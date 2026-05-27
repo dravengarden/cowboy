@@ -7,8 +7,28 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+
+      # Pure-Rust build of the v0 daemon. No frontend bundle yet (the UI is the
+      # inline placeholder in server.rs), so this is a plain cargoLock build —
+      # no bun/embed step. Add a vendored frontend derivation here once the
+      # React UI lands and rust-embed pulls it in.
+      cowboy = pkgs.rustPlatform.buildRustPackage {
+        pname = "cowboy";
+        version = "0.1.0";
+        src = pkgs.lib.cleanSource ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+        meta = {
+          description = "Drive coding-agent CLIs from anywhere over ACP";
+          mainProgram = "cowboy";
+        };
+      };
     in
     {
+      packages.${system} = {
+        default = cowboy;
+        cowboy = cowboy;
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         # Rust toolchain + sccache compiler cache, plus the frontend toolchain.
         nativeBuildInputs = with pkgs; [
