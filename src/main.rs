@@ -1,7 +1,9 @@
 mod acp;
 mod cli;
+mod core;
 mod provider;
 mod server;
+mod supervisor;
 
 use clap::Parser;
 

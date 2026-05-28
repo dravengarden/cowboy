@@ -8,15 +8,47 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
 
-      # Pure-Rust build of the v0 daemon. No frontend bundle yet (the UI is the
-      # inline placeholder in server.rs), so this is a plain cargoLock build —
-      # no bun/embed step. Add a vendored frontend derivation here once the
-      # React UI lands and rust-embed pulls it in.
+      # Step 1 — build the SPA (omega's recipe). Fixed-output derivation
+      # because `bun install` needs network; the hash only changes when the
+      # bundle changes. Output is the built `web/dist`. Refresh the hash with
+      # `lib.fakeHash` → build → copy the "got" hash back.
+      cowboy-web = pkgs.stdenvNoCC.mkDerivation {
+        pname = "cowboy-web";
+        version = "0.1.0";
+        src = pkgs.lib.cleanSource ./.;
+        nativeBuildInputs = [ pkgs.bun pkgs.nodejs_22 ];
+        dontConfigure = true;
+        buildPhase = ''
+          export HOME=$TMPDIR
+          cd web
+          bun install --frozen-lockfile --no-progress
+          node node_modules/.bin/vite build
+        '';
+        installPhase = ''
+          cp -R dist $out
+        '';
+        dontFixup = true;
+        outputHashMode = "recursive";
+        outputHashAlgo = "sha256";
+        outputHash = "sha256-PA3GXJtJjwYdIt1fyYd1qQJZM/+MKG4ZqbURMWGuq7M=";
+      };
+
+      # Step 2 — the Rust binary, embedding the built SPA via rust-embed
+      # (`#[folder = "web/dist"]`). `preBuild` drops the FOD output where the
+      # embed macro expects it before the release cargo build runs.
       cowboy = pkgs.rustPlatform.buildRustPackage {
         pname = "cowboy";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
-        cargoLock.lockFile = ./Cargo.lock;
+        # fetchCargoVendor (cargoHash) rather than cargoLock: it downloads
+        # crates via python-requests, which sends a User-Agent. crates.io now
+        # 403s the download endpoint without one, and the plain-fetchurl
+        # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
+        cargoHash = "sha256-KN9wGQeIlP4vyNBsKvORlaLmDK35vbe7Hgl77MgsF6I=";
+        preBuild = ''
+          mkdir -p web/dist
+          cp -R ${cowboy-web}/. web/dist/
+        '';
         meta = {
           description = "Drive coding-agent CLIs from anywhere over ACP";
           mainProgram = "cowboy";
@@ -27,6 +59,7 @@
       packages.${system} = {
         default = cowboy;
         cowboy = cowboy;
+        cowboy-web = cowboy-web;
       };
 
       devShells.${system}.default = pkgs.mkShell {

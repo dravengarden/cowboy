@@ -10,8 +10,18 @@ is a conduit and control plane, not a reduced reimplementation.
 
 ## Status
 
-Design draft — no code yet. See **[design.md](design.md)** for the full
+**v1 — working multi-agent panel.** A single Rust daemon spawns claude-code /
+codex over ACP, normalizes their streams (messages, thinking, tool calls,
+plan, permissions), and fans them out over one WebSocket to all clients
+equally; the React/MUI web UI (embedded in the binary, responsive for
+iPad/iPhone) lists sessions, shows a live transcript, sends prompts, and
+answers permission requests. See **[design.md](design.md)** for the full
 architecture (it is the source of truth).
+
+Deferred from v1 (see design): auth/token pairing + QR (§9; v1 is no-auth,
+LAN-only by choice), the vim/hint-mode keyboard layer (§8), SQLite persistence
++ restart `session/load` resume (§6/§7), and the code-editor / file-tree / git
+views (intentionally out of scope — cowboy is the agent panel only).
 
 ## Shape (one-paragraph summary)
 

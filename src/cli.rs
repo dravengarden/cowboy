@@ -37,7 +37,7 @@ pub struct TryAgentArgs {
 #[derive(Args)]
 pub struct ServeArgs {
     /// Address to bind the HTTP/WebSocket server to.
-    #[arg(long, env = "COWBOY_BIND", default_value = "127.0.0.1:8080")]
+    #[arg(long, env = "COWBOY_BIND", default_value = "127.0.0.1:3333")]
     pub bind: SocketAddr,
 
     /// Root directory agents are allowed to operate within.

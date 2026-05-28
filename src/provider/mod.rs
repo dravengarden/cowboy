@@ -17,7 +17,8 @@ pub struct LaunchSpec {
     /// Arguments passed to the executable.
     pub args: Vec<String>,
     /// Whether the agent can resume a prior session via `session/load`
-    /// (design §7 restart recovery). Informational for now.
+    /// (design §7 restart recovery). Informational until resume lands.
+    #[allow(dead_code)]
     pub resume: bool,
 }
 
@@ -28,7 +29,7 @@ pub struct LaunchSpec {
 ///   NDJSON on stdio. Requires Claude auth in the environment (e.g.
 ///   `ANTHROPIC_API_KEY` or a prior `claude` login).
 /// - `codex`: the `@zed-industries/codex-acp` adapter, run via `npx`. Wraps the
-///   Codex CLI. Requires Codex auth (ChatGPT subscription login in `~/.codex`,
+///   Codex CLI. Requires Codex auth (`ChatGPT` subscription login in `~/.codex`,
 ///   or `CODEX_API_KEY` / `OPENAI_API_KEY`).
 #[must_use]
 pub fn builtin() -> HashMap<&'static str, LaunchSpec> {

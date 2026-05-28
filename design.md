@@ -402,3 +402,37 @@ the wrapper config.
    varies by agent.
 4. **Remote exposure** is the largest attack surface; §9 is mandatory, not
    optional.
+
+## 13. Zed remote-development coexistence
+
+cowboy is **not an editor** (§3). For code review / direct editing of the
+files an agent is touching, the chosen integration with Zed's SSH
+remote-development mode is **coexistence (option a): cowboy does nothing
+Zed-protocol-specific**. A local Zed app connects to the same box over SSH as a
+normal remote project; Zed manages its own `~/.zed_server/zed-remote-server-
+<channel>-<version>` binary, version matching, and server lifecycle entirely.
+
+Why not reimplement Zed's remote server (so a local Zed connects to cowboy)?
+Researched and rejected: the SSH remote protocol is the same internal,
+**unversioned** ~600-message `zed.proto` Envelope shared with Zed
+collaboration (`crates/proto/proto/buf.yaml` self-declares "internal to Zed
+only"), with **no protocol negotiation** — the client computes one *exact*
+`zed-remote-server-<channel>-<version>` filename from its own build and refuses
+anything else. A third-party server side would be a perpetual reverse-
+engineering treadmill that breaks on every Zed release. Not a compatibility
+guarantee.
+
+What coexistence requires of cowboy — only deployment alignment, no code:
+
+- **Run cowboy as the human SSH user** (e.g. `draven`), not a locked-down
+  system user. Then the agent and the Zed-over-SSH session share one identity
+  and one view of the files: Zed's filesystem watcher sees the agent's edits
+  live (exactly the review story), and the agent can read the user's
+  credentials (`~/.claude`, `~/.codex`).
+- **Put `--workspace-root` under the SSH user's home** so both cowboy's agents
+  and a Zed connection open the same paths.
+
+For restricted-internet / air-gapped remotes, do **not** have cowboy stage the
+Zed server binary (option b): Zed's built-in `upload_binary_over_ssh: true`
+already solves first-connect download better, because the *local* app inherently
+knows its own exact version while a remote daemon can only guess it.
