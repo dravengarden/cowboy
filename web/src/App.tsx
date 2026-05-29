@@ -162,7 +162,7 @@ export function App({
   );
 
   return (
-    <Box sx={{ display: "flex", height: "100dvh" }}>
+    <Box sx={{ display: "flex", height: "100%" }}>
       {mobile ? (
         <Drawer open={drawerOpen} onClose={(): void => setDrawerOpen(false)}>
           <Box sx={{ width: DRAWER_WIDTH }}>{list}</Box>

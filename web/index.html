@@ -11,6 +11,17 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="cowboy" />
     <title>cowboy</title>
+    <style>
+      /* Full-height chain. CssBaseline zeroes the body margin but does not set
+         heights; the app shell uses height:100% off this chain rather than
+         100dvh, which under-resolves inside embedded/preview webviews and
+         leaves a gap below the composer. */
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
