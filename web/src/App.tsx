@@ -35,6 +35,7 @@ import {
 } from "./protocol";
 import { send, useStore } from "./store";
 import { Settings } from "./Settings";
+import { ProviderIcon } from "./ProviderIcon";
 import { PortalLauncherButton } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 
@@ -116,6 +117,7 @@ function SessionList({
             <ListItemText
               primary={
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                  <ProviderIcon provider={s.provider} sx={{ fontSize: 16, flexShrink: 0 }} />
                   <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
                     {s.provider}
                   </Typography>
@@ -358,15 +360,21 @@ export function App({
                 <MenuIcon />
               </IconButton>
             )}
-            <Typography variant="subtitle1" noWrap sx={{ flex: 1, minWidth: 0 }}>
-              {active
-                ? mobile
-                  ? `🤠 ${active.provider}`
-                  : active.provider
-                : mobile
-                  ? "🤠 cowboy"
-                  : ""}
-            </Typography>
+            {active ? (
+              <Typography
+                variant="subtitle1"
+                noWrap
+                component="div"
+                sx={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 0.75 }}
+              >
+                <ProviderIcon provider={active.provider} sx={{ fontSize: 20 }} />
+                {active.provider}
+              </Typography>
+            ) : (
+              <Typography variant="subtitle1" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                {mobile ? "🤠 cowboy" : ""}
+              </Typography>
+            )}
             {active && (
               <Chip
                 size="small"
