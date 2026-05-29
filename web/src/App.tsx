@@ -240,11 +240,21 @@ export function App({
     // duplicate messages) have a hook. Keeps the reactive trace explicit.
   }, [lastError?.seq]);
   const theme = useTheme();
-  const mobile = useMediaQuery(theme.breakpoints.down("sm"));
+  // Sidebar collapse aka "drawer mode". Anything below the `lg` breakpoint
+  // (1200px) hides the persistent sidebar and shows a hamburger that opens
+  // the Drawer — this catches both iPad orientations (portrait ~820,
+  // landscape ~1180), not just phones. The session-list-as-persistent-
+  // rail layout reads as cramped on iPad: the transcript pane loses too
+  // many columns, and the chip row gets squeezed. Matches Mail.app /
+  // Messages on iPad, which also collapse their sidebars in both
+  // orientations until the device is wider than ~1200pt.
+  const mobile = useMediaQuery(theme.breakpoints.down("lg"));
   // BottomSheet (Drawer anchor=bottom) on phones + portrait iPad; centred
-  // Dialog on landscape iPad and desktop. md breakpoint is 900px — portrait
-  // iPad is ~820 wide so it falls into BottomSheet, landscape iPad 1180 →
-  // Dialog. Matches the iOS Settings idiom.
+  // Dialog on landscape iPad and desktop. `md` (900px) — portrait iPad
+  // ~820 falls into BottomSheet; landscape iPad ~1180 → Dialog. This is
+  // intentionally LESS aggressive than `mobile` above so iPad landscape
+  // keeps the iPad-native modal feel for Settings / Delete, while still
+  // getting the collapsed sidebar.
   const bottomSheet = useMediaQuery(theme.breakpoints.down("md"));
   const [activeId, setActiveId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
