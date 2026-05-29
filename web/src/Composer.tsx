@@ -154,7 +154,7 @@ export function Composer({
     <Box
       sx={{
         p: { xs: 1, sm: 1.5 },
-        pb: { xs: "calc(env(safe-area-inset-bottom) + 8px)", sm: 1.5 },
+        pb: { xs: "calc(env(safe-area-inset-bottom) + 12px)", sm: 1.5 },
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
@@ -255,9 +255,16 @@ export function Composer({
         direction="row"
         spacing={0.75}
         alignItems="center"
+        useFlexGap
+        // On touch the controls WRAP onto multiple lines; on desktop they stay
+        // on one scrollable line. Why: a horizontal-scroll strip at the very
+        // bottom edge meant a left/right swipe to reach an off-screen chip was
+        // caught by the iOS app-switch / home gesture instead of scrolling.
+        // Wrapping removes the horizontal scroll on phones entirely.
+        flexWrap={{ xs: "wrap", lg: "nowrap" }}
         sx={{
           mt: 1,
-          overflowX: "auto",
+          overflowX: { xs: "visible", lg: "auto" },
           // Hide scrollbar on touch viewports (anything below the desktop
           // tier; same threshold as the sidebar drawer). On desktop the
           // bar is a useful drag affordance when chips overflow.
@@ -312,7 +319,9 @@ export function Composer({
             />
           ))
         )}
-        <Box sx={{ flex: 1 }} />
+        {/* Spacer only matters on desktop (pushes the hint right); on mobile
+            the row wraps and the hint is hidden, so keep it out of the flow. */}
+        <Box sx={{ flex: 1, display: { xs: "none", lg: "block" } }} />
         {/* Keyboard hint is meaningless on touch — hide unless we're on a
             pointer-first viewport (sidebar persistent, lg+). */}
         <Typography
@@ -427,7 +436,11 @@ function ConfigOptionChip({
                 borderTopLeftRadius: 16,
                 borderTopRightRadius: 16,
                 maxHeight: "85vh",
-                pb: "env(safe-area-inset-bottom)",
+                // Clear the iPhone/iPad home-indicator bar AND keep a baseline
+                // gap on devices without an inset: env(safe-area-inset-bottom)
+                // is 0 off-device, so a bare inset leaves the last (often
+                // tinted-selected) item flush against the rounded screen corner.
+                pb: "max(env(safe-area-inset-bottom), 12px)",
               },
             },
           }}

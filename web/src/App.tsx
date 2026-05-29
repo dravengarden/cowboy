@@ -42,11 +42,10 @@ import type { Mode as ThemeMode } from "./theme";
 // grows on wide displays and shrinks on narrow ones without media-query
 // staircase steps. 240px is the floor (a list row stays readable at that
 // width), 22vw is the natural scale, 360px is the ceiling (any wider and
-// the list looks empty next to the transcript). The mobile Drawer keeps
-// its own width because the slide-in panel is meant to feel temporary,
-// not adapt to viewport.
+// the list looks empty next to the transcript). On mobile the sidebar
+// becomes a top-anchored Drawer (full width), so there's no separate
+// mobile-width to declare.
 const SIDEBAR_WIDTH = "clamp(240px, 22vw, 360px)";
-const MOBILE_DRAWER_WIDTH = "min(86vw, 360px)";
 
 function statusColor(s: Status): string {
   switch (s) {
@@ -304,8 +303,27 @@ export function App({
   return (
     <Box sx={{ display: "flex", height: "100%", width: "100%" }}>
       {mobile ? (
-        <Drawer open={drawerOpen} onClose={(): void => setDrawerOpen(false)}>
-          <Box sx={{ width: MOBILE_DRAWER_WIDTH }}>{list}</Box>
+        <Drawer
+          anchor="top"
+          open={drawerOpen}
+          onClose={(): void => setDrawerOpen(false)}
+          slotProps={{
+            paper: {
+              sx: {
+                maxHeight: "80vh",
+                borderBottomLeftRadius: 16,
+                borderBottomRightRadius: 16,
+                // Slide DOWN from the top rather than in from the left: a
+                // left-anchored drawer fought the iOS back / app-switch
+                // edge-swipe (a swipe to scroll the list kept switching apps).
+                // Opening is a hamburger tap, so there's no edge gesture at all.
+                // pt clears the notch / status bar.
+                pt: "max(env(safe-area-inset-top), 8px)",
+              },
+            },
+          }}
+        >
+          {list}
         </Drawer>
       ) : (
         <Stack
@@ -329,10 +347,14 @@ export function App({
             sx={{ borderBottom: 1, borderColor: "divider" }}
           >
             {/* On mobile the sidebar (with its launcher) is hidden, so the
-                launcher rides the content bar next to the drawer toggle. */}
-            {mobile && <PortalLauncherButton edge="start" size="small" />}
+                drawer toggle leads the bar; the launcher moves to the far right,
+                after Settings (the app's chosen placement on this bar). */}
             {mobile && (
-              <IconButton onClick={(): void => setDrawerOpen(true)} sx={{ mr: 1 }}>
+              <IconButton
+                edge="start"
+                onClick={(): void => setDrawerOpen(true)}
+                sx={{ mr: 1 }}
+              >
                 <MenuIcon />
               </IconButton>
             )}
@@ -361,6 +383,8 @@ export function App({
             >
               <SettingsIcon />
             </IconButton>
+            {/* Launcher last — to the right of Settings (self-hides standalone). */}
+            {mobile && <PortalLauncherButton size="small" />}
           </Toolbar>
         </AppBar>
 
@@ -483,7 +507,9 @@ function SettingsShell({
               borderTopLeftRadius: 16,
               borderTopRightRadius: 16,
               maxHeight: "85vh",
-              pb: "env(safe-area-inset-bottom)",
+              // Keep a baseline gap (inset is 0 off-device) so the sheet clears
+              // the home-indicator bar and rounded screen corners on iPhone/iPad.
+              pb: "max(env(safe-area-inset-bottom), 12px)",
             },
           },
         }}
@@ -561,7 +587,9 @@ function DeleteSessionShell({
             sx: {
               borderTopLeftRadius: 16,
               borderTopRightRadius: 16,
-              pb: "env(safe-area-inset-bottom)",
+              // Keep a baseline gap (inset is 0 off-device) so the sheet clears
+              // the home-indicator bar and rounded screen corners on iPhone/iPad.
+              pb: "max(env(safe-area-inset-bottom), 12px)",
             },
           },
         }}
