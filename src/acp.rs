@@ -218,6 +218,12 @@ async fn agent_main(
                         .and_then(|u| u.get("configOptions"))
                         .cloned()
                     {
+                        let count = opts.as_array().map_or(0, Vec::len);
+                        tracing::info!(
+                            session = %session_id_for_intercept,
+                            count = count,
+                            "intercept: config_option_update"
+                        );
                         hub_for_intercept
                             .set_config_options(&session_id_for_intercept, opts);
                     }

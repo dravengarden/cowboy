@@ -28,11 +28,24 @@ pub struct Supervisor {
 impl Supervisor {
     #[must_use]
     pub fn new(hub: Hub, workspace_root: PathBuf) -> Self {
+        // Seed the id counter past anything Hub::restore already loaded —
+        // otherwise after a daemon restart the first new session gets
+        // `sess-1` again, collides with the persisted row, and every
+        // store-writer INSERT throws PRIMARY KEY conflicts (the in-memory
+        // Hub silently clobbers the old session too). Parse `sess-N`
+        // suffixes; ignore anything that doesn't fit that shape so
+        // future id formats degrade gracefully.
+        let initial = hub
+            .session_list()
+            .iter()
+            .filter_map(|m| m.id.strip_prefix("sess-").and_then(|n| n.parse::<u64>().ok()))
+            .max()
+            .map_or(1, |max| max + 1);
         Self {
             hub,
             workspace_root,
             senders: Mutex::new(HashMap::new()),
-            counter: AtomicU64::new(1),
+            counter: AtomicU64::new(initial),
         }
     }
 
