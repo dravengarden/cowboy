@@ -6,7 +6,9 @@ import {
   Button,
   Chip,
   Dialog,
+  DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   Drawer,
   IconButton,
@@ -88,11 +90,13 @@ function SessionList({
   activeId,
   onPick,
   onNew,
+  onRequestDelete,
 }: {
   sessions: SessionMeta[];
   activeId: string | null;
   onPick: (id: string) => void;
   onNew: () => void;
+  onRequestDelete: (s: SessionMeta) => void;
 }): React.JSX.Element {
   return (
     <Stack sx={{ height: "100%" }}>
@@ -136,13 +140,7 @@ function SessionList({
               aria-label={`delete session ${s.id}`}
               onClick={(e): void => {
                 e.stopPropagation();
-                if (
-                  window.confirm(
-                    `Delete this ${originLabel(s.origin)} session? Any in-flight turn is cancelled. The agent transcript on this session will be lost (in-memory only in v1).`,
-                  )
-                ) {
-                  send({ type: "delete_session", session_id: s.id });
-                }
+                onRequestDelete(s);
               }}
               sx={{ ml: 0.5 }}
             >
@@ -252,6 +250,10 @@ export function App({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Session targeted for deletion; non-null = the dialog is open. Held in
+  // App so the dialog is a single instance instead of one per row, and so
+  // its mobile vs desktop shell can react to `bottomSheet` from useMediaQuery.
+  const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(null);
 
   // Default to the first session once one exists.
   const active = sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
@@ -267,6 +269,7 @@ export function App({
       activeId={active?.id ?? null}
       onPick={pick}
       onNew={(): void => setDialogOpen(true)}
+      onRequestDelete={(s): void => setPendingDelete(s)}
     />
   );
 
@@ -390,6 +393,17 @@ export function App({
       </Stack>
 
       <NewSessionDialog open={dialogOpen} onClose={(): void => setDialogOpen(false)} />
+      <DeleteSessionShell
+        session={pendingDelete}
+        bottomSheet={bottomSheet}
+        onClose={(): void => setPendingDelete(null)}
+        onConfirm={(): void => {
+          if (pendingDelete) {
+            send({ type: "delete_session", session_id: pendingDelete.id });
+          }
+          setPendingDelete(null);
+        }}
+      />
       <SettingsShell
         open={settingsOpen}
         bottomSheet={bottomSheet}
@@ -483,6 +497,102 @@ function SettingsShell({
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
       {body}
+    </Dialog>
+  );
+}
+
+// Responsive delete-session confirmation. Same split as SettingsShell —
+// Drawer anchor=bottom (iOS-style bottom sheet with drag handle) on phones
+// and portrait iPad; centred Dialog on desktop and landscape iPad. Replaces
+// the browser `window.confirm` which is unstyled, blocks input, and can't
+// adapt its layout per viewport.
+function DeleteSessionShell({
+  session,
+  bottomSheet,
+  onClose,
+  onConfirm,
+}: {
+  session: SessionMeta | null;
+  bottomSheet: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}): React.JSX.Element | null {
+  if (!session) return null;
+  const surface = originLabel(session.origin);
+  const title = `Delete this ${surface} session?`;
+  const detail =
+    "Any in-flight turn is cancelled. The agent transcript on this session will be lost.";
+  const actions = (
+    <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ width: "100%" }}>
+      <Button onClick={onClose} color="inherit">
+        Cancel
+      </Button>
+      <Button
+        onClick={onConfirm}
+        color="error"
+        variant="contained"
+        autoFocus
+        // Make the destructive action obviously the heavier control; matches
+        // material guidance for destructive confirmations.
+      >
+        Delete
+      </Button>
+    </Stack>
+  );
+
+  if (bottomSheet) {
+    return (
+      <Drawer
+        anchor="bottom"
+        open
+        onClose={onClose}
+        slotProps={{
+          paper: {
+            sx: {
+              borderTopLeftRadius: 16,
+              borderTopRightRadius: 16,
+              pb: "env(safe-area-inset-bottom)",
+            },
+          },
+        }}
+      >
+        <Box
+          sx={{
+            width: 36,
+            height: 4,
+            borderRadius: 2,
+            bgcolor: "action.disabledBackground",
+            mx: "auto",
+            mt: 1,
+            mb: 0.5,
+          }}
+        />
+        <Box sx={{ px: 2.5, pt: 1.5, pb: 2 }}>
+          <Typography variant="h6" component="h2" gutterBottom>
+            {title}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {detail}
+          </Typography>
+          {actions}
+        </Box>
+      </Drawer>
+    );
+  }
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      fullWidth
+      maxWidth="xs"
+      aria-labelledby="delete-session-title"
+    >
+      <DialogTitle id="delete-session-title">{title}</DialogTitle>
+      <DialogContent>
+        <DialogContentText>{detail}</DialogContentText>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
     </Dialog>
   );
 }
