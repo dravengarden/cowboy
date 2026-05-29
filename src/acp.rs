@@ -174,8 +174,60 @@ async fn agent_main(
         .spawn()
         .with_context(|| format!("spawning provider {} ({})", spec.id, spec.command))?;
 
-    let outgoing = child.stdin.take().context("child stdin")?.compat_write();
+    let child_stdin = child.stdin.take().context("child stdin")?;
     let child_stdout = child.stdout.take().context("child stdout")?;
+
+    // Outgoing tee: rewrite the underscore-prefixed extension method the
+    // crate emits back to the bare protocol name the upstream actually
+    // listens for. The crate forces a `_` prefix on every `ext_method` call
+    // (protocol convention to namespace extensions), but
+    // `session/setSessionConfigOption` is a real method on
+    // claude-agent-acp ≥ 0.31, not an extension. Without this rewrite the
+    // agent answers `Method not found` and the mode/model/effort chips
+    // silently fail. Rewrite only that one method; everything else is
+    // forwarded byte-for-byte.
+    let (crate_write, mut crate_write_rx) = tokio::io::duplex(64 * 1024);
+    tokio::task::spawn_local(async move {
+        let mut reader = BufReader::new(&mut crate_write_rx);
+        let mut writer = child_stdin;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "reading crate outgoing");
+                    break;
+                }
+            }
+            let rewritten = if let Ok(mut val) =
+                serde_json::from_str::<serde_json::Value>(line.trim_end())
+            {
+                let method = val.get("method").and_then(|m| m.as_str()).map(str::to_owned);
+                let needs_rewrite = matches!(
+                    method.as_deref(),
+                    Some("_session/setSessionConfigOption")
+                );
+                if needs_rewrite {
+                    val["method"] =
+                        serde_json::Value::String("session/setSessionConfigOption".to_owned());
+                    let mut s = val.to_string();
+                    s.push('\n');
+                    Some(s)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let bytes = rewritten.as_deref().unwrap_or(line.as_str());
+            if writer.write_all(bytes.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+    });
+    let outgoing = crate_write.compat_write();
 
     // Stream interceptor: agent stdout → tee → (a) Hub for unknown variants
     // we want to capture but the crate would refuse, (b) crate via in-process
