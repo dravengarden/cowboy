@@ -3,13 +3,16 @@ import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { App } from "./App";
 import { useThemeMode } from "./theme";
+import { PortalProvider } from "./_shell";
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <App themeMode={mode} onSetThemeMode={setMode} />
+      <PortalProvider appId="cowboy">
+        <App themeMode={mode} onSetThemeMode={setMode} />
+      </PortalProvider>
     </ThemeProvider>
   );
 }
