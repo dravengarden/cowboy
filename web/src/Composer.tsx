@@ -2,9 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
+  CircularProgress,
   ClickAwayListener,
+  Divider,
   Drawer,
   IconButton,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
   Menu,
   MenuItem,
   MenuList,
@@ -18,7 +24,15 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
-import { Add, Close, ExpandMore, Send, Stop } from "@mui/icons-material";
+import {
+  Add,
+  AttachFile,
+  Check,
+  Close,
+  ExpandMore,
+  Send,
+  Stop,
+} from "@mui/icons-material";
 import { send, useStore } from "./store";
 import type {
   AcpUpdate,
@@ -55,6 +69,15 @@ export function Composer({
   const fileInput = useRef<HTMLInputElement | null>(null);
   const textFieldRef = useRef<HTMLDivElement | null>(null);
   const { configOptions, timelines } = useStore();
+  const theme = useTheme();
+  // Touch tier collapses the whole action bar into a single `+` button left
+  // of the textarea — tapping it opens a BottomSheet with attach + every
+  // config option in one place. Inspired by ChatGPT / DeepSeek / Gemini:
+  // chips wrap awkwardly on iPad portrait (820px) and are completely
+  // unreadable on a 390px iPhone, so the sheet pattern wins on every
+  // sub-desktop viewport. Desktop keeps the inline chip row — there's room.
+  const compact = useMediaQuery(theme.breakpoints.down("lg"));
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const busy = status === "busy";
   const starting = status === "starting";
@@ -170,6 +193,20 @@ export function Composer({
         />
       )}
       <Stack direction="row" spacing={1} alignItems="flex-end">
+        {compact && (
+          <Tooltip title="Attach + options">
+            <span>
+              <IconButton
+                aria-label="more options"
+                disabled={dead}
+                sx={{ width: 44, height: 44, flexShrink: 0 }}
+                onClick={(): void => setSheetOpen(true)}
+              >
+                <Add />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         <TextField
           fullWidth
           multiline
@@ -251,93 +288,97 @@ export function Composer({
           </IconButton>
         )}
       </Stack>
-      <Stack
-        direction="row"
-        spacing={0.75}
-        alignItems="center"
-        useFlexGap
-        // On touch the controls WRAP onto multiple lines; on desktop they stay
-        // on one scrollable line. Why: a horizontal-scroll strip at the very
-        // bottom edge meant a left/right swipe to reach an off-screen chip was
-        // caught by the iOS app-switch / home gesture instead of scrolling.
-        // Wrapping removes the horizontal scroll on phones entirely.
-        flexWrap={{ xs: "wrap", lg: "nowrap" }}
-        sx={{
-          mt: 1,
-          overflowX: { xs: "visible", lg: "auto" },
-          // Hide scrollbar on touch viewports (anything below the desktop
-          // tier; same threshold as the sidebar drawer). On desktop the
-          // bar is a useful drag affordance when chips overflow.
-          "&::-webkit-scrollbar": {
-            display: { xs: "none", lg: "block" },
-            height: 6,
-          },
-          msOverflowStyle: "none",
-          scrollbarWidth: "thin",
-          minHeight: 40,
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: "none" }}
+        onChange={(e): void => {
+          void handleFiles(e.target.files);
+          e.target.value = "";
         }}
-      >
-        <input
-          ref={fileInput}
-          type="file"
-          accept="image/*"
-          multiple
-          style={{ display: "none" }}
-          onChange={(e): void => {
-            void handleFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <Tooltip title="Attach images">
-          <span>
-            <IconButton
-              aria-label="attach"
-              disabled={dead}
-              sx={{ width: 40, height: 40, flexShrink: 0 }}
-              onClick={(): void => fileInput.current?.click()}
-            >
-              <Add />
-            </IconButton>
-          </span>
-        </Tooltip>
-        {showSkeleton ? (
-          <ConfigChipSkeletons />
-        ) : (
-          options.map((opt) => (
-            <ConfigOptionChip
-              key={opt.id}
-              option={opt}
-              disabled={dead}
-              onSelect={(value): void =>
-                send({
-                  type: "set_config_option",
-                  session_id: sessionId,
-                  config_id: opt.id,
-                  value,
-                })
-              }
-            />
-          ))
-        )}
-        {/* Spacer only matters on desktop (pushes the hint right); on mobile
-            the row wraps and the hint is hidden, so keep it out of the flow. */}
-        <Box sx={{ flex: 1, display: { xs: "none", lg: "block" } }} />
-        {/* Keyboard hint is meaningless on touch — hide unless we're on a
-            pointer-first viewport (sidebar persistent, lg+). */}
-        <Typography
-          variant="caption"
-          color="text.disabled"
+      />
+      {!compact && (
+        <Stack
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
           sx={{
-            display: { xs: "none", lg: "block" },
-            ml: 1,
-            whiteSpace: "nowrap",
-            fontSize: 11,
-            flexShrink: 0,
+            mt: 1,
+            overflowX: "auto",
+            "&::-webkit-scrollbar": { height: 6 },
+            scrollbarWidth: "thin",
+            minHeight: 40,
           }}
         >
-          ⌘/Ctrl + Enter = send
-        </Typography>
-      </Stack>
+          <Tooltip title="Attach images">
+            <span>
+              <IconButton
+                aria-label="attach"
+                disabled={dead}
+                sx={{ width: 40, height: 40, flexShrink: 0 }}
+                onClick={(): void => fileInput.current?.click()}
+              >
+                <Add />
+              </IconButton>
+            </span>
+          </Tooltip>
+          {showSkeleton ? (
+            <ConfigChipSkeletons />
+          ) : (
+            options.map((opt) => (
+              <ConfigOptionChip
+                key={opt.id}
+                option={opt}
+                disabled={dead}
+                onSelect={(value): void =>
+                  send({
+                    type: "set_config_option",
+                    session_id: sessionId,
+                    config_id: opt.id,
+                    value,
+                  })
+                }
+              />
+            ))
+          )}
+          <Box sx={{ flex: 1 }} />
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            sx={{
+              ml: 1,
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+          >
+            ⌘/Ctrl + Enter = send
+          </Typography>
+        </Stack>
+      )}
+      {compact && (
+        <ComposerSheet
+          open={sheetOpen}
+          onClose={(): void => setSheetOpen(false)}
+          options={options}
+          loading={showSkeleton}
+          dead={dead}
+          onAttachClick={(): void => {
+            setSheetOpen(false);
+            fileInput.current?.click();
+          }}
+          onSelectOption={(configId, value): void =>
+            send({
+              type: "set_config_option",
+              session_id: sessionId,
+              config_id: configId,
+              value,
+            })
+          }
+        />
+      )}
       <SlashPicker
         open={slashOpen && filteredCommands.length > 0}
         anchorEl={textFieldRef.current}
@@ -380,31 +421,15 @@ function ConfigOptionChip({
   disabled: boolean;
   onSelect: (value: string | boolean) => void;
 }): React.JSX.Element {
-  const theme = useTheme();
-  // Touch tier (anything below the desktop sidebar threshold) gets a
-  // bottom sheet rather than a Menu glued to the chip: iPhone Safari's
-  // viewport at 375px can't fit a 360px Menu plus its anchor edges, and
-  // the description text wraps awkwardly inside the small popover. The
-  // sheet gives full width, generous touch targets, and the iOS-native
-  // drag-handle visual the rest of the app already uses for
-  // Settings / Delete.
-  const bottomSheet = useMediaQuery(theme.breakpoints.down("lg"));
+  // Desktop-only: ComposerSheet handles touch viewports now, so this just
+  // needs the anchored Menu it always had.
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const current = useMemo(
     () =>
       option.options.find((o) => o.value === option.currentValue) ??
       option.options[0],
     [option.options, option.currentValue],
   );
-  const openPicker = (e: React.MouseEvent<HTMLButtonElement>): void => {
-    if (bottomSheet) setDrawerOpen(true);
-    else setAnchor(e.currentTarget);
-  };
-  const closePicker = (): void => {
-    setAnchor(null);
-    setDrawerOpen(false);
-  };
   return (
     <>
       <Button
@@ -413,7 +438,7 @@ function ConfigOptionChip({
         color="inherit"
         disabled={disabled}
         endIcon={<ExpandMore fontSize="small" />}
-        onClick={openPicker}
+        onClick={(e): void => setAnchor(e.currentTarget)}
         sx={{
           textTransform: "none",
           minHeight: 36,
@@ -425,120 +450,192 @@ function ConfigOptionChip({
       >
         {current?.name ?? String(option.currentValue)}
       </Button>
-      {bottomSheet ? (
-        <Drawer
-          anchor="bottom"
-          open={drawerOpen}
-          onClose={closePicker}
-          slotProps={{
-            paper: {
-              sx: {
-                borderTopLeftRadius: 16,
-                borderTopRightRadius: 16,
-                maxHeight: "85vh",
-                // Clear the iPhone/iPad home-indicator bar AND keep a baseline
-                // gap on devices without an inset: env(safe-area-inset-bottom)
-                // is 0 off-device, so a bare inset leaves the last (often
-                // tinted-selected) item flush against the rounded screen corner.
-                pb: "max(env(safe-area-inset-bottom), 12px)",
-              },
-            },
-          }}
+      <Menu
+        anchorEl={anchor}
+        open={!!anchor}
+        onClose={(): void => setAnchor(null)}
+        slotProps={{ paper: { sx: { maxWidth: 360 } } }}
+      >
+        {option.options.map((o) => (
+          <MenuItem
+            key={String(o.value)}
+            selected={o.value === option.currentValue}
+            onClick={(): void => {
+              onSelect(o.value);
+              setAnchor(null);
+            }}
+            sx={{ alignItems: "flex-start", whiteSpace: "normal" }}
+          >
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                {o.name}
+              </Typography>
+              {o.description && (
+                <Typography variant="caption" color="text.secondary">
+                  {o.description}
+                </Typography>
+              )}
+            </Box>
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  );
+}
+
+// Unified bottom sheet for touch viewports: every action lives here, none
+// in a visible inline row. ChatGPT / DeepSeek / Gemini all collapse their
+// composer controls behind a single `+` because chip rows wrap awkwardly
+// on iPad portrait (820px) and break entirely on a 390px iPhone, while
+// the bottom-sheet pattern is iOS-native muscle memory.
+function ComposerSheet({
+  open,
+  onClose,
+  options,
+  loading,
+  dead,
+  onAttachClick,
+  onSelectOption,
+}: {
+  open: boolean;
+  onClose: () => void;
+  options: ConfigOption[];
+  loading: boolean;
+  dead: boolean;
+  onAttachClick: () => void;
+  onSelectOption: (configId: string, value: string | boolean) => void;
+}): React.JSX.Element {
+  return (
+    <Drawer
+      anchor="bottom"
+      open={open}
+      onClose={onClose}
+      slotProps={{
+        paper: {
+          sx: {
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
+            maxHeight: "85vh",
+            pb: "max(env(safe-area-inset-bottom), 12px)",
+          },
+        },
+      }}
+    >
+      {/* iOS-style drag handle — purely visual; tapping outside closes. */}
+      <Box
+        sx={{
+          width: 36,
+          height: 4,
+          borderRadius: 2,
+          bgcolor: "action.disabledBackground",
+          mx: "auto",
+          mt: 1,
+          mb: 0.5,
+        }}
+      />
+      <List disablePadding>
+        <ListItemButton
+          disabled={dead}
+          onClick={onAttachClick}
+          sx={{ py: 1.25, px: 2.5 }}
         >
-          <Box
-            sx={{
-              width: 36,
-              height: 4,
-              borderRadius: 2,
-              bgcolor: "action.disabledBackground",
-              mx: "auto",
-              mt: 1,
-              mb: 0.5,
+          <ListItemIcon sx={{ minWidth: 40 }}>
+            <AttachFile />
+          </ListItemIcon>
+          <ListItemText
+            primary="Attach images"
+            secondary="Add one or more pictures to the next message"
+            slotProps={{
+              primary: { variant: "body1", sx: { fontWeight: 500 } },
             }}
           />
-          <Box sx={{ px: 2.5, py: 1 }}>
-            <Typography
-              variant="overline"
-              color="text.secondary"
-              sx={{ letterSpacing: 0.8 }}
-            >
-              {option.name}
-            </Typography>
-            {option.description && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", mt: 0.25 }}
-              >
-                {option.description}
-              </Typography>
-            )}
-          </Box>
-          <MenuList disablePadding>
-            {option.options.map((o) => (
-              <MenuItem
-                key={String(o.value)}
-                selected={o.value === option.currentValue}
-                onClick={(): void => {
-                  onSelect(o.value);
-                  closePicker();
-                }}
-                sx={{
-                  alignItems: "flex-start",
-                  whiteSpace: "normal",
-                  py: 1.25,
-                  px: 2.5,
-                }}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                    {o.name}
-                  </Typography>
-                  {o.description && (
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      sx={{ mt: 0.25 }}
-                    >
-                      {o.description}
-                    </Typography>
-                  )}
-                </Box>
-              </MenuItem>
-            ))}
-          </MenuList>
-        </Drawer>
-      ) : (
-        <Menu
-          anchorEl={anchor}
-          open={!!anchor}
-          onClose={closePicker}
-          slotProps={{ paper: { sx: { maxWidth: 360 } } }}
+        </ListItemButton>
+        {loading && (
+          <Stack
+            direction="row"
+            spacing={1.5}
+            alignItems="center"
+            sx={{ px: 2.5, py: 2, color: "text.secondary" }}
+          >
+            <CircularProgress size={16} />
+            <Typography variant="body2">Loading agent options…</Typography>
+          </Stack>
+        )}
+        {options.map((opt) => (
+          <ConfigSheetSection
+            key={opt.id}
+            option={opt}
+            onSelect={(value): void => {
+              onSelectOption(opt.id, value);
+              onClose();
+            }}
+          />
+        ))}
+      </List>
+    </Drawer>
+  );
+}
+
+function ConfigSheetSection({
+  option,
+  onSelect,
+}: {
+  option: ConfigOption;
+  onSelect: (value: string | boolean) => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <Divider sx={{ mt: 0.5 }} />
+      <Box sx={{ px: 2.5, pt: 1.25, pb: 0.5 }}>
+        <Typography
+          variant="overline"
+          color="text.secondary"
+          sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
         >
-          {option.options.map((o) => (
-            <MenuItem
-              key={String(o.value)}
-              selected={o.value === option.currentValue}
-              onClick={(): void => {
-                onSelect(o.value);
-                closePicker();
+          {option.name}
+        </Typography>
+        {option.description && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block" }}
+          >
+            {option.description}
+          </Typography>
+        )}
+      </Box>
+      {option.options.map((o) => {
+        const selected = o.value === option.currentValue;
+        return (
+          <ListItemButton
+            key={String(o.value)}
+            selected={selected}
+            onClick={(): void => onSelect(o.value)}
+            sx={{
+              alignItems: "flex-start",
+              whiteSpace: "normal",
+              py: 1.25,
+              px: 2.5,
+            }}
+          >
+            <ListItemIcon sx={{ minWidth: 32, mt: 0.5 }}>
+              {selected ? (
+                <Check color="primary" />
+              ) : (
+                <Box sx={{ width: 24, height: 24 }} />
+              )}
+            </ListItemIcon>
+            <ListItemText
+              primary={o.name}
+              secondary={o.description}
+              slotProps={{
+                primary: { variant: "body1", sx: { fontWeight: 500 } },
+                secondary: { variant: "body2" },
               }}
-              sx={{ alignItems: "flex-start", whiteSpace: "normal" }}
-            >
-              <Box>
-                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                  {o.name}
-                </Typography>
-                {o.description && (
-                  <Typography variant="caption" color="text.secondary">
-                    {o.description}
-                  </Typography>
-                )}
-              </Box>
-            </MenuItem>
-          ))}
-        </Menu>
-      )}
+            />
+          </ListItemButton>
+        );
+      })}
     </>
   );
 }
