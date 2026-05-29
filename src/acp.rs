@@ -207,11 +207,17 @@ async fn agent_main(
                 let method = val.get("method").and_then(|m| m.as_str()).map(str::to_owned);
                 let needs_rewrite = matches!(
                     method.as_deref(),
-                    Some("_session/setSessionConfigOption")
+                    Some("_session/set_config_option")
                 );
                 if needs_rewrite {
+                    // Snake-case wire name per claude-agent-acp's SDK
+                    // (`AGENT_METHODS.session_set_config_option =
+                    // "session/set_config_option"`). The earlier camelCase
+                    // guess (`setSessionConfigOption`) the upstream still
+                    // 404s on; the SDK exposes the camelCase NAME on the
+                    // class but routes the snake_case METHOD over the wire.
                     val["method"] =
-                        serde_json::Value::String("session/setSessionConfigOption".to_owned());
+                        serde_json::Value::String("session/set_config_option".to_owned());
                     let mut s = val.to_string();
                     s.push('\n');
                     Some(s)
@@ -460,8 +466,13 @@ async fn agent_main(
                             return;
                         }
                     };
+                    // Method name here is what the crate sees pre-rewrite;
+                    // the outgoing tee strips the crate's `_` and lands the
+                    // snake_case wire name `session/set_config_option`.
+                    // Keeping the crate-side string consistent so the
+                    // intercept's match is exact (no regex / startswith).
                     let req = ExtRequest {
-                        method: Arc::from("session/setSessionConfigOption"),
+                        method: Arc::from("session/set_config_option"),
                         params: params_raw,
                     };
                     match conn.ext_method(req).await {
