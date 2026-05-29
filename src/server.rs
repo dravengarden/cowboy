@@ -255,8 +255,25 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
             if send_json(
                 &mut sink,
                 &Outbound::Snapshot {
-                    session_id: meta.id,
+                    session_id: meta.id.clone(),
                     events,
+                },
+            )
+            .await
+            .is_err()
+            {
+                return;
+            }
+        }
+        // Replay the last-seen agent config options so the composer's
+        // mode / model / effort dropdowns hydrate on first paint instead of
+        // waiting for the next `config_option_update` to fire upstream.
+        if let Some(options) = state.hub.config_options(&meta.id) {
+            if send_json(
+                &mut sink,
+                &Outbound::ConfigOptions {
+                    session_id: meta.id,
+                    options,
                 },
             )
             .await
@@ -307,8 +324,22 @@ fn handle_command(state: &AppState, text: &str) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "bad inbound command");
+            state
+                .hub
+                .broadcast_error(None, format!("bad inbound command: {e}"));
             return;
         }
+    };
+    // Capture session_id ahead of the match for error attribution. Most
+    // commands carry one; NewSession doesn't (the session id is assigned
+    // by the daemon after success).
+    let session_id_for_err: Option<String> = match &cmd {
+        Inbound::Prompt { session_id, .. }
+        | Inbound::Cancel { session_id }
+        | Inbound::Permission { session_id, .. }
+        | Inbound::DeleteSession { session_id }
+        | Inbound::SetConfigOption { session_id, .. } => Some(session_id.clone()),
+        Inbound::NewSession { .. } => None,
     };
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
@@ -323,6 +354,10 @@ fn handle_command(state: &AppState, text: &str) {
             let blocks: Vec<ContentBlock> = if content.is_empty() {
                 if text.is_empty() {
                     tracing::warn!("Prompt with neither text nor content; dropping");
+                    state.hub.broadcast_error(
+                        Some(session_id),
+                        "empty prompt: no text or content blocks".to_owned(),
+                    );
                     return;
                 }
                 vec![ContentBlock::from(text)]
@@ -362,9 +397,20 @@ fn handle_command(state: &AppState, text: &str) {
             state.hub.delete_session(&session_id);
             Ok(())
         }
+        Inbound::SetConfigOption {
+            session_id,
+            config_id,
+            value,
+        } => state.supervisor.send(
+            &session_id,
+            AgentCommand::SetConfigOption { config_id, value },
+        ),
     };
     if let Err(e) = result {
         tracing::warn!(error = %e, "command failed");
+        state
+            .hub
+            .broadcast_error(session_id_for_err, format!("command failed: {e}"));
     }
 }
 

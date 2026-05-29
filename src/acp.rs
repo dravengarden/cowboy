@@ -18,13 +18,14 @@ use std::process::Stdio;
 use std::rc::Rc;
 
 use agent_client_protocol::{
-    Agent, CancelNotification, Client, ClientSideConnection, ContentBlock, Error,
+    Agent, CancelNotification, Client, ClientSideConnection, ContentBlock, Error, ExtRequest,
     InitializeRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionModeId,
     SessionNotification, SetSessionModeRequest, V1,
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -45,6 +46,15 @@ pub enum AgentCommand {
     Permission {
         request_id: String,
         option_id: Option<String>,
+    },
+    /// Set one of the per-session config options the agent advertises
+    /// (mode / model / effort / future). Forwarded to the upstream via the
+    /// ACP `session/setSessionConfigOption` extension method (see acp.rs
+    /// `agent_main` for the wire shape). The agent's authoritative response
+    /// carrying the refreshed options is pushed back into [`Hub`].
+    SetConfigOption {
+        config_id: String,
+        value: serde_json::Value,
     },
 }
 
@@ -165,7 +175,64 @@ async fn agent_main(
         .with_context(|| format!("spawning provider {} ({})", spec.id, spec.command))?;
 
     let outgoing = child.stdin.take().context("child stdin")?.compat_write();
-    let incoming = child.stdout.take().context("child stdout")?.compat();
+    let child_stdout = child.stdout.take().context("child stdout")?;
+
+    // Stream interceptor: agent stdout → tee → (a) Hub for unknown variants
+    // we want to capture but the crate would refuse, (b) crate via in-process
+    // pipe. The motivating case is `sessionUpdate=config_option_update`,
+    // which claude-agent-acp 0.31 advertises mode / model / effort through;
+    // our pinned `agent-client-protocol` 0.4.7 has no decoder for that
+    // variant. By peeking each newline-delimited JSON-RPC frame ourselves
+    // before forwarding, the daemon learns about the options (and routes
+    // them to the composer) without bumping the whole protocol crate.
+    let (mut bridge_writer, bridge_reader) = tokio::io::duplex(64 * 1024);
+    let hub_for_intercept = hub.clone();
+    let session_id_for_intercept = session_id.to_owned();
+    tokio::task::spawn_local(async move {
+        let mut reader = BufReader::new(child_stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break, // agent stdout EOF
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "reading agent stdout");
+                    break;
+                }
+            }
+            // Peek as JSON-RPC; on parse failure, just forward unchanged
+            // (the crate's decoder will produce its own clearer error).
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line.trim_end()) {
+                let is_session_update =
+                    val.get("method").and_then(|m| m.as_str()) == Some("session/update");
+                let update_kind = val
+                    .get("params")
+                    .and_then(|p| p.get("update"))
+                    .and_then(|u| u.get("sessionUpdate"))
+                    .and_then(|s| s.as_str());
+                if is_session_update && update_kind == Some("config_option_update") {
+                    if let Some(opts) = val
+                        .get("params")
+                        .and_then(|p| p.get("update"))
+                        .and_then(|u| u.get("configOptions"))
+                        .cloned()
+                    {
+                        hub_for_intercept
+                            .set_config_options(&session_id_for_intercept, opts);
+                    }
+                    // Swallow — the crate's strict decoder would log a
+                    // useless rpc error if we forwarded this notification.
+                    continue;
+                }
+            }
+            if bridge_writer.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let incoming = bridge_reader.compat();
 
     let pending: Pending = Rc::new(RefCell::new(HashMap::new()));
     let client = CowboyClient {
@@ -305,6 +372,59 @@ async fn agent_main(
                         option_id,
                     },
                 );
+            }
+            AgentCommand::SetConfigOption { config_id, value } => {
+                // claude-agent-acp ≥ 0.31 handles mode / model / effort all
+                // through the same `session/setSessionConfigOption` request
+                // (extension method — not in our pinned crate). The agent
+                // acks with the refreshed `configOptions` array; pushing it
+                // back into Hub keeps the composer dropdowns in sync even
+                // when the upstream chose a different value than we asked
+                // for (e.g. `model=default` resets effort to its model's
+                // default level).
+                let conn = conn.clone();
+                let hub = hub.clone();
+                let sid = session_id.to_owned();
+                let acp = acp_id.clone();
+                tokio::task::spawn_local(async move {
+                    let params = serde_json::json!({
+                        "sessionId": acp.0,
+                        "configId": config_id,
+                        "value": value,
+                    });
+                    let params_raw = match serde_json::value::to_raw_value(&params) {
+                        Ok(r) => Arc::from(r),
+                        Err(e) => {
+                            hub.broadcast_error(
+                                Some(sid.clone()),
+                                format!("encoding setConfigOption params: {e}"),
+                            );
+                            return;
+                        }
+                    };
+                    let req = ExtRequest {
+                        method: Arc::from("session/setSessionConfigOption"),
+                        params: params_raw,
+                    };
+                    match conn.ext_method(req).await {
+                        Ok(resp) => {
+                            // Response carries `{ configOptions: [...] }`.
+                            if let Ok(val) =
+                                serde_json::from_str::<serde_json::Value>(resp.get())
+                            {
+                                if let Some(opts) = val.get("configOptions").cloned() {
+                                    hub.set_config_options(&sid, opts);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            hub.broadcast_error(
+                                Some(sid.clone()),
+                                format!("set {config_id}: {e}"),
+                            );
+                        }
+                    }
+                });
             }
         }
     }

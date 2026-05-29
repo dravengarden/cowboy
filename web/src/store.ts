@@ -8,16 +8,40 @@
 // harmless.
 
 import { useSyncExternalStore } from "react";
-import type { Envelope, Inbound, Outbound, SessionMeta } from "./protocol";
+import type {
+  ConfigOption,
+  Envelope,
+  Inbound,
+  Outbound,
+  SessionMeta,
+} from "./protocol";
+
+/// One notification slot — the App's snackbar shows the latest. We monotonically
+/// bump `seq` even on repeat messages so the UI can re-trigger the open
+/// animation for the same text (e.g. user sets mode twice fast).
+export interface ErrorNotice {
+  seq: number;
+  sessionId?: string;
+  message: string;
+}
 
 export interface State {
   connected: boolean;
   sessions: SessionMeta[];
   // session_id → seq-ordered, deduped event log
   timelines: Map<string, Envelope[]>;
+  // session_id → agent-advertised configOptions array (mode/model/effort)
+  configOptions: Map<string, ConfigOption[]>;
+  lastError?: ErrorNotice;
 }
 
-let state: State = { connected: false, sessions: [], timelines: new Map() };
+let errorSeq = 0;
+let state: State = {
+  connected: false,
+  sessions: [],
+  timelines: new Map(),
+  configOptions: new Map(),
+};
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
 
@@ -53,9 +77,23 @@ function handle(msg: Outbound): void {
     case "event":
       setState({ ...state, timelines: applyEnvelope(state.timelines, msg.envelope) });
       break;
-    case "error":
-      console.warn("cowboy error:", msg.message);
+    case "config_options": {
+      const next = new Map(state.configOptions);
+      next.set(msg.session_id, msg.options);
+      setState({ ...state, configOptions: next });
       break;
+    }
+    case "error": {
+      errorSeq += 1;
+      // exactOptionalPropertyTypes: only include sessionId if non-undefined.
+      const notice: ErrorNotice =
+        msg.session_id !== undefined
+          ? { seq: errorSeq, sessionId: msg.session_id, message: msg.message }
+          : { seq: errorSeq, message: msg.message };
+      console.warn("cowboy error:", msg.message);
+      setState({ ...state, lastError: notice });
+      break;
+    }
   }
 }
 

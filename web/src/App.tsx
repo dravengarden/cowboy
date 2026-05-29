@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  Alert,
   AppBar,
   Box,
   Button,
@@ -13,6 +14,7 @@ import {
   ListItemButton,
   ListItemText,
   MenuItem,
+  Snackbar,
   Stack,
   TextField,
   Toolbar,
@@ -228,7 +230,16 @@ export function App({
   themeMode: ThemeMode;
   onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-  const { connected, sessions, timelines } = useStore();
+  const { connected, sessions, timelines, lastError } = useStore();
+  // The error notice is monotonically `seq`-stamped so the same message
+  // text triggers the snackbar twice if it happens again. Tracking the
+  // `seq` we've shown means we don't re-open after the user dismisses.
+  const [shownErrorSeq, setShownErrorSeq] = useState(0);
+  const errorOpen = !!lastError && lastError.seq > shownErrorSeq;
+  useEffect(() => {
+    // No-op on mount; effect exists so future enhancements (e.g. coalescing
+    // duplicate messages) have a hook. Keeps the reactive trace explicit.
+  }, [lastError?.seq]);
   const theme = useTheme();
   const mobile = useMediaQuery(theme.breakpoints.down("sm"));
   // BottomSheet (Drawer anchor=bottom) on phones + portrait iPad; centred
@@ -380,6 +391,32 @@ export function App({
         themeMode={themeMode}
         onSetThemeMode={onSetThemeMode}
       />
+      <Snackbar
+        open={errorOpen}
+        autoHideDuration={5000}
+        onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
+        anchorOrigin={{
+          vertical: "bottom",
+          horizontal: mobile ? "center" : "right",
+        }}
+        // Lift above the composer's safe-area inset on mobile so the toast
+        // doesn't sit underneath the action row.
+        sx={{
+          bottom: {
+            xs: "calc(env(safe-area-inset-bottom) + 96px)",
+            sm: 24,
+          },
+        }}
+      >
+        <Alert
+          severity="error"
+          variant="filled"
+          onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
+          sx={{ maxWidth: 480 }}
+        >
+          {lastError?.message ?? ""}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

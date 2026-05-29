@@ -110,6 +110,12 @@ struct Session {
     meta: SessionMeta,
     log: Vec<Envelope>,
     next_seq: u64,
+    /// Last seen agent-advertised config options (raw ACP
+    /// `configOptions` array — see acp.rs intercept). `None` until the agent
+    /// fires its first `config_option_update` notification. Re-sent to every
+    /// new client on connect so the composer dropdowns populate from a fresh
+    /// reload.
+    config_options: Option<serde_json::Value>,
 }
 
 /// A command sent by a client (Web UI, `acp-bridge`, future test harnesses)
@@ -151,6 +157,20 @@ pub enum Inbound {
     /// remove the entry from the Hub, and broadcast the updated session list
     /// to every connected client (so other surfaces auto-clear).
     DeleteSession { session_id: String },
+    /// Set one config option on the session (mode / model / effort / future).
+    /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
+    /// request that handles all three via the same shape. cowboy sends it as
+    /// an ACP ext_method (the 0.4 crate lacks a typed wrapper); the agent
+    /// answers with the refreshed `configOptions` array, which the daemon
+    /// then re-broadcasts as [`Outbound::ConfigOptions`].
+    SetConfigOption {
+        session_id: String,
+        config_id: String,
+        /// Free-form value — typically a string variant id (`"sonnet"`,
+        /// `"high"`, `"bypassPermissions"`), but the protocol allows
+        /// booleans too. Forwarded verbatim.
+        value: serde_json::Value,
+    },
 }
 
 /// What the server pushes to a WebSocket client.
@@ -166,11 +186,26 @@ pub enum Outbound {
     },
     /// A single live event.
     Event { envelope: Envelope },
+    /// Agent-advertised per-session config options (mode / model / effort and
+    /// whatever else upstream adds). Sent (a) on client connect for every
+    /// session whose options were captured during this daemon's lifetime,
+    /// and (b) live whenever the agent fires `config_option_update`. The
+    /// payload is the raw ACP array — see acp.rs intercept.
+    ConfigOptions {
+        session_id: String,
+        options: serde_json::Value,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
-    /// Part of the wire protocol; not emitted in v1 (command errors are
-    /// currently logged server-side only).
-    #[allow(dead_code)]
-    Error { message: String },
+    /// Broadcast to every connected client — cowboy's "one shared progress"
+    /// design means any window watching the same session should see why a
+    /// command was rejected, not just the originator.
+    Error {
+        /// Session the error belongs to, if any. `None` for daemon-level
+        /// errors (malformed inbound frame, unknown session id, ...).
+        #[serde(default)]
+        session_id: Option<String>,
+        message: String,
+    },
 }
 
 /// Persistence intent sent on the write-behind channel from `Hub` to the
@@ -229,10 +264,20 @@ impl Hub {
     /// Should be called once at startup, BEFORE any client connects, so the
     /// `Sessions` broadcast on first connect already includes everything.
     /// Skips the write-behind side: these rows are already in the DB.
+    ///
+    /// **Restored sessions are forced to [`Status::Exited`].** The agent
+    /// subprocess does not come back across a daemon restart — the postgres
+    /// state is metadata + history only, not a live ACP connection. Letting
+    /// a restored row keep its persisted `Running`/`Busy` status creates the
+    /// trap of a UI that looks alive but rejects every prompt with `unknown
+    /// session` (no agent_tx in the supervisor). Mark them dead so the UI
+    /// shows them as ended and disables the composer; resume via
+    /// session/load is a future follow-up (design §7).
     pub fn restore(&self, sessions: Vec<(SessionMeta, Vec<Envelope>, u64)>) {
         let mut sessions_lock = self.inner.sessions.lock().unwrap();
         let mut order = self.inner.order.lock().unwrap();
-        for (meta, log, next_seq) in sessions {
+        for (mut meta, log, next_seq) in sessions {
+            meta.status = Status::Exited;
             let id = meta.id.clone();
             sessions_lock.insert(
                 id.clone(),
@@ -240,6 +285,7 @@ impl Hub {
                     meta,
                     log,
                     next_seq,
+                    config_options: None,
                 },
             );
             order.push(id);
@@ -296,6 +342,7 @@ impl Hub {
                     meta: meta.clone(),
                     log: Vec::new(),
                     next_seq: 0,
+                    config_options: None,
                 },
             );
             order.push(id);
@@ -376,6 +423,48 @@ impl Hub {
     fn broadcast_sessions(&self) {
         let _ = self.inner.tx.send(Outbound::Sessions {
             sessions: self.session_list(),
+        });
+    }
+
+    /// Snapshot the captured config options for one session — used by the
+    /// WS connect handler to replay the agent's last-seen `configOptions`
+    /// to a freshly-connected client (so its composer dropdowns hydrate
+    /// without waiting for the next `config_option_update`).
+    #[must_use]
+    pub fn config_options(&self, session_id: &str) -> Option<serde_json::Value> {
+        let sessions = self.inner.sessions.lock().unwrap();
+        sessions
+            .get(session_id)
+            .and_then(|s| s.config_options.clone())
+    }
+
+    /// Store the latest agent-advertised config options for a session and
+    /// fan them out to every client. Called from acp.rs when the upstream
+    /// emits a `config_option_update` notification, and from the
+    /// SetConfigOption reply path (the agent's authoritative response
+    /// refreshes the same array).
+    pub fn set_config_options(&self, session_id: &str, options: serde_json::Value) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.config_options = Some(options.clone());
+        }
+        let _ = self.inner.tx.send(Outbound::ConfigOptions {
+            session_id: session_id.to_owned(),
+            options,
+        });
+    }
+
+    /// Surface a command failure to every connected client so the UI can show
+    /// a toast. Replaces the previous behaviour of silently logging to
+    /// `tracing::warn` — that left the user staring at an unchanged page
+    /// wondering why nothing happened.
+    pub fn broadcast_error(&self, session_id: Option<String>, message: String) {
+        let _ = self.inner.tx.send(Outbound::Error {
+            session_id,
+            message,
         });
     }
 }
