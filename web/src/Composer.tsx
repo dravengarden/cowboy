@@ -3,6 +3,7 @@ import {
   Box,
   Button,
   ClickAwayListener,
+  Drawer,
   IconButton,
   Menu,
   MenuItem,
@@ -14,6 +15,8 @@ import {
   TextField,
   Tooltip,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import { Add, Close, ExpandMore, Send, Stop } from "@mui/icons-material";
 import { send, useStore } from "./store";
@@ -368,13 +371,31 @@ function ConfigOptionChip({
   disabled: boolean;
   onSelect: (value: string | boolean) => void;
 }): React.JSX.Element {
+  const theme = useTheme();
+  // Touch tier (anything below the desktop sidebar threshold) gets a
+  // bottom sheet rather than a Menu glued to the chip: iPhone Safari's
+  // viewport at 375px can't fit a 360px Menu plus its anchor edges, and
+  // the description text wraps awkwardly inside the small popover. The
+  // sheet gives full width, generous touch targets, and the iOS-native
+  // drag-handle visual the rest of the app already uses for
+  // Settings / Delete.
+  const bottomSheet = useMediaQuery(theme.breakpoints.down("lg"));
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const current = useMemo(
     () =>
       option.options.find((o) => o.value === option.currentValue) ??
       option.options[0],
     [option.options, option.currentValue],
   );
+  const openPicker = (e: React.MouseEvent<HTMLButtonElement>): void => {
+    if (bottomSheet) setDrawerOpen(true);
+    else setAnchor(e.currentTarget);
+  };
+  const closePicker = (): void => {
+    setAnchor(null);
+    setDrawerOpen(false);
+  };
   return (
     <>
       <Button
@@ -383,7 +404,7 @@ function ConfigOptionChip({
         color="inherit"
         disabled={disabled}
         endIcon={<ExpandMore fontSize="small" />}
-        onClick={(e): void => setAnchor(e.currentTarget)}
+        onClick={openPicker}
         sx={{
           textTransform: "none",
           minHeight: 36,
@@ -395,35 +416,116 @@ function ConfigOptionChip({
       >
         {current?.name ?? String(option.currentValue)}
       </Button>
-      <Menu
-        anchorEl={anchor}
-        open={!!anchor}
-        onClose={(): void => setAnchor(null)}
-        slotProps={{ paper: { sx: { maxWidth: 360 } } }}
-      >
-        {option.options.map((o) => (
-          <MenuItem
-            key={String(o.value)}
-            selected={o.value === option.currentValue}
-            onClick={(): void => {
-              onSelect(o.value);
-              setAnchor(null);
+      {bottomSheet ? (
+        <Drawer
+          anchor="bottom"
+          open={drawerOpen}
+          onClose={closePicker}
+          slotProps={{
+            paper: {
+              sx: {
+                borderTopLeftRadius: 16,
+                borderTopRightRadius: 16,
+                maxHeight: "85vh",
+                pb: "env(safe-area-inset-bottom)",
+              },
+            },
+          }}
+        >
+          <Box
+            sx={{
+              width: 36,
+              height: 4,
+              borderRadius: 2,
+              bgcolor: "action.disabledBackground",
+              mx: "auto",
+              mt: 1,
+              mb: 0.5,
             }}
-            sx={{ alignItems: "flex-start", whiteSpace: "normal" }}
-          >
-            <Box>
-              <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                {o.name}
+          />
+          <Box sx={{ px: 2.5, py: 1 }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ letterSpacing: 0.8 }}
+            >
+              {option.name}
+            </Typography>
+            {option.description && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 0.25 }}
+              >
+                {option.description}
               </Typography>
-              {o.description && (
-                <Typography variant="caption" color="text.secondary">
-                  {o.description}
+            )}
+          </Box>
+          <MenuList disablePadding>
+            {option.options.map((o) => (
+              <MenuItem
+                key={String(o.value)}
+                selected={o.value === option.currentValue}
+                onClick={(): void => {
+                  onSelect(o.value);
+                  closePicker();
+                }}
+                sx={{
+                  alignItems: "flex-start",
+                  whiteSpace: "normal",
+                  py: 1.25,
+                  px: 2.5,
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                    {o.name}
+                  </Typography>
+                  {o.description && (
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ mt: 0.25 }}
+                    >
+                      {o.description}
+                    </Typography>
+                  )}
+                </Box>
+              </MenuItem>
+            ))}
+          </MenuList>
+        </Drawer>
+      ) : (
+        <Menu
+          anchorEl={anchor}
+          open={!!anchor}
+          onClose={closePicker}
+          slotProps={{ paper: { sx: { maxWidth: 360 } } }}
+        >
+          {option.options.map((o) => (
+            <MenuItem
+              key={String(o.value)}
+              selected={o.value === option.currentValue}
+              onClick={(): void => {
+                onSelect(o.value);
+                closePicker();
+              }}
+              sx={{ alignItems: "flex-start", whiteSpace: "normal" }}
+            >
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  {o.name}
                 </Typography>
-              )}
-            </Box>
-          </MenuItem>
-        ))}
-      </Menu>
+                {o.description && (
+                  <Typography variant="caption" color="text.secondary">
+                    {o.description}
+                  </Typography>
+                )}
+              </Box>
+            </MenuItem>
+          ))}
+        </Menu>
+      )}
     </>
   );
 }

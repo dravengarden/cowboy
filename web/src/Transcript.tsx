@@ -510,6 +510,12 @@ export function Transcript({
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
+  // How far above the bottom the viewport currently sits. The scroll-to-
+  // latest FAB only renders when this exceeds a small threshold, so a 3-
+  // message transcript that already fits the viewport doesn't ever surface
+  // a useless button.
+  const [distFromBottom, setDistFromBottom] = useState(0);
+
   // Wire user-intent listeners ONCE; they read parentRef each time so the
   // dependency on the ref's contents stays out of React's eyes.
   useEffect(() => {
@@ -522,7 +528,9 @@ export function Transcript({
       }
     };
     const onScroll = (): void => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setDistFromBottom(dist);
+      const atBottom = dist < 24;
       if (atBottom && !stick.current) {
         stick.current = true;
         setDetached(false);
@@ -543,7 +551,13 @@ export function Transcript({
   }, []);
 
   // Auto-snap only on rowCount changes, ONLY if we're still stuck.
+  // We also recompute `distFromBottom` here because the virtualizer's
+  // total height changes when new events stream in — the user may be
+  // detached, watching a partial reply, and the FAB needs to (start to)
+  // appear without an actual scroll event firing.
   useLayoutEffect(() => {
+    const el = parentRef.current;
+    if (el) setDistFromBottom(el.scrollHeight - el.scrollTop - el.clientHeight);
     if (!stick.current || rowCount === 0) return;
     virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
   }, [rowCount, virtualizer]);
@@ -610,7 +624,11 @@ export function Transcript({
           })}
         </Box>
       </Box>
-      {detached && (
+      {detached && distFromBottom > 200 && (
+        // Threshold matches Slack / Telegram / Linear: only surface the
+        // jump-down affordance when there's at least ~one short message
+        // worth of hidden content below. A three-line transcript that
+        // fits the viewport never sees this button.
         <Fab
           size="small"
           color="primary"
