@@ -33,6 +33,7 @@ import {
 } from "./protocol";
 import { send, useStore } from "./store";
 import { Settings } from "./Settings";
+import { PortalLauncherButton } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 
 // Sidebar width: fluid clamp instead of a fixed pixel value so the panel
@@ -312,8 +313,10 @@ export function App({
             variant="dense"
             sx={{ borderBottom: 1, borderColor: "divider" }}
           >
+            {/* Portal launcher (top-left); self-hides when not hosted. */}
+            <PortalLauncherButton edge="start" size="small" />
             {mobile && (
-              <IconButton edge="start" onClick={(): void => setDrawerOpen(true)} sx={{ mr: 1 }}>
+              <IconButton onClick={(): void => setDrawerOpen(true)} sx={{ mr: 1 }}>
                 <MenuIcon />
               </IconButton>
             )}
