@@ -1,10 +1,15 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
+  ClickAwayListener,
   IconButton,
   Menu,
   MenuItem,
+  MenuList,
+  Paper,
+  Popper,
+  Skeleton,
   Stack,
   TextField,
   Tooltip,
@@ -12,7 +17,14 @@ import {
 } from "@mui/material";
 import { Add, Close, ExpandMore, Send, Stop } from "@mui/icons-material";
 import { send, useStore } from "./store";
-import type { ConfigOption, ContentBlock, Status } from "./protocol";
+import type {
+  AcpUpdate,
+  AvailableCommand,
+  ConfigOption,
+  ContentBlock,
+  Envelope,
+  Status,
+} from "./protocol";
 
 // Cmd/Ctrl + Enter = send. Plain Enter = newline.
 //
@@ -38,9 +50,11 @@ export function Composer({
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ContentBlock[]>([]);
   const fileInput = useRef<HTMLInputElement | null>(null);
-  const { configOptions } = useStore();
+  const textFieldRef = useRef<HTMLDivElement | null>(null);
+  const { configOptions, timelines } = useStore();
 
   const busy = status === "busy";
+  const starting = status === "starting";
   const dead = status === "exited" || status === "crashed";
   const sendable = (!!text.trim() || attachments.length > 0) && !dead;
 
@@ -59,6 +73,49 @@ export function Composer({
       return ai - bi;
     });
   }, [configOptions, sessionId]);
+  // `starting` is the obvious case; we also keep the skeleton on for the
+  // brief window after status flips to `running` but before the agent's
+  // first `config_option_update` arrives (otherwise the action row pops
+  // empty for ~1 frame and then re-flows when the chips appear).
+  const showSkeleton = !dead && options.length === 0 && (starting || status === "running");
+
+  // Slash-command picker: claude-agent-acp streams its `/help`, `/clear` etc
+  // via `available_commands_update` SessionUpdate. Read the latest one from
+  // the timeline rather than mirror it in store state — the list is small
+  // and only this component renders it.
+  const availableCommands = useMemo(
+    () => latestAvailableCommands(timelines.get(sessionId) ?? []),
+    [timelines, sessionId],
+  );
+  const slashQuery = useMemo(() => parseSlashQuery(text), [text]);
+  const slashOpen = slashQuery !== null && availableCommands.length > 0 && !dead;
+  const filteredCommands = useMemo(() => {
+    if (!slashOpen || slashQuery === null) return [];
+    const q = slashQuery.toLowerCase();
+    return availableCommands.filter((c) => c.name.toLowerCase().includes(q));
+  }, [slashOpen, slashQuery, availableCommands]);
+  const [slashIndex, setSlashIndex] = useState(0);
+  // Clamp the selected index back to range whenever the filter shrinks.
+  useEffect(() => {
+    setSlashIndex((i) => Math.max(0, Math.min(i, filteredCommands.length - 1)));
+  }, [filteredCommands.length]);
+  const insertCommand = useCallback(
+    (name: string): void => {
+      setText(`/${name} `);
+      setSlashIndex(0);
+      // Defer focus to the next tick so React's controlled-value update has
+      // applied before we put the caret at the end.
+      queueMicrotask(() => {
+        const input = textFieldRef.current?.querySelector("textarea");
+        if (input) {
+          input.focus();
+          const end = input.value.length;
+          input.setSelectionRange(end, end);
+        }
+      });
+    },
+    [],
+  );
 
   function submit(): void {
     if (!sendable) return;
@@ -98,6 +155,7 @@ export function Composer({
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
+        position: "relative", // anchor for Popper portal placement
       }}
     >
       {attachments.length > 0 && (
@@ -115,11 +173,45 @@ export function Composer({
           minRows={1}
           maxRows={12}
           size="small"
+          inputRef={(): void => {
+            // ref to the underlying textarea is used for caret placement; the
+            // wrapping div ref (textFieldRef) is what Popper anchors to.
+          }}
+          ref={textFieldRef}
           placeholder={dead ? "Session ended" : "Message the agent…"}
           value={text}
           disabled={dead}
           onChange={(e): void => setText(e.target.value)}
           onKeyDown={(e): void => {
+            // Slash picker keyboard control wins over send/newline so the
+            // user can pick a command without surprises.
+            if (slashOpen && filteredCommands.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSlashIndex((i) => (i + 1) % filteredCommands.length);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSlashIndex(
+                  (i) => (i - 1 + filteredCommands.length) % filteredCommands.length,
+                );
+                return;
+              }
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
+                const cmd = filteredCommands[slashIndex];
+                if (cmd) {
+                  e.preventDefault();
+                  insertCommand(cmd.name);
+                  return;
+                }
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setText("");
+                return;
+              }
+            }
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               submit();
@@ -163,10 +255,11 @@ export function Composer({
         sx={{
           mt: 1,
           overflowX: "auto",
-          // Hide scrollbar on touch viewports — the chips themselves are the
-          // affordance. Keep it on desktop where pointer drag matters.
+          // Hide scrollbar on touch viewports (anything below the desktop
+          // tier; same threshold as the sidebar drawer). On desktop the
+          // bar is a useful drag affordance when chips overflow.
           "&::-webkit-scrollbar": {
-            display: { xs: "none", sm: "block" },
+            display: { xs: "none", lg: "block" },
             height: 6,
           },
           msOverflowStyle: "none",
@@ -197,27 +290,33 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {options.map((opt) => (
-          <ConfigOptionChip
-            key={opt.id}
-            option={opt}
-            disabled={dead}
-            onSelect={(value): void =>
-              send({
-                type: "set_config_option",
-                session_id: sessionId,
-                config_id: opt.id,
-                value,
-              })
-            }
-          />
-        ))}
+        {showSkeleton ? (
+          <ConfigChipSkeletons />
+        ) : (
+          options.map((opt) => (
+            <ConfigOptionChip
+              key={opt.id}
+              option={opt}
+              disabled={dead}
+              onSelect={(value): void =>
+                send({
+                  type: "set_config_option",
+                  session_id: sessionId,
+                  config_id: opt.id,
+                  value,
+                })
+              }
+            />
+          ))
+        )}
         <Box sx={{ flex: 1 }} />
+        {/* Keyboard hint is meaningless on touch — hide unless we're on a
+            pointer-first viewport (sidebar persistent, lg+). */}
         <Typography
           variant="caption"
           color="text.disabled"
           sx={{
-            display: { xs: "none", sm: "block" },
+            display: { xs: "none", lg: "block" },
             ml: 1,
             whiteSpace: "nowrap",
             fontSize: 11,
@@ -227,7 +326,36 @@ export function Composer({
           ⌘/Ctrl + Enter = send
         </Typography>
       </Stack>
+      <SlashPicker
+        open={slashOpen && filteredCommands.length > 0}
+        anchorEl={textFieldRef.current}
+        commands={filteredCommands}
+        selectedIndex={slashIndex}
+        onSelect={insertCommand}
+        onClose={(): void => setText("")}
+      />
     </Box>
+  );
+}
+
+function ConfigChipSkeletons(): React.JSX.Element {
+  // Three skeletons sized to the typical chip widths (Bypass Permissions ≈
+  // 160px, Default (recommended) ≈ 170px, High ≈ 80px). Keeps the row's
+  // visual rhythm stable when the real chips replace them.
+  const widths = [148, 168, 76];
+  return (
+    <>
+      {widths.map((w, i) => (
+        <Skeleton
+          key={i}
+          variant="rounded"
+          width={w}
+          height={36}
+          animation="wave"
+          sx={{ flexShrink: 0, borderRadius: 1 }}
+        />
+      ))}
+    </>
   );
 }
 
@@ -297,6 +425,82 @@ function ConfigOptionChip({
         ))}
       </Menu>
     </>
+  );
+}
+
+function SlashPicker({
+  open,
+  anchorEl,
+  commands,
+  selectedIndex,
+  onSelect,
+  onClose,
+}: {
+  open: boolean;
+  anchorEl: HTMLElement | null;
+  commands: AvailableCommand[];
+  selectedIndex: number;
+  onSelect: (name: string) => void;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <Popper
+      open={open}
+      anchorEl={anchorEl}
+      placement="top-start"
+      // Cover the textarea width up to a reasonable max so long command
+      // descriptions don't overflow the viewport on narrow phones.
+      modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
+      sx={{ zIndex: (theme): number => theme.zIndex.modal + 1 }}
+    >
+      <ClickAwayListener onClickAway={onClose}>
+        <Paper
+          elevation={6}
+          sx={{
+            width: anchorEl ? anchorEl.clientWidth : "auto",
+            maxWidth: "min(560px, 92vw)",
+            maxHeight: 320,
+            overflowY: "auto",
+            borderRadius: 1.5,
+          }}
+        >
+          <MenuList dense disablePadding>
+            {commands.map((c, i) => (
+              <MenuItem
+                key={c.name}
+                selected={i === selectedIndex}
+                onClick={(): void => onSelect(c.name)}
+                sx={{ alignItems: "flex-start", whiteSpace: "normal", py: 0.75 }}
+              >
+                <Stack sx={{ width: "100%", minWidth: 0 }}>
+                  <Stack direction="row" spacing={1} alignItems="baseline">
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontWeight: 600,
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      }}
+                    >
+                      /{c.name}
+                    </Typography>
+                  </Stack>
+                  {c.description && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ whiteSpace: "normal" }}
+                    >
+                      {c.description}
+                    </Typography>
+                  )}
+                </Stack>
+              </MenuItem>
+            ))}
+          </MenuList>
+        </Paper>
+      </ClickAwayListener>
+    </Popper>
   );
 }
 
@@ -370,4 +574,31 @@ async function readAsBase64(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+// Find the most recent `available_commands_update` payload in the session's
+// event log. Walks in reverse so the cost is at most one event when the
+// agent already advertised, and the empty-array baseline is cheap on first
+// connect.
+function latestAvailableCommands(timeline: Envelope[]): AvailableCommand[] {
+  for (let i = timeline.length - 1; i >= 0; i -= 1) {
+    const env = timeline[i];
+    if (env && env.kind === "update") {
+      const u = env.update as AcpUpdate;
+      if (u.sessionUpdate === "available_commands_update" && Array.isArray(u.availableCommands)) {
+        return u.availableCommands;
+      }
+    }
+  }
+  return [];
+}
+
+// Parse a leading `/<word>?` from the current text input. Returns the word
+// after the slash (possibly empty) when the input is *exactly* one slash-
+// prefixed token with no spaces or newlines, otherwise null (= picker
+// stays closed). This matches Slack's first-position-only behavior; the
+// user gets the picker only when starting a fresh slash command.
+function parseSlashQuery(text: string): string | null {
+  const m = /^\/(\S*)$/.exec(text);
+  return m ? (m[1] ?? "") : null;
 }
