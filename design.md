@@ -230,7 +230,7 @@ binary (omega pattern, via `rust-embed`). "PC" and "phone" are the **same app at
 different widths**, not separate builds — no desktop/Tauri app.
 
 - **Stack:** React 19, MUI 7 + Emotion, TanStack Router, TanStack Query, Vite 7,
-  TypeScript (strictest), built with Bun, linted with oxlint.
+  TypeScript (strictest), built with Deno, linted with oxlint.
 - **Realtime:** WebSocket client + a small store accumulating each session's
   timeline. TanStack Query (`useInfiniteQuery`) handles non-stream REST and
   **cursor-based history pagination** (`seq < cursor`, see §6).
@@ -436,3 +436,91 @@ For restricted-internet / air-gapped remotes, do **not** have cowboy stage the
 Zed server binary (option b): Zed's built-in `upload_binary_over_ssh: true`
 already solves first-connect download better, because the *local* app inherently
 knows its own exact version while a remote daemon can only guess it.
+
+## 13a. Coexistence via Zed ACP — cowboy as an external agent
+
+§13 is about the IDE-editor layer (Zed remote-dev sees the same files cowboy's
+agents edit). It does **not** make cowboy a visible client of Zed's Agent
+Panel — those still run their own claude-agent-acp out of band, splitting the
+session tree in two. To finally make Zed Agent Panel *itself* a cowboy client
+(so a turn started in Zed shows up live on the phone, and vice versa), cowboy
+exposes an **ACP server face** over stdio: the `cowboy serve-acp` subcommand
+implementing the `Agent` half of the same `agent-client-protocol` crate it
+already uses on the client side for upstream agents.
+
+The wire is what Zed's `crates/agent_servers/src/acp.rs:797-852` already
+spawns for any `agent_servers["<name>"]` entry of `type=custom`: piped
+stdin/stdout, line-delimited JSON-RPC, one stdio child hosting many
+concurrent `session/new` calls (`crates/acp_thread/src/acp_thread.rs:1535-1611`
+catalog of renderable `session/update` variants). There is no auth and no
+private handshake before `initialize`. cowboy advertises:
+
+- `protocolVersion: 1`, `authMethods: []`, `loadSession: false`,
+  `promptCapabilities: { image:false, audio:false, embeddedContext:false }` —
+  text-only baseline; ratchet up when we actually pipe images through.
+
+The Hub is the fan-out point. A new internal subscriber translates each Hub
+envelope as follows:
+
+| Hub `Event` | Forwarded as | Notes |
+| --- | --- | --- |
+| `Update { update }` | `session/update` notification | `update` is already a serialized ACP `SessionUpdate` (§5), deserialize → push verbatim. |
+| `PermissionRequest { ... }` | outbound `session/request_permission` RPC + supervisor-routed answer | first-response-wins still holds: a `PermissionResolved` from any other client short-circuits the in-flight Zed RPC future. |
+| `PermissionResolved { ... }` | drops the matching Zed-side pending RPC | nothing on the wire (Zed never sees an "another client answered" event). |
+| `TurnEnd { stop_reason }` | resolves the in-flight `prompt()` future with the parsed `StopReason` | this is how cowboy's `Agent::prompt` returns to Zed. |
+| `Lifecycle { ... }` | dropped | no ACP equivalent; cowboy's WS clients keep their process-status UI. |
+
+Sessions created by other surfaces (e.g. the phone's WebSocket) are kept
+**invisible to Zed**: only sessions whose `session/new` came through this ACP
+face are forwarded. The single Hub still has them; cowboy just doesn't push
+them. This keeps Zed Agent Panel from rendering threads it can't reasonably
+own.
+
+Why this is **not** the same anti-pattern as reimplementing Zed's remote-server
+proto (§13): ACP is Apache-2.0, versioned (`protocolVersion`), and the same
+crate cowboy already vendors. No reverse-engineering treadmill — a crate
+bump is `cargo update`. The single source of truth for the contract is the
+crate, not a Zed binary.
+
+**Dual-bind**: one cowboy process can expose both faces at once. The
+`cowboy serve-acp --ws-bind=<addr>` form additionally spawns the HTTP+WS
+server on `<addr>` using the SAME `Hub` + `Arc<Supervisor>` that the ACP
+face is using. The fan-out filter (`Shared::sessions`) keeps WS-only
+sessions invisible to Zed (so the panel doesn't render phone-only
+threads), but sessions created by Zed via `session/new` ARE registered in
+`Shared::sessions` AND broadcast to the Hub → WS clients see them and can
+prompt them. Verified end-to-end: a prompt sent from the browser to a
+Zed-opened session reaches the ACP-stdio client as a series of
+`session/update` notifications (user_message_chunk → streamed
+agent_message_chunks), and vice versa.
+
+What this delivers, concretely:
+
+- The user picks `cowboy (claude-code)` from Zed's agent picker; Zed spawns
+  one `cowboy serve-acp --ws-bind=…` child via the shell wrapper Zed always
+  uses; cowboy starts a session under the supervisor; the panel renders
+  streamed messages, tool calls, and plan updates from the same Hub the WS
+  UI is watching.
+- Phones + Zed open at once → multiple views of one running session; any
+  client can answer the next permission prompt (first-response-wins; the
+  other client's pending UI is closed via `Event::PermissionResolved`).
+- Cancel from Zed reaches the supervisor via `session/cancel` → upstream is
+  interrupted → `TurnEnd{Cancelled}` resolves cowboy's pending `prompt()` →
+  Zed sees `stopReason: cancelled`.
+- For the Mac client: `~/.config/zed/settings.json` carries one
+  `agent_servers["cowboy (claude-code)"]` entry pointing at the cowboy
+  release binary on the remote host with `--ws-bind=<host>:<port>` so the
+  phone has somewhere to connect. Register a second entry for Codex with
+  `--provider=codex` and a *different* `--ws-bind` port.
+
+Out of scope for the v0 cut:
+
+- `session/load` — depends on the SQLite persistence work (§6/§7); for now
+  `loadSession: false` is advertised so Zed never calls it.
+- A per-session provider picker inside Zed — Zed has no UI for that; the
+  workaround is one cowboy `agent_servers` entry per provider.
+- Permission UI parity for ExitPlanMode's mode-switch options — upstream's
+  `claude-agent-acp` emits structured `permission_option_kind: allow_always`
+  with mode IDs, which Zed renders; cowboy passes them through unmodified.
+  Special-case work (e.g. surfacing "switch to acceptEdits" prominently in
+  Zed) is downstream UX, not protocol.

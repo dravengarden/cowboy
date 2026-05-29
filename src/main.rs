@@ -1,8 +1,10 @@
 mod acp;
+mod acp_bridge;
 mod cli;
 mod core;
 mod provider;
 mod server;
+mod store;
 mod supervisor;
 
 use clap::Parser;

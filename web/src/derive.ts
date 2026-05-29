@@ -5,10 +5,26 @@
 
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 
+/// A renderable slice of a message — text and images can interleave inside
+/// one message item (e.g. user pastes "describe this:" + image + " thanks").
+export type ContentChunk =
+  | { type: "text"; text: string }
+  | { type: "image"; src: string; alt?: string };
+
 export type RenderItem =
-  | { kind: "message"; role: "assistant" | "user"; text: string }
+  | { kind: "message"; role: "assistant" | "user"; chunks: ContentChunk[] }
   | { kind: "thought"; text: string }
-  | { kind: "tool"; id: string; title: string; toolKind: string; status: string }
+  | {
+      kind: "tool";
+      id: string;
+      title: string;
+      toolKind: string;
+      status: string;
+      /// Raw input JSON (tool args), preserved for the expanded card.
+      rawInput?: unknown;
+      /// Tool result content (text / files / diff) as the upstream sent it.
+      content?: unknown;
+    }
   | { kind: "plan"; entries: PlanEntry[] }
   | {
       kind: "permission";
@@ -20,8 +36,51 @@ export type RenderItem =
     }
   | { kind: "lifecycle"; status: Status; detail: string | null };
 
+/// Convert an ACP content block into a renderable chunk (or null if we don't
+/// support that type yet).
+function chunkOf(update: AcpUpdate): ContentChunk | null {
+  const c = update.content as
+    | undefined
+    | {
+        type?: string;
+        text?: string;
+        data?: string;
+        url?: string;
+        mimeType?: string;
+        media_type?: string;
+        source?: { type?: string; data?: string; url?: string; media_type?: string };
+      };
+  if (!c) return null;
+  if (c.type === "text") {
+    return { type: "text", text: c.text ?? "" };
+  }
+  if (c.type === "image") {
+    // ACP image content blocks have a few shapes; cover both flat
+    // {data, mimeType, url} and nested {source: {data|url, media_type}}.
+    const src = c.source ?? c;
+    if (src.url) {
+      return { type: "image", src: src.url };
+    }
+    if (src.data) {
+      const mt = src.media_type ?? c.mimeType ?? "image/png";
+      return { type: "image", src: `data:${mt};base64,${src.data}` };
+    }
+  }
+  return null;
+}
+
 function textOf(update: AcpUpdate): string {
-  return update.content?.type === "text" ? (update.content.text ?? "") : "";
+  const ch = chunkOf(update);
+  return ch?.type === "text" ? ch.text : "";
+}
+
+function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void {
+  const last = item.chunks[item.chunks.length - 1];
+  if (last && last.type === "text" && chunk.type === "text") {
+    last.text += chunk.text;
+  } else {
+    item.chunks.push(chunk);
+  }
 }
 
 export function derive(timeline: Envelope[]): RenderItem[] {
@@ -43,12 +102,13 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           case "agent_message_chunk":
           case "user_message_chunk": {
             const role = u.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
-            const text = textOf(u);
+            const chunk = chunkOf(u);
+            if (!chunk) break;
             const last = items[items.length - 1];
             if (cursor?.kind === "message" && cursor.role === role && last?.kind === "message") {
-              last.text += text;
+              pushChunk(last, chunk);
             } else {
-              items.push({ kind: "message", role, text });
+              items.push({ kind: "message", role, chunks: [chunk] });
               cursor = { kind: "message", role };
             }
             break;
@@ -72,6 +132,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               title: u.title ?? id,
               toolKind: u.kind ?? "other",
               status: u.status ?? "pending",
+              rawInput: u["rawInput"] ?? u["input"],
+              content: u["content"],
             });
             toolIndex.set(id, items.length - 1);
             break;
@@ -83,6 +145,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (existing && existing.kind === "tool") {
               if (u.status) existing.status = u.status;
               if (u.title) existing.title = u.title;
+              if (u["rawInput"] !== undefined) existing.rawInput = u["rawInput"];
+              if (u["content"] !== undefined) existing.content = u["content"];
             }
             break;
           }

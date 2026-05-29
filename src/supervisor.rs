@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 use crate::acp::{self, AgentCommand};
-use crate::core::Hub;
+use crate::core::{Hub, SessionOrigin};
 use crate::provider;
 
 /// Spawns and tracks agent sessions; routes commands to their threads.
@@ -37,29 +37,34 @@ impl Supervisor {
     }
 
     /// Create a new session for `provider`, optionally rooted at `cwd`
-    /// (resolved under the workspace root). Returns the cowboy session id.
+    /// (resolved under the workspace root), tagged with the surface
+    /// (`origin`) that opened it. Returns the cowboy session id.
     ///
     /// # Errors
     /// If the provider is unknown or the agent thread cannot be spawned.
-    pub fn new_session(&self, provider: &str, cwd: Option<String>) -> Result<String, String> {
+    pub fn new_session(
+        &self,
+        provider: &str,
+        cwd: Option<String>,
+        origin: SessionOrigin,
+    ) -> Result<String, String> {
         let spec =
             provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
 
-        // Resolve cwd within the workspace root. A relative request joins the
-        // root; an absolute request that escapes the root falls back to it
-        // (v1 scoping — design §9 workspace-root scoping).
+        // Resolve cwd. Relative paths join the workspace_root; absolute
+        // paths are honoured as-is. We dropped the starts_with(root) clamp
+        // (v1) because cowboy is LAN-only + runs as the human user, and the
+        // user explicitly wants to open sessions in workspaces outside the
+        // default root (e.g. `/etc/nixos`). The agent already inherits the
+        // user's full filesystem permissions, so the clamp was security
+        // theatre rather than a real boundary.
         let cwd = match cwd {
             Some(rel) => {
                 let p = PathBuf::from(&rel);
-                let joined = if p.is_absolute() {
+                if p.is_absolute() {
                     p
                 } else {
                     self.workspace_root.join(p)
-                };
-                if joined.starts_with(&self.workspace_root) {
-                    joined
-                } else {
-                    self.workspace_root.clone()
                 }
             }
             None => self.workspace_root.clone(),
@@ -72,6 +77,7 @@ impl Supervisor {
             provider.to_owned(),
             cwd.display().to_string(),
             title,
+            origin,
         );
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -97,5 +103,25 @@ impl Supervisor {
             .get(session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         tx.send(cmd).map_err(|_| "session ended".to_owned())
+    }
+
+    /// Tear down a session's agent thread. Sends `Cancel` (best-effort, so an
+    /// in-flight turn returns to its caller cleanly), then drops the tx so
+    /// the agent's command loop terminates on next poll. Hub state is the
+    /// caller's responsibility — pair with [`Hub::delete_session`].
+    ///
+    /// Returns `true` if the session had a live sender (= the thread was
+    /// alive). Unknown / already-torn-down sessions are a no-op and return
+    /// `false`.
+    pub fn delete_session(&self, session_id: &str) -> bool {
+        let tx = self.senders.lock().unwrap().remove(session_id);
+        match tx {
+            Some(tx) => {
+                let _ = tx.send(AgentCommand::Cancel);
+                drop(tx);
+                true
+            }
+            None => false,
+        }
     }
 }

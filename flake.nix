@@ -8,21 +8,50 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
 
-      # Step 1 — build the SPA (omega's recipe). Fixed-output derivation
-      # because `bun install` needs network; the hash only changes when the
-      # bundle changes. Output is the built `web/dist`. Refresh the hash with
+      # Deno 2.8.1 — nixpkgs `nixos-unstable` only ships 2.7.14 today, so we
+      # pull the official prebuilt binary directly. Standard pattern:
+      # fetchurl → unzip → autoPatchelfHook fixes the dynamic linker. Once
+      # nixpkgs catches up, this whole derivation can be deleted and the
+      # uses below swap back to `pkgs.deno`.
+      deno = pkgs.stdenvNoCC.mkDerivation rec {
+        pname = "deno";
+        version = "2.8.1";
+        src = pkgs.fetchurl {
+          url = "https://github.com/denoland/deno/releases/download/v${version}/deno-x86_64-unknown-linux-gnu.zip";
+          hash = "sha256-LXu2GVImrIMuC/cQmhFfCvZe5prHl6S73lsnoGzCQtk=";
+        };
+        nativeBuildInputs = [ pkgs.unzip pkgs.autoPatchelfHook ];
+        buildInputs = [ pkgs.stdenv.cc.cc.lib pkgs.zlib ];
+        unpackPhase = "unzip $src";
+        installPhase = ''
+          install -Dm755 deno $out/bin/deno
+        '';
+        meta = {
+          description = "A modern runtime for JavaScript and TypeScript";
+          homepage = "https://deno.land/";
+          mainProgram = "deno";
+        };
+      };
+
+      # Step 1 — build the SPA. Fixed-output derivation because
+      # `deno install` needs network; the hash only changes when the bundle
+      # changes. Output is the built `web/dist`. Refresh the hash with
       # `lib.fakeHash` → build → copy the "got" hash back.
       cowboy-web = pkgs.stdenvNoCC.mkDerivation {
         pname = "cowboy-web";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
-        nativeBuildInputs = [ pkgs.bun pkgs.nodejs_22 ];
+        nativeBuildInputs = [ deno pkgs.nodejs_24 ];
         dontConfigure = true;
         buildPhase = ''
           export HOME=$TMPDIR
+          export DENO_DIR=$TMPDIR/deno-cache
           cd web
-          bun install --frozen-lockfile --no-progress
-          node node_modules/.bin/vite build
+          # No --frozen here: the FOD's outputHash already pins the bundle
+          # bit-for-bit, and the lockfile lives in-tree so an in-source
+          # update is what we want when a dep is bumped.
+          deno install
+          deno task build
         '';
         installPhase = ''
           cp -R dist $out
@@ -30,7 +59,7 @@
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-PA3GXJtJjwYdIt1fyYd1qQJZM/+MKG4ZqbURMWGuq7M=";
+        outputHash = "sha256-sumtfAffUtZ2AAjm3gXOSKliS1uRhg+7di/9q+9JYj4=";
       };
 
       # Step 2 — the Rust binary, embedding the built SPA via rust-embed
@@ -44,7 +73,7 @@
         # crates via python-requests, which sends a User-Agent. crates.io now
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-KN9wGQeIlP4vyNBsKvORlaLmDK35vbe7Hgl77MgsF6I=";
+        cargoHash = "sha256-YSWws4KEyP9BoBz/XBwWYfidTjGoy6I00yW6dXU0aQg=";
         preBuild = ''
           mkdir -p web/dist
           cp -R ${cowboy-web}/. web/dist/
@@ -60,10 +89,13 @@
         default = cowboy;
         cowboy = cowboy;
         cowboy-web = cowboy-web;
+        deno = deno;
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        # Rust toolchain + sccache compiler cache, plus the frontend toolchain.
+        # Rust toolchain + sccache compiler cache, plus the frontend toolchain
+        # (deno 2.8.1 binary override + node 24 for any node-shaped tool
+        # that deno's npm interop can't shim).
         nativeBuildInputs = with pkgs; [
           rustc
           cargo
@@ -71,8 +103,8 @@
           rustfmt
           sccache
           just
-          bun
-          nodejs_22
+          deno
+          nodejs_24
         ];
 
         # All Rust builds in this project go through sccache (see design.md §10).
@@ -82,8 +114,9 @@
         CARGO_INCREMENTAL = "0";
 
         shellHook = ''
-          echo "cowboy dev shell — rust + sccache + bun"
+          echo "cowboy dev shell — rust + sccache + deno"
           sccache --version >/dev/null 2>&1 && echo "sccache: $(sccache --version)"
+          deno --version 2>/dev/null | head -1
         '';
       };
     };

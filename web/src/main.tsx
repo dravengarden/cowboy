@@ -5,11 +5,11 @@ import { App } from "./App";
 import { useThemeMode } from "./theme";
 
 function Root(): React.JSX.Element {
-  const { theme, mode, cycle } = useThemeMode();
+  const { theme, mode, setMode } = useThemeMode();
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <App themeMode={mode} onToggleTheme={cycle} />
+      <App themeMode={mode} onSetThemeMode={setMode} />
     </ThemeProvider>
   );
 }

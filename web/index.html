@@ -11,6 +11,20 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="cowboy" />
     <title>cowboy</title>
+    <style>
+      /* Hard reset so the root flex container has a 100% canvas to work on
+         no matter what the browser's default margins / DPI / dvh quirks
+         do. CssBaseline alone doesn't set html/body to fill the viewport
+         (only normalizes spacing), which leaves an unsightly band of
+         background on some displays. */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overscroll-behavior: none;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

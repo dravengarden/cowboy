@@ -4,12 +4,18 @@
 
 export type Status = "starting" | "running" | "busy" | "exited" | "crashed";
 
+// Which surface opened the session — for the sidebar badge.
+// Mirrors src/core.rs `SessionOrigin`. Older daemons that predate this field
+// will omit it; treat absent as "api".
+export type SessionOrigin = "api" | "web" | "zed";
+
 export interface SessionMeta {
   id: string;
   provider: string;
   cwd: string;
   title: string;
   status: Status;
+  origin?: SessionOrigin;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -83,6 +89,7 @@ export type Inbound =
       session_id: string;
       request_id: string;
       option_id?: string;
-    };
+    }
+  | { type: "delete_session"; session_id: string };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;

@@ -20,10 +20,11 @@ use std::rc::Rc;
 use agent_client_protocol::{
     Agent, CancelNotification, Client, ClientSideConnection, ContentBlock, Error,
     InitializeRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, V1,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionModeId,
+    SessionNotification, SetSessionModeRequest, V1,
 };
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -34,8 +35,10 @@ use crate::provider::LaunchSpec;
 /// A command from a client, routed by the supervisor to an agent thread.
 #[derive(Debug)]
 pub enum AgentCommand {
-    /// Send a user turn.
-    Prompt(String),
+    /// Send a user turn. The full ACP content array is forwarded to the
+    /// upstream agent verbatim — image / audio / resource blocks make it
+    /// through (subject to the upstream's own capabilities), not just text.
+    Prompt(Vec<ContentBlock>),
     /// Cancel the current turn (ACP `session/cancel`).
     Cancel,
     /// Answer a pending permission request (`None` = cancelled / no choice).
@@ -202,23 +205,64 @@ async fn agent_main(
     tracing::info!(session = session_id, acp_id = %acp_id.0, "session created");
     hub.set_status(session_id, Status::Running, None);
 
-    // Command loop. Prompts run as concurrent local tasks so Cancel and
-    // Permission answers are still processed while a turn is in flight.
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            AgentCommand::Prompt(text) => {
-                hub.set_status(session_id, Status::Busy, None);
-                // Echo the user's turn into the timeline so every client sees
-                // it (the agent may not stream a user_message_chunk back).
+    // Match Zed's claude-acp default UX: open at `bypassPermissions` if the
+    // upstream advertises it. This is what most users want for an agent
+    // panel — explicit permission prompts dominate the UX otherwise — and
+    // it matches the v0 spec the user is iterating against.
+    if let Some(modes) = session.modes.as_ref() {
+        let want = "bypassPermissions";
+        let has = modes
+            .available_modes
+            .iter()
+            .any(|m| m.id.0.as_ref() == want);
+        if has && modes.current_mode_id.0.as_ref() != want {
+            let req = SetSessionModeRequest {
+                session_id: acp_id.clone(),
+                mode_id: SessionModeId(Arc::from(want)),
+                meta: None,
+            };
+            if let Err(e) = conn.set_session_mode(req).await {
+                tracing::warn!(error = ?e, "set_session_mode bypassPermissions failed");
+            } else {
+                tracing::info!(session = session_id, "mode → bypassPermissions");
+                // Also echo into the timeline so the UI mode chip is up to
+                // date without round-tripping through a session_update.
                 hub.push(
                     session_id,
                     Event::Update {
                         update: serde_json::json!({
-                            "sessionUpdate": "user_message_chunk",
-                            "content": { "type": "text", "text": text },
+                            "sessionUpdate": "current_mode_update",
+                            "currentModeId": want,
                         }),
                     },
                 );
+            }
+        }
+    }
+
+    // Command loop. Prompts run as concurrent local tasks so Cancel and
+    // Permission answers are still processed while a turn is in flight.
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            AgentCommand::Prompt(blocks) => {
+                hub.set_status(session_id, Status::Busy, None);
+                // Echo each user content block into the timeline so every
+                // client (Web UI, phone, Zed via bridge) sees it — the
+                // upstream agent may not stream a user_message_chunk back.
+                // One Hub event per block so each renders as its own bubble
+                // (text + image, today; future: audio etc.).
+                for block in &blocks {
+                    let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
+                    hub.push(
+                        session_id,
+                        Event::Update {
+                            update: serde_json::json!({
+                                "sessionUpdate": "user_message_chunk",
+                                "content": content,
+                            }),
+                        },
+                    );
+                }
                 let conn = conn.clone();
                 let hub = hub.clone();
                 let sid = session_id.to_owned();
@@ -227,7 +271,7 @@ async fn agent_main(
                     let stop_reason = match conn
                         .prompt(PromptRequest {
                             session_id: acp,
-                            prompt: vec![ContentBlock::from(text)],
+                            prompt: blocks,
                             meta: None,
                         })
                         .await

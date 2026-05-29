@@ -14,60 +14,114 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Json, State};
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::Router;
 use futures::{SinkExt, StreamExt};
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+use agent_client_protocol::ContentBlock;
+
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
-use crate::core::{Hub, Outbound};
+use crate::core::{Hub, Inbound, Outbound, SessionOrigin, StoreWrite};
+use crate::store::Store;
 use crate::supervisor::Supervisor;
+use tokio::sync::mpsc;
 
 struct AppState {
     hub: Hub,
-    supervisor: Supervisor,
-}
-
-/// A command sent by a client over the WebSocket.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Inbound {
-    /// Start a new agent session.
-    NewSession {
-        provider: String,
-        #[serde(default)]
-        cwd: Option<String>,
-    },
-    /// Send a user turn to a session.
-    Prompt { session_id: String, text: String },
-    /// Cancel a session's current turn.
-    Cancel { session_id: String },
-    /// Answer a pending permission request.
-    Permission {
-        session_id: String,
-        request_id: String,
-        #[serde(default)]
-        option_id: Option<String>,
-    },
+    supervisor: Arc<Supervisor>,
 }
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     init_tracing();
 
-    let hub = Hub::new();
-    let supervisor = Supervisor::new(hub.clone(), args.workspace_root.clone());
+    // Phase 2: when --postgres-url is supplied, hook in the persistent store.
+    // Migrations run on every start (sqlx tracks applied versions, so it's
+    // idempotent); the in-memory Hub is then warmed from the DB before WS
+    // clients can connect. Without --postgres-url the daemon falls back to
+    // pure in-memory mode — same behaviour as before, useful for dev or for
+    // running on a host that doesn't have the cowboy-private postgres yet.
+    let (hub, store) = if let Some(url) = args.postgres_url.as_deref() {
+        let store = Store::connect(url).await.context("connecting postgres")?;
+        store.migrate().await.context("running migrations")?;
+        let (tx, rx) = mpsc::unbounded_channel::<StoreWrite>();
+        let hub = Hub::with_store(Some(tx));
+        // Warm restore — sessions + events come back exactly as the daemon
+        // left them, so on a fresh process every WS client's first snapshot
+        // is correct.
+        let loaded = store.load_all().await.context("loading persisted state")?;
+        let restored: Vec<_> = loaded
+            .into_iter()
+            .map(|ls| (ls.meta, ls.events, ls.next_seq))
+            .collect();
+        let restored_count = restored.len();
+        hub.restore(restored);
+        tracing::info!(
+            postgres = url,
+            restored = restored_count,
+            "persistence wired",
+        );
+        // Background DB writer: dequeues StoreWrite intents and applies them.
+        // Errors are logged but don't bring the daemon down — the in-memory
+        // state remains authoritative for the current process.
+        tokio::spawn(run_store_writer(store.clone(), rx));
+        (hub, Some(store))
+    } else {
+        tracing::info!("no --postgres-url: running in-memory only");
+        (Hub::new(), None)
+    };
+    drop(store); // We only kept it to thread the type; the writer holds it.
+
+    let supervisor = Arc::new(Supervisor::new(hub.clone(), args.workspace_root.clone()));
+
+    tracing::info!(
+        workspace = %args.workspace_root.display(),
+        data_dir = %args.data_dir.display(),
+        "cowboy serving",
+    );
+
+    serve_axum(args.bind, hub, supervisor).await
+}
+
+/// Drain the write-behind channel into postgres. One row per intent, no
+/// batching for v0 — append-event is the hot one and a single INSERT per
+/// envelope is fine at the volumes we'll see (a streaming claude turn is
+/// ~50-200 events; postgres can handle that easily over a local socket).
+async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWrite>) {
+    while let Some(write) = rx.recv().await {
+        let result = match &write {
+            StoreWrite::InsertSession(meta) => store.insert_session(meta).await,
+            StoreWrite::AppendEvent(env) => store.append_event(env).await,
+            StoreWrite::UpdateStatus { session_id, status } => {
+                store.update_status(session_id, *status).await
+            }
+            StoreWrite::DeleteSession(id) => store.delete_session(id).await,
+        };
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "store writer failed an intent (intent dropped)");
+        }
+    }
+    tracing::info!("store writer shutting down (channel closed)");
+}
+
+async fn serve_axum(
+    bind: std::net::SocketAddr,
+    hub: Hub,
+    supervisor: Arc<Supervisor>,
+) -> anyhow::Result<()> {
     let state = Arc::new(AppState { hub, supervisor });
 
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/api/sessions", post(api_new_session))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
         // client-side routes.
@@ -75,16 +129,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(args.bind)
+    let listener = tokio::net::TcpListener::bind(bind)
         .await
-        .with_context(|| format!("binding {}", args.bind))?;
-
-    tracing::info!(
-        addr = %args.bind,
-        workspace = %args.workspace_root.display(),
-        data_dir = %args.data_dir.display(),
-        "cowboy serving",
-    );
+        .with_context(|| format!("binding {bind}"))?;
+    tracing::info!(addr = %bind, "WS/HTTP listening");
 
     axum::serve(listener, app).await.context("axum serve")?;
     Ok(())
@@ -102,8 +150,50 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
+/// Request body for `POST /api/sessions`.
+///
+/// WS `Inbound::NewSession` is fire-and-forget without a `sessionId` reply, so
+/// external drivers (e.g. the `acp-bridge` translating ACP `session/new`)
+/// would have to diff `Outbound::Sessions` broadcasts to learn their id —
+/// racey. This endpoint exists so a single synchronous HTTP request returns
+/// the assigned id directly. Web UI clients can keep using the WS path;
+/// this is purely additive.
+#[derive(Debug, Deserialize)]
+struct NewSessionRequest {
+    provider: String,
+    #[serde(default)]
+    cwd: Option<String>,
+    /// Which surface opened the session — defaults to `Api` for direct
+    /// `curl`/test callers. `acp-bridge` sends `Zed`. The Web UI uses the WS
+    /// `Inbound::NewSession` path (which always tags `Web`), not this
+    /// endpoint, so `Web` shouldn't normally arrive here.
+    #[serde(default)]
+    origin: SessionOrigin,
+}
+
+/// Response body for `POST /api/sessions`.
+#[derive(Debug, Serialize)]
+struct NewSessionResponse {
+    session_id: String,
+}
+
+async fn api_new_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<NewSessionRequest>,
+) -> Response {
+    match state
+        .supervisor
+        .new_session(&req.provider, req.cwd, req.origin)
+    {
+        Ok(session_id) => {
+            (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response()
+        }
+        Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+    }
+}
+
 /// The built web UI (Vite output), embedded at compile time. The flake builds
-/// `web/dist` with bun before the cargo build so this folder exists.
+/// `web/dist` with deno before the cargo build so this folder exists.
 #[derive(RustEmbed)]
 #[folder = "web/dist"]
 struct Assets;
@@ -221,12 +311,37 @@ fn handle_command(state: &AppState, text: &str) {
         }
     };
     let result = match cmd {
-        Inbound::NewSession { provider, cwd } => {
-            state.supervisor.new_session(&provider, cwd).map(|_| ())
-        }
-        Inbound::Prompt { session_id, text } => state
+        Inbound::NewSession { provider, cwd } => state
             .supervisor
-            .send(&session_id, AgentCommand::Prompt(text)),
+            .new_session(&provider, cwd, SessionOrigin::Web)
+            .map(|_| ()),
+        Inbound::Prompt {
+            session_id,
+            text,
+            content,
+        } => {
+            let blocks: Vec<ContentBlock> = if content.is_empty() {
+                if text.is_empty() {
+                    tracing::warn!("Prompt with neither text nor content; dropping");
+                    return;
+                }
+                vec![ContentBlock::from(text)]
+            } else {
+                content
+                    .into_iter()
+                    .filter_map(|v| match serde_json::from_value::<ContentBlock>(v) {
+                        Ok(b) => Some(b),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "skipping unparseable Prompt content block");
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            state
+                .supervisor
+                .send(&session_id, AgentCommand::Prompt(blocks))
+        }
         Inbound::Cancel { session_id } => state.supervisor.send(&session_id, AgentCommand::Cancel),
         Inbound::Permission {
             session_id,
@@ -239,6 +354,14 @@ fn handle_command(state: &AppState, text: &str) {
                 option_id,
             },
         ),
+        Inbound::DeleteSession { session_id } => {
+            // Order: tear down agent thread first (so it doesn't push more
+            // events into a soon-to-be-gone Hub session), then drop Hub state
+            // + broadcast updated list.
+            state.supervisor.delete_session(&session_id);
+            state.hub.delete_session(&session_id);
+            Ok(())
+        }
     };
     if let Err(e) = result {
         tracing::warn!(error = %e, "command failed");
