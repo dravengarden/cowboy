@@ -278,8 +278,10 @@ export function App({
   const sidebarHeader = (
     <Toolbar
       variant="dense"
-      sx={{ borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
+      sx={{ borderBottom: 1, borderColor: "divider", flexShrink: 0, gap: 0.5 }}
     >
+      {/* Portal launcher — the app's absolute top-left; self-hides when not hosted. */}
+      <PortalLauncherButton edge="start" size="small" />
       <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
         🤠 cowboy
       </Typography>
@@ -313,8 +315,9 @@ export function App({
             variant="dense"
             sx={{ borderBottom: 1, borderColor: "divider" }}
           >
-            {/* Portal launcher (top-left); self-hides when not hosted. */}
-            <PortalLauncherButton edge="start" size="small" />
+            {/* On mobile the sidebar (with its launcher) is hidden, so the
+                launcher rides the content bar next to the drawer toggle. */}
+            {mobile && <PortalLauncherButton edge="start" size="small" />}
             {mobile && (
               <IconButton onClick={(): void => setDrawerOpen(true)} sx={{ mr: 1 }}>
                 <MenuIcon />
