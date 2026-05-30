@@ -239,11 +239,12 @@ export function Composer({
         // The action row's far-left (slash) and far-right (send) buttons sit
         // right where iPhone's rounded screen corners curve in. In portrait
         // `env(safe-area-inset-left/right)` is 0, so floor the side padding to
-        // 12px (and the bottom to home-indicator + 12px) to keep those tap
-        // targets off the corner radius; in landscape the non-zero side insets
-        // push them clear of the notch too.
+        // 12px to keep those tap targets off the corner radius; in landscape the
+        // non-zero side insets push them clear of the notch too. Bottom: just
+        // the home-indicator inset (no extra) so there's no oversized gap below
+        // the action row — floored to 6px on devices without a home bar.
         pt: { xs: 1, sm: 1.5 },
-        pb: { xs: "calc(env(safe-area-inset-bottom) + 12px)", sm: 1.5 },
+        pb: { xs: "max(env(safe-area-inset-bottom), 6px)", sm: 1.5 },
         pl: { xs: "max(env(safe-area-inset-left), 12px)", sm: "max(env(safe-area-inset-left), 12px)" },
         pr: { xs: "max(env(safe-area-inset-right), 12px)", sm: "max(env(safe-area-inset-right), 12px)" },
         borderTop: 1,
