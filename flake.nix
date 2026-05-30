@@ -3,10 +3,17 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  # Shared front-end SDK (contract + UI primitives) from the atlantis project,
+  # staged into the web build — NOT vendored (web/src/_shell/ is gitignored,
+  # materialized at build / via `harness shell link` for local dev).
+  inputs.atlantis.url = "git+file:///home/draven/columbus/projects/atlantis/main";
+  inputs.atlantis.inputs.nixpkgs.follows = "nixpkgs";
+
+  outputs = { self, nixpkgs, atlantis }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      appSdk = atlantis.packages.${system}.components;
 
       # Deno 2.8.1 — nixpkgs `nixos-unstable` only ships 2.7.14 today, so we
       # pull the official prebuilt binary directly. Standard pattern:
@@ -46,6 +53,10 @@
         buildPhase = ''
           export HOME=$TMPDIR
           export DENO_DIR=$TMPDIR/deno-cache
+          # Stage the shared SDK from the atlantis components package.
+          mkdir -p web/src/_shell
+          cp ${appSdk}/* web/src/_shell/
+          chmod -R u+w web/src/_shell
           cd web
           # No --frozen here: the FOD's outputHash already pins the bundle
           # bit-for-bit, and the lockfile lives in-tree so an in-source
