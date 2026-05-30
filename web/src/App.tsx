@@ -1052,6 +1052,14 @@ function SwipeableSessionRow({
           willChange: "transform",
           // Let vertical scroll through, capture horizontal pans here.
           touchAction: "pan-y",
+          // Solid background is mandatory — otherwise the absolutely-
+          // positioned Delete button behind us shows through whenever the
+          // ListItemButton's row content doesn't span the full width
+          // (which is most of the time, because ListItemText shrinks to
+          // its content). Without this the row looks permanently
+          // swipe-open even at translate 0.
+          bgcolor: "background.paper",
+          width: "100%",
         }}
       >
         {children}
