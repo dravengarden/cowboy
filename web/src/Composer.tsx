@@ -182,225 +182,219 @@ export function Composer({
         // leading `+` and the trailing send button — floor the side insets so
         // those tap targets stay fully on-screen. `env(safe-area-inset-*)` is
         // 0 off-device, so each is floored to the normal padding (8 / 12px).
+        // The `+` and send buttons now sit at the row's far left/right, i.e.
+        // right where iPhone's rounded screen corners curve in. In portrait
+        // `env(safe-area-inset-left/right)` is 0, so floor the side padding to
+        // 12px (and the bottom to home-indicator + 12px) to keep both buttons
+        // off the corner radius; in landscape the non-zero side insets push
+        // them clear of the notch too.
         pt: { xs: 1, sm: 1.5 },
         pb: { xs: "calc(env(safe-area-inset-bottom) + 12px)", sm: 1.5 },
-        pl: { xs: "max(env(safe-area-inset-left), 8px)", sm: "max(env(safe-area-inset-left), 12px)" },
-        pr: { xs: "max(env(safe-area-inset-right), 8px)", sm: "max(env(safe-area-inset-right), 12px)" },
+        pl: { xs: "max(env(safe-area-inset-left), 12px)", sm: "max(env(safe-area-inset-left), 12px)" },
+        pr: { xs: "max(env(safe-area-inset-right), 12px)", sm: "max(env(safe-area-inset-right), 12px)" },
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
         position: "relative", // anchor for Popper portal placement
       }}
     >
-      <Paper
-        ref={textFieldRef}
-        variant="outlined"
-        elevation={0}
-        sx={{
-          // Slack / iMessage-style composer card: the textarea, the action
-          // bar and the send button all live inside ONE rounded, bordered
-          // surface — the card is the border, the input itself is borderless —
-          // and the whole edge highlights on focus. Replaces the old layout of
-          // an outlined TextField + a detached chip row + a separate send
-          // button sitting beside it.
-          display: "flex",
-          flexDirection: "column",
-          borderRadius: 2.5,
-          borderColor: "divider",
-          bgcolor: "background.paper",
-          overflow: "hidden",
-          transition: "border-color 120ms ease",
-          "&:focus-within": { borderColor: "primary.main" },
-          opacity: dead ? 0.6 : 1,
-        }}
-      >
-        {attachments.length > 0 && (
-          <Box sx={{ px: 1, pt: 1 }}>
-            <AttachmentPreview
-              blocks={attachments}
-              onRemove={(i): void =>
-                setAttachments((prev) => prev.filter((_, idx) => idx !== i))
-              }
-            />
-          </Box>
-        )}
-        <InputBase
-          fullWidth
-          multiline
-          minRows={1}
-          maxRows={12}
-          placeholder={dead ? "Session ended" : "Message the agent…"}
-          value={text}
-          disabled={dead}
-          onChange={(e): void => setText(e.target.value)}
-          onKeyDown={(e): void => {
-            // Slash picker keyboard control wins over send/newline so the
-            // user can pick a command without surprises.
-            if (slashOpen && filteredCommands.length > 0) {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setSlashIndex((i) => (i + 1) % filteredCommands.length);
-                return;
-              }
-              if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setSlashIndex(
-                  (i) => (i - 1 + filteredCommands.length) % filteredCommands.length,
-                );
-                return;
-              }
-              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
-                const cmd = filteredCommands[slashIndex];
-                if (cmd) {
+      {/* Slack resting composer: a single row with `+` BEFORE the field and
+          send AFTER it, both flanking the rounded input (not stacked below).
+          They align to the field's bottom so they stay put as it grows. The
+          row sits inside the outer safe-area padding, so on iPhone the buttons
+          clear the home indicator and the rounded screen corners. */}
+      <Stack direction="row" alignItems="flex-end" spacing={0.5}>
+        {/* `+` before the field. Touch → opens the bottom sheet (attach + every
+            config option). Desktop → image-attach (config lives in the chip
+            row below). */}
+        <Tooltip title={compact ? "Attach + options" : "Attach images"}>
+          <span>
+            <IconButton
+              aria-label={compact ? "more options" : "attach"}
+              disabled={dead}
+              sx={{ width: { xs: 40, lg: 38 }, height: { xs: 40, lg: 38 }, flexShrink: 0 }}
+              onClick={(): void => {
+                if (compact) setSheetOpen(true);
+                else fileInput.current?.click();
+              }}
+            >
+              <Add />
+            </IconButton>
+          </span>
+        </Tooltip>
+
+        {/* The rounded input field. `+`/send flank it from outside, so this is
+            just the text surface — bordered, focus-highlighting, growing with
+            the text up to maxRows. */}
+        <Paper
+          ref={textFieldRef}
+          variant="outlined"
+          elevation={0}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            borderRadius: 3,
+            borderColor: "divider",
+            bgcolor: "background.paper",
+            overflow: "hidden",
+            transition: "border-color 120ms ease",
+            "&:focus-within": { borderColor: "primary.main" },
+            opacity: dead ? 0.6 : 1,
+          }}
+        >
+          {attachments.length > 0 && (
+            <Box sx={{ px: 1, pt: 1 }}>
+              <AttachmentPreview
+                blocks={attachments}
+                onRemove={(i): void =>
+                  setAttachments((prev) => prev.filter((_, idx) => idx !== i))
+                }
+              />
+            </Box>
+          )}
+          <InputBase
+            fullWidth
+            multiline
+            minRows={1}
+            maxRows={12}
+            placeholder={dead ? "Session ended" : "Message the agent…"}
+            value={text}
+            disabled={dead}
+            onChange={(e): void => setText(e.target.value)}
+            onKeyDown={(e): void => {
+              // Slash picker keyboard control wins over send/newline so the
+              // user can pick a command without surprises.
+              if (slashOpen && filteredCommands.length > 0) {
+                if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  insertCommand(cmd.name);
+                  setSlashIndex((i) => (i + 1) % filteredCommands.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashIndex(
+                    (i) => (i - 1 + filteredCommands.length) % filteredCommands.length,
+                  );
+                  return;
+                }
+                if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
+                  const cmd = filteredCommands[slashIndex];
+                  if (cmd) {
+                    e.preventDefault();
+                    insertCommand(cmd.name);
+                    return;
+                  }
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setText("");
                   return;
                 }
               }
-              if (e.key === "Escape") {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                setText("");
-                return;
+                submit();
               }
-            }
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          sx={{
-            px: 1.5,
-            pt: 1,
-            pb: 0.5,
-            fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-            // 16px on touch so iOS/iPadOS Safari doesn't auto-zoom the page on
-            // focus (it never zooms back out); 14px on desktop where there is
-            // no auto-zoom. See the index.html viewport note.
-            fontSize: 14,
-            "@media (pointer: coarse)": { fontSize: 16 },
-          }}
-        />
-        {/* Action bar, inside the card. Left: attach + the agent-advertised
-            config (mode / model / effort) — a single + that opens the bottom
-            sheet on touch, inline chips on desktop. Right: the keyboard hint
-            (desktop) and the send / stop button. */}
+            }}
+            sx={{
+              px: 1.5,
+              py: 1,
+              fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+              // 16px on touch so iOS/iPadOS Safari doesn't auto-zoom the page on
+              // focus (it never zooms back out); 14px on desktop where there is
+              // no auto-zoom. See the index.html viewport note.
+              fontSize: 14,
+              "@media (pointer: coarse)": { fontSize: 16 },
+            }}
+          />
+        </Paper>
+
+        {/* send after the field */}
+        {busy ? (
+          <Tooltip title="Stop">
+            <IconButton
+              color="error"
+              aria-label="cancel"
+              sx={{ width: { xs: 40, lg: 38 }, height: { xs: 40, lg: 38 }, flexShrink: 0 }}
+              onClick={(): void => send({ type: "cancel", session_id: sessionId })}
+            >
+              <Stop />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Tooltip title="Send (⌘/Ctrl + Enter)">
+            <span>
+              <IconButton
+                aria-label="send"
+                disabled={!sendable}
+                onClick={submit}
+                sx={{
+                  width: { xs: 40, lg: 38 },
+                  height: { xs: 40, lg: 38 },
+                  flexShrink: 0,
+                  borderRadius: 2,
+                  // Filled accent when there's something to send (Slack /
+                  // ChatGPT), a quiet ghost when the field is empty.
+                  bgcolor: sendable ? "primary.main" : "transparent",
+                  color: sendable ? "primary.contrastText" : "text.disabled",
+                  "&:hover": { bgcolor: sendable ? "primary.dark" : "action.hover" },
+                }}
+              >
+                <Send sx={{ fontSize: 20 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+      </Stack>
+      {/* Desktop only: the agent's mode / model / effort chips + the keyboard
+          hint, on a row below the field. On touch these live in the + sheet,
+          so there's no chip strip flush to the bottom edge (the iOS home
+          gesture would eat its horizontal scroll). */}
+      {!compact && (
         <Stack
           direction="row"
           alignItems="center"
-          sx={{ px: 0.5, pb: 0.5, gap: 0.25 }}
+          spacing={0.75}
+          sx={{
+            mt: 0.75,
+            pl: "44px", // align the chip row under the field, past the + button
+            overflowX: "auto",
+            scrollbarWidth: "thin",
+            "&::-webkit-scrollbar": { height: 6 },
+            minHeight: 36,
+          }}
         >
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={0.5}
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              // Desktop chip row can outgrow the width → scroll it. On touch the
-              // left side is a single + (no strip), so this never becomes a
-              // bottom-edge horizontal-scroll strip the iOS home gesture eats.
-              overflowX: "auto",
-              scrollbarWidth: "thin",
-              "&::-webkit-scrollbar": { height: 6 },
-            }}
-          >
-            {compact ? (
-              <Tooltip title="Attach + options">
-                <span>
-                  <IconButton
-                    aria-label="more options"
-                    disabled={dead}
-                    sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
-                    onClick={(): void => setSheetOpen(true)}
-                  >
-                    <Add />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            ) : (
-              <>
-                <Tooltip title="Attach images">
-                  <span>
-                    <IconButton
-                      aria-label="attach"
-                      disabled={dead}
-                      sx={{ width: 36, height: 36, flexShrink: 0 }}
-                      onClick={(): void => fileInput.current?.click()}
-                    >
-                      <Add />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                {showSkeleton ? (
-                  <ConfigChipSkeletons />
-                ) : (
-                  options.map((opt) => (
-                    <ConfigOptionChip
-                      key={opt.id}
-                      option={opt}
-                      disabled={dead}
-                      onSelect={(value): void =>
-                        send({
-                          type: "set_config_option",
-                          session_id: sessionId,
-                          config_id: opt.id,
-                          value,
-                        })
-                      }
-                    />
-                  ))
-                )}
-              </>
-            )}
-          </Stack>
-          {!compact && (
-            <Typography
-              variant="caption"
-              color="text.disabled"
-              sx={{ whiteSpace: "nowrap", fontSize: 11, flexShrink: 0, mr: 0.5 }}
-            >
-              ⌘/Ctrl + Enter = send
-            </Typography>
-          )}
-          {busy ? (
-            <Tooltip title="Stop">
-              <IconButton
-                color="error"
-                aria-label="cancel"
-                sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
-                onClick={(): void => send({ type: "cancel", session_id: sessionId })}
-              >
-                <Stop />
-              </IconButton>
-            </Tooltip>
+          {showSkeleton ? (
+            <ConfigChipSkeletons />
           ) : (
-            <Tooltip title="Send (⌘/Ctrl + Enter)">
-              <span>
-                <IconButton
-                  aria-label="send"
-                  disabled={!sendable}
-                  onClick={submit}
-                  sx={{
-                    width: { xs: 40, lg: 36 },
-                    height: { xs: 40, lg: 36 },
-                    flexShrink: 0,
-                    borderRadius: 1.5,
-                    // Filled accent when there's something to send (Slack /
-                    // ChatGPT), a quiet ghost when the field is empty.
-                    bgcolor: sendable ? "primary.main" : "transparent",
-                    color: sendable ? "primary.contrastText" : "text.disabled",
-                    "&:hover": {
-                      bgcolor: sendable ? "primary.dark" : "action.hover",
-                    },
-                  }}
-                >
-                  <Send sx={{ fontSize: 20 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
+            options.map((opt) => (
+              <ConfigOptionChip
+                key={opt.id}
+                option={opt}
+                disabled={dead}
+                onSelect={(value): void =>
+                  send({
+                    type: "set_config_option",
+                    session_id: sessionId,
+                    config_id: opt.id,
+                    value,
+                  })
+                }
+              />
+            ))
           )}
+          <Box sx={{ flex: 1 }} />
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            sx={{ whiteSpace: "nowrap", fontSize: 11, flexShrink: 0, ml: 1 }}
+          >
+            ⌘/Ctrl + Enter = send
+          </Typography>
         </Stack>
-      </Paper>
+      )}
       <input
         ref={fileInput}
         type="file"
