@@ -45,6 +45,11 @@
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
         cargoHash = "sha256-KN9wGQeIlP4vyNBsKvORlaLmDK35vbe7Hgl77MgsF6I=";
+        # Build id the binary serves at /version.json for the atlantis portal's
+        # update-banner poll. The app's commit SHA changes every deploy; a dirty
+        # tree (local `nix build`) has no rev, so fall back to the static
+        # version. Read via option_env! in src/server.rs.
+        ATLANTIS_BUILD_VERSION = self.shortRev or "0.1.0";
         preBuild = ''
           mkdir -p web/dist
           cp -R ${cowboy-web}/. web/dist/
