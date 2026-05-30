@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   AppBar,
@@ -31,6 +31,7 @@ import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
 import {
   PROVIDERS,
+  type ConfigOption,
   type SessionMeta,
   type SessionOrigin,
   type Status,
@@ -142,13 +143,20 @@ function SessionList({
   onPick,
   onNew,
   onRequestDelete,
+  swipeEnabled,
 }: {
   sessions: SessionMeta[];
   activeId: string | null;
   onPick: (id: string) => void;
   onNew: () => void;
   onRequestDelete: (s: SessionMeta) => void;
+  // Wraps each row in a WeChat-style swipe-to-reveal container. Touch
+  // viewports get it; desktop keeps the inline X icon (mouse can't swipe).
+  swipeEnabled: boolean;
 }): React.JSX.Element {
+  // Only one row can sit open at a time. Tapping a different row body
+  // closes the currently-open one — same idiom WeChat / Mail use.
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   return (
     <Stack sx={{ height: "100%" }}>
       <Box sx={{ p: 1 }}>
@@ -157,49 +165,75 @@ function SessionList({
         </Button>
       </Box>
       <List dense sx={{ flex: 1, overflowY: "auto" }}>
-        {sessions.map((s) => (
-          <ListItemButton
-            key={s.id}
-            selected={s.id === activeId}
-            onClick={(): void => onPick(s.id)}
-            sx={{ pr: 1 }}
-          >
-            <StatusDot status={s.status} sx={{ mr: 1 }} />
-            <ListItemText
-              primary={
-                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                  <ProviderIcon provider={s.provider} sx={{ fontSize: 16, flexShrink: 0 }} />
-                  <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
-                    {s.provider}
-                  </Typography>
-                  <Chip
-                    size="small"
-                    label={originLabel(s.origin)}
-                    color={originColor(s.origin)}
-                    sx={{ height: 16, fontSize: 10, "& .MuiChip-label": { px: 0.75 } }}
-                  />
-                </Stack>
-              }
-              secondary={s.cwd}
-              slotProps={{
-                primary: { component: "div" },
-                secondary: { noWrap: true, variant: "caption" },
+        {sessions.map((s) => {
+          const itemBody = (
+            <ListItemButton
+              selected={s.id === activeId}
+              onClick={(): void => {
+                if (swipeEnabled && openSwipeId !== null) {
+                  const wasOpen = openSwipeId === s.id;
+                  setOpenSwipeId(null);
+                  if (wasOpen) return;
+                }
+                onPick(s.id);
               }}
-            />
-            <IconButton
-              size="small"
-              edge="end"
-              aria-label={`delete session ${s.id}`}
-              onClick={(e): void => {
-                e.stopPropagation();
+              sx={{ pr: 1, bgcolor: "background.paper" }}
+            >
+              <StatusDot status={s.status} sx={{ mr: 1 }} />
+              <ListItemText
+                primary={
+                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                    <ProviderIcon provider={s.provider} sx={{ fontSize: 16, flexShrink: 0 }} />
+                    <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
+                      {s.provider}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={originLabel(s.origin)}
+                      color={originColor(s.origin)}
+                      sx={{ height: 16, fontSize: 10, "& .MuiChip-label": { px: 0.75 } }}
+                    />
+                  </Stack>
+                }
+                secondary={s.cwd}
+                slotProps={{
+                  primary: { component: "div" },
+                  secondary: { noWrap: true, variant: "caption" },
+                }}
+              />
+              {/* Inline X — desktop only. On touch the swipe action replaces it. */}
+              {!swipeEnabled && (
+                <IconButton
+                  size="small"
+                  edge="end"
+                  aria-label={`delete session ${s.id}`}
+                  onClick={(e): void => {
+                    e.stopPropagation();
+                    onRequestDelete(s);
+                  }}
+                  sx={{ ml: 0.5 }}
+                >
+                  <Close fontSize="inherit" />
+                </IconButton>
+              )}
+            </ListItemButton>
+          );
+          if (!swipeEnabled) return <Box key={s.id}>{itemBody}</Box>;
+          return (
+            <SwipeableSessionRow
+              key={s.id}
+              isOpen={openSwipeId === s.id}
+              onOpen={(): void => setOpenSwipeId(s.id)}
+              onClose={(): void => setOpenSwipeId(null)}
+              onDelete={(): void => {
+                setOpenSwipeId(null);
                 onRequestDelete(s);
               }}
-              sx={{ ml: 0.5 }}
             >
-              <Close fontSize="inherit" />
-            </IconButton>
-          </ListItemButton>
-        ))}
+              {itemBody}
+            </SwipeableSessionRow>
+          );
+        })}
         {sessions.length === 0 && (
           <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: "center" }}>
             No sessions yet.
@@ -281,7 +315,7 @@ export function App({
   themeMode: ThemeMode;
   onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-  const { connected, sessions, timelines, lastError } = useStore();
+  const { connected, sessions, timelines, configOptions, lastError } = useStore();
   // The error notice is monotonically `seq`-stamped so the same message
   // text triggers the snackbar twice if it happens again. Tracking the
   // `seq` we've shown means we don't re-open after the user dismisses.
@@ -316,6 +350,14 @@ export function App({
   // App so the dialog is a single instance instead of one per row, and so
   // its mobile vs desktop shell can react to `bottomSheet` from useMediaQuery.
   const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(null);
+  // Mobile AppBar shows only provider + dot + ellipsized title; long-press
+  // the title strip to reveal the rest (full cwd, origin, session id, all
+  // current config-option values). The sheet is bottom-anchored and only
+  // mounts on touch since the desktop sidebar already shows all of this.
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const titleLongPress = useLongPress((): void => {
+    if (mobile && active) setDetailsOpen(true);
+  });
 
   // Default to the first session once one exists.
   const active = sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
@@ -332,6 +374,7 @@ export function App({
       onPick={pick}
       onNew={(): void => setDialogOpen(true)}
       onRequestDelete={(s): void => setPendingDelete(s)}
+      swipeEnabled={mobile}
     />
   );
 
@@ -423,7 +466,18 @@ export function App({
                 direction="row"
                 alignItems="center"
                 spacing={0.75}
-                sx={{ flex: 1, minWidth: 0 }}
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  // Suppress the iOS context-menu-on-long-press so the
+                  // long-press gesture lands on us, not on Safari's text
+                  // selector / share menu.
+                  userSelect: "none",
+                  WebkitUserSelect: "none",
+                  WebkitTouchCallout: "none",
+                  cursor: mobile ? "pointer" : "default",
+                }}
+                {...(mobile ? titleLongPress : {})}
               >
                 <StatusDot status={active.status} />
                 <ProviderIcon provider={active.provider} sx={{ fontSize: 20, flexShrink: 0 }} />
@@ -490,6 +544,14 @@ export function App({
       </Stack>
 
       <NewSessionDialog open={dialogOpen} onClose={(): void => setDialogOpen(false)} />
+      {mobile && (
+        <SessionDetailsSheet
+          open={detailsOpen && !!active}
+          session={active}
+          configOptions={active ? (configOptions.get(active.id) ?? []) : []}
+          onClose={(): void => setDetailsOpen(false)}
+        />
+      )}
       <DeleteSessionShell
         session={pendingDelete}
         bottomSheet={bottomSheet}
@@ -701,5 +763,299 @@ function DeleteSessionShell({
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
     </Dialog>
+  );
+}
+
+// Pointer-event long-press detector. 500ms by default; the timer cancels
+// on pointerup, on a noticeable move (we don't want a scroll start to fire
+// long-press), and on cancel/leave. Returns the props blob to spread onto
+// the target element.
+function useLongPress(
+  callback: () => void,
+  ms = 500,
+  moveThreshold = 8,
+): {
+  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
+  onPointerLeave: () => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+} {
+  const timer = useRef<number | null>(null);
+  const startX = useRef(0);
+  const startY = useRef(0);
+  const cancel = useCallback((): void => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
+  return {
+    onPointerDown: (e): void => {
+      cancel();
+      startX.current = e.clientX;
+      startY.current = e.clientY;
+      timer.current = window.setTimeout(callback, ms);
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onPointerLeave: cancel,
+    onPointerMove: (e): void => {
+      const dx = Math.abs(e.clientX - startX.current);
+      const dy = Math.abs(e.clientY - startY.current);
+      if (dx > moveThreshold || dy > moveThreshold) cancel();
+    },
+    // Swallow the OS context menu so a long-press-and-hold doesn't pop the
+    // iOS share / Android select sheet on top of our handler.
+    onContextMenu: (e): void => e.preventDefault(),
+  };
+}
+
+// Bottom sheet that surfaces the rest of the session metadata + current
+// config-option values. The mobile AppBar only has room for the dot +
+// provider + ellipsized title; a long-press on that strip opens this.
+function SessionDetailsSheet({
+  open,
+  session,
+  configOptions,
+  onClose,
+}: {
+  open: boolean;
+  session: SessionMeta | null;
+  configOptions: ConfigOption[];
+  onClose: () => void;
+}): React.JSX.Element | null {
+  if (!session) return null;
+  const fields: { label: string; value: string }[] = [
+    { label: "Session id", value: session.id },
+    { label: "Provider", value: session.provider },
+    { label: "Working directory", value: session.cwd },
+    { label: "Origin", value: originLabel(session.origin) },
+    { label: "Status", value: session.status },
+  ];
+  return (
+    <Drawer
+      anchor="bottom"
+      open={open}
+      onClose={onClose}
+      slotProps={{
+        paper: {
+          sx: {
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
+            maxHeight: "85vh",
+            pb: "max(env(safe-area-inset-bottom), 12px)",
+          },
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: 36,
+          height: 4,
+          borderRadius: 2,
+          bgcolor: "action.disabledBackground",
+          mx: "auto",
+          mt: 1,
+          mb: 0.5,
+        }}
+      />
+      <Box sx={{ px: 2.5, pt: 1.5, pb: 0.5 }}>
+        <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.8 }}>
+          Session
+        </Typography>
+      </Box>
+      <List dense disablePadding>
+        {fields.map((f) => (
+          <ListItemDetailRow key={f.label} label={f.label} value={f.value} />
+        ))}
+      </List>
+      {configOptions.length > 0 && (
+        <>
+          <Box sx={{ px: 2.5, pt: 1.5, pb: 0.5 }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ letterSpacing: 0.8 }}
+            >
+              Agent
+            </Typography>
+          </Box>
+          <List dense disablePadding>
+            {configOptions.map((opt) => {
+              const current = opt.options.find((o) => o.value === opt.currentValue);
+              return (
+                <ListItemDetailRow
+                  key={opt.id}
+                  label={opt.name}
+                  value={current?.name ?? String(opt.currentValue)}
+                />
+              );
+            })}
+          </List>
+        </>
+      )}
+    </Drawer>
+  );
+}
+
+function ListItemDetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}): React.JSX.Element {
+  return (
+    <Box sx={{ px: 2.5, py: 1, display: "flex", gap: 2, alignItems: "baseline" }}>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ minWidth: 120, flexShrink: 0 }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
+        sx={{
+          flex: 1,
+          wordBreak: "break-word",
+          fontFamily: ["Session id", "Working directory"].includes(label)
+            ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+            : "inherit",
+        }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+// WeChat-style swipe-to-reveal: the row slides left to expose a red Delete
+// action button on its right. Horizontal-only by design — vertical drags
+// fall through to the list's native scroll. One row can be open at a time
+// (`openSwipeId` in the parent handles arbitration); tapping a closed row
+// dismisses any open sibling instead of navigating.
+function SwipeableSessionRow({
+  isOpen,
+  onOpen,
+  onClose,
+  onDelete,
+  children,
+}: {
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onDelete: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const ACTION_WIDTH = 88;
+  const AXIS_THRESHOLD = 8;
+  const SNAP_THRESHOLD = ACTION_WIDTH * 0.4;
+  const [dx, setDx] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const start = useRef({ x: 0, y: 0 });
+  const axis = useRef<"unknown" | "h" | "v">("unknown");
+  const dragRef = useRef(0);
+
+  const offset = dragging ? dx : isOpen ? -ACTION_WIDTH : 0;
+
+  return (
+    <Box sx={{ position: "relative", overflow: "hidden" }}>
+      {/* Action button revealed behind the row */}
+      <Box
+        sx={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: ACTION_WIDTH,
+          display: "flex",
+          alignItems: "stretch",
+        }}
+      >
+        <Button
+          fullWidth
+          onClick={(e): void => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          sx={{
+            bgcolor: "error.main",
+            color: "error.contrastText",
+            borderRadius: 0,
+            fontWeight: 600,
+            textTransform: "none",
+            "&:hover": { bgcolor: "error.dark" },
+          }}
+        >
+          Delete
+        </Button>
+      </Box>
+      <Box
+        onPointerDown={(e): void => {
+          start.current = { x: e.clientX, y: e.clientY };
+          axis.current = "unknown";
+          dragRef.current = 0;
+          setDx(isOpen ? -ACTION_WIDTH : 0);
+          setDragging(true);
+        }}
+        onPointerMove={(e): void => {
+          if (!dragging) return;
+          const deltaX = e.clientX - start.current.x;
+          const deltaY = e.clientY - start.current.y;
+          if (axis.current === "unknown") {
+            const adx = Math.abs(deltaX);
+            const ady = Math.abs(deltaY);
+            if (adx > AXIS_THRESHOLD || ady > AXIS_THRESHOLD) {
+              axis.current = adx > ady ? "h" : "v";
+              if (axis.current === "v") {
+                setDragging(false);
+                setDx(0);
+                return;
+              }
+              (e.target as Element).setPointerCapture?.(e.pointerId);
+            }
+          }
+          if (axis.current === "h") {
+            const baseline = isOpen ? -ACTION_WIDTH : 0;
+            const next = Math.max(-ACTION_WIDTH * 1.1, Math.min(0, baseline + deltaX));
+            dragRef.current = next;
+            setDx(next);
+          }
+        }}
+        onPointerUp={(): void => {
+          if (!dragging) return;
+          setDragging(false);
+          if (axis.current === "h") {
+            if (dragRef.current < -SNAP_THRESHOLD) onOpen();
+            else onClose();
+          }
+        }}
+        onPointerCancel={(): void => {
+          setDragging(false);
+          setDx(0);
+        }}
+        // Suppress the row body click that would otherwise fire after a
+        // swipe gesture (some browsers synthesize click despite movement).
+        onClickCapture={(e): void => {
+          if (Math.abs(dragRef.current) > AXIS_THRESHOLD) {
+            e.preventDefault();
+            e.stopPropagation();
+            dragRef.current = 0;
+          }
+        }}
+        sx={{
+          transform: `translateX(${offset}px)`,
+          transition: dragging ? "none" : "transform 0.2s ease",
+          willChange: "transform",
+          // Let vertical scroll through, capture horizontal pans here.
+          touchAction: "pan-y",
+        }}
+      >
+        {children}
+      </Box>
+    </Box>
   );
 }
