@@ -176,8 +176,16 @@ export function Composer({
   return (
     <Box
       sx={{
-        p: { xs: 1, sm: 1.5 },
+        // Pad every edge against the device safe area, not just the bottom.
+        // Bottom: clear the home-indicator bar. Left/right: in landscape the
+        // notch / rounded screen corners eat the edges, which would clip the
+        // leading `+` and the trailing send button — floor the side insets so
+        // those tap targets stay fully on-screen. `env(safe-area-inset-*)` is
+        // 0 off-device, so each is floored to the normal padding (8 / 12px).
+        pt: { xs: 1, sm: 1.5 },
         pb: { xs: "calc(env(safe-area-inset-bottom) + 12px)", sm: 1.5 },
+        pl: { xs: "max(env(safe-area-inset-left), 8px)", sm: "max(env(safe-area-inset-left), 12px)" },
+        pr: { xs: "max(env(safe-area-inset-right), 8px)", sm: "max(env(safe-area-inset-right), 12px)" },
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
@@ -517,6 +525,10 @@ function ComposerSheet({
             borderTopRightRadius: 16,
             maxHeight: "85vh",
             pb: "max(env(safe-area-inset-bottom), 12px)",
+            // Side insets so rows clear the notch / rounded corners in
+            // landscape; 0 off-device, so desktop is unchanged.
+            pl: "env(safe-area-inset-left)",
+            pr: "env(safe-area-inset-right)",
           },
         },
       }}

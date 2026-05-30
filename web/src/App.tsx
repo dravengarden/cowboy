@@ -20,10 +20,12 @@ import {
   Stack,
   TextField,
   Toolbar,
+  Tooltip,
   Typography,
   useMediaQuery,
   useTheme,
 } from "@mui/material";
+import type { SxProps, Theme } from "@mui/material";
 import { Add, Circle, Close, Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
@@ -48,6 +50,13 @@ import type { Mode as ThemeMode } from "./theme";
 // mobile-width to declare.
 const SIDEBAR_WIDTH = "clamp(240px, 22vw, 360px)";
 
+// Status is shown as a single color-coded dot (no text label), so the hue has
+// to carry the whole meaning. The palette tokens are chosen so the colors read
+// the same here and in any future status surface:
+//   green  (success) — running: connected, idle, ready for your next prompt
+//   amber  (warning) — busy:    a turn is in flight, the agent is working
+//   blue   (info)    — starting: process spinning up, not ready yet
+//   red    (error)   — exited / crashed: the session is gone
 function statusColor(s: Status): string {
   switch (s) {
     case "running":
@@ -59,6 +68,48 @@ function statusColor(s: Status): string {
     default:
       return "error.main";
   }
+}
+
+// Human-readable meaning for the dot — surfaced in its tooltip / aria-label,
+// since the dot itself is just color. Mirrors the statusColor mapping above.
+function statusLabel(s: Status): string {
+  switch (s) {
+    case "running":
+      return "Ready";
+    case "busy":
+      return "Working…";
+    case "starting":
+      return "Starting…";
+    case "exited":
+      return "Exited";
+    case "crashed":
+      return "Crashed";
+  }
+}
+
+// One status indicator, shared by the header and the sidebar list so the
+// "green = ready, amber = working" code reads identically everywhere. The dot
+// encodes state by color; the tooltip + aria-label spell it out for hover and
+// assistive tech (touch has no hover, but the wording is also redundant with
+// the surrounding chrome).
+function StatusDot({
+  status,
+  sx,
+}: {
+  status: Status;
+  sx?: SxProps<Theme>;
+}): React.JSX.Element {
+  return (
+    <Tooltip title={statusLabel(status)} enterDelay={300}>
+      <Circle
+        aria-label={statusLabel(status)}
+        sx={[
+          { fontSize: 10, flexShrink: 0, color: statusColor(status) },
+          ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+        ]}
+      />
+    </Tooltip>
+  );
 }
 
 function originLabel(o: SessionOrigin | undefined): string {
@@ -113,7 +164,7 @@ function SessionList({
             onClick={(): void => onPick(s.id)}
             sx={{ pr: 1 }}
           >
-            <Circle sx={{ fontSize: 10, mr: 1, color: statusColor(s.status) }} />
+            <StatusDot status={s.status} sx={{ mr: 1 }} />
             <ListItemText
               primary={
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
@@ -319,8 +370,11 @@ export function App({
                 // left-anchored drawer fought the iOS back / app-switch
                 // edge-swipe (a swipe to scroll the list kept switching apps).
                 // Opening is a hamburger tap, so there's no edge gesture at all.
-                // pt clears the notch / status bar.
+                // pt clears the notch / status bar; side insets clear the
+                // rounded corners / notch in landscape (0 off-device).
                 pt: "max(env(safe-area-inset-top), 8px)",
+                pl: "env(safe-area-inset-left)",
+                pr: "env(safe-area-inset-right)",
               },
             },
           }}
@@ -361,27 +415,28 @@ export function App({
               </IconButton>
             )}
             {active ? (
-              <Typography
-                variant="subtitle1"
-                noWrap
-                component="div"
-                sx={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 0.75 }}
+              // Status moves to a leading dot (color = state); the title takes
+              // the freed width and ellipsizes, with the full string in a
+              // tooltip on hover. The title ("provider · cwd") carries more than
+              // the bare provider name the bar used to show.
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={0.75}
+                sx={{ flex: 1, minWidth: 0 }}
               >
-                <ProviderIcon provider={active.provider} sx={{ fontSize: 20 }} />
-                {active.provider}
-              </Typography>
+                <StatusDot status={active.status} />
+                <ProviderIcon provider={active.provider} sx={{ fontSize: 20, flexShrink: 0 }} />
+                <Tooltip title={active.title} enterDelay={400}>
+                  <Typography variant="subtitle1" noWrap sx={{ minWidth: 0 }}>
+                    {active.title}
+                  </Typography>
+                </Tooltip>
+              </Stack>
             ) : (
               <Typography variant="subtitle1" noWrap sx={{ flex: 1, minWidth: 0 }}>
                 {mobile ? "🤠 cowboy" : ""}
               </Typography>
-            )}
-            {active && (
-              <Chip
-                size="small"
-                label={active.status}
-                sx={{ mr: 1, color: statusColor(active.status) }}
-                variant="outlined"
-              />
             )}
             {!connected && <Chip size="small" color="error" label="offline" sx={{ mr: 1 }} />}
             <IconButton
@@ -518,6 +573,9 @@ function SettingsShell({
               // Keep a baseline gap (inset is 0 off-device) so the sheet clears
               // the home-indicator bar and rounded screen corners on iPhone/iPad.
               pb: "max(env(safe-area-inset-bottom), 12px)",
+              // Side insets so content clears the notch / corners in landscape.
+              pl: "env(safe-area-inset-left)",
+              pr: "env(safe-area-inset-right)",
             },
           },
         }}
@@ -598,6 +656,9 @@ function DeleteSessionShell({
               // Keep a baseline gap (inset is 0 off-device) so the sheet clears
               // the home-indicator bar and rounded screen corners on iPhone/iPad.
               pb: "max(env(safe-area-inset-bottom), 12px)",
+              // Side insets so content clears the notch / corners in landscape.
+              pl: "env(safe-area-inset-left)",
+              pr: "env(safe-area-inset-right)",
             },
           },
         }}
