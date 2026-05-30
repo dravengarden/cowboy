@@ -51,7 +51,3 @@ export {
   type AtlantisThemeOptions,
   createAtlantisTheme,
 } from "./theme";
-export {
-  type AppViewportOptions,
-  installAppViewport,
-} from "./viewport";
