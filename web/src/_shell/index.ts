@@ -12,9 +12,15 @@
 // source under columbus/interface/app-shell/.
 
 export {
-  AppGridButton,
-  type AppGridButtonProps,
+  PortalLauncherButton,
+  type PortalLauncherButtonProps,
 } from "./app-grid-button";
+export { BottomSheet, type BottomSheetProps } from "./bottom-sheet";
+export {
+  NavShell,
+  type NavShellApi,
+  type NavShellProps,
+} from "./nav-shell";
 export {
   type NavigateOptions,
   type PortalApi,
@@ -28,10 +34,24 @@ export {
   type BusEvent,
   CHANNEL,
   PROTOCOL_VERSION,
+  type ThemeChoice,
   type ThemeMode,
   type Visibility,
 } from "./protocol";
 export {
+  SettingsSheet,
+  type SettingsSheetProps,
+  ThemeModeControl,
+} from "./settings-sheet";
+export {
+  type ThemeModeState,
+  useThemeMode,
+} from "./theme-mode";
+export {
   type AtlantisThemeOptions,
   createAtlantisTheme,
 } from "./theme";
+export {
+  type AppViewportOptions,
+  installAppViewport,
+} from "./viewport";

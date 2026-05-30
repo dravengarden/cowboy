@@ -17,6 +17,11 @@ export const PROTOCOL_VERSION = 1 as const;
 /** Theme mode the portal pushes down so every app flips light/dark together. */
 export type ThemeMode = "light" | "dark";
 
+/** A hosted app's theme *selection*: "system" follows the OS, otherwise a
+ *  concrete mode. Resolved to a {@link ThemeMode} before it reaches MUI. The
+ *  portal, by contrast, uses "auto" + owns its own push (see atlantis). */
+export type ThemeChoice = "system" | "light" | "dark";
+
 /** Foreground/background — the portal tells a kept-alive iframe to yield CPU. */
 export type Visibility = "foreground" | "background";
 

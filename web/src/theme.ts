@@ -1,42 +1,36 @@
-// Dark/light/system theme toggle, persisted to localStorage (omega's recipe).
+// cowboy's MUI theme. The dark/light/system selection is shared (app-shell
+// SDK's useThemeMode); this only builds the theme object + the status-bar
+// colour from the resolved mode.
 
-import { useMemo, useState } from "react";
-import { createTheme, useMediaQuery, type Theme } from "@mui/material";
+import { useEffect, useMemo } from "react";
+import { createTheme, type Theme } from "@mui/material";
 
-type Mode = "system" | "light" | "dark";
-const STORAGE_KEY = "cowboy-theme-mode";
+import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
 
-function loadMode(): Mode {
-  const v = globalThis.localStorage.getItem(STORAGE_KEY);
-  return v === "light" || v === "dark" || v === "system" ? v : "system";
-}
-
-function nextMode(m: Mode): Mode {
-  if (m === "system") return "light";
-  if (m === "light") return "dark";
-  return "system";
+// MUI AppBar color="default" resolves to grey[100]/grey[900]; mirror it onto
+// the theme-color meta so the iOS standalone status bar tracks the active
+// theme (status-bar-style="default" lets iOS tint the bar + auto-contrast its
+// glyphs).
+function applyThemeColor(dark: boolean): void {
+  globalThis.document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", dark ? "#212121" : "#f5f5f5");
 }
 
 export interface ThemeControls {
   theme: Theme;
-  mode: Mode;
+  mode: ThemeChoice;
   cycle: () => void;
 }
 
 export function useThemeMode(): ThemeControls {
-  const [mode, setMode] = useState<Mode>(loadMode);
-  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
-  const dark = mode === "dark" || (mode === "system" && systemDark);
+  const { choice, resolved, cycle } = useSharedThemeMode("cowboy");
+  const dark = resolved === "dark";
+  useEffect(() => {
+    applyThemeColor(dark);
+  }, [dark]);
 
-  const theme = useMemo(() => createTheme({ palette: { mode: dark ? "dark" : "light" } }), [dark]);
+  const theme = useMemo(() => createTheme({ palette: { mode: resolved } }), [resolved]);
 
-  function cycle(): void {
-    setMode((current) => {
-      const next = nextMode(current);
-      globalThis.localStorage.setItem(STORAGE_KEY, next);
-      return next;
-    });
-  }
-
-  return { theme, mode, cycle };
+  return { theme, mode: choice, cycle };
 }
