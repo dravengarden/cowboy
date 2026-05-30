@@ -4,12 +4,31 @@
 
 export type Status = "starting" | "running" | "busy" | "exited" | "crashed";
 
+// Which surface opened the session — for the sidebar badge.
+// Mirrors src/core.rs `SessionOrigin`. Older daemons that predate this field
+// will omit it; treat absent as "api".
+export type SessionOrigin = "api" | "web" | "zed";
+
+// Human label for the surface that opened a session. Absent origin (older
+// daemons) reads as "API", matching the daemon's `SessionOrigin` default.
+export function originLabel(o: SessionOrigin | undefined): string {
+  switch (o ?? "api") {
+    case "zed":
+      return "Zed";
+    case "web":
+      return "Web";
+    default:
+      return "API";
+  }
+}
+
 export interface SessionMeta {
   id: string;
   provider: string;
   cwd: string;
   title: string;
   status: Status;
+  origin?: SessionOrigin;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -68,21 +87,55 @@ export type Event =
 
 export type Envelope = { session_id: string; seq: number } & Event;
 
+// A single ACP config option the agent advertises for a session. Shape is
+// stable across mode / model / effort because claude-agent-acp routes them
+// all through one configOptions array. `currentValue` and option values are
+// usually strings, but the protocol allows booleans too — leave wide.
+export interface ConfigOption {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type?: string;
+  currentValue: string | boolean;
+  options: {
+    value: string | boolean;
+    name: string;
+    description?: string;
+  }[];
+}
+
 export type Outbound =
   | { type: "sessions"; sessions: SessionMeta[] }
   | { type: "snapshot"; session_id: string; events: Envelope[] }
   | { type: "event"; envelope: Envelope }
-  | { type: "error"; message: string };
+  | { type: "config_options"; session_id: string; options: ConfigOption[] }
+  | { type: "error"; session_id?: string; message: string };
 
 export type Inbound =
   | { type: "new_session"; provider: string; cwd?: string }
-  | { type: "prompt"; session_id: string; text: string }
+  | {
+      type: "prompt";
+      session_id: string;
+      text?: string;
+      content?: ContentBlock[];
+    }
   | { type: "cancel"; session_id: string }
   | {
       type: "permission";
       session_id: string;
       request_id: string;
       option_id?: string;
+    }
+  | { type: "delete_session"; session_id: string }
+  | { type: "rename_session"; session_id: string; title: string }
+  | {
+      // Mode / model / effort change — same wire shape, server routes the
+      // right ext_method downstream. See src/acp.rs SetConfigOption.
+      type: "set_config_option";
+      session_id: string;
+      config_id: string;
+      value: string | boolean;
     };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;

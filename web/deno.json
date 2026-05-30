@@ -1,0 +1,13 @@
+{
+  "$schema": "https://deno.land/x/deno/cli/schemas/config-file.v1.json",
+  "lock": "deno.lock",
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "install": "deno install",
+    "dev": "node node_modules/.bin/vite",
+    "build": "node node_modules/.bin/tsc --noEmit && node node_modules/.bin/vite build",
+    "preview": "node node_modules/.bin/vite preview",
+    "typecheck": "node node_modules/.bin/tsc --noEmit",
+    "lint": "node_modules/.bin/oxlint"
+  }
+}

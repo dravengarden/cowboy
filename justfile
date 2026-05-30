@@ -3,9 +3,11 @@
 default:
     @just --list
 
-# Install frontend deps.
+# Install frontend deps. `deno install` reads package.json + deno.json and
+# populates web/node_modules (nodeModulesDir = "auto") so Vite resolves
+# `vite`, `tsc`, etc. from there as it always did.
 install:
-    cd web && bun install
+    cd web && deno install
 
 # Run the daemon in the foreground (dev). Pair with `just dev-web` for HMR.
 dev *ARGS:
@@ -13,11 +15,11 @@ dev *ARGS:
 
 # Frontend dev server (Vite), proxying /ws + /healthz to a running daemon.
 dev-web:
-    cd web && bun run dev
+    cd web && deno task dev
 
 # Build the frontend bundle (embedded into the binary via rust-embed).
 build-web:
-    cd web && bun run build
+    cd web && deno task build
 
 # Build the release binary (embeds the current web/dist).
 build: build-web
@@ -29,10 +31,10 @@ fmt:
 
 lint:
     cargo clippy --all-targets -- -D warnings
-    cd web && bun run lint
+    cd web && deno task lint
 
 typecheck:
-    cd web && bun run typecheck
+    cd web && deno task typecheck
 
 check: fmt lint typecheck
     cargo build

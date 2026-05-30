@@ -4,24 +4,53 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <!-- Rewritten at runtime by useThemeMode to the active app-bar colour;
-         this static value is only the pre-hydration default. -->
-    <meta name="theme-color" content="#212121" />
+    <meta name="theme-color" content="#1976d2" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="cowboy" />
     <title>cowboy</title>
     <style>
-      /* Full-height chain. CssBaseline zeroes the body margin but does not set
-         heights; the app shell uses height:100% off this chain rather than
-         100dvh, which under-resolves inside embedded/preview webviews and
-         leaves a gap below the composer. */
-      html,
-      body,
-      #root {
+      /* Hard reset so the root flex container has a 100% canvas to work on
+         no matter what the browser's default margins / DPI / dvh quirks
+         do. CssBaseline alone doesn't set html/body to fill the viewport
+         (only normalizes spacing), which leaves an unsightly band of
+         background on some displays. */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
         height: 100%;
+        overscroll-behavior: none;
+      }
+      /* Lock the page so iOS CAN'T scroll it. This is the crux of the keyboard
+         fix: when an input is focused, iOS chooses between two behaviours —
+         shrink the visual viewport (good, we track it) OR scroll the page to
+         reveal the input (bad: it leaves the composer behind the keyboard / the
+         page stuck-scrolled, and offsetTop goes haywire). position:fixed on the
+         body removes the scroll option entirely, forcing iOS down the resize
+         path every time — which is what makes the fix reliable instead of
+         intermittent. All real scrolling lives inside the transcript pane. */
+      html {
+        overflow: hidden;
+      }
+      body {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+      }
+      /* The root tracks the *visual* viewport height (set by main.tsx from
+         window.visualViewport) so the bottom composer stays above the iOS
+         software keyboard. Height ONLY — an earlier attempt also followed
+         visualViewport.offsetTop via a transform, but in Safari that over-lifted
+         the app (offsetTop double-counts here). Falls back to 100dvh (then the
+         static 100%) before the script runs / where visualViewport is absent. */
+      #root {
+        height: var(--app-height, 100dvh);
       }
     </style>
   </head>

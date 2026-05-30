@@ -17,11 +17,26 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use serde::Serialize;
-use tokio::sync::broadcast;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc};
+
+/// Who opened a session. Used by the UI to render an `origin` badge and
+/// (eventually) to decide which sessions belong to which client surface.
+/// `Web` = a browser/phone clicked "New session" on cowboy's own UI.
+/// `Zed` = the `acp-bridge` translated an ACP `session/new` from Zed.
+/// `Api` = a direct `POST /api/sessions` with no `origin` field (curl, tests,
+/// future scripted callers).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    #[default]
+    Api,
+    Web,
+    Zed,
+}
 
 /// Provider/session status as shown in the session list.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     /// Agent subprocess spawning / ACP handshake in flight.
@@ -41,7 +56,7 @@ pub enum Status {
 /// `Update` is a pass-through of an ACP `SessionUpdate` (message/thought
 /// chunks, tool calls, plan, available commands, mode). The remaining variants
 /// are cowboy-specific control events the protocol doesn't model.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {
     /// A serialized ACP `SessionUpdate` (see module docs).
@@ -69,7 +84,7 @@ pub enum Event {
 
 /// One event stamped with its session + monotonic `seq`. This is the unit
 /// stored in the log and streamed to clients.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
     pub session_id: String,
     pub seq: u64,
@@ -78,13 +93,16 @@ pub struct Envelope {
 }
 
 /// Session metadata for the list view (no event log).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
     pub cwd: String,
     pub title: String,
     pub status: Status,
+    /// Who opened the session (UI surface that called `new_session`).
+    #[serde(default)]
+    pub origin: SessionOrigin,
 }
 
 /// Per-session state: metadata + the seq-ordered event log.
@@ -92,10 +110,78 @@ struct Session {
     meta: SessionMeta,
     log: Vec<Envelope>,
     next_seq: u64,
+    /// Last seen agent-advertised config options (raw ACP
+    /// `configOptions` array — see acp.rs intercept). `None` until the agent
+    /// fires its first `config_option_update` notification. Re-sent to every
+    /// new client on connect so the composer dropdowns populate from a fresh
+    /// reload.
+    config_options: Option<serde_json::Value>,
+}
+
+/// A command sent by a client (Web UI, `acp-bridge`, future test harnesses)
+/// to the daemon over the WebSocket. Tag is `type`, snake-cased.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Inbound {
+    /// Start a new agent session.
+    NewSession {
+        provider: String,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    /// Send a user turn to a session. Two shapes:
+    ///
+    /// - **Web UI** sends `text: "..."` (legacy text-only path; daemon wraps
+    ///   it in a single ACP `Text` content block).
+    /// - **Bridge** sends `content: [...ACP ContentBlock JSON]` to carry rich
+    ///   content (e.g. pasted images). When both are present, `content`
+    ///   wins. At least one must be non-empty; otherwise the prompt is
+    ///   dropped server-side with a warn log.
+    Prompt {
+        session_id: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        content: Vec<serde_json::Value>,
+    },
+    /// Cancel a session's current turn.
+    Cancel { session_id: String },
+    /// Answer a pending permission request.
+    Permission {
+        session_id: String,
+        request_id: String,
+        #[serde(default)]
+        option_id: Option<String>,
+    },
+    /// Tear down a session: cancel any in-flight turn, drop the agent thread,
+    /// remove the entry from the Hub, and broadcast the updated session list
+    /// to every connected client (so other surfaces auto-clear).
+    DeleteSession { session_id: String },
+    /// Rename a session — the user-customizable title shown in the `AppBar`
+    /// and (post-rename) in the sidebar list. Empty title is rejected at
+    /// the server before this point.
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
+    /// Set one config option on the session (mode / model / effort / future).
+    /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
+    /// request that handles all three via the same shape. cowboy sends it as
+    /// an ACP `ext_method` (the 0.4 crate lacks a typed wrapper); the agent
+    /// answers with the refreshed `configOptions` array, which the daemon
+    /// then re-broadcasts as [`Outbound::ConfigOptions`].
+    SetConfigOption {
+        session_id: String,
+        config_id: String,
+        /// Free-form value — typically a string variant id (`"sonnet"`,
+        /// `"high"`, `"bypassPermissions"`), but the protocol allows
+        /// booleans too. Forwarded verbatim.
+        value: serde_json::Value,
+    },
 }
 
 /// What the server pushes to a WebSocket client.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outbound {
     /// Full session list (sent on connect and whenever it changes).
@@ -107,11 +193,39 @@ pub enum Outbound {
     },
     /// A single live event.
     Event { envelope: Envelope },
+    /// Agent-advertised per-session config options (mode / model / effort and
+    /// whatever else upstream adds). Sent (a) on client connect for every
+    /// session whose options were captured during this daemon's lifetime,
+    /// and (b) live whenever the agent fires `config_option_update`. The
+    /// payload is the raw ACP array — see acp.rs intercept.
+    ConfigOptions {
+        session_id: String,
+        options: serde_json::Value,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
-    /// Part of the wire protocol; not emitted in v1 (command errors are
-    /// currently logged server-side only).
-    #[allow(dead_code)]
-    Error { message: String },
+    /// Broadcast to every connected client — cowboy's "one shared progress"
+    /// design means any window watching the same session should see why a
+    /// command was rejected, not just the originator.
+    Error {
+        /// Session the error belongs to, if any. `None` for daemon-level
+        /// errors (malformed inbound frame, unknown session id, ...).
+        #[serde(default)]
+        session_id: Option<String>,
+        message: String,
+    },
+}
+
+/// Persistence intent sent on the write-behind channel from `Hub` to the
+/// background DB writer task in `crate::server`. Each variant maps 1:1 to a
+/// [`crate::store::Store`] call. The channel is unbounded so the hot path
+/// (`Hub::push`) never blocks; a slow DB causes memory growth, not WS lag.
+#[derive(Debug, Clone)]
+pub enum StoreWrite {
+    InsertSession(SessionMeta),
+    AppendEvent(Envelope),
+    UpdateStatus { session_id: String, status: Status },
+    UpdateTitle { session_id: String, title: String },
+    DeleteSession(String),
 }
 
 /// The single source of truth. Cloneable handle (`Arc` inside) shared by the
@@ -128,18 +242,61 @@ struct HubInner {
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     tx: broadcast::Sender<Outbound>,
+    /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
+    /// only (no `--postgres-url` configured).
+    store_tx: Option<mpsc::UnboundedSender<StoreWrite>>,
 }
 
 impl Hub {
     #[must_use]
     pub fn new() -> Self {
+        Self::with_store(None)
+    }
+
+    /// Hub plus a write-behind channel. The receiver half is owned by the
+    /// DB writer task (spawned in `crate::server`).
+    #[must_use]
+    pub fn with_store(store_tx: Option<mpsc::UnboundedSender<StoreWrite>>) -> Self {
         let (tx, _) = broadcast::channel(1024);
         Self {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
                 order: Mutex::new(Vec::new()),
                 tx,
+                store_tx,
             }),
+        }
+    }
+
+    /// Populate the in-memory state from a previously-stored snapshot.
+    /// Should be called once at startup, BEFORE any client connects, so the
+    /// `Sessions` broadcast on first connect already includes everything.
+    /// Skips the write-behind side: these rows are already in the DB.
+    ///
+    /// **Restored sessions are forced to [`Status::Exited`].** The agent
+    /// subprocess does not come back across a daemon restart — the postgres
+    /// state is metadata + history only, not a live ACP connection. Letting
+    /// a restored row keep its persisted `Running`/`Busy` status creates the
+    /// trap of a UI that looks alive but rejects every prompt with `unknown
+    /// session` (no `agent_tx` in the supervisor). Mark them dead so the UI
+    /// shows them as ended and disables the composer; resume via
+    /// session/load is a future follow-up (design §7).
+    pub fn restore(&self, sessions: Vec<(SessionMeta, Vec<Envelope>, u64)>) {
+        let mut sessions_lock = self.inner.sessions.lock().unwrap();
+        let mut order = self.inner.order.lock().unwrap();
+        for (mut meta, log, next_seq) in sessions {
+            meta.status = Status::Exited;
+            let id = meta.id.clone();
+            sessions_lock.insert(
+                id.clone(),
+                Session {
+                    meta,
+                    log,
+                    next_seq,
+                    config_options: None,
+                },
+            );
+            order.push(id);
         }
     }
 
@@ -168,25 +325,81 @@ impl Hub {
     }
 
     /// Register a new session in `Starting` state and broadcast the new list.
-    pub fn create_session(&self, id: String, provider: String, cwd: String, title: String) {
+    pub fn create_session(
+        &self,
+        id: String,
+        provider: String,
+        cwd: String,
+        title: String,
+        origin: SessionOrigin,
+    ) {
+        let meta = SessionMeta {
+            id: id.clone(),
+            provider,
+            cwd,
+            title,
+            status: Status::Starting,
+            origin,
+        };
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let mut order = self.inner.order.lock().unwrap();
             sessions.insert(
                 id.clone(),
                 Session {
-                    meta: SessionMeta {
-                        id: id.clone(),
-                        provider,
-                        cwd,
-                        title,
-                        status: Status::Starting,
-                    },
+                    meta: meta.clone(),
                     log: Vec::new(),
                     next_seq: 0,
+                    config_options: None,
                 },
             );
             order.push(id);
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::InsertSession(meta));
+        }
+        self.broadcast_sessions();
+    }
+
+    /// Remove a session entirely. Drops its event log and broadcasts the
+    /// updated session list. Returns `true` if a session was actually
+    /// removed. Note: this does NOT touch the supervisor — callers must
+    /// also call [`crate::supervisor::Supervisor::delete_session`] (or the
+    /// agent thread will linger uselessly until its rx is dropped on
+    /// process shutdown).
+    pub fn delete_session(&self, session_id: &str) -> bool {
+        let removed = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut order = self.inner.order.lock().unwrap();
+            let removed = sessions.remove(session_id).is_some();
+            order.retain(|id| id != session_id);
+            removed
+        };
+        if removed {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
+            }
+            self.broadcast_sessions();
+        }
+        removed
+    }
+
+    /// Rename a session. Updates the in-memory `title`, persists, and
+    /// re-broadcasts the session list so every connected surface sees the
+    /// new label. Unknown ids are silently ignored (matches `set_status`).
+    pub fn rename_session(&self, session_id: &str, title: String) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.meta.title.clone_from(&title);
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateTitle {
+                session_id: session_id.to_owned(),
+                title,
+            });
         }
         self.broadcast_sessions();
     }
@@ -199,6 +412,12 @@ impl Hub {
                 return;
             };
             s.meta.status = status;
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateStatus {
+                session_id: session_id.to_owned(),
+                status,
+            });
         }
         self.push(session_id, Event::Lifecycle { status, detail });
         self.broadcast_sessions();
@@ -222,6 +441,9 @@ impl Hub {
             s.log.push(envelope.clone());
             envelope
         };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
+        }
         // A send error just means no clients are connected — fine.
         let _ = self.inner.tx.send(Outbound::Event { envelope });
     }
@@ -229,6 +451,48 @@ impl Hub {
     fn broadcast_sessions(&self) {
         let _ = self.inner.tx.send(Outbound::Sessions {
             sessions: self.session_list(),
+        });
+    }
+
+    /// Snapshot the captured config options for one session — used by the
+    /// WS connect handler to replay the agent's last-seen `configOptions`
+    /// to a freshly-connected client (so its composer dropdowns hydrate
+    /// without waiting for the next `config_option_update`).
+    #[must_use]
+    pub fn config_options(&self, session_id: &str) -> Option<serde_json::Value> {
+        let sessions = self.inner.sessions.lock().unwrap();
+        sessions
+            .get(session_id)
+            .and_then(|s| s.config_options.clone())
+    }
+
+    /// Store the latest agent-advertised config options for a session and
+    /// fan them out to every client. Called from acp.rs when the upstream
+    /// emits a `config_option_update` notification, and from the
+    /// `SetConfigOption` reply path (the agent's authoritative response
+    /// refreshes the same array).
+    pub fn set_config_options(&self, session_id: &str, options: serde_json::Value) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.config_options = Some(options.clone());
+        }
+        let _ = self.inner.tx.send(Outbound::ConfigOptions {
+            session_id: session_id.to_owned(),
+            options,
+        });
+    }
+
+    /// Surface a command failure to every connected client so the UI can show
+    /// a toast. Replaces the previous behaviour of silently logging to
+    /// `tracing::warn` — that left the user staring at an unchanged page
+    /// wondering why nothing happened.
+    pub fn broadcast_error(&self, session_id: Option<String>, message: String) {
+        let _ = self.inner.tx.send(Outbound::Error {
+            session_id,
+            message,
         });
     }
 }

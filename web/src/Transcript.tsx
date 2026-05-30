@@ -1,15 +1,131 @@
-import { useEffect, useRef } from "react";
-import { Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
+// Virtualized transcript. One row per derived `RenderItem`; row heights are
+// measured dynamically so streamed-in markdown / code blocks / images grow
+// naturally without us pre-computing sizes.
+//
+// Why virtual at all: a long session (claude with hundreds of streamed
+// chunks + tool cards) renders thousands of DOM nodes otherwise — on mobile
+// that scrolls badly and locks up the main thread. `@tanstack/react-virtual`
+// keeps DOM proportional to the viewport, with `measureElement` for
+// variable heights.
+//
+// Why no virtual on tool/permission CARDS (those have their own collapse
+// state): row-level virtualization unmounts and remounts rows as they leave
+// the viewport. To preserve per-card UI state across scroll we'd need to
+// hoist that state into a Map keyed by item id; v0 accepts that re-opening
+// a card after scrolling away is required. Tool cards default to collapsed,
+// so this is mostly a non-issue.
+
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  Box,
+  Button,
+  Chip,
+  Fab,
+  Paper,
+  Skeleton,
+  Stack,
+  Typography,
+  keyframes,
+} from "@mui/material";
+import {
+  ArrowDownward,
   CheckCircle,
+  Code,
   Construction,
   ErrorOutline,
+  ExpandLess,
+  ExpandMore,
+  Folder,
   Psychology,
   RadioButtonUnchecked,
+  Search,
+  Terminal,
 } from "@mui/icons-material";
-import { derive, type RenderItem } from "./derive";
-import type { Envelope } from "./protocol";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { Markdown } from "./Markdown";
+import { derive, type ContentChunk, type RenderItem } from "./derive";
+import type { Envelope, Status } from "./protocol";
 import { send } from "./store";
+
+// --- Loading primitives -----------------------------------------------------
+
+// Bouncing dots — the ChatGPT / Slack "Y is typing" idiom. CSS keyframes
+// instead of a JS animation lib so it's free on bundle size and runs on the
+// compositor (smooth on low-end phones).
+const bounce = keyframes`
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30%           { transform: translateY(-4px); opacity: 1; }
+`;
+
+function LoadingDots({
+  label,
+}: {
+  /** Optional caption shown alongside the dots, e.g. "Thinking…". */
+  label?: string;
+}): React.JSX.Element {
+  const dotSx = {
+    display: "inline-block",
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    bgcolor: "text.secondary",
+    animation: `${bounce} 1.2s infinite ease-in-out`,
+  } as const;
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      sx={{ color: "text.secondary", py: 0.5, alignSelf: "flex-start" }}
+    >
+      <Box sx={{ display: "inline-flex", gap: 0.6 }}>
+        <Box sx={{ ...dotSx, animationDelay: "0ms" }} />
+        <Box sx={{ ...dotSx, animationDelay: "200ms" }} />
+        <Box sx={{ ...dotSx, animationDelay: "400ms" }} />
+      </Box>
+      {label && (
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
+          {label}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
+// Blinking text caret — Claude.ai / Cursor put one at the end of streaming
+// text so the user knows the model is still producing. `steps(2)` makes it
+// blink-on / blink-off rather than fading, which reads as more "alive".
+const blink = keyframes`
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+`;
+
+function StreamingCaret(): React.JSX.Element {
+  return (
+    <Box
+      component="span"
+      aria-hidden
+      sx={{
+        display: "inline-block",
+        width: "0.55em",
+        height: "1em",
+        ml: 0.25,
+        verticalAlign: "text-bottom",
+        bgcolor: "text.primary",
+        animation: `${blink} 1s steps(2, jump-none) infinite`,
+      }}
+    />
+  );
+}
+
+// Soft pulse for an in-flight tool card — the card is rendered already (you
+// can see what tool it is), but the opacity breathing tells the user that
+// the result is still landing. Different from a spinner (which feels like a
+// blocking modal).
+const pulse = keyframes`
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+`;
 
 function toolColor(status: string): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
@@ -18,43 +134,176 @@ function toolColor(status: string): "default" | "success" | "error" | "warning" 
   return "default";
 }
 
-function ToolRow({ item }: { item: Extract<RenderItem, { kind: "tool" }> }): React.JSX.Element {
-  return (
-    <Chip
-      icon={<Construction fontSize="small" />}
-      label={`${item.title} · ${item.status}`}
-      size="small"
-      color={toolColor(item.status)}
-      variant="outlined"
-      sx={{ alignSelf: "flex-start", maxWidth: "100%" }}
-    />
-  );
+function toolIcon(kind: string): React.ReactElement {
+  switch (kind) {
+    case "read":
+      return <Folder fontSize="small" />;
+    case "edit":
+      return <Code fontSize="small" />;
+    case "execute":
+      return <Terminal fontSize="small" />;
+    case "search":
+      return <Search fontSize="small" />;
+    default:
+      return <Construction fontSize="small" />;
+  }
+}
+
+function ChunkView({
+  chunk,
+  invert,
+}: {
+  chunk: ContentChunk;
+  invert: boolean;
+}): React.JSX.Element {
+  if (chunk.type === "image") {
+    return (
+      <Box
+        component="img"
+        src={chunk.src}
+        alt={chunk.alt ?? ""}
+        sx={{
+          maxWidth: "100%",
+          // Cap image preview height in dvh so it scales with viewport
+          // (mobile portrait stays bounded; desktop can show bigger).
+          maxHeight: "50dvh",
+          display: "block",
+          borderRadius: 1,
+          my: 0.5,
+        }}
+        loading="lazy"
+      />
+    );
+  }
+  return <Markdown text={chunk.text} invert={invert} />;
 }
 
 function MessageBubble({
   role,
-  text,
+  chunks,
+  streaming,
 }: {
   role: "assistant" | "user";
-  text: string;
+  chunks: ContentChunk[];
+  /** When true, append a blinking caret after the last text chunk to signal
+   *  the model is still producing. */
+  streaming?: boolean;
 }): React.JSX.Element {
   const mine = role === "user";
+  const lastChunkIdx = chunks.length - 1;
   return (
     <Paper
       variant="outlined"
       sx={{
-        p: 1.25,
+        p: { xs: 1, sm: 1.25 },
         alignSelf: mine ? "flex-end" : "flex-start",
-        maxWidth: "92%",
+        maxWidth: { xs: "96%", sm: "92%" },
         bgcolor: mine ? "primary.main" : "background.paper",
         color: mine ? "primary.contrastText" : "text.primary",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
+        overflow: "hidden",
       }}
     >
-      <Typography variant="body2" component="div">
-        {text}
-      </Typography>
+      {chunks.map((c, i) => (
+        <Box key={i} sx={{ position: "relative" }}>
+          <ChunkView chunk={c} invert={mine} />
+          {streaming && i === lastChunkIdx && c.type === "text" && (
+            <StreamingCaret />
+          )}
+        </Box>
+      ))}
+    </Paper>
+  );
+}
+
+function ToolCard({
+  item,
+}: {
+  item: Extract<RenderItem, { kind: "tool" }>;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const hasDetail = item.rawInput !== undefined || item.content !== undefined;
+  const running = item.status === "in_progress" || item.status === "pending";
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        alignSelf: "stretch",
+        overflow: "hidden",
+        // Subtle breathing while a tool is mid-flight; nothing while
+        // completed/failed (those are static states).
+        animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
+      }}
+    >
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{
+          p: 1,
+          cursor: hasDetail ? "pointer" : "default",
+          "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
+        }}
+        onClick={(): void => {
+          if (hasDetail) setOpen((o) => !o);
+        }}
+      >
+        {toolIcon(item.toolKind)}
+        <Typography
+          variant="body2"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontFamily:
+              item.toolKind === "execute"
+                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                : undefined,
+          }}
+        >
+          {item.title}
+        </Typography>
+        <Chip size="small" color={toolColor(item.status)} label={item.status} variant="outlined" />
+        {hasDetail && (open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />)}
+      </Stack>
+      {open && hasDetail && (
+        <Box sx={{ borderTop: 1, borderColor: "divider", p: 1, bgcolor: "action.hover" }}>
+          {item.rawInput !== undefined && (
+            <>
+              <Typography variant="caption" color="text.secondary">
+                Input
+              </Typography>
+              <Markdown
+                text={"```json\n" + JSON.stringify(item.rawInput, null, 2) + "\n```"}
+              />
+            </>
+          )}
+          {item.content !== undefined ? (
+            <>
+              <Typography variant="caption" color="text.secondary">
+                Output
+              </Typography>
+              <Markdown
+                text={
+                  "```json\n" + JSON.stringify(item.content, null, 2) + "\n```"
+                }
+              />
+            </>
+          ) : (
+            running && (
+              <>
+                <Typography variant="caption" color="text.secondary">
+                  Output
+                </Typography>
+                <Skeleton animation="wave" width="80%" />
+                <Skeleton animation="wave" width="60%" />
+                <Skeleton animation="wave" width="40%" />
+              </>
+            )
+          )}
+        </Box>
+      )}
     </Paper>
   );
 }
@@ -66,130 +315,336 @@ function PermissionCard({
   sessionId: string;
   item: Extract<RenderItem, { kind: "permission" }>;
 }): React.JSX.Element {
+  // Two visual states. Pending = warning-bordered card with action buttons
+  // (the user MUST decide). Resolved = subtle one-line summary that just
+  // logs what was decided (a glaring orange card stays in the timeline
+  // forever otherwise — see the user's screenshot).
+  if (item.resolved) {
+    const rejected = item.chosen?.toLowerCase().startsWith("reject") ?? false;
+    return (
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{
+          alignSelf: "flex-start",
+          color: "text.secondary",
+          fontSize: 12,
+          px: 0.5,
+        }}
+      >
+        <Typography variant="caption" sx={{ fontStyle: "italic" }}>
+          {rejected ? "Rejected" : "Allowed"}
+          {item.chosen ? `: ${item.chosen}` : ""} · {item.title}
+        </Typography>
+      </Stack>
+    );
+  }
   return (
-    <Paper variant="outlined" sx={{ p: 1.5, borderColor: "warning.main", alignSelf: "stretch" }}>
+    <Paper
+      variant="outlined"
+      sx={{ p: 1.5, borderColor: "warning.main", alignSelf: "stretch" }}
+    >
       <Typography variant="subtitle2" gutterBottom>
         {item.title}
       </Typography>
-      {item.resolved ? (
-        <Typography variant="caption" color="text.secondary">
-          Resolved{item.chosen ? `: ${item.chosen}` : ""}
-        </Typography>
-      ) : (
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          {item.options.map((opt) => (
-            <Button
-              key={opt.optionId}
-              size="small"
-              variant={opt.kind.startsWith("allow") ? "contained" : "outlined"}
-              color={opt.kind.startsWith("reject") ? "error" : "primary"}
-              onClick={(): void =>
-                send({
-                  type: "permission",
-                  session_id: sessionId,
-                  request_id: item.requestId,
-                  option_id: opt.optionId,
-                })
-              }
-            >
-              {opt.name}
-            </Button>
-          ))}
-        </Stack>
-      )}
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        {item.options.map((opt) => (
+          <Button
+            key={opt.optionId}
+            size="small"
+            variant={opt.kind.startsWith("allow") ? "contained" : "outlined"}
+            color={opt.kind.startsWith("reject") ? "error" : "primary"}
+            onClick={(): void =>
+              send({
+                type: "permission",
+                session_id: sessionId,
+                request_id: item.requestId,
+                option_id: opt.optionId,
+              })
+            }
+          >
+            {opt.name}
+          </Button>
+        ))}
+      </Stack>
     </Paper>
   );
+}
+
+function ItemView({
+  item,
+  sessionId,
+  streaming,
+}: {
+  item: RenderItem;
+  sessionId: string;
+  /** True when this item is the last assistant chunk-bearing item and the
+   *  session is still busy. Adds a blinking caret / dots accordingly. */
+  streaming?: boolean;
+}): React.JSX.Element | null {
+  switch (item.kind) {
+    case "message":
+      return (
+        <MessageBubble
+          role={item.role}
+          chunks={item.chunks}
+          streaming={!!streaming && item.role === "assistant"}
+        />
+      );
+    case "thought":
+      return (
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{
+            color: "text.secondary",
+            alignSelf: "flex-start",
+            maxWidth: { xs: "96%", sm: "92%" },
+          }}
+        >
+          <Psychology fontSize="small" />
+          <Box sx={{ fontStyle: "italic", fontSize: "0.875rem", flex: 1 }}>
+            {item.text ? <Markdown text={item.text} /> : <LoadingDots />}
+            {streaming && item.text && <StreamingCaret />}
+          </Box>
+        </Stack>
+      );
+    case "tool":
+      return <ToolCard item={item} />;
+    case "plan":
+      return (
+        <Paper variant="outlined" sx={{ p: 1.25, alignSelf: "stretch" }}>
+          <Typography variant="overline">Plan</Typography>
+          <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+            {item.entries.map((e, j) => (
+              <Stack key={j} direction="row" spacing={1} alignItems="center">
+                {e.status === "completed" ? (
+                  <CheckCircle fontSize="small" color="success" />
+                ) : (
+                  <RadioButtonUnchecked fontSize="small" color="disabled" />
+                )}
+                <Typography variant="body2">{e.content}</Typography>
+              </Stack>
+            ))}
+          </Stack>
+        </Paper>
+      );
+    case "permission":
+      return <PermissionCard sessionId={sessionId} item={item} />;
+    case "lifecycle":
+      return (
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          sx={{ color: item.status === "crashed" ? "error.main" : "text.secondary" }}
+        >
+          <ErrorOutline fontSize="small" />
+          <Typography variant="caption">
+            {item.status}
+            {item.detail ? `: ${item.detail}` : ""}
+          </Typography>
+        </Stack>
+      );
+  }
 }
 
 export function Transcript({
   sessionId,
   timeline,
+  status,
 }: {
   sessionId: string;
   timeline: Envelope[];
+  status: Status;
 }): React.JSX.Element {
   const items = derive(timeline);
-  const endRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const busy = status === "busy";
+  const lastIdx = items.length - 1;
+  const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
+  // The last item is "streaming" if the session is busy AND it's an
+  // assistant message or a thought (both grow chunk by chunk). Tool calls
+  // have their own in_progress visual.
+  const lastIsStreamingAssistant =
+    busy &&
+    !!lastItem &&
+    ((lastItem.kind === "message" && lastItem.role === "assistant") ||
+      lastItem.kind === "thought");
+  // Show the trailing "dots" row when busy AND we're NOT already showing
+  // a caret-tipped streaming assistant bubble at the bottom (i.e. between
+  // sending a prompt and the first chunk landing, or after a tool call
+  // completes while waiting for the model to start text again).
+  const showTrailingDots = busy && !lastIsStreamingAssistant;
+  // The virtualizer's row count includes a phantom "dots" row at the end
+  // when we're showing it. Keeping it as a virtualized row (rather than a
+  // sibling) means scroll-stickiness Just Works.
+  const rowCount = items.length + (showTrailingDots ? 1 : 0);
+  const parentRef = useRef<HTMLDivElement>(null);
+  // "stick-to-bottom" UX, done properly this time:
+  //
+  // Previous bug: we listened to `onScroll` to decide if the user "wanted"
+  // the bottom; but `onScroll` ALSO fires for our own `scrollToIndex`. So
+  // every streamed chunk: snap-to-bottom → onScroll → atBottom=true →
+  // stick=true → user wheels up → next chunk → snap-back. Unkillable.
+  //
+  // New model:
+  // - Treat user intent as a separate signal: a wheel / touchstart / arrow
+  //   key on the container means "I am leaving the bottom" — set stick=false
+  //   *immediately*, before any subsequent programmatic scroll can confuse
+  //   us.
+  // - scroll-event only re-enables stick when the resulting position is
+  //   actually at the bottom (the user manually scrolled all the way back).
+  // - Auto-snap on new items uses the **`stick` value at the time of the
+  //   commit** — i.e. via a ref so we don't re-render to keep it.
+  // - A floating "↓" button surfaces when the user is detached so they can
+  //   re-stick without scrolling manually.
   const stick = useRef(true);
+  const [detached, setDetached] = useState(false);
 
-  useEffect(() => {
-    if (stick.current) endRef.current?.scrollIntoView({ block: "end" });
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 80,
+    overscan: 6,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
-  function onScroll(): void {
-    const el = containerRef.current;
-    if (!el) return;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  // How far above the bottom the viewport currently sits. The scroll-to-
+  // latest FAB only renders when this exceeds a small threshold, so a 3-
+  // message transcript that already fits the viewport doesn't ever surface
+  // a useless button.
+  const [distFromBottom, setDistFromBottom] = useState(0);
+
+  // Wire user-intent listeners ONCE; they read parentRef each time so the
+  // dependency on the ref's contents stays out of React's eyes.
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return undefined;
+    const detach = (): void => {
+      if (stick.current) {
+        stick.current = false;
+        setDetached(true);
+      }
+    };
+    const onScroll = (): void => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setDistFromBottom(dist);
+      const atBottom = dist < 24;
+      if (atBottom && !stick.current) {
+        stick.current = true;
+        setDetached(false);
+      }
+    };
+    el.addEventListener("wheel", detach, { passive: true });
+    el.addEventListener("touchstart", detach, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
+    // be focused first; that's fine, hits the rare desktop case.
+    el.addEventListener("keydown", detach);
+    return () => {
+      el.removeEventListener("wheel", detach);
+      el.removeEventListener("touchstart", detach);
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("keydown", detach);
+    };
+  }, []);
+
+  // Auto-snap only on rowCount changes, ONLY if we're still stuck.
+  // We also recompute `distFromBottom` here because the virtualizer's
+  // total height changes when new events stream in — the user may be
+  // detached, watching a partial reply, and the FAB needs to (start to)
+  // appear without an actual scroll event firing.
+  useLayoutEffect(() => {
+    const el = parentRef.current;
+    if (el) setDistFromBottom(el.scrollHeight - el.scrollTop - el.clientHeight);
+    if (!stick.current || rowCount === 0) return;
+    virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
+  }, [rowCount, virtualizer]);
+
+  function jumpToBottom(): void {
+    stick.current = true;
+    setDetached(false);
+    if (rowCount > 0) {
+      virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
+    }
   }
 
   return (
-    <Box
-      ref={containerRef}
-      onScroll={onScroll}
-      sx={{ flex: 1, overflowY: "auto", p: { xs: 1, sm: 2 } }}
-    >
-      <Stack spacing={1.25}>
-        {items.map((item, i) => {
-          switch (item.kind) {
-            case "message":
-              return <MessageBubble key={i} role={item.role} text={item.text} />;
-            case "thought":
-              return (
-                <Stack
-                  key={i}
-                  direction="row"
-                  spacing={1}
-                  sx={{ color: "text.secondary", alignSelf: "flex-start", maxWidth: "92%" }}
-                >
-                  <Psychology fontSize="small" />
-                  <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", fontStyle: "italic" }}>
-                    {item.text}
-                  </Typography>
-                </Stack>
-              );
-            case "tool":
-              return <ToolRow key={i} item={item} />;
-            case "plan":
-              return (
-                <Paper key={i} variant="outlined" sx={{ p: 1.25, alignSelf: "stretch" }}>
-                  <Typography variant="overline">Plan</Typography>
-                  <Stack spacing={0.5} sx={{ mt: 0.5 }}>
-                    {item.entries.map((e, j) => (
-                      <Stack key={j} direction="row" spacing={1} alignItems="center">
-                        {e.status === "completed" ? (
-                          <CheckCircle fontSize="small" color="success" />
-                        ) : (
-                          <RadioButtonUnchecked fontSize="small" color="disabled" />
-                        )}
-                        <Typography variant="body2">{e.content}</Typography>
-                      </Stack>
-                    ))}
-                  </Stack>
-                </Paper>
-              );
-            case "permission":
-              return <PermissionCard key={i} sessionId={sessionId} item={item} />;
-            case "lifecycle":
-              return (
-                <Stack
-                  key={i}
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                  sx={{ color: item.status === "crashed" ? "error.main" : "text.secondary" }}
-                >
-                  <ErrorOutline fontSize="small" />
-                  <Typography variant="caption">
-                    {item.status}
-                    {item.detail ? `: ${item.detail}` : ""}
-                  </Typography>
-                </Stack>
-              );
-          }
-        })}
-      </Stack>
-      <div ref={endRef} />
+    <Box sx={{ flex: 1, position: "relative", overflow: "hidden" }}>
+      <Box
+        ref={parentRef}
+        tabIndex={0}
+        sx={{
+          height: "100%",
+          overflowY: "auto",
+          overflowX: "hidden",
+          px: { xs: 1, sm: 2 },
+          py: { xs: 1, sm: 1.5 },
+          contain: "strict",
+          // Hide focus ring; we keep tabIndex for keyboard scroll capture.
+          outline: "none",
+          overscrollBehavior: "contain",
+        }}
+      >
+        <Box
+          sx={{
+            height: virtualizer.getTotalSize(),
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const isTrailingDots = showTrailingDots && vi.index === items.length;
+            const item = isTrailingDots ? undefined : items[vi.index];
+            const streaming = busy && vi.index === lastIdx;
+            return (
+              <Box
+                key={vi.key}
+                data-index={vi.index}
+                ref={virtualizer.measureElement}
+                sx={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vi.start}px)`,
+                  py: 0.625,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                {isTrailingDots ? (
+                  <LoadingDots label="Thinking…" />
+                ) : item ? (
+                  <ItemView item={item} sessionId={sessionId} streaming={streaming} />
+                ) : null}
+              </Box>
+            );
+          })}
+        </Box>
+      </Box>
+      {detached && distFromBottom > 200 && (
+        // Threshold matches Slack / Telegram / Linear: only surface the
+        // jump-down affordance when there's at least ~one short message
+        // worth of hidden content below. A three-line transcript that
+        // fits the viewport never sees this button.
+        <Fab
+          size="small"
+          color="primary"
+          aria-label="scroll to latest"
+          onClick={jumpToBottom}
+          sx={{
+            position: "absolute",
+            bottom: 16,
+            right: 16,
+            zIndex: 1,
+            boxShadow: 3,
+          }}
+        >
+          <ArrowDownward />
+        </Fab>
+      )}
     </Box>
   );
 }
