@@ -17,19 +17,22 @@ function Root(): React.JSX.Element {
   );
 }
 
-// Keep the app sized to the *visual* viewport (the area not covered by the iOS
-// software keyboard), published as the `--app-height` CSS var the root height
-// reads (see index.html). On iOS Safari the layout viewport doesn't shrink when
-// the keyboard opens, so a full-height non-scrolling column can't scroll the
-// focused input above the keyboard — intermittently hiding it. Shrinking the
-// column to the visible area keeps the bottom composer above the keyboard
-// without relying on iOS's flaky scroll-into-view. No-op on desktop (visual ==
-// layout viewport). Listeners are passive and never removed — the app lives for
-// the whole document lifetime.
+// Pin the app to the *visual* viewport (the area not covered by the iOS
+// software keyboard), published as the `--app-height` / `--app-offset-top` CSS
+// vars the #root rule reads (see index.html). On iOS Safari the layout viewport
+// doesn't shrink when the keyboard opens; sometimes iOS resizes the visual
+// viewport (height shrinks) and sometimes it scrolls it (offsetTop grows to
+// reveal the focused input). Publishing BOTH lets #root (position:fixed +
+// translateY) follow the visible rectangle either way, so the bottom composer
+// always sits above the keyboard without relying on iOS's flaky
+// scroll-into-view. No-op on desktop (offsetTop 0, height == layout viewport).
+// Listeners are passive and never removed — the app lives for the whole
+// document lifetime.
 function syncAppHeight(): void {
   const vv = globalThis.visualViewport;
-  const height = vv ? vv.height : globalThis.innerHeight;
-  document.documentElement.style.setProperty("--app-height", `${height}px`);
+  const root = document.documentElement;
+  root.style.setProperty("--app-height", `${vv ? vv.height : globalThis.innerHeight}px`);
+  root.style.setProperty("--app-offset-top", `${vv ? vv.offsetTop : 0}px`);
 }
 const vv = globalThis.visualViewport;
 if (vv) {
