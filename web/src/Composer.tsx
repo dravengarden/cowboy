@@ -270,7 +270,15 @@ export function Composer({
               sx: {
                 fontFamily:
                   "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+                // iOS/iPadOS Safari auto-zooms the whole page when a focused
+                // input's font-size is < 16px — and never zooms back out on
+                // blur, which is the "page got bigger and stayed big" bug.
+                // maximum-scale=1 used to suppress it, but modern Safari
+                // ignores that for accessibility. So float the input to 16px on
+                // touch pointers (iPhone + iPad, both pointer:coarse); desktop
+                // (pointer:fine, no auto-zoom) keeps the denser 14px.
                 fontSize: 14,
+                "@media (pointer: coarse)": { fontSize: 16 },
               },
             },
           }}
