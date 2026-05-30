@@ -292,9 +292,12 @@ const WORKING_DIRS = [
 function NewSessionDialog({
     open,
     onClose,
+    onCreated,
 }: {
     open: boolean;
     onClose: () => void;
+    /** Called with the new session's id so the UI can focus it immediately. */
+    onCreated: (sessionId: string) => void;
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
@@ -334,7 +337,27 @@ function NewSessionDialog({
                     <Button
                         variant="contained"
                         onClick={(): void => {
-                            send({ type: "new_session", provider, cwd });
+                            // POST (not the fire-and-forget WS `new_session`) so
+                            // we get the assigned id back synchronously and can
+                            // focus the new session the moment it's created.
+                            void fetch("/api/sessions", {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: JSON.stringify({
+                                    provider,
+                                    cwd,
+                                    origin: "web",
+                                }),
+                            })
+                                .then((r) => (r.ok ? r.json() : null))
+                                .then((data: { session_id?: string } | null) => {
+                                    if (data?.session_id)
+                                        onCreated(data.session_id);
+                                })
+                                .catch(() => {
+                                    // Network/daemon error surfaces via the WS
+                                    // error channel; nothing to do here.
+                                });
                             onClose();
                         }}
                     >
@@ -433,7 +456,7 @@ export function App({
             {/* Portal launcher — the app's absolute top-left; self-hides when not hosted. */}
             <PortalLauncherButton edge="start" size="small" />
             <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
-                🤠 cowboy
+                cowboy
             </Typography>
         </Toolbar>
     );
@@ -500,10 +523,11 @@ export function App({
                             </IconButton>
                         )}
                         {active ? (
-                            // Status moves to a leading dot (color = state); the title takes
-                            // the freed width and ellipsizes, with the full string in a
-                            // tooltip on hover. The title ("provider · cwd") carries more than
-                            // the bare provider name the bar used to show.
+                            // Status is a leading dot (color = state); the
+                            // ProviderIcon already names the agent, so the title
+                            // drops the redundant "provider · " prefix the
+                            // daemon stores and shows just the cwd (or the
+                            // user's custom rename). Full string in the tooltip.
                             <Stack
                                 direction="row"
                                 alignItems="center"
@@ -521,18 +545,21 @@ export function App({
                                         noWrap
                                         sx={{ minWidth: 0 }}
                                     >
-                                        {active.title}
+                                        {active.title.startsWith(
+                                            `${active.provider} · `,
+                                        )
+                                            ? active.title.slice(
+                                                  active.provider.length + 3,
+                                              )
+                                            : active.title}
                                     </Typography>
                                 </Tooltip>
                             </Stack>
                         ) : (
-                            <Typography
-                                variant="subtitle1"
-                                noWrap
-                                sx={{ flex: 1, minWidth: 0 }}
-                            >
-                                {mobile ? "🤠 cowboy" : ""}
-                            </Typography>
+                            // No session: the content pane already says "No
+                            // session selected", so the bar shows nothing — no
+                            // redundant brand/emoji.
+                            <Box sx={{ flex: 1, minWidth: 0 }} />
                         )}
                         {!connected && (
                             <Chip
@@ -604,6 +631,13 @@ export function App({
             <NewSessionDialog
                 open={dialogOpen}
                 onClose={(): void => setDialogOpen(false)}
+                onCreated={(id): void => {
+                    // Focus the freshly-created session as soon as the daemon
+                    // returns its id; the `sessions` broadcast that adds it to
+                    // the list arrives moments later and `active` resolves it.
+                    setActiveId(id);
+                    setDrawerOpen(false);
+                }}
             />
             <DeleteSessionShell
                 session={pendingDelete}
