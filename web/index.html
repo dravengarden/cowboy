@@ -24,6 +24,22 @@
         height: 100%;
         overscroll-behavior: none;
       }
+      /* The page itself must never scroll — all scrolling lives inside the
+         transcript pane. Without this, iOS can leave the whole page scrolled
+         after the keyboard closes. */
+      html, body {
+        overflow: hidden;
+      }
+      /* The root tracks the *visual* viewport height — set by main.tsx from
+         window.visualViewport — so the bottom composer stays above the iOS
+         software keyboard. On iOS the layout viewport doesn't shrink when the
+         keyboard opens (only the visual viewport does), and this full-height,
+         non-scrolling column then has no room to scroll the focused input into
+         view, intermittently leaving it hidden behind the keyboard. Falls back
+         to 100% before the script runs / where visualViewport is unsupported. */
+      #root {
+        height: var(--app-height, 100%);
+      }
     </style>
   </head>
   <body>
