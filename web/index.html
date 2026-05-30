@@ -30,23 +30,15 @@
       html, body {
         overflow: hidden;
       }
-      /* Pin the app to the *visual* viewport — both its height and its
-         vertical offset, set by main.tsx from window.visualViewport — so the
-         bottom composer always stays above the iOS software keyboard. On iOS
-         the layout viewport doesn't shrink when the keyboard opens; sometimes
-         iOS resizes the visual viewport (height shrinks) and sometimes it
-         scrolls it (offsetTop grows to reveal the focused input). A height-only
-         fix misses the scroll case, intermittently leaving the input behind the
-         keyboard. position:fixed + translateY(offsetTop) + height tracks the
-         visible rectangle in either case. Falls back to a full-height static
-         root before the script runs / where visualViewport is unsupported. */
+      /* The root tracks the *visual* viewport height (set by main.tsx from
+         window.visualViewport) so the bottom composer stays above the iOS
+         software keyboard. NOTE: an earlier attempt also did position:fixed +
+         translateY(visualViewport.offsetTop), but in Safari that over-lifted
+         the app by a big chunk (offsetTop double-counts here) — so we track
+         height ONLY and leave the root in normal flow. Falls back to 100%
+         before the script runs / where visualViewport is unsupported. */
       #root {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
         height: var(--app-height, 100%);
-        transform: translateY(var(--app-offset-top, 0px));
       }
     </style>
   </head>

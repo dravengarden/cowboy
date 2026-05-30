@@ -17,22 +17,21 @@ function Root(): React.JSX.Element {
   );
 }
 
-// Pin the app to the *visual* viewport (the area not covered by the iOS
-// software keyboard), published as the `--app-height` / `--app-offset-top` CSS
-// vars the #root rule reads (see index.html). On iOS Safari the layout viewport
-// doesn't shrink when the keyboard opens; sometimes iOS resizes the visual
-// viewport (height shrinks) and sometimes it scrolls it (offsetTop grows to
-// reveal the focused input). Publishing BOTH lets #root (position:fixed +
-// translateY) follow the visible rectangle either way, so the bottom composer
-// always sits above the keyboard without relying on iOS's flaky
-// scroll-into-view. No-op on desktop (offsetTop 0, height == layout viewport).
-// Listeners are passive and never removed — the app lives for the whole
-// document lifetime.
+// Size the app to the *visual* viewport height (the area not covered by the iOS
+// software keyboard), published as the `--app-height` CSS var the #root rule
+// reads (see index.html). On iOS Safari the layout viewport doesn't shrink when
+// the keyboard opens (only the visual viewport does), so a full-height column
+// otherwise leaves the bottom composer behind the keyboard. We track height
+// ONLY: a previous attempt also followed visualViewport.offsetTop via a
+// transform, but in Safari that over-lifted the app. No-op on desktop (visual
+// == layout viewport). Listeners are passive and never removed — the app lives
+// for the whole document lifetime.
 function syncAppHeight(): void {
   const vv = globalThis.visualViewport;
-  const root = document.documentElement;
-  root.style.setProperty("--app-height", `${vv ? vv.height : globalThis.innerHeight}px`);
-  root.style.setProperty("--app-offset-top", `${vv ? vv.offsetTop : 0}px`);
+  document.documentElement.style.setProperty(
+    "--app-height",
+    `${vv ? vv.height : globalThis.innerHeight}px`,
+  );
 }
 const vv = globalThis.visualViewport;
 if (vv) {
@@ -41,6 +40,35 @@ if (vv) {
 }
 globalThis.addEventListener("orientationchange", syncAppHeight);
 syncAppHeight();
+
+// Diagnostic overlay, opt-in via `?vvdebug=1`. Prints the live viewport numbers
+// so the iOS keyboard behaviour can be read off-device. Off (and tree-shaken to
+// a dead branch) for everyone else. Remove once the keyboard handling is final.
+if (new URLSearchParams(globalThis.location.search).has("vvdebug")) {
+  const dbg = document.createElement("div");
+  dbg.style.cssText =
+    "position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,.82);" +
+    "color:#0f0;font:11px/1.5 ui-monospace,monospace;padding:3px 6px;" +
+    "pointer-events:none;white-space:pre-wrap;";
+  const render = (): void => {
+    const v = globalThis.visualViewport;
+    const appH = getComputedStyle(document.documentElement)
+      .getPropertyValue("--app-height")
+      .trim();
+    dbg.textContent =
+      `inner=${globalThis.innerHeight} ` +
+      `vv.h=${v ? Math.round(v.height) : "-"} ` +
+      `vv.top=${v ? Math.round(v.offsetTop) : "-"} ` +
+      `--app-height=${appH || "(unset)"}`;
+  };
+  document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dbg));
+  if (document.body) document.body.appendChild(dbg);
+  vv?.addEventListener("resize", render);
+  vv?.addEventListener("scroll", render);
+  globalThis.addEventListener("resize", render);
+  globalThis.setInterval(render, 250);
+  render();
+}
 
 const el = document.getElementById("root");
 if (el) {
