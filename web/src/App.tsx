@@ -6,9 +6,7 @@ import {
     Button,
     Chip,
     Dialog,
-    DialogActions,
     DialogContent,
-    DialogContentText,
     DialogTitle,
     Divider,
     Drawer,
@@ -396,13 +394,6 @@ export function App({
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
     const mobile = useMediaQuery(theme.breakpoints.down("lg"));
-    // BottomSheet (Drawer anchor=bottom) on phones + portrait iPad; centred
-    // Dialog on landscape iPad and desktop. `md` (900px) — portrait iPad
-    // ~820 falls into BottomSheet; landscape iPad ~1180 → Dialog. This is
-    // intentionally LESS aggressive than `mobile` above so iPad landscape
-    // keeps the iPad-native modal feel for Settings / Delete, while still
-    // getting the collapsed sidebar.
-    const bottomSheet = useMediaQuery(theme.breakpoints.down("md"));
     const [activeId, setActiveId] = useState<string | null>(null);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -641,7 +632,6 @@ export function App({
             />
             <DeleteSessionShell
                 session={pendingDelete}
-                bottomSheet={bottomSheet}
                 onClose={(): void => setPendingDelete(null)}
                 onConfirm={(): void => {
                     if (pendingDelete) {
@@ -655,7 +645,6 @@ export function App({
             />
             <RenameSessionShell
                 session={pendingRename}
-                bottomSheet={bottomSheet}
                 onClose={(): void => setPendingRename(null)}
                 onConfirm={(title): void => {
                     if (pendingRename) {
@@ -744,121 +733,46 @@ function SettingsShell({
 // adapt its layout per viewport.
 function DeleteSessionShell({
     session,
-    bottomSheet,
     onClose,
     onConfirm,
 }: {
     session: SessionMeta | null;
-    bottomSheet: boolean;
     onClose: () => void;
     onConfirm: () => void;
 }): React.JSX.Element | null {
     if (!session) return null;
     const surface = originLabel(session.origin);
-    const title = `Delete this ${surface} session?`;
-    const detail =
-        "Any in-flight turn is cancelled. The agent transcript on this session will be lost.";
-    const actions = (
-        <Stack
-            direction="row"
-            spacing={1}
-            justifyContent="flex-end"
-            sx={{ width: "100%" }}
-        >
-            <Button onClick={onClose} color="inherit">
-                Cancel
-            </Button>
-            <Button
-                onClick={onConfirm}
-                color="error"
-                variant="contained"
-                autoFocus
-                // Make the destructive action obviously the heavier control; matches
-                // material guidance for destructive confirmations.
-            >
-                Delete
-            </Button>
-        </Stack>
-    );
-
-    if (bottomSheet) {
-        return (
-            <Drawer
-                anchor="bottom"
-                open
-                onClose={onClose}
-                slotProps={{
-                    paper: {
-                        sx: {
-                            borderTopLeftRadius: 16,
-                            borderTopRightRadius: 16,
-                            // Keep a baseline gap (inset is 0 off-device) so the sheet clears
-                            // the home-indicator bar and rounded screen corners on iPhone/iPad.
-                            pb: "max(env(safe-area-inset-bottom), 12px)",
-                            // Side insets so content clears the notch / corners in landscape.
-                            pl: "env(safe-area-inset-left)",
-                            pr: "env(safe-area-inset-right)",
-                        },
-                    },
-                }}
-            >
-                <Box
-                    sx={{
-                        width: 36,
-                        height: 4,
-                        borderRadius: 2,
-                        bgcolor: "action.disabledBackground",
-                        mx: "auto",
-                        mt: 1,
-                        mb: 0.5,
-                    }}
-                />
-                <Box sx={{ px: 2.5, pt: 1.5, pb: 2 }}>
-                    <Typography variant="h6" component="h2" gutterBottom>
-                        {title}
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{ mb: 2 }}
-                    >
-                        {detail}
-                    </Typography>
-                    {actions}
-                </Box>
-            </Drawer>
-        );
-    }
-
     return (
-        <Dialog
+        <BottomSheet
             open
             onClose={onClose}
-            fullWidth
-            maxWidth="xs"
-            aria-labelledby="delete-session-title"
+            title={`Delete this ${surface} session?`}
+            actions={
+                <>
+                    <Button onClick={onClose} color="inherit">
+                        Cancel
+                    </Button>
+                    <Button onClick={onConfirm} color="error" variant="contained" autoFocus>
+                        Delete
+                    </Button>
+                </>
+            }
         >
-            <DialogTitle id="delete-session-title">{title}</DialogTitle>
-            <DialogContent>
-                <DialogContentText>{detail}</DialogContentText>
-            </DialogContent>
-            <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
-        </Dialog>
+            <Typography variant="body2" color="text.secondary">
+                Any in-flight turn is cancelled. The agent transcript on this session will be lost.
+            </Typography>
+        </BottomSheet>
     );
 }
 
-// Same shell idiom as DeleteSessionShell: Dialog on desktop / landscape iPad,
-// bottom-anchored Drawer with iOS-style drag handle on phones + portrait
-// iPad. Prefills the textfield with the current title; Save is disabled
-// while empty or unchanged (server-side also rejects empty).
+// Prefills the textfield with the current title; Save is disabled while empty
+// or unchanged (server-side also rejects empty).
 function RenameSessionShell({
     session,
-    bottomSheet,
     onClose,
     onConfirm,
 }: {
     session: SessionMeta | null;
-    bottomSheet: boolean;
     onClose: () => void;
     onConfirm: (title: string) => void;
 }): React.JSX.Element | null {
@@ -872,81 +786,38 @@ function RenameSessionShell({
     const submit = (): void => {
         if (canSave) onConfirm(trimmed);
     };
-    const field = (
-        <TextField
-            autoFocus
-            fullWidth
-            label="Title"
-            value={value}
-            onChange={(e): void => setValue(e.target.value)}
-            onKeyDown={(e): void => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    submit();
-                }
-            }}
-            sx={{ mt: 1 }}
-            helperText="Shown in the sidebar and the title bar."
-        />
-    );
-    const actions = (
-        <Stack
-            direction="row"
-            spacing={1}
-            justifyContent="flex-end"
-            sx={{ width: "100%" }}
-        >
-            <Button onClick={onClose} color="inherit">
-                Cancel
-            </Button>
-            <Button onClick={submit} variant="contained" disabled={!canSave}>
-                Save
-            </Button>
-        </Stack>
-    );
-    if (bottomSheet) {
-        return (
-            <Drawer
-                anchor="bottom"
-                open
-                onClose={onClose}
-                slotProps={{
-                    paper: {
-                        sx: {
-                            borderTopLeftRadius: 16,
-                            borderTopRightRadius: 16,
-                            pb: "env(safe-area-inset-bottom)",
-                        },
-                    },
-                }}
-            >
-                <Box
-                    sx={{
-                        width: 36,
-                        height: 4,
-                        borderRadius: 2,
-                        bgcolor: "action.disabledBackground",
-                        mx: "auto",
-                        mt: 1,
-                        mb: 0.5,
-                    }}
-                />
-                <Box sx={{ px: 2.5, pt: 1.5, pb: 2 }}>
-                    <Typography variant="h6" component="h2" gutterBottom>
-                        Rename session
-                    </Typography>
-                    {field}
-                    <Box sx={{ mt: 2 }}>{actions}</Box>
-                </Box>
-            </Drawer>
-        );
-    }
     return (
-        <Dialog open onClose={onClose} fullWidth maxWidth="xs">
-            <DialogTitle>Rename session</DialogTitle>
-            <DialogContent>{field}</DialogContent>
-            <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
-        </Dialog>
+        <BottomSheet
+            open
+            onClose={onClose}
+            title="Rename session"
+            actions={
+                <>
+                    <Button onClick={onClose} color="inherit">
+                        Cancel
+                    </Button>
+                    <Button onClick={submit} variant="contained" disabled={!canSave}>
+                        Save
+                    </Button>
+                </>
+            }
+        >
+            <TextField
+                autoFocus
+                fullWidth
+                label="Title"
+                value={value}
+                onChange={(e): void => setValue(e.target.value)}
+                onKeyDown={(e): void => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        submit();
+                    }
+                }}
+                sx={{ mt: 1 }}
+                helperText="Shown in the sidebar and the title bar."
+            />
+        </BottomSheet>
     );
 }
 

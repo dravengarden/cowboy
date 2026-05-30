@@ -5,7 +5,6 @@ import {
   CircularProgress,
   ClickAwayListener,
   Divider,
-  Drawer,
   IconButton,
   List,
   Menu,
@@ -38,6 +37,7 @@ import type {
   SessionMeta,
   Status,
 } from "./protocol";
+import { BottomSheet } from "./_shell";
 
 // Cmd/Ctrl + Enter = send. Plain Enter = newline.
 //
@@ -614,42 +614,12 @@ function ComposerSheet({
   onSelectOption: (configId: string, value: string | boolean) => void;
 }): React.JSX.Element {
   return (
-    <Drawer
-      anchor="bottom"
-      open={open}
-      onClose={onClose}
-      slotProps={{
-        paper: {
-          sx: {
-            borderTopLeftRadius: 16,
-            borderTopRightRadius: 16,
-            maxHeight: "85vh",
-            pb: "max(env(safe-area-inset-bottom), 12px)",
-            // Side insets so rows clear the notch / rounded corners in
-            // landscape; 0 off-device, so desktop is unchanged.
-            pl: "env(safe-area-inset-left)",
-            pr: "env(safe-area-inset-right)",
-          },
-        },
-      }}
-    >
-      {/* iOS-style drag handle — purely visual; tapping outside closes. */}
-      <Box
-        sx={{
-          width: 36,
-          height: 4,
-          borderRadius: 2,
-          bgcolor: "action.disabledBackground",
-          mx: "auto",
-          mt: 1,
-          mb: 0.5,
-        }}
-      />
+    <BottomSheet open={open} onClose={onClose}>
       {session && <SessionInfoSection session={session} />}
       {(loading || options.length > 0) && (
         <>
           <Divider />
-          <Box sx={{ px: 2.5, py: 1.5 }}>
+          <Box sx={{ py: 1.5 }}>
             <Typography
               variant="overline"
               color="text.secondary"
@@ -686,7 +656,7 @@ function ComposerSheet({
           </Box>
         </>
       )}
-    </Drawer>
+    </BottomSheet>
   );
 }
 
@@ -709,7 +679,7 @@ function SessionInfoSection({
   ];
   return (
     <>
-      <Box sx={{ px: 2.5, pt: 0.5, pb: 0.25 }}>
+      <Box sx={{ pt: 0.5, pb: 0.25 }}>
         <Typography
           variant="overline"
           color="text.secondary"
@@ -744,7 +714,6 @@ function SheetDetailRow({
   return (
     <Box
       sx={{
-        px: 2.5,
         py: 0.75,
         display: "flex",
         gap: 2,
