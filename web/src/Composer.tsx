@@ -7,6 +7,7 @@ import {
   Divider,
   Drawer,
   IconButton,
+  InputBase,
   List,
   ListItemButton,
   ListItemIcon,
@@ -18,7 +19,6 @@ import {
   Popper,
   Skeleton,
   Stack,
-  TextField,
   Tooltip,
   Typography,
   useMediaQuery,
@@ -192,40 +192,43 @@ export function Composer({
         position: "relative", // anchor for Popper portal placement
       }}
     >
-      {attachments.length > 0 && (
-        <AttachmentPreview
-          blocks={attachments}
-          onRemove={(i): void =>
-            setAttachments((prev) => prev.filter((_, idx) => idx !== i))
-          }
-        />
-      )}
-      <Stack direction="row" spacing={1} alignItems="flex-end">
-        {compact && (
-          <Tooltip title="Attach + options">
-            <span>
-              <IconButton
-                aria-label="more options"
-                disabled={dead}
-                sx={{ width: 44, height: 44, flexShrink: 0 }}
-                onClick={(): void => setSheetOpen(true)}
-              >
-                <Add />
-              </IconButton>
-            </span>
-          </Tooltip>
+      <Paper
+        ref={textFieldRef}
+        variant="outlined"
+        elevation={0}
+        sx={{
+          // Slack / iMessage-style composer card: the textarea, the action
+          // bar and the send button all live inside ONE rounded, bordered
+          // surface — the card is the border, the input itself is borderless —
+          // and the whole edge highlights on focus. Replaces the old layout of
+          // an outlined TextField + a detached chip row + a separate send
+          // button sitting beside it.
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: 2.5,
+          borderColor: "divider",
+          bgcolor: "background.paper",
+          overflow: "hidden",
+          transition: "border-color 120ms ease",
+          "&:focus-within": { borderColor: "primary.main" },
+          opacity: dead ? 0.6 : 1,
+        }}
+      >
+        {attachments.length > 0 && (
+          <Box sx={{ px: 1, pt: 1 }}>
+            <AttachmentPreview
+              blocks={attachments}
+              onRemove={(i): void =>
+                setAttachments((prev) => prev.filter((_, idx) => idx !== i))
+              }
+            />
+          </Box>
         )}
-        <TextField
+        <InputBase
           fullWidth
           multiline
           minRows={1}
           maxRows={12}
-          size="small"
-          inputRef={(): void => {
-            // ref to the underlying textarea is used for caret placement; the
-            // wrapping div ref (textFieldRef) is what Popper anchors to.
-          }}
-          ref={textFieldRef}
           placeholder={dead ? "Session ended" : "Message the agent…"}
           value={text}
           disabled={dead}
@@ -265,45 +268,139 @@ export function Composer({
               submit();
             }
           }}
-          slotProps={{
-            input: {
-              sx: {
-                fontFamily:
-                  "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-                // iOS/iPadOS Safari auto-zooms the whole page when a focused
-                // input's font-size is < 16px — and never zooms back out on
-                // blur, which is the "page got bigger and stayed big" bug.
-                // maximum-scale=1 used to suppress it, but modern Safari
-                // ignores that for accessibility. So float the input to 16px on
-                // touch pointers (iPhone + iPad, both pointer:coarse); desktop
-                // (pointer:fine, no auto-zoom) keeps the denser 14px.
-                fontSize: 14,
-                "@media (pointer: coarse)": { fontSize: 16 },
-              },
-            },
+          sx={{
+            px: 1.5,
+            pt: 1,
+            pb: 0.5,
+            fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+            // 16px on touch so iOS/iPadOS Safari doesn't auto-zoom the page on
+            // focus (it never zooms back out); 14px on desktop where there is
+            // no auto-zoom. See the index.html viewport note.
+            fontSize: 14,
+            "@media (pointer: coarse)": { fontSize: 16 },
           }}
         />
-        {busy ? (
-          <IconButton
-            color="error"
-            aria-label="cancel"
-            sx={{ width: 44, height: 44 }}
-            onClick={(): void => send({ type: "cancel", session_id: sessionId })}
+        {/* Action bar, inside the card. Left: attach + the agent-advertised
+            config (mode / model / effort) — a single + that opens the bottom
+            sheet on touch, inline chips on desktop. Right: the keyboard hint
+            (desktop) and the send / stop button. */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          sx={{ px: 0.5, pb: 0.5, gap: 0.25 }}
+        >
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={0.5}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              // Desktop chip row can outgrow the width → scroll it. On touch the
+              // left side is a single + (no strip), so this never becomes a
+              // bottom-edge horizontal-scroll strip the iOS home gesture eats.
+              overflowX: "auto",
+              scrollbarWidth: "thin",
+              "&::-webkit-scrollbar": { height: 6 },
+            }}
           >
-            <Stop />
-          </IconButton>
-        ) : (
-          <IconButton
-            color="primary"
-            aria-label="send"
-            disabled={!sendable}
-            sx={{ width: 44, height: 44 }}
-            onClick={submit}
-          >
-            <Send />
-          </IconButton>
-        )}
-      </Stack>
+            {compact ? (
+              <Tooltip title="Attach + options">
+                <span>
+                  <IconButton
+                    aria-label="more options"
+                    disabled={dead}
+                    sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                    onClick={(): void => setSheetOpen(true)}
+                  >
+                    <Add />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            ) : (
+              <>
+                <Tooltip title="Attach images">
+                  <span>
+                    <IconButton
+                      aria-label="attach"
+                      disabled={dead}
+                      sx={{ width: 36, height: 36, flexShrink: 0 }}
+                      onClick={(): void => fileInput.current?.click()}
+                    >
+                      <Add />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                {showSkeleton ? (
+                  <ConfigChipSkeletons />
+                ) : (
+                  options.map((opt) => (
+                    <ConfigOptionChip
+                      key={opt.id}
+                      option={opt}
+                      disabled={dead}
+                      onSelect={(value): void =>
+                        send({
+                          type: "set_config_option",
+                          session_id: sessionId,
+                          config_id: opt.id,
+                          value,
+                        })
+                      }
+                    />
+                  ))
+                )}
+              </>
+            )}
+          </Stack>
+          {!compact && (
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ whiteSpace: "nowrap", fontSize: 11, flexShrink: 0, mr: 0.5 }}
+            >
+              ⌘/Ctrl + Enter = send
+            </Typography>
+          )}
+          {busy ? (
+            <Tooltip title="Stop">
+              <IconButton
+                color="error"
+                aria-label="cancel"
+                sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                onClick={(): void => send({ type: "cancel", session_id: sessionId })}
+              >
+                <Stop />
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <Tooltip title="Send (⌘/Ctrl + Enter)">
+              <span>
+                <IconButton
+                  aria-label="send"
+                  disabled={!sendable}
+                  onClick={submit}
+                  sx={{
+                    width: { xs: 40, lg: 36 },
+                    height: { xs: 40, lg: 36 },
+                    flexShrink: 0,
+                    borderRadius: 1.5,
+                    // Filled accent when there's something to send (Slack /
+                    // ChatGPT), a quiet ghost when the field is empty.
+                    bgcolor: sendable ? "primary.main" : "transparent",
+                    color: sendable ? "primary.contrastText" : "text.disabled",
+                    "&:hover": {
+                      bgcolor: sendable ? "primary.dark" : "action.hover",
+                    },
+                  }}
+                >
+                  <Send sx={{ fontSize: 20 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+        </Stack>
+      </Paper>
       <input
         ref={fileInput}
         type="file"
@@ -315,65 +412,6 @@ export function Composer({
           e.target.value = "";
         }}
       />
-      {!compact && (
-        <Stack
-          direction="row"
-          spacing={0.75}
-          alignItems="center"
-          sx={{
-            mt: 1,
-            overflowX: "auto",
-            "&::-webkit-scrollbar": { height: 6 },
-            scrollbarWidth: "thin",
-            minHeight: 40,
-          }}
-        >
-          <Tooltip title="Attach images">
-            <span>
-              <IconButton
-                aria-label="attach"
-                disabled={dead}
-                sx={{ width: 40, height: 40, flexShrink: 0 }}
-                onClick={(): void => fileInput.current?.click()}
-              >
-                <Add />
-              </IconButton>
-            </span>
-          </Tooltip>
-          {showSkeleton ? (
-            <ConfigChipSkeletons />
-          ) : (
-            options.map((opt) => (
-              <ConfigOptionChip
-                key={opt.id}
-                option={opt}
-                disabled={dead}
-                onSelect={(value): void =>
-                  send({
-                    type: "set_config_option",
-                    session_id: sessionId,
-                    config_id: opt.id,
-                    value,
-                  })
-                }
-              />
-            ))
-          )}
-          <Box sx={{ flex: 1 }} />
-          <Typography
-            variant="caption"
-            color="text.disabled"
-            sx={{
-              ml: 1,
-              whiteSpace: "nowrap",
-              fontSize: 11,
-              flexShrink: 0,
-            }}
-          >
-            ⌘/Ctrl + Enter = send
-          </Typography>
-        </Stack>
-      )}
       {compact && (
         <ComposerSheet
           open={sheetOpen}
