@@ -10,6 +10,7 @@ import {
     DialogContent,
     DialogContentText,
     DialogTitle,
+    Divider,
     Drawer,
     IconButton,
     List,
@@ -47,9 +48,8 @@ import {
     type Status,
 } from "./protocol";
 import { send, useStore } from "./store";
-import { Settings } from "./Settings";
 import { ProviderIcon } from "./ProviderIcon";
-import { PortalLauncherButton } from "./_shell";
+import { BottomSheet, PortalLauncherButton, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 
 // Sidebar width: fluid clamp instead of a fixed pixel value so the panel
@@ -670,7 +670,6 @@ export function App({
             />
             <SettingsShell
                 open={settingsOpen}
-                bottomSheet={bottomSheet}
                 onClose={(): void => setSettingsOpen(false)}
                 themeMode={themeMode}
                 onSetThemeMode={onSetThemeMode}
@@ -705,72 +704,36 @@ export function App({
     );
 }
 
-// Responsive settings container. Desktop / landscape iPad → centred Dialog.
-// Mobile / portrait iPad → bottom-anchored Drawer with iOS-style drag
-// handle + rounded top corners (the "bottom sheet" idiom). The content is
-// the same in both shells.
+// Settings surface. Uses the shared BottomSheet (DetentSheet momentum sheet on
+// mobile, centred Dialog on desktop) so it looks/behaves identically to every
+// other app's settings + the portal's launcher. Content is the shared
+// ThemeModeControl + a small About blurb.
 function SettingsShell({
     open,
-    bottomSheet,
     onClose,
     themeMode,
     onSetThemeMode,
 }: {
     open: boolean;
-    bottomSheet: boolean;
     onClose: () => void;
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const body = (
-        <Settings
-            themeMode={themeMode}
-            onSetThemeMode={onSetThemeMode}
-            onClose={onClose}
-        />
-    );
-    if (bottomSheet) {
-        return (
-            <Drawer
-                anchor="bottom"
-                open={open}
-                onClose={onClose}
-                slotProps={{
-                    paper: {
-                        sx: {
-                            borderTopLeftRadius: 16,
-                            borderTopRightRadius: 16,
-                            maxHeight: "85vh",
-                            // Keep a baseline gap (inset is 0 off-device) so the sheet clears
-                            // the home-indicator bar and rounded screen corners on iPhone/iPad.
-                            pb: "max(env(safe-area-inset-bottom), 12px)",
-                            // Side insets so content clears the notch / corners in landscape.
-                            pl: "env(safe-area-inset-left)",
-                            pr: "env(safe-area-inset-right)",
-                        },
-                    },
-                }}
-            >
-                {/* Drag handle bar — purely visual; tapping outside still closes. */}
-                <Box
-                    sx={{
-                        width: 36,
-                        height: 4,
-                        borderRadius: 2,
-                        bgcolor: "action.disabledBackground",
-                        mx: "auto",
-                        mt: 1,
-                        mb: 0.5,
-                    }}
-                />
-                {body}
-            </Drawer>
-        );
-    }
     return (
-        <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-            {body}
-        </Dialog>
+        <BottomSheet open={open} onClose={onClose} title="Settings">
+            <Stack spacing={3}>
+                <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
+                <Divider />
+                <Stack spacing={0.5}>
+                    <Typography variant="overline" color="text.secondary">
+                        About
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                        cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
+                    </Typography>
+                </Stack>
+            </Stack>
+        </BottomSheet>
     );
 }
 
