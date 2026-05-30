@@ -153,6 +153,21 @@ impl Store {
         Ok(())
     }
 
+    /// Persist a user-renamed title. Mirrors `update_status` — only the
+    /// title and `updated_at` move; everything else stays.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_title(&self, session_id: &str, title: &str) -> Result<()> {
+        sqlx::query("UPDATE sessions SET title = $1, updated_at = now() WHERE id = $2")
+            .bind(title)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session title {session_id}"))?;
+        Ok(())
+    }
+
     /// Append an event under its session. Also bumps `sessions.next_seq` so
     /// the high-water mark survives restart. Single transaction so seq
     /// stays monotonic from any concurrent appender.

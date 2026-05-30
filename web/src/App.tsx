@@ -1,40 +1,50 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert,
-  AppBar,
-  Box,
-  Button,
-  Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  Drawer,
-  IconButton,
-  List,
-  ListItemButton,
-  ListItemText,
-  MenuItem,
-  Snackbar,
-  Stack,
-  TextField,
-  Toolbar,
-  Tooltip,
-  Typography,
-  useMediaQuery,
-  useTheme,
+    Alert,
+    AppBar,
+    Box,
+    Button,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogContentText,
+    DialogTitle,
+    Drawer,
+    IconButton,
+    List,
+    ListItemButton,
+    ListItemIcon,
+    ListItemText,
+    Menu,
+    MenuItem,
+    Snackbar,
+    Stack,
+    TextField,
+    Toolbar,
+    Tooltip,
+    Typography,
+    useMediaQuery,
+    useTheme,
 } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material";
-import { Add, Circle, Close, Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material";
+import {
+    Add,
+    Circle,
+    DeleteOutline,
+    DriveFileRenameOutline,
+    Menu as MenuIcon,
+    MoreVert,
+    Settings as SettingsIcon,
+} from "@mui/icons-material";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
 import {
-  PROVIDERS,
-  type ConfigOption,
-  type SessionMeta,
-  type SessionOrigin,
-  type Status,
+    PROVIDERS,
+    type ConfigOption,
+    type SessionMeta,
+    type SessionOrigin,
+    type Status,
 } from "./protocol";
 import { send, useStore } from "./store";
 import { Settings } from "./Settings";
@@ -59,33 +69,33 @@ const SIDEBAR_WIDTH = "clamp(240px, 22vw, 360px)";
 //   blue   (info)    — starting: process spinning up, not ready yet
 //   red    (error)   — exited / crashed: the session is gone
 function statusColor(s: Status): string {
-  switch (s) {
-    case "running":
-      return "success.main";
-    case "busy":
-      return "warning.main";
-    case "starting":
-      return "info.main";
-    default:
-      return "error.main";
-  }
+    switch (s) {
+        case "running":
+            return "success.main";
+        case "busy":
+            return "warning.main";
+        case "starting":
+            return "info.main";
+        default:
+            return "error.main";
+    }
 }
 
 // Human-readable meaning for the dot — surfaced in its tooltip / aria-label,
 // since the dot itself is just color. Mirrors the statusColor mapping above.
 function statusLabel(s: Status): string {
-  switch (s) {
-    case "running":
-      return "Ready";
-    case "busy":
-      return "Working…";
-    case "starting":
-      return "Starting…";
-    case "exited":
-      return "Exited";
-    case "crashed":
-      return "Crashed";
-  }
+    switch (s) {
+        case "running":
+            return "Ready";
+        case "busy":
+            return "Working…";
+        case "starting":
+            return "Starting…";
+        case "exited":
+            return "Exited";
+        case "crashed":
+            return "Crashed";
+    }
 }
 
 // One status indicator, shared by the header and the sidebar list so the
@@ -94,154 +104,192 @@ function statusLabel(s: Status): string {
 // assistive tech (touch has no hover, but the wording is also redundant with
 // the surrounding chrome).
 function StatusDot({
-  status,
-  sx,
+    status,
+    sx,
 }: {
-  status: Status;
-  sx?: SxProps<Theme>;
+    status: Status;
+    sx?: SxProps<Theme>;
 }): React.JSX.Element {
-  return (
-    <Tooltip title={statusLabel(status)} enterDelay={300}>
-      <Circle
-        aria-label={statusLabel(status)}
-        sx={[
-          { fontSize: 10, flexShrink: 0, color: statusColor(status) },
-          ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
-        ]}
-      />
-    </Tooltip>
-  );
+    return (
+        <Tooltip title={statusLabel(status)} enterDelay={300}>
+            <Circle
+                aria-label={statusLabel(status)}
+                sx={[
+                    { fontSize: 10, flexShrink: 0, color: statusColor(status) },
+                    ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+                ]}
+            />
+        </Tooltip>
+    );
 }
 
 function originLabel(o: SessionOrigin | undefined): string {
-  // Default to "api" matches the daemon's SessionOrigin default; older
-  // daemons that predate the field also fall through to here.
-  switch (o ?? "api") {
-    case "zed":
-      return "Zed";
-    case "web":
-      return "Web";
-    default:
-      return "API";
-  }
+    // Default to "api" matches the daemon's SessionOrigin default; older
+    // daemons that predate the field also fall through to here.
+    switch (o ?? "api") {
+        case "zed":
+            return "Zed";
+        case "web":
+            return "Web";
+        default:
+            return "API";
+    }
 }
 
-function originColor(o: SessionOrigin | undefined): "primary" | "secondary" | "default" {
-  switch (o ?? "api") {
-    case "zed":
-      return "primary";
-    case "web":
-      return "secondary";
-    default:
-      return "default";
-  }
+function originColor(
+    o: SessionOrigin | undefined,
+): "primary" | "secondary" | "default" {
+    switch (o ?? "api") {
+        case "zed":
+            return "primary";
+        case "web":
+            return "secondary";
+        default:
+            return "default";
+    }
 }
 
 function SessionList({
-  sessions,
-  activeId,
-  onPick,
-  onNew,
-  onRequestDelete,
-  swipeEnabled,
+    sessions,
+    activeId,
+    onPick,
+    onNew,
+    onRequestDelete,
+    onRequestRename,
 }: {
-  sessions: SessionMeta[];
-  activeId: string | null;
-  onPick: (id: string) => void;
-  onNew: () => void;
-  onRequestDelete: (s: SessionMeta) => void;
-  // Wraps each row in a WeChat-style swipe-to-reveal container. Touch
-  // viewports get it; desktop keeps the inline X icon (mouse can't swipe).
-  swipeEnabled: boolean;
+    sessions: SessionMeta[];
+    activeId: string | null;
+    onPick: (id: string) => void;
+    onNew: () => void;
+    onRequestDelete: (s: SessionMeta) => void;
+    onRequestRename: (s: SessionMeta) => void;
 }): React.JSX.Element {
-  // Only one row can sit open at a time. Tapping a different row body
-  // closes the currently-open one — same idiom WeChat / Mail use.
-  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
-  return (
-    <Stack sx={{ height: "100%" }}>
-      <Box sx={{ p: 1 }}>
-        <Button fullWidth variant="outlined" startIcon={<Add />} onClick={onNew}>
-          New session
-        </Button>
-      </Box>
-      <List dense sx={{ flex: 1, overflowY: "auto" }}>
-        {sessions.map((s) => {
-          const itemBody = (
-            <ListItemButton
-              selected={s.id === activeId}
-              onClick={(): void => {
-                if (swipeEnabled && openSwipeId !== null) {
-                  const wasOpen = openSwipeId === s.id;
-                  setOpenSwipeId(null);
-                  if (wasOpen) return;
-                }
-                onPick(s.id);
-              }}
-              sx={{ pr: 1, bgcolor: "background.paper" }}
-            >
-              <StatusDot status={s.status} sx={{ mr: 1 }} />
-              <ListItemText
-                primary={
-                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                    <ProviderIcon provider={s.provider} sx={{ fontSize: 16, flexShrink: 0 }} />
-                    <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
-                      {s.provider}
-                    </Typography>
-                    <Chip
-                      size="small"
-                      label={originLabel(s.origin)}
-                      color={originColor(s.origin)}
-                      sx={{ height: 16, fontSize: 10, "& .MuiChip-label": { px: 0.75 } }}
-                    />
-                  </Stack>
-                }
-                secondary={s.cwd}
-                slotProps={{
-                  primary: { component: "div" },
-                  secondary: { noWrap: true, variant: "caption" },
-                }}
-              />
-              {/* Inline X — desktop only. On touch the swipe action replaces it. */}
-              {!swipeEnabled && (
-                <IconButton
-                  size="small"
-                  edge="end"
-                  aria-label={`delete session ${s.id}`}
-                  onClick={(e): void => {
-                    e.stopPropagation();
-                    onRequestDelete(s);
-                  }}
-                  sx={{ ml: 0.5 }}
+    // Per-row kebab Menu anchor + target. Standard Material list-row
+    // pattern: trailing IconButton with MoreVert opens a Menu containing
+    // Rename + Delete — two-step gesture (open menu, pick item, confirm
+    // dialog) replaces the previous swipe-to-delete, which the user
+    // (correctly) flagged as mis-tap-prone.
+    const [menuAnchor, setMenuAnchor] = useState<{
+        row: SessionMeta;
+        el: HTMLElement;
+    } | null>(null);
+    return (
+        <Stack sx={{ height: "100%" }}>
+            <Box sx={{ p: 1 }}>
+                <Button
+                    fullWidth
+                    variant="outlined"
+                    startIcon={<Add />}
+                    onClick={onNew}
                 >
-                  <Close fontSize="inherit" />
-                </IconButton>
-              )}
-            </ListItemButton>
-          );
-          if (!swipeEnabled) return <Box key={s.id}>{itemBody}</Box>;
-          return (
-            <SwipeableSessionRow
-              key={s.id}
-              isOpen={openSwipeId === s.id}
-              onOpen={(): void => setOpenSwipeId(s.id)}
-              onClose={(): void => setOpenSwipeId(null)}
-              onDelete={(): void => {
-                setOpenSwipeId(null);
-                onRequestDelete(s);
-              }}
+                    New session
+                </Button>
+            </Box>
+            <List dense sx={{ flex: 1, overflowY: "auto" }}>
+                {sessions.map((s) => (
+                    <ListItemButton
+                        key={s.id}
+                        selected={s.id === activeId}
+                        onClick={(): void => onPick(s.id)}
+                        sx={{ pr: 0.5 }}
+                    >
+                        <StatusDot status={s.status} sx={{ mr: 1 }} />
+                        <ListItemText
+                            primary={
+                                <Stack
+                                    direction="row"
+                                    spacing={0.75}
+                                    alignItems="center"
+                                    sx={{ minWidth: 0 }}
+                                >
+                                    <ProviderIcon
+                                        provider={s.provider}
+                                        sx={{ fontSize: 16, flexShrink: 0 }}
+                                    />
+                                    <Typography
+                                        variant="body2"
+                                        noWrap
+                                        sx={{ minWidth: 0 }}
+                                    >
+                                        {s.title}
+                                    </Typography>
+                                    <Chip
+                                        size="small"
+                                        label={originLabel(s.origin)}
+                                        color={originColor(s.origin)}
+                                        sx={{
+                                            height: 16,
+                                            fontSize: 10,
+                                            "& .MuiChip-label": { px: 0.75 },
+                                        }}
+                                    />
+                                </Stack>
+                            }
+                            secondary={s.cwd}
+                            slotProps={{
+                                primary: { component: "div" },
+                                secondary: {
+                                    noWrap: true,
+                                    variant: "caption",
+                                },
+                            }}
+                        />
+                        <IconButton
+                            size="small"
+                            edge="end"
+                            aria-label={`row actions ${s.id}`}
+                            onClick={(e): void => {
+                                e.stopPropagation();
+                                setMenuAnchor({ row: s, el: e.currentTarget });
+                            }}
+                            sx={{ ml: 0.5 }}
+                        >
+                            <MoreVert fontSize="inherit" />
+                        </IconButton>
+                    </ListItemButton>
+                ))}
+                {sessions.length === 0 && (
+                    <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ p: 2, textAlign: "center" }}
+                    >
+                        No sessions yet.
+                    </Typography>
+                )}
+            </List>
+            <Menu
+                anchorEl={menuAnchor?.el ?? null}
+                open={!!menuAnchor}
+                onClose={(): void => setMenuAnchor(null)}
+                slotProps={{ paper: { sx: { minWidth: 180 } } }}
             >
-              {itemBody}
-            </SwipeableSessionRow>
-          );
-        })}
-        {sessions.length === 0 && (
-          <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: "center" }}>
-            No sessions yet.
-          </Typography>
-        )}
-      </List>
-    </Stack>
-  );
+                <MenuItem
+                    onClick={(): void => {
+                        if (menuAnchor) onRequestRename(menuAnchor.row);
+                        setMenuAnchor(null);
+                    }}
+                >
+                    <ListItemIcon>
+                        <DriveFileRenameOutline fontSize="small" />
+                    </ListItemIcon>
+                    <ListItemText primary="Rename" />
+                </MenuItem>
+                <MenuItem
+                    onClick={(): void => {
+                        if (menuAnchor) onRequestDelete(menuAnchor.row);
+                        setMenuAnchor(null);
+                    }}
+                    sx={{ color: "error.main" }}
+                >
+                    <ListItemIcon>
+                        <DeleteOutline fontSize="small" color="error" />
+                    </ListItemIcon>
+                    <ListItemText primary="Delete" />
+                </MenuItem>
+            </Menu>
+        </Stack>
+    );
 }
 
 // Hard-coded workspace choices for v0. Each entry's `value` is what the
@@ -250,354 +298,421 @@ function SessionList({
 // `/home/draven`). To expose more roots later, either bump this list or
 // fetch a list from the daemon.
 const WORKING_DIRS = [
-  { value: "columbus", label: "columbus", help: "/home/draven/columbus" },
-  { value: "/etc/nixos", label: "/etc/nixos", help: "NixOS host config" },
+    { value: "columbus", label: "columbus", help: "/home/draven/columbus" },
+    { value: "/etc/nixos", label: "/etc/nixos", help: "NixOS host config" },
 ] as const;
 
 function NewSessionDialog({
-  open,
-  onClose,
+    open,
+    onClose,
 }: {
-  open: boolean;
-  onClose: () => void;
+    open: boolean;
+    onClose: () => void;
 }): React.JSX.Element {
-  const [provider, setProvider] = useState<string>(PROVIDERS[0]);
-  const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
-  return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>New session</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField
-            select
-            label="Provider"
-            value={provider}
-            onChange={(e): void => setProvider(e.target.value)}
-          >
-            {PROVIDERS.map((p) => (
-              <MenuItem key={p} value={p}>
-                {p}
-              </MenuItem>
-            ))}
-          </TextField>
-          <TextField
-            select
-            label="Working directory"
-            value={cwd}
-            onChange={(e): void => setCwd(e.target.value)}
-            helperText={WORKING_DIRS.find((w) => w.value === cwd)?.help ?? ""}
-          >
-            {WORKING_DIRS.map((w) => (
-              <MenuItem key={w.value} value={w.value}>
-                {w.label}
-              </MenuItem>
-            ))}
-          </TextField>
-          <Button
-            variant="contained"
-            onClick={(): void => {
-              send({ type: "new_session", provider, cwd });
-              onClose();
-            }}
-          >
-            Create
-          </Button>
-        </Stack>
-      </DialogContent>
-    </Dialog>
-  );
+    const [provider, setProvider] = useState<string>(PROVIDERS[0]);
+    const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    return (
+        <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+            <DialogTitle>New session</DialogTitle>
+            <DialogContent>
+                <Stack spacing={2} sx={{ mt: 1 }}>
+                    <TextField
+                        select
+                        label="Provider"
+                        value={provider}
+                        onChange={(e): void => setProvider(e.target.value)}
+                    >
+                        {PROVIDERS.map((p) => (
+                            <MenuItem key={p} value={p}>
+                                {p}
+                            </MenuItem>
+                        ))}
+                    </TextField>
+                    <TextField
+                        select
+                        label="Working directory"
+                        value={cwd}
+                        onChange={(e): void => setCwd(e.target.value)}
+                        helperText={
+                            WORKING_DIRS.find((w) => w.value === cwd)?.help ??
+                            ""
+                        }
+                    >
+                        {WORKING_DIRS.map((w) => (
+                            <MenuItem key={w.value} value={w.value}>
+                                {w.label}
+                            </MenuItem>
+                        ))}
+                    </TextField>
+                    <Button
+                        variant="contained"
+                        onClick={(): void => {
+                            send({ type: "new_session", provider, cwd });
+                            onClose();
+                        }}
+                    >
+                        Create
+                    </Button>
+                </Stack>
+            </DialogContent>
+        </Dialog>
+    );
 }
 
 export function App({
-  themeMode,
-  onSetThemeMode,
+    themeMode,
+    onSetThemeMode,
 }: {
-  themeMode: ThemeMode;
-  onSetThemeMode: (m: ThemeMode) => void;
+    themeMode: ThemeMode;
+    onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-  const { connected, sessions, timelines, configOptions, lastError } = useStore();
-  // The error notice is monotonically `seq`-stamped so the same message
-  // text triggers the snackbar twice if it happens again. Tracking the
-  // `seq` we've shown means we don't re-open after the user dismisses.
-  const [shownErrorSeq, setShownErrorSeq] = useState(0);
-  const errorOpen = !!lastError && lastError.seq > shownErrorSeq;
-  useEffect(() => {
-    // No-op on mount; effect exists so future enhancements (e.g. coalescing
-    // duplicate messages) have a hook. Keeps the reactive trace explicit.
-  }, [lastError?.seq]);
-  const theme = useTheme();
-  // Sidebar collapse aka "drawer mode". Anything below the `lg` breakpoint
-  // (1200px) hides the persistent sidebar and shows a hamburger that opens
-  // the Drawer — this catches both iPad orientations (portrait ~820,
-  // landscape ~1180), not just phones. The session-list-as-persistent-
-  // rail layout reads as cramped on iPad: the transcript pane loses too
-  // many columns, and the chip row gets squeezed. Matches Mail.app /
-  // Messages on iPad, which also collapse their sidebars in both
-  // orientations until the device is wider than ~1200pt.
-  const mobile = useMediaQuery(theme.breakpoints.down("lg"));
-  // BottomSheet (Drawer anchor=bottom) on phones + portrait iPad; centred
-  // Dialog on landscape iPad and desktop. `md` (900px) — portrait iPad
-  // ~820 falls into BottomSheet; landscape iPad ~1180 → Dialog. This is
-  // intentionally LESS aggressive than `mobile` above so iPad landscape
-  // keeps the iPad-native modal feel for Settings / Delete, while still
-  // getting the collapsed sidebar.
-  const bottomSheet = useMediaQuery(theme.breakpoints.down("md"));
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  // Session targeted for deletion; non-null = the dialog is open. Held in
-  // App so the dialog is a single instance instead of one per row, and so
-  // its mobile vs desktop shell can react to `bottomSheet` from useMediaQuery.
-  const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(null);
-  // Mobile AppBar shows only provider + dot + ellipsized title; long-press
-  // the title strip to reveal the rest (full cwd, origin, session id, all
-  // current config-option values). The sheet is bottom-anchored and only
-  // mounts on touch since the desktop sidebar already shows all of this.
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const titleLongPress = useLongPress((): void => {
-    if (mobile && active) setDetailsOpen(true);
-  });
+    const { connected, sessions, timelines, configOptions, lastError } =
+        useStore();
+    // The error notice is monotonically `seq`-stamped so the same message
+    // text triggers the snackbar twice if it happens again. Tracking the
+    // `seq` we've shown means we don't re-open after the user dismisses.
+    const [shownErrorSeq, setShownErrorSeq] = useState(0);
+    const errorOpen = !!lastError && lastError.seq > shownErrorSeq;
+    useEffect(() => {
+        // No-op on mount; effect exists so future enhancements (e.g. coalescing
+        // duplicate messages) have a hook. Keeps the reactive trace explicit.
+    }, [lastError?.seq]);
+    const theme = useTheme();
+    // Sidebar collapse aka "drawer mode". Anything below the `lg` breakpoint
+    // (1200px) hides the persistent sidebar and shows a hamburger that opens
+    // the Drawer — this catches both iPad orientations (portrait ~820,
+    // landscape ~1180), not just phones. The session-list-as-persistent-
+    // rail layout reads as cramped on iPad: the transcript pane loses too
+    // many columns, and the chip row gets squeezed. Matches Mail.app /
+    // Messages on iPad, which also collapse their sidebars in both
+    // orientations until the device is wider than ~1200pt.
+    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
+    // BottomSheet (Drawer anchor=bottom) on phones + portrait iPad; centred
+    // Dialog on landscape iPad and desktop. `md` (900px) — portrait iPad
+    // ~820 falls into BottomSheet; landscape iPad ~1180 → Dialog. This is
+    // intentionally LESS aggressive than `mobile` above so iPad landscape
+    // keeps the iPad-native modal feel for Settings / Delete, while still
+    // getting the collapsed sidebar.
+    const bottomSheet = useMediaQuery(theme.breakpoints.down("md"));
+    const [activeId, setActiveId] = useState<string | null>(null);
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [dialogOpen, setDialogOpen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    // Session targeted for deletion; non-null = the dialog is open. Held in
+    // App so the dialog is a single instance instead of one per row, and so
+    // its mobile vs desktop shell can react to `bottomSheet` from useMediaQuery.
+    const [pendingDelete, setPendingDelete] = useState<SessionMeta | null>(
+        null,
+    );
+    // Same pattern for rename — single dialog instance prefilled with the
+    // session's current title; Mobile/desktop shell split mirrors the rest.
+    const [pendingRename, setPendingRename] = useState<SessionMeta | null>(
+        null,
+    );
+    // Mobile AppBar shows only provider + dot + ellipsized title; long-press
+    // the title strip to reveal the rest (full cwd, origin, session id, all
+    // current config-option values). The sheet is bottom-anchored and only
+    // mounts on touch since the desktop sidebar already shows all of this.
+    const [detailsOpen, setDetailsOpen] = useState(false);
+    const titleLongPress = useLongPress((): void => {
+        if (mobile && active) setDetailsOpen(true);
+    });
 
-  // Default to the first session once one exists.
-  const active = sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+    // Default to the first session once one exists.
+    const active =
+        sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
 
-  function pick(id: string): void {
-    setActiveId(id);
-    setDrawerOpen(false);
-  }
+    function pick(id: string): void {
+        setActiveId(id);
+        setDrawerOpen(false);
+    }
 
-  const list = (
-    <SessionList
-      sessions={sessions}
-      activeId={active?.id ?? null}
-      onPick={pick}
-      onNew={(): void => setDialogOpen(true)}
-      onRequestDelete={(s): void => setPendingDelete(s)}
-      swipeEnabled={mobile}
-    />
-  );
+    const list = (
+        <SessionList
+            sessions={sessions}
+            activeId={active?.id ?? null}
+            onPick={pick}
+            onNew={(): void => setDialogOpen(true)}
+            onRequestDelete={(s): void => setPendingDelete(s)}
+            onRequestRename={(s): void => setPendingRename(s)}
+        />
+    );
 
-  // Brand toolbar for the desktop sidebar. Uses MUI's own `<Toolbar>` so
-  // its height comes from `theme.mixins.toolbar` (responsive across
-  // breakpoints) and stays in lockstep with the AppBar's Toolbar on the
-  // right pane — no hardcoded pixel value. On mobile the sidebar is a
-  // Drawer and the brand goes in the AppBar instead.
-  const sidebarHeader = (
-    <Toolbar
-      variant="dense"
-      sx={{ borderBottom: 1, borderColor: "divider", flexShrink: 0, gap: 0.5 }}
-    >
-      {/* Portal launcher — the app's absolute top-left; self-hides when not hosted. */}
-      <PortalLauncherButton edge="start" size="small" />
-      <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
-        🤠 cowboy
-      </Typography>
-    </Toolbar>
-  );
-
-  return (
-    <Box sx={{ display: "flex", height: "100%", width: "100%" }}>
-      {mobile ? (
-        <Drawer
-          anchor="top"
-          open={drawerOpen}
-          onClose={(): void => setDrawerOpen(false)}
-          slotProps={{
-            paper: {
-              sx: {
-                maxHeight: "80vh",
-                borderBottomLeftRadius: 16,
-                borderBottomRightRadius: 16,
-                // Slide DOWN from the top rather than in from the left: a
-                // left-anchored drawer fought the iOS back / app-switch
-                // edge-swipe (a swipe to scroll the list kept switching apps).
-                // Opening is a hamburger tap, so there's no edge gesture at all.
-                // pt clears the notch / status bar; side insets clear the
-                // rounded corners / notch in landscape (0 off-device).
-                pt: "max(env(safe-area-inset-top), 8px)",
-                pl: "env(safe-area-inset-left)",
-                pr: "env(safe-area-inset-right)",
-              },
-            },
-          }}
-        >
-          {list}
-        </Drawer>
-      ) : (
-        <Stack
-          sx={{
-            width: SIDEBAR_WIDTH,
-            flexShrink: 0,
-            borderRight: 1,
-            borderColor: "divider",
-            height: "100%",
-          }}
-        >
-          {sidebarHeader}
-          <Box sx={{ flex: 1, minHeight: 0 }}>{list}</Box>
-        </Stack>
-      )}
-
-      <Stack sx={{ flex: 1, minWidth: 0 }}>
-        <AppBar position="static" color="default" elevation={0}>
-          <Toolbar
+    // Brand toolbar for the desktop sidebar. Uses MUI's own `<Toolbar>` so
+    // its height comes from `theme.mixins.toolbar` (responsive across
+    // breakpoints) and stays in lockstep with the AppBar's Toolbar on the
+    // right pane — no hardcoded pixel value. On mobile the sidebar is a
+    // Drawer and the brand goes in the AppBar instead.
+    const sidebarHeader = (
+        <Toolbar
             variant="dense"
-            sx={{ borderBottom: 1, borderColor: "divider" }}
-          >
-            {/* On mobile the sidebar (with its launcher) is hidden, so the
+            sx={{
+                borderBottom: 1,
+                borderColor: "divider",
+                flexShrink: 0,
+                gap: 0.5,
+            }}
+        >
+            {/* Portal launcher — the app's absolute top-left; self-hides when not hosted. */}
+            <PortalLauncherButton edge="start" size="small" />
+            <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
+                🤠 cowboy
+            </Typography>
+        </Toolbar>
+    );
+
+    return (
+        <Box sx={{ display: "flex", height: "100%", width: "100%" }}>
+            {mobile ? (
+                <Drawer
+                    anchor="top"
+                    open={drawerOpen}
+                    onClose={(): void => setDrawerOpen(false)}
+                    slotProps={{
+                        paper: {
+                            sx: {
+                                maxHeight: "80vh",
+                                borderBottomLeftRadius: 16,
+                                borderBottomRightRadius: 16,
+                                // Slide DOWN from the top rather than in from the left: a
+                                // left-anchored drawer fought the iOS back / app-switch
+                                // edge-swipe (a swipe to scroll the list kept switching apps).
+                                // Opening is a hamburger tap, so there's no edge gesture at all.
+                                // pt clears the notch / status bar; side insets clear the
+                                // rounded corners / notch in landscape (0 off-device).
+                                pt: "max(env(safe-area-inset-top), 8px)",
+                                pl: "env(safe-area-inset-left)",
+                                pr: "env(safe-area-inset-right)",
+                            },
+                        },
+                    }}
+                >
+                    {list}
+                </Drawer>
+            ) : (
+                <Stack
+                    sx={{
+                        width: SIDEBAR_WIDTH,
+                        flexShrink: 0,
+                        borderRight: 1,
+                        borderColor: "divider",
+                        height: "100%",
+                    }}
+                >
+                    {sidebarHeader}
+                    <Box sx={{ flex: 1, minHeight: 0 }}>{list}</Box>
+                </Stack>
+            )}
+
+            <Stack sx={{ flex: 1, minWidth: 0 }}>
+                <AppBar position="static" color="default" elevation={0}>
+                    <Toolbar
+                        variant="dense"
+                        sx={{ borderBottom: 1, borderColor: "divider" }}
+                    >
+                        {/* On mobile the sidebar (with its launcher) is hidden, so the
                 drawer toggle leads the bar; the launcher moves to the far right,
                 after Settings (the app's chosen placement on this bar). */}
-            {mobile && (
-              <IconButton
-                edge="start"
-                onClick={(): void => setDrawerOpen(true)}
-                sx={{ mr: 1 }}
-              >
-                <MenuIcon />
-              </IconButton>
-            )}
-            {active ? (
-              // Status moves to a leading dot (color = state); the title takes
-              // the freed width and ellipsizes, with the full string in a
-              // tooltip on hover. The title ("provider · cwd") carries more than
-              // the bare provider name the bar used to show.
-              <Stack
-                direction="row"
-                alignItems="center"
-                spacing={0.75}
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  // Suppress the iOS context-menu-on-long-press so the
-                  // long-press gesture lands on us, not on Safari's text
-                  // selector / share menu.
-                  userSelect: "none",
-                  WebkitUserSelect: "none",
-                  WebkitTouchCallout: "none",
-                  cursor: mobile ? "pointer" : "default",
-                }}
-                {...(mobile ? titleLongPress : {})}
-              >
-                <StatusDot status={active.status} />
-                <ProviderIcon provider={active.provider} sx={{ fontSize: 20, flexShrink: 0 }} />
-                <Tooltip title={active.title} enterDelay={400}>
-                  <Typography variant="subtitle1" noWrap sx={{ minWidth: 0 }}>
-                    {active.title}
-                  </Typography>
-                </Tooltip>
-              </Stack>
-            ) : (
-              <Typography variant="subtitle1" noWrap sx={{ flex: 1, minWidth: 0 }}>
-                {mobile ? "🤠 cowboy" : ""}
-              </Typography>
-            )}
-            {!connected && <Chip size="small" color="error" label="offline" sx={{ mr: 1 }} />}
-            <IconButton
-              onClick={(): void => setSettingsOpen(true)}
-              aria-label="settings"
-              title="Settings"
-            >
-              <SettingsIcon />
-            </IconButton>
-            {/* Launcher last — to the right of Settings (self-hides standalone). */}
-            {mobile && <PortalLauncherButton size="small" />}
-          </Toolbar>
-        </AppBar>
+                        {mobile && (
+                            <IconButton
+                                edge="start"
+                                onClick={(): void => setDrawerOpen(true)}
+                                sx={{ mr: 1 }}
+                            >
+                                <MenuIcon />
+                            </IconButton>
+                        )}
+                        {active ? (
+                            // Status moves to a leading dot (color = state); the title takes
+                            // the freed width and ellipsizes, with the full string in a
+                            // tooltip on hover. The title ("provider · cwd") carries more than
+                            // the bare provider name the bar used to show.
+                            <Stack
+                                direction="row"
+                                alignItems="center"
+                                spacing={0.75}
+                                sx={{
+                                    flex: 1,
+                                    minWidth: 0,
+                                    // Suppress the iOS context-menu-on-long-press so the
+                                    // long-press gesture lands on us, not on Safari's text
+                                    // selector / share menu.
+                                    userSelect: "none",
+                                    WebkitUserSelect: "none",
+                                    WebkitTouchCallout: "none",
+                                    cursor: mobile ? "pointer" : "default",
+                                }}
+                                {...(mobile ? titleLongPress : {})}
+                            >
+                                <StatusDot status={active.status} />
+                                <ProviderIcon
+                                    provider={active.provider}
+                                    sx={{ fontSize: 20, flexShrink: 0 }}
+                                />
+                                <Tooltip title={active.title} enterDelay={400}>
+                                    <Typography
+                                        variant="subtitle1"
+                                        noWrap
+                                        sx={{ minWidth: 0 }}
+                                    >
+                                        {active.title}
+                                    </Typography>
+                                </Tooltip>
+                            </Stack>
+                        ) : (
+                            <Typography
+                                variant="subtitle1"
+                                noWrap
+                                sx={{ flex: 1, minWidth: 0 }}
+                            >
+                                {mobile ? "🤠 cowboy" : ""}
+                            </Typography>
+                        )}
+                        {!connected && (
+                            <Chip
+                                size="small"
+                                color="error"
+                                label="offline"
+                                sx={{ mr: 1 }}
+                            />
+                        )}
+                        <IconButton
+                            onClick={(): void => setSettingsOpen(true)}
+                            aria-label="settings"
+                            title="Settings"
+                        >
+                            <SettingsIcon />
+                        </IconButton>
+                        {/* Launcher last — to the right of Settings (self-hides standalone). */}
+                        {mobile && <PortalLauncherButton size="small" />}
+                    </Toolbar>
+                </AppBar>
 
-        {active ? (
-          <>
-            <Transcript
-              sessionId={active.id}
-              timeline={timelines.get(active.id) ?? []}
-              status={active.status}
-            />
-            <Composer sessionId={active.id} status={active.status} />
-          </>
-        ) : (
-          // Empty state: relative parent + absolutely-positioned content
-          // centered to the geometric middle of the *whole* right pane
-          // (including the AppBar area), so it reads as the viewport
-          // center even on tall screens. flex-centering would push it
-          // ~24px down (half the AppBar height).
-          <Box sx={{ flex: 1, position: "relative" }}>
-            <Stack
-              spacing={2}
-              alignItems="center"
-              sx={{
-                position: "absolute",
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                p: 3,
-                width: "max-content",
-                maxWidth: "calc(100% - 48px)",
-              }}
-            >
-              <Typography color="text.secondary">No session selected.</Typography>
-              <Button variant="contained" startIcon={<Add />} onClick={(): void => setDialogOpen(true)}>
-                New session
-              </Button>
+                {active ? (
+                    <>
+                        <Transcript
+                            sessionId={active.id}
+                            timeline={timelines.get(active.id) ?? []}
+                            status={active.status}
+                        />
+                        <Composer
+                            sessionId={active.id}
+                            status={active.status}
+                        />
+                    </>
+                ) : (
+                    // Empty state: relative parent + absolutely-positioned content
+                    // centered to the geometric middle of the *whole* right pane
+                    // (including the AppBar area), so it reads as the viewport
+                    // center even on tall screens. flex-centering would push it
+                    // ~24px down (half the AppBar height).
+                    <Box sx={{ flex: 1, position: "relative" }}>
+                        <Stack
+                            spacing={2}
+                            alignItems="center"
+                            sx={{
+                                position: "absolute",
+                                top: "50%",
+                                left: "50%",
+                                transform: "translate(-50%, -50%)",
+                                p: 3,
+                                width: "max-content",
+                                maxWidth: "calc(100% - 48px)",
+                            }}
+                        >
+                            <Typography color="text.secondary">
+                                No session selected.
+                            </Typography>
+                            <Button
+                                variant="contained"
+                                startIcon={<Add />}
+                                onClick={(): void => setDialogOpen(true)}
+                            >
+                                New session
+                            </Button>
+                        </Stack>
+                    </Box>
+                )}
             </Stack>
-          </Box>
-        )}
-      </Stack>
 
-      <NewSessionDialog open={dialogOpen} onClose={(): void => setDialogOpen(false)} />
-      {mobile && (
-        <SessionDetailsSheet
-          open={detailsOpen && !!active}
-          session={active}
-          configOptions={active ? (configOptions.get(active.id) ?? []) : []}
-          onClose={(): void => setDetailsOpen(false)}
-        />
-      )}
-      <DeleteSessionShell
-        session={pendingDelete}
-        bottomSheet={bottomSheet}
-        onClose={(): void => setPendingDelete(null)}
-        onConfirm={(): void => {
-          if (pendingDelete) {
-            send({ type: "delete_session", session_id: pendingDelete.id });
-          }
-          setPendingDelete(null);
-        }}
-      />
-      <SettingsShell
-        open={settingsOpen}
-        bottomSheet={bottomSheet}
-        onClose={(): void => setSettingsOpen(false)}
-        themeMode={themeMode}
-        onSetThemeMode={onSetThemeMode}
-      />
-      <Snackbar
-        open={errorOpen}
-        autoHideDuration={5000}
-        onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
-        anchorOrigin={{
-          vertical: "bottom",
-          horizontal: mobile ? "center" : "right",
-        }}
-        // Lift above the composer's safe-area inset on mobile so the toast
-        // doesn't sit underneath the action row.
-        sx={{
-          bottom: {
-            xs: "calc(env(safe-area-inset-bottom) + 96px)",
-            sm: 24,
-          },
-        }}
-      >
-        <Alert
-          severity="error"
-          variant="filled"
-          onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
-          sx={{ maxWidth: 480 }}
-        >
-          {lastError?.message ?? ""}
-        </Alert>
-      </Snackbar>
-    </Box>
-  );
+            <NewSessionDialog
+                open={dialogOpen}
+                onClose={(): void => setDialogOpen(false)}
+            />
+            {mobile && (
+                <SessionDetailsSheet
+                    open={detailsOpen && !!active}
+                    session={active}
+                    configOptions={
+                        active ? (configOptions.get(active.id) ?? []) : []
+                    }
+                    onClose={(): void => setDetailsOpen(false)}
+                />
+            )}
+            <DeleteSessionShell
+                session={pendingDelete}
+                bottomSheet={bottomSheet}
+                onClose={(): void => setPendingDelete(null)}
+                onConfirm={(): void => {
+                    if (pendingDelete) {
+                        send({
+                            type: "delete_session",
+                            session_id: pendingDelete.id,
+                        });
+                    }
+                    setPendingDelete(null);
+                }}
+            />
+            <RenameSessionShell
+                session={pendingRename}
+                bottomSheet={bottomSheet}
+                onClose={(): void => setPendingRename(null)}
+                onConfirm={(title): void => {
+                    if (pendingRename) {
+                        send({
+                            type: "rename_session",
+                            session_id: pendingRename.id,
+                            title,
+                        });
+                    }
+                    setPendingRename(null);
+                }}
+            />
+            <SettingsShell
+                open={settingsOpen}
+                bottomSheet={bottomSheet}
+                onClose={(): void => setSettingsOpen(false)}
+                themeMode={themeMode}
+                onSetThemeMode={onSetThemeMode}
+            />
+            <Snackbar
+                open={errorOpen}
+                autoHideDuration={5000}
+                onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
+                anchorOrigin={{
+                    vertical: "bottom",
+                    horizontal: mobile ? "center" : "right",
+                }}
+                // Lift above the composer's safe-area inset on mobile so the toast
+                // doesn't sit underneath the action row.
+                sx={{
+                    bottom: {
+                        xs: "calc(env(safe-area-inset-bottom) + 96px)",
+                        sm: 24,
+                    },
+                }}
+            >
+                <Alert
+                    severity="error"
+                    variant="filled"
+                    onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
+                    sx={{ maxWidth: 480 }}
+                >
+                    {lastError?.message ?? ""}
+                </Alert>
+            </Snackbar>
+        </Box>
+    );
 }
 
 // Responsive settings container. Desktop / landscape iPad → centred Dialog.
@@ -605,64 +720,68 @@ export function App({
 // handle + rounded top corners (the "bottom sheet" idiom). The content is
 // the same in both shells.
 function SettingsShell({
-  open,
-  bottomSheet,
-  onClose,
-  themeMode,
-  onSetThemeMode,
+    open,
+    bottomSheet,
+    onClose,
+    themeMode,
+    onSetThemeMode,
 }: {
-  open: boolean;
-  bottomSheet: boolean;
-  onClose: () => void;
-  themeMode: ThemeMode;
-  onSetThemeMode: (m: ThemeMode) => void;
+    open: boolean;
+    bottomSheet: boolean;
+    onClose: () => void;
+    themeMode: ThemeMode;
+    onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-  const body = (
-    <Settings themeMode={themeMode} onSetThemeMode={onSetThemeMode} onClose={onClose} />
-  );
-  if (bottomSheet) {
-    return (
-      <Drawer
-        anchor="bottom"
-        open={open}
-        onClose={onClose}
-        slotProps={{
-          paper: {
-            sx: {
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              maxHeight: "85vh",
-              // Keep a baseline gap (inset is 0 off-device) so the sheet clears
-              // the home-indicator bar and rounded screen corners on iPhone/iPad.
-              pb: "max(env(safe-area-inset-bottom), 12px)",
-              // Side insets so content clears the notch / corners in landscape.
-              pl: "env(safe-area-inset-left)",
-              pr: "env(safe-area-inset-right)",
-            },
-          },
-        }}
-      >
-        {/* Drag handle bar — purely visual; tapping outside still closes. */}
-        <Box
-          sx={{
-            width: 36,
-            height: 4,
-            borderRadius: 2,
-            bgcolor: "action.disabledBackground",
-            mx: "auto",
-            mt: 1,
-            mb: 0.5,
-          }}
+    const body = (
+        <Settings
+            themeMode={themeMode}
+            onSetThemeMode={onSetThemeMode}
+            onClose={onClose}
         />
-        {body}
-      </Drawer>
     );
-  }
-  return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      {body}
-    </Dialog>
-  );
+    if (bottomSheet) {
+        return (
+            <Drawer
+                anchor="bottom"
+                open={open}
+                onClose={onClose}
+                slotProps={{
+                    paper: {
+                        sx: {
+                            borderTopLeftRadius: 16,
+                            borderTopRightRadius: 16,
+                            maxHeight: "85vh",
+                            // Keep a baseline gap (inset is 0 off-device) so the sheet clears
+                            // the home-indicator bar and rounded screen corners on iPhone/iPad.
+                            pb: "max(env(safe-area-inset-bottom), 12px)",
+                            // Side insets so content clears the notch / corners in landscape.
+                            pl: "env(safe-area-inset-left)",
+                            pr: "env(safe-area-inset-right)",
+                        },
+                    },
+                }}
+            >
+                {/* Drag handle bar — purely visual; tapping outside still closes. */}
+                <Box
+                    sx={{
+                        width: 36,
+                        height: 4,
+                        borderRadius: 2,
+                        bgcolor: "action.disabledBackground",
+                        mx: "auto",
+                        mt: 1,
+                        mb: 0.5,
+                    }}
+                />
+                {body}
+            </Drawer>
+        );
+    }
+    return (
+        <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
+            {body}
+        </Dialog>
+    );
 }
 
 // Responsive delete-session confirmation. Same split as SettingsShell —
@@ -671,99 +790,108 @@ function SettingsShell({
 // the browser `window.confirm` which is unstyled, blocks input, and can't
 // adapt its layout per viewport.
 function DeleteSessionShell({
-  session,
-  bottomSheet,
-  onClose,
-  onConfirm,
+    session,
+    bottomSheet,
+    onClose,
+    onConfirm,
 }: {
-  session: SessionMeta | null;
-  bottomSheet: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
+    session: SessionMeta | null;
+    bottomSheet: boolean;
+    onClose: () => void;
+    onConfirm: () => void;
 }): React.JSX.Element | null {
-  if (!session) return null;
-  const surface = originLabel(session.origin);
-  const title = `Delete this ${surface} session?`;
-  const detail =
-    "Any in-flight turn is cancelled. The agent transcript on this session will be lost.";
-  const actions = (
-    <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ width: "100%" }}>
-      <Button onClick={onClose} color="inherit">
-        Cancel
-      </Button>
-      <Button
-        onClick={onConfirm}
-        color="error"
-        variant="contained"
-        autoFocus
-        // Make the destructive action obviously the heavier control; matches
-        // material guidance for destructive confirmations.
-      >
-        Delete
-      </Button>
-    </Stack>
-  );
-
-  if (bottomSheet) {
-    return (
-      <Drawer
-        anchor="bottom"
-        open
-        onClose={onClose}
-        slotProps={{
-          paper: {
-            sx: {
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              // Keep a baseline gap (inset is 0 off-device) so the sheet clears
-              // the home-indicator bar and rounded screen corners on iPhone/iPad.
-              pb: "max(env(safe-area-inset-bottom), 12px)",
-              // Side insets so content clears the notch / corners in landscape.
-              pl: "env(safe-area-inset-left)",
-              pr: "env(safe-area-inset-right)",
-            },
-          },
-        }}
-      >
-        <Box
-          sx={{
-            width: 36,
-            height: 4,
-            borderRadius: 2,
-            bgcolor: "action.disabledBackground",
-            mx: "auto",
-            mt: 1,
-            mb: 0.5,
-          }}
-        />
-        <Box sx={{ px: 2.5, pt: 1.5, pb: 2 }}>
-          <Typography variant="h6" component="h2" gutterBottom>
-            {title}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {detail}
-          </Typography>
-          {actions}
-        </Box>
-      </Drawer>
+    if (!session) return null;
+    const surface = originLabel(session.origin);
+    const title = `Delete this ${surface} session?`;
+    const detail =
+        "Any in-flight turn is cancelled. The agent transcript on this session will be lost.";
+    const actions = (
+        <Stack
+            direction="row"
+            spacing={1}
+            justifyContent="flex-end"
+            sx={{ width: "100%" }}
+        >
+            <Button onClick={onClose} color="inherit">
+                Cancel
+            </Button>
+            <Button
+                onClick={onConfirm}
+                color="error"
+                variant="contained"
+                autoFocus
+                // Make the destructive action obviously the heavier control; matches
+                // material guidance for destructive confirmations.
+            >
+                Delete
+            </Button>
+        </Stack>
     );
-  }
 
-  return (
-    <Dialog
-      open
-      onClose={onClose}
-      fullWidth
-      maxWidth="xs"
-      aria-labelledby="delete-session-title"
-    >
-      <DialogTitle id="delete-session-title">{title}</DialogTitle>
-      <DialogContent>
-        <DialogContentText>{detail}</DialogContentText>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
-    </Dialog>
-  );
+    if (bottomSheet) {
+        return (
+            <Drawer
+                anchor="bottom"
+                open
+                onClose={onClose}
+                slotProps={{
+                    paper: {
+                        sx: {
+                            borderTopLeftRadius: 16,
+                            borderTopRightRadius: 16,
+                            // Keep a baseline gap (inset is 0 off-device) so the sheet clears
+                            // the home-indicator bar and rounded screen corners on iPhone/iPad.
+                            pb: "max(env(safe-area-inset-bottom), 12px)",
+                            // Side insets so content clears the notch / corners in landscape.
+                            pl: "env(safe-area-inset-left)",
+                            pr: "env(safe-area-inset-right)",
+                        },
+                    },
+                }}
+            >
+                <Box
+                    sx={{
+                        width: 36,
+                        height: 4,
+                        borderRadius: 2,
+                        bgcolor: "action.disabledBackground",
+                        mx: "auto",
+                        mt: 1,
+                        mb: 0.5,
+                    }}
+                />
+                <Box sx={{ px: 2.5, pt: 1.5, pb: 2 }}>
+                    <Typography variant="h6" component="h2" gutterBottom>
+                        {title}
+                    </Typography>
+                    <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ mb: 2 }}
+                    >
+                        {detail}
+                    </Typography>
+                    {actions}
+                </Box>
+            </Drawer>
+        );
+    }
+
+    return (
+        <Dialog
+            open
+            onClose={onClose}
+            fullWidth
+            maxWidth="xs"
+            aria-labelledby="delete-session-title"
+        >
+            <DialogTitle id="delete-session-title">{title}</DialogTitle>
+            <DialogContent>
+                <DialogContentText>{detail}</DialogContentText>
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
+        </Dialog>
+    );
 }
 
 // Pointer-event long-press detector. 500ms by default; the timer cancels
@@ -771,299 +899,290 @@ function DeleteSessionShell({
 // long-press), and on cancel/leave. Returns the props blob to spread onto
 // the target element.
 function useLongPress(
-  callback: () => void,
-  ms = 500,
-  moveThreshold = 8,
+    callback: () => void,
+    ms = 500,
+    moveThreshold = 8,
 ): {
-  onPointerDown: (e: React.PointerEvent) => void;
-  onPointerUp: () => void;
-  onPointerCancel: () => void;
-  onPointerLeave: () => void;
-  onPointerMove: (e: React.PointerEvent) => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+    onPointerDown: (e: React.PointerEvent) => void;
+    onPointerUp: () => void;
+    onPointerCancel: () => void;
+    onPointerLeave: () => void;
+    onPointerMove: (e: React.PointerEvent) => void;
+    onContextMenu: (e: React.MouseEvent) => void;
 } {
-  const timer = useRef<number | null>(null);
-  const startX = useRef(0);
-  const startY = useRef(0);
-  const cancel = useCallback((): void => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  }, []);
-  return {
-    onPointerDown: (e): void => {
-      cancel();
-      startX.current = e.clientX;
-      startY.current = e.clientY;
-      timer.current = window.setTimeout(callback, ms);
-    },
-    onPointerUp: cancel,
-    onPointerCancel: cancel,
-    onPointerLeave: cancel,
-    onPointerMove: (e): void => {
-      const dx = Math.abs(e.clientX - startX.current);
-      const dy = Math.abs(e.clientY - startY.current);
-      if (dx > moveThreshold || dy > moveThreshold) cancel();
-    },
-    // Swallow the OS context menu so a long-press-and-hold doesn't pop the
-    // iOS share / Android select sheet on top of our handler.
-    onContextMenu: (e): void => e.preventDefault(),
-  };
+    const timer = useRef<number | null>(null);
+    const startX = useRef(0);
+    const startY = useRef(0);
+    const cancel = useCallback((): void => {
+        if (timer.current !== null) {
+            window.clearTimeout(timer.current);
+            timer.current = null;
+        }
+    }, []);
+    return {
+        onPointerDown: (e): void => {
+            cancel();
+            startX.current = e.clientX;
+            startY.current = e.clientY;
+            timer.current = window.setTimeout(callback, ms);
+        },
+        onPointerUp: cancel,
+        onPointerCancel: cancel,
+        onPointerLeave: cancel,
+        onPointerMove: (e): void => {
+            const dx = Math.abs(e.clientX - startX.current);
+            const dy = Math.abs(e.clientY - startY.current);
+            if (dx > moveThreshold || dy > moveThreshold) cancel();
+        },
+        // Swallow the OS context menu so a long-press-and-hold doesn't pop the
+        // iOS share / Android select sheet on top of our handler.
+        onContextMenu: (e): void => e.preventDefault(),
+    };
 }
 
 // Bottom sheet that surfaces the rest of the session metadata + current
 // config-option values. The mobile AppBar only has room for the dot +
 // provider + ellipsized title; a long-press on that strip opens this.
 function SessionDetailsSheet({
-  open,
-  session,
-  configOptions,
-  onClose,
+    open,
+    session,
+    configOptions,
+    onClose,
 }: {
-  open: boolean;
-  session: SessionMeta | null;
-  configOptions: ConfigOption[];
-  onClose: () => void;
+    open: boolean;
+    session: SessionMeta | null;
+    configOptions: ConfigOption[];
+    onClose: () => void;
 }): React.JSX.Element | null {
-  if (!session) return null;
-  const fields: { label: string; value: string }[] = [
-    { label: "Session id", value: session.id },
-    { label: "Provider", value: session.provider },
-    { label: "Working directory", value: session.cwd },
-    { label: "Origin", value: originLabel(session.origin) },
-    { label: "Status", value: session.status },
-  ];
-  return (
-    <Drawer
-      anchor="bottom"
-      open={open}
-      onClose={onClose}
-      slotProps={{
-        paper: {
-          sx: {
-            borderTopLeftRadius: 16,
-            borderTopRightRadius: 16,
-            maxHeight: "85vh",
-            pb: "max(env(safe-area-inset-bottom), 12px)",
-          },
-        },
-      }}
-    >
-      <Box
-        sx={{
-          width: 36,
-          height: 4,
-          borderRadius: 2,
-          bgcolor: "action.disabledBackground",
-          mx: "auto",
-          mt: 1,
-          mb: 0.5,
-        }}
-      />
-      <Box sx={{ px: 2.5, pt: 1.5, pb: 0.5 }}>
-        <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.8 }}>
-          Session
-        </Typography>
-      </Box>
-      <List dense disablePadding>
-        {fields.map((f) => (
-          <ListItemDetailRow key={f.label} label={f.label} value={f.value} />
-        ))}
-      </List>
-      {configOptions.length > 0 && (
-        <>
-          <Box sx={{ px: 2.5, pt: 1.5, pb: 0.5 }}>
-            <Typography
-              variant="overline"
-              color="text.secondary"
-              sx={{ letterSpacing: 0.8 }}
-            >
-              Agent
-            </Typography>
-          </Box>
-          <List dense disablePadding>
-            {configOptions.map((opt) => {
-              const current = opt.options.find((o) => o.value === opt.currentValue);
-              return (
-                <ListItemDetailRow
-                  key={opt.id}
-                  label={opt.name}
-                  value={current?.name ?? String(opt.currentValue)}
-                />
-              );
-            })}
-          </List>
-        </>
-      )}
-    </Drawer>
-  );
+    if (!session) return null;
+    const fields: { label: string; value: string }[] = [
+        { label: "Session id", value: session.id },
+        { label: "Provider", value: session.provider },
+        { label: "Working directory", value: session.cwd },
+        { label: "Origin", value: originLabel(session.origin) },
+        { label: "Status", value: session.status },
+    ];
+    return (
+        <Drawer
+            anchor="bottom"
+            open={open}
+            onClose={onClose}
+            slotProps={{
+                paper: {
+                    sx: {
+                        borderTopLeftRadius: 16,
+                        borderTopRightRadius: 16,
+                        maxHeight: "85vh",
+                        pb: "max(env(safe-area-inset-bottom), 12px)",
+                    },
+                },
+            }}
+        >
+            <Box
+                sx={{
+                    width: 36,
+                    height: 4,
+                    borderRadius: 2,
+                    bgcolor: "action.disabledBackground",
+                    mx: "auto",
+                    mt: 1,
+                    mb: 0.5,
+                }}
+            />
+            <Box sx={{ px: 2.5, pt: 1.5, pb: 0.5 }}>
+                <Typography
+                    variant="overline"
+                    color="text.secondary"
+                    sx={{ letterSpacing: 0.8 }}
+                >
+                    Session
+                </Typography>
+            </Box>
+            <List dense disablePadding>
+                {fields.map((f) => (
+                    <ListItemDetailRow
+                        key={f.label}
+                        label={f.label}
+                        value={f.value}
+                    />
+                ))}
+            </List>
+            {configOptions.length > 0 && (
+                <>
+                    <Box sx={{ px: 2.5, pt: 1.5, pb: 0.5 }}>
+                        <Typography
+                            variant="overline"
+                            color="text.secondary"
+                            sx={{ letterSpacing: 0.8 }}
+                        >
+                            Agent
+                        </Typography>
+                    </Box>
+                    <List dense disablePadding>
+                        {configOptions.map((opt) => {
+                            const current = opt.options.find(
+                                (o) => o.value === opt.currentValue,
+                            );
+                            return (
+                                <ListItemDetailRow
+                                    key={opt.id}
+                                    label={opt.name}
+                                    value={
+                                        current?.name ??
+                                        String(opt.currentValue)
+                                    }
+                                />
+                            );
+                        })}
+                    </List>
+                </>
+            )}
+        </Drawer>
+    );
 }
 
 function ListItemDetailRow({
-  label,
-  value,
+    label,
+    value,
 }: {
-  label: string;
-  value: string;
+    label: string;
+    value: string;
 }): React.JSX.Element {
-  return (
-    <Box sx={{ px: 2.5, py: 1, display: "flex", gap: 2, alignItems: "baseline" }}>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ minWidth: 120, flexShrink: 0 }}
-      >
-        {label}
-      </Typography>
-      <Typography
-        variant="body2"
-        sx={{
-          flex: 1,
-          wordBreak: "break-word",
-          fontFamily: ["Session id", "Working directory"].includes(label)
-            ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-            : "inherit",
-        }}
-      >
-        {value}
-      </Typography>
-    </Box>
-  );
-}
-
-// WeChat-style swipe-to-reveal: the row slides left to expose a red Delete
-// action button on its right. Horizontal-only by design — vertical drags
-// fall through to the list's native scroll. One row can be open at a time
-// (`openSwipeId` in the parent handles arbitration); tapping a closed row
-// dismisses any open sibling instead of navigating.
-function SwipeableSessionRow({
-  isOpen,
-  onOpen,
-  onClose,
-  onDelete,
-  children,
-}: {
-  isOpen: boolean;
-  onOpen: () => void;
-  onClose: () => void;
-  onDelete: () => void;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  const ACTION_WIDTH = 88;
-  const AXIS_THRESHOLD = 8;
-  const SNAP_THRESHOLD = ACTION_WIDTH * 0.4;
-  const [dx, setDx] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const start = useRef({ x: 0, y: 0 });
-  const axis = useRef<"unknown" | "h" | "v">("unknown");
-  const dragRef = useRef(0);
-
-  const offset = dragging ? dx : isOpen ? -ACTION_WIDTH : 0;
-
-  return (
-    <Box sx={{ position: "relative", overflow: "hidden" }}>
-      {/* Action button revealed behind the row */}
-      <Box
-        sx={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: ACTION_WIDTH,
-          display: "flex",
-          alignItems: "stretch",
-        }}
-      >
-        <Button
-          fullWidth
-          onClick={(e): void => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          sx={{
-            bgcolor: "error.main",
-            color: "error.contrastText",
-            borderRadius: 0,
-            fontWeight: 600,
-            textTransform: "none",
-            "&:hover": { bgcolor: "error.dark" },
-          }}
+    return (
+        <Box
+            sx={{
+                px: 2.5,
+                py: 1,
+                display: "flex",
+                gap: 2,
+                alignItems: "baseline",
+            }}
         >
-          Delete
-        </Button>
-      </Box>
-      <Box
-        onPointerDown={(e): void => {
-          start.current = { x: e.clientX, y: e.clientY };
-          axis.current = "unknown";
-          dragRef.current = 0;
-          setDx(isOpen ? -ACTION_WIDTH : 0);
-          setDragging(true);
-        }}
-        onPointerMove={(e): void => {
-          if (!dragging) return;
-          const deltaX = e.clientX - start.current.x;
-          const deltaY = e.clientY - start.current.y;
-          if (axis.current === "unknown") {
-            const adx = Math.abs(deltaX);
-            const ady = Math.abs(deltaY);
-            if (adx > AXIS_THRESHOLD || ady > AXIS_THRESHOLD) {
-              axis.current = adx > ady ? "h" : "v";
-              if (axis.current === "v") {
-                setDragging(false);
-                setDx(0);
-                return;
-              }
-              (e.target as Element).setPointerCapture?.(e.pointerId);
-            }
-          }
-          if (axis.current === "h") {
-            const baseline = isOpen ? -ACTION_WIDTH : 0;
-            const next = Math.max(-ACTION_WIDTH * 1.1, Math.min(0, baseline + deltaX));
-            dragRef.current = next;
-            setDx(next);
-          }
-        }}
-        onPointerUp={(): void => {
-          if (!dragging) return;
-          setDragging(false);
-          if (axis.current === "h") {
-            if (dragRef.current < -SNAP_THRESHOLD) onOpen();
-            else onClose();
-          }
-        }}
-        onPointerCancel={(): void => {
-          setDragging(false);
-          setDx(0);
-        }}
-        // Suppress the row body click that would otherwise fire after a
-        // swipe gesture (some browsers synthesize click despite movement).
-        onClickCapture={(e): void => {
-          if (Math.abs(dragRef.current) > AXIS_THRESHOLD) {
-            e.preventDefault();
-            e.stopPropagation();
-            dragRef.current = 0;
-          }
-        }}
-        sx={{
-          transform: `translateX(${offset}px)`,
-          transition: dragging ? "none" : "transform 0.2s ease",
-          willChange: "transform",
-          // Let vertical scroll through, capture horizontal pans here.
-          touchAction: "pan-y",
-          // Solid background is mandatory — otherwise the absolutely-
-          // positioned Delete button behind us shows through whenever the
-          // ListItemButton's row content doesn't span the full width
-          // (which is most of the time, because ListItemText shrinks to
-          // its content). Without this the row looks permanently
-          // swipe-open even at translate 0.
-          bgcolor: "background.paper",
-          width: "100%",
-        }}
-      >
-        {children}
-      </Box>
-    </Box>
-  );
+            <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ minWidth: 120, flexShrink: 0 }}
+            >
+                {label}
+            </Typography>
+            <Typography
+                variant="body2"
+                sx={{
+                    flex: 1,
+                    wordBreak: "break-word",
+                    fontFamily: ["Session id", "Working directory"].includes(
+                        label,
+                    )
+                        ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                        : "inherit",
+                }}
+            >
+                {value}
+            </Typography>
+        </Box>
+    );
 }
+
+// Same shell idiom as DeleteSessionShell: Dialog on desktop / landscape iPad,
+// bottom-anchored Drawer with iOS-style drag handle on phones + portrait
+// iPad. Prefills the textfield with the current title; Save is disabled
+// while empty or unchanged (server-side also rejects empty).
+function RenameSessionShell({
+    session,
+    bottomSheet,
+    onClose,
+    onConfirm,
+}: {
+    session: SessionMeta | null;
+    bottomSheet: boolean;
+    onClose: () => void;
+    onConfirm: (title: string) => void;
+}): React.JSX.Element | null {
+    const [value, setValue] = useState("");
+    useEffect(() => {
+        if (session) setValue(session.title);
+    }, [session?.id, session?.title]);
+    if (!session) return null;
+    const trimmed = value.trim();
+    const canSave = trimmed.length > 0 && trimmed !== session.title;
+    const submit = (): void => {
+        if (canSave) onConfirm(trimmed);
+    };
+    const field = (
+        <TextField
+            autoFocus
+            fullWidth
+            label="Title"
+            value={value}
+            onChange={(e): void => setValue(e.target.value)}
+            onKeyDown={(e): void => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit();
+                }
+            }}
+            sx={{ mt: 1 }}
+            helperText="Shown in the sidebar and the title bar."
+        />
+    );
+    const actions = (
+        <Stack
+            direction="row"
+            spacing={1}
+            justifyContent="flex-end"
+            sx={{ width: "100%" }}
+        >
+            <Button onClick={onClose} color="inherit">
+                Cancel
+            </Button>
+            <Button onClick={submit} variant="contained" disabled={!canSave}>
+                Save
+            </Button>
+        </Stack>
+    );
+    if (bottomSheet) {
+        return (
+            <Drawer
+                anchor="bottom"
+                open
+                onClose={onClose}
+                slotProps={{
+                    paper: {
+                        sx: {
+                            borderTopLeftRadius: 16,
+                            borderTopRightRadius: 16,
+                            pb: "env(safe-area-inset-bottom)",
+                        },
+                    },
+                }}
+            >
+                <Box
+                    sx={{
+                        width: 36,
+                        height: 4,
+                        borderRadius: 2,
+                        bgcolor: "action.disabledBackground",
+                        mx: "auto",
+                        mt: 1,
+                        mb: 0.5,
+                    }}
+                />
+                <Box sx={{ px: 2.5, pt: 1.5, pb: 2 }}>
+                    <Typography variant="h6" component="h2" gutterBottom>
+                        Rename session
+                    </Typography>
+                    {field}
+                    <Box sx={{ mt: 2 }}>{actions}</Box>
+                </Box>
+            </Drawer>
+        );
+    }
+    return (
+        <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+            <DialogTitle>Rename session</DialogTitle>
+            <DialogContent>{field}</DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>{actions}</DialogActions>
+        </Dialog>
+    );
+}
+

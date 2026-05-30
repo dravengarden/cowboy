@@ -103,6 +103,9 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
             StoreWrite::UpdateStatus { session_id, status } => {
                 store.update_status(session_id, *status).await
             }
+            StoreWrite::UpdateTitle { session_id, title } => {
+                store.update_title(session_id, title).await
+            }
             StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         };
         if let Err(e) = result {
@@ -338,6 +341,7 @@ fn handle_command(state: &AppState, text: &str) {
         | Inbound::Cancel { session_id }
         | Inbound::Permission { session_id, .. }
         | Inbound::DeleteSession { session_id }
+        | Inbound::RenameSession { session_id, .. }
         | Inbound::SetConfigOption { session_id, .. } => Some(session_id.clone()),
         Inbound::NewSession { .. } => None,
     };
@@ -396,6 +400,16 @@ fn handle_command(state: &AppState, text: &str) {
             state.supervisor.delete_session(&session_id);
             state.hub.delete_session(&session_id);
             Ok(())
+        }
+        Inbound::RenameSession { session_id, title } => {
+            // Empty title is a UI bug; reject server-side so the toast lands.
+            let trimmed = title.trim().to_owned();
+            if trimmed.is_empty() {
+                Err("title cannot be empty".to_owned())
+            } else {
+                state.hub.rename_session(&session_id, trimmed);
+                Ok(())
+            }
         }
         Inbound::SetConfigOption {
             session_id,

@@ -157,6 +157,13 @@ pub enum Inbound {
     /// remove the entry from the Hub, and broadcast the updated session list
     /// to every connected client (so other surfaces auto-clear).
     DeleteSession { session_id: String },
+    /// Rename a session — the user-customizable title shown in the AppBar
+    /// and (post-rename) in the sidebar list. Empty title is rejected at
+    /// the server before this point.
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
     /// Set one config option on the session (mode / model / effort / future).
     /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
     /// request that handles all three via the same shape. cowboy sends it as
@@ -217,6 +224,7 @@ pub enum StoreWrite {
     InsertSession(SessionMeta),
     AppendEvent(Envelope),
     UpdateStatus { session_id: String, status: Status },
+    UpdateTitle { session_id: String, title: String },
     DeleteSession(String),
 }
 
@@ -374,6 +382,26 @@ impl Hub {
             self.broadcast_sessions();
         }
         removed
+    }
+
+    /// Rename a session. Updates the in-memory `title`, persists, and
+    /// re-broadcasts the session list so every connected surface sees the
+    /// new label. Unknown ids are silently ignored (matches `set_status`).
+    pub fn rename_session(&self, session_id: &str, title: String) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.meta.title = title.clone();
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateTitle {
+                session_id: session_id.to_owned(),
+                title,
+            });
+        }
+        self.broadcast_sessions();
     }
 
     /// Update a session's status, emit a `Lifecycle` event, refresh the list.

@@ -115,6 +115,7 @@ export type Inbound =
       option_id?: string;
     }
   | { type: "delete_session"; session_id: string }
+  | { type: "rename_session"; session_id: string; title: string }
   | {
       // Mode / model / effort change — same wire shape, server routes the
       // right ext_method downstream. See src/acp.rs SetConfigOption.
