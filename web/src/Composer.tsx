@@ -8,9 +8,6 @@ import {
   Drawer,
   IconButton,
   List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
   Menu,
   MenuItem,
   MenuList,
@@ -26,21 +23,19 @@ import {
 } from "@mui/material";
 import {
   AlternateEmail,
-  AttachFile,
-  Check,
-  Close,
   ExpandMore,
   Send,
   Stop,
   Tune,
 } from "@mui/icons-material";
 import { send, useStore } from "./store";
+import { originLabel } from "./protocol";
 import type {
   AcpUpdate,
   AvailableCommand,
   ConfigOption,
-  ContentBlock,
   Envelope,
+  SessionMeta,
   Status,
 } from "./protocol";
 
@@ -54,10 +49,11 @@ import type {
 // send button.
 //
 // Layout: mobile-first. Composer sits at the bottom of the viewport with a
-// safe-area inset. Action row (attach + agent-advertised config chips for
-// mode / model / effort) sits BELOW the textarea so the textarea always
-// stays wide and tap-able. The row is horizontally scrollable on narrow
-// viewports so any number of dropdowns doesn't force a wrap.
+// safe-area inset. Action row (slash-command / @-reference triggers + the
+// agent-advertised config chips for mode / model / effort) sits BELOW the
+// textarea so the textarea always stays wide and tap-able. The row is
+// horizontally scrollable on narrow viewports so any number of dropdowns
+// doesn't force a wrap.
 export function Composer({
   sessionId,
   status,
@@ -66,24 +62,27 @@ export function Composer({
   status: Status;
 }): React.JSX.Element {
   const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<ContentBlock[]>([]);
-  const fileInput = useRef<HTMLInputElement | null>(null);
   const textFieldRef = useRef<HTMLDivElement | null>(null);
-  const { configOptions, timelines } = useStore();
+  const { configOptions, sessions, timelines } = useStore();
+  // The active session's metadata, surfaced read-only inside the options
+  // sheet (mobile's "session settings" popup). Desktop shows the same facts
+  // in the always-visible sidebar, so the sheet — and this lookup — only
+  // matters on the compact tier.
+  const session = sessions.find((s) => s.id === sessionId);
   const theme = useTheme();
-  // Touch tier collapses the whole action bar into a single `+` button left
-  // of the textarea — tapping it opens a BottomSheet with attach + every
-  // config option in one place. Inspired by ChatGPT / DeepSeek / Gemini:
-  // chips wrap awkwardly on iPad portrait (820px) and are completely
-  // unreadable on a 390px iPhone, so the sheet pattern wins on every
-  // sub-desktop viewport. Desktop keeps the inline chip row — there's room.
+  // Touch tier collapses the agent config into a single Tune button — tapping
+  // it opens a BottomSheet with the session info + every config option in one
+  // place. Inspired by ChatGPT / DeepSeek / Gemini: chips wrap awkwardly on
+  // iPad portrait (820px) and are completely unreadable on a 390px iPhone, so
+  // the sheet pattern wins on every sub-desktop viewport. Desktop keeps the
+  // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const busy = status === "busy";
   const starting = status === "starting";
   const dead = status === "exited" || status === "crashed";
-  const sendable = (!!text.trim() || attachments.length > 0) && !dead;
+  const sendable = !!text.trim() && !dead;
 
   // Pull the agent-advertised options for this session, if known. Sorted in
   // a fixed display order so dropdowns don't flicker between
@@ -144,6 +143,70 @@ export function Composer({
     [],
   );
 
+  // @-file picker. Unlike slash (whole-input only), `@` triggers whenever the
+  // text *ends* with an `@token` actively being typed — a trailing space or
+  // selecting a file completes the reference and closes the picker. The
+  // candidate list comes from the daemon (gitignore-aware fuzzy search of the
+  // session cwd); `atDismissed` lets Escape suppress it until the query moves.
+  const atQuery = useMemo(() => parseAtQuery(text), [text]);
+  const [atDismissed, setAtDismissed] = useState(false);
+  useEffect(() => {
+    setAtDismissed(false);
+  }, [atQuery]);
+  const [atFiles, setAtFiles] = useState<string[]>([]);
+  const [atIndex, setAtIndex] = useState(0);
+  const atOpen = atQuery !== null && !atDismissed && atFiles.length > 0 && !dead;
+  // Debounced fetch: a keystroke schedules a search 120ms out, and any newer
+  // query (or unmount) aborts the in-flight one so results can't land stale.
+  useEffect(() => {
+    if (atQuery === null || dead) {
+      setAtFiles([]);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const url = `/api/sessions/${encodeURIComponent(sessionId)}/files?q=${
+        encodeURIComponent(atQuery)
+      }&limit=20`;
+      fetch(url, { signal: controller.signal })
+        .then((r) => (r.ok ? r.json() : { files: [] }))
+        .then((d: { files?: string[] }) =>
+          setAtFiles(Array.isArray(d.files) ? d.files : []),
+        )
+        .catch(() => {
+          /* aborted or transient network error — keep the last list */
+        });
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [atQuery, dead, sessionId]);
+  // Clamp the selection when the candidate list shrinks.
+  useEffect(() => {
+    setAtIndex((i) => Math.max(0, Math.min(i, atFiles.length - 1)));
+  }, [atFiles.length]);
+  const insertFile = useCallback((path: string): void => {
+    setText((prev) => {
+      const m = AT_QUERY_RE.exec(prev);
+      if (m === null) return prev;
+      // The token sits at the very end (the regex is `$`-anchored), so cut from
+      // the `@` and append the picked path plus a trailing space — which also
+      // ends the `@token`, closing the picker on the next render.
+      const at = prev.length - (m[1] ?? "").length - 1;
+      const next = `${prev.slice(0, at)}@${path} `;
+      queueMicrotask(() => {
+        const input = textFieldRef.current?.querySelector("textarea");
+        if (input) {
+          input.focus();
+          const end = input.value.length;
+          input.setSelectionRange(end, end);
+        }
+      });
+      return next;
+    });
+  }, []);
+
   // The `/` and `@` action buttons just type their trigger character into the
   // field and focus it: `/` from an empty field opens the slash-command picker
   // (same path as typing it); `@` starts a file reference that the agent reads
@@ -163,39 +226,17 @@ export function Composer({
 
   function submit(): void {
     if (!sendable) return;
-    const blocks: ContentBlock[] = [];
     const trimmed = text.trimEnd();
-    if (trimmed) blocks.push({ type: "text", text: trimmed });
-    blocks.push(...attachments);
-    if (blocks.length === 0) return;
-    if (blocks.length === 1 && attachments.length === 0) {
-      // Text-only path uses the legacy `text` field — keeps wire-compat
-      // with the existing daemon path that wraps it in a single ACP Text
-      // block. No functional difference; just smaller frames.
-      send({ type: "prompt", session_id: sessionId, text: trimmed });
-    } else {
-      send({ type: "prompt", session_id: sessionId, content: blocks });
-    }
+    if (!trimmed) return;
+    send({ type: "prompt", session_id: sessionId, text: trimmed });
     setText("");
-    setAttachments([]);
-  }
-
-  async function handleFiles(files: FileList | null): Promise<void> {
-    if (!files) return;
-    const next: ContentBlock[] = [];
-    for (const f of Array.from(files)) {
-      if (!f.type.startsWith("image/")) continue;
-      const data = await readAsBase64(f);
-      next.push({ type: "image", mimeType: f.type, data });
-    }
-    if (next.length > 0) setAttachments((prev) => [...prev, ...next]);
   }
 
   return (
     <Box
       sx={{
         // Pad every edge against the device safe area, not just the bottom.
-        // The action row's far-left (upload) and far-right (send) buttons sit
+        // The action row's far-left (slash) and far-right (send) buttons sit
         // right where iPhone's rounded screen corners curve in. In portrait
         // `env(safe-area-inset-left/right)` is 0, so floor the side padding to
         // 12px (and the bottom to home-indicator + 12px) to keep those tap
@@ -211,14 +252,6 @@ export function Composer({
         position: "relative", // anchor for Popper portal placement
       }}
     >
-      {attachments.length > 0 && (
-        <AttachmentPreview
-          blocks={attachments}
-          onRemove={(i): void =>
-            setAttachments((prev) => prev.filter((_, idx) => idx !== i))
-          }
-        />
-      )}
       {/* Simple composer: a plain MUI outlined input on top (default theme
           radius — no oversized pill), with one action row beneath it. */}
       <TextField
@@ -262,6 +295,32 @@ export function Composer({
               return;
             }
           }
+          // @-file picker keyboard control — same precedence over send/newline.
+          if (atOpen) {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setAtIndex((i) => (i + 1) % atFiles.length);
+              return;
+            }
+            if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setAtIndex((i) => (i - 1 + atFiles.length) % atFiles.length);
+              return;
+            }
+            if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
+              const file = atFiles[atIndex];
+              if (file) {
+                e.preventDefault();
+                insertFile(file);
+                return;
+              }
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setAtDismissed(true);
+              return;
+            }
+          }
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             submit();
@@ -279,23 +338,11 @@ export function Composer({
           },
         }}
       />
-      {/* Action row below the input: upload / slash-command / @-reference on
+      {/* Action row below the input: slash-command / @-reference triggers on
           the left, then the agent config (inline chips on desktop, the bottom
           sheet on touch), then the send button. Buttons are 40px on touch so
           the side safe-area floor keeps them off the iPhone corner radius. */}
       <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.75, minHeight: 40 }}>
-        <Tooltip title="Upload a file">
-          <span>
-            <IconButton
-              aria-label="upload file"
-              disabled={dead}
-              sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
-              onClick={(): void => fileInput.current?.click()}
-            >
-              <AttachFile fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
         <Tooltip title="Slash command / skill">
           <span>
             <IconButton
@@ -409,28 +456,14 @@ export function Composer({
           </Tooltip>
         )}
       </Stack>
-      <input
-        ref={fileInput}
-        type="file"
-        accept="image/*"
-        multiple
-        style={{ display: "none" }}
-        onChange={(e): void => {
-          void handleFiles(e.target.files);
-          e.target.value = "";
-        }}
-      />
       {compact && (
         <ComposerSheet
           open={sheetOpen}
           onClose={(): void => setSheetOpen(false)}
+          session={session}
           options={options}
           loading={showSkeleton}
           dead={dead}
-          onAttachClick={(): void => {
-            setSheetOpen(false);
-            fileInput.current?.click();
-          }}
           onSelectOption={(configId, value): void =>
             send({
               type: "set_config_option",
@@ -447,7 +480,17 @@ export function Composer({
         commands={filteredCommands}
         selectedIndex={slashIndex}
         onSelect={insertCommand}
+        onHighlight={(i): void => setSlashIndex(i)}
         onClose={(): void => setText("")}
+      />
+      <AtPicker
+        open={atOpen}
+        anchorEl={textFieldRef.current}
+        files={atFiles}
+        selectedIndex={atIndex}
+        onSelect={insertFile}
+        onHighlight={(i): void => setAtIndex(i)}
+        onClose={(): void => setAtDismissed(true)}
       />
     </Box>
   );
@@ -553,18 +596,18 @@ function ConfigOptionChip({
 function ComposerSheet({
   open,
   onClose,
+  session,
   options,
   loading,
   dead,
-  onAttachClick,
   onSelectOption,
 }: {
   open: boolean;
   onClose: () => void;
+  session: SessionMeta | undefined;
   options: ConfigOption[];
   loading: boolean;
   dead: boolean;
-  onAttachClick: () => void;
   onSelectOption: (configId: string, value: string | boolean) => void;
 }): React.JSX.Element {
   return (
@@ -599,112 +642,175 @@ function ComposerSheet({
           mb: 0.5,
         }}
       />
-      <List disablePadding>
-        <ListItemButton
-          disabled={dead}
-          onClick={onAttachClick}
-          sx={{ py: 1.25, px: 2.5 }}
-        >
-          <ListItemIcon sx={{ minWidth: 40 }}>
-            <AttachFile />
-          </ListItemIcon>
-          <ListItemText
-            primary="Attach images"
-            secondary="Add one or more pictures to the next message"
-            slotProps={{
-              primary: { variant: "body1", sx: { fontWeight: 500 } },
-            }}
-          />
-        </ListItemButton>
-        {loading && (
-          <Stack
-            direction="row"
-            spacing={1.5}
-            alignItems="center"
-            sx={{ px: 2.5, py: 2, color: "text.secondary" }}
-          >
-            <CircularProgress size={16} />
-            <Typography variant="body2">Loading agent options…</Typography>
-          </Stack>
-        )}
-        {options.map((opt) => (
-          <ConfigSheetSection
-            key={opt.id}
-            option={opt}
-            onSelect={(value): void => {
-              onSelectOption(opt.id, value);
-              onClose();
-            }}
-          />
-        ))}
-      </List>
+      {session && <SessionInfoSection session={session} />}
+      {(loading || options.length > 0) && (
+        <>
+          <Divider />
+          <Box sx={{ px: 2.5, py: 1.5 }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
+            >
+              Agent
+            </Typography>
+            {loading ? (
+              <Stack
+                direction="row"
+                spacing={1.5}
+                alignItems="center"
+                sx={{ py: 1, color: "text.secondary" }}
+              >
+                <CircularProgress size={16} />
+                <Typography variant="body2">Loading agent options…</Typography>
+              </Stack>
+            ) : (
+              // Selecting a value does NOT close the sheet — mode, model, and
+              // effort are commonly changed together, and each <Select> already
+              // closes its own menu on pick. The user dismisses the sheet by
+              // tapping outside once they're done.
+              <Stack spacing={2} sx={{ mt: 1.5 }}>
+                {options.map((opt) => (
+                  <ConfigSheetDropdown
+                    key={opt.id}
+                    option={opt}
+                    disabled={dead}
+                    onSelect={(value): void => onSelectOption(opt.id, value)}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Box>
+        </>
+      )}
     </Drawer>
   );
 }
 
-function ConfigSheetSection({
-  option,
-  onSelect,
+// Read-only session metadata at the top of the options sheet. This used to
+// live behind a long-press on the mobile title bar (a gesture nobody found),
+// so it now rides the one popup the user already opens to change mode / model
+// / effort. Desktop shows the same facts in the persistent sidebar, so this
+// section only renders inside the compact-tier sheet.
+function SessionInfoSection({
+  session,
 }: {
-  option: ConfigOption;
-  onSelect: (value: string | boolean) => void;
+  session: SessionMeta;
 }): React.JSX.Element {
+  const rows: { label: string; value: string; mono?: boolean }[] = [
+    { label: "Provider", value: session.provider },
+    { label: "Working dir", value: session.cwd, mono: true },
+    { label: "Origin", value: originLabel(session.origin) },
+    { label: "Status", value: session.status },
+    { label: "Session id", value: session.id, mono: true },
+  ];
   return (
     <>
-      <Divider sx={{ mt: 0.5 }} />
-      <Box sx={{ px: 2.5, pt: 1.25, pb: 0.5 }}>
+      <Box sx={{ px: 2.5, pt: 0.5, pb: 0.25 }}>
         <Typography
           variant="overline"
           color="text.secondary"
           sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
         >
-          {option.name}
+          Session
         </Typography>
-        {option.description && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block" }}
-          >
-            {option.description}
-          </Typography>
-        )}
       </Box>
-      {option.options.map((o) => {
-        const selected = o.value === option.currentValue;
-        return (
-          <ListItemButton
-            key={String(o.value)}
-            selected={selected}
-            onClick={(): void => onSelect(o.value)}
-            sx={{
-              alignItems: "flex-start",
-              whiteSpace: "normal",
-              py: 1.25,
-              px: 2.5,
-            }}
-          >
-            <ListItemIcon sx={{ minWidth: 32, mt: 0.5 }}>
-              {selected ? (
-                <Check color="primary" />
-              ) : (
-                <Box sx={{ width: 24, height: 24 }} />
-              )}
-            </ListItemIcon>
-            <ListItemText
-              primary={o.name}
-              secondary={o.description}
-              slotProps={{
-                primary: { variant: "body1", sx: { fontWeight: 500 } },
-                secondary: { variant: "body2" },
-              }}
-            />
-          </ListItemButton>
-        );
-      })}
+      <List dense disablePadding>
+        {rows.map((r) => (
+          <SheetDetailRow
+            key={r.label}
+            label={r.label}
+            value={r.value}
+            mono={r.mono === true}
+          />
+        ))}
+      </List>
     </>
   );
 }
+
+function SheetDetailRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        px: 2.5,
+        py: 0.75,
+        display: "flex",
+        gap: 2,
+        alignItems: "baseline",
+      }}
+    >
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ minWidth: 96, flexShrink: 0 }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          wordBreak: "break-word",
+          fontFamily: mono ? MONO : "inherit",
+        }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+// One labelled dropdown per agent option (mode / model / effort). Collapses
+// what used to be an always-expanded radio list — the sheet stays short even
+// when an agent advertises a dozen models. ACP option values may be string OR
+// boolean, so the <Select> is keyed on String(value) and mapped back to the
+// original type on change.
+function ConfigSheetDropdown({
+  option,
+  disabled,
+  onSelect,
+}: {
+  option: ConfigOption;
+  disabled: boolean;
+  onSelect: (value: string | boolean) => void;
+}): React.JSX.Element {
+  const currentKey = String(option.currentValue);
+  return (
+    <TextField
+      select
+      fullWidth
+      size="small"
+      disabled={disabled}
+      label={option.name}
+      value={currentKey}
+      onChange={(e): void => {
+        const picked = option.options.find(
+          (o) => String(o.value) === e.target.value,
+        );
+        if (picked) onSelect(picked.value);
+      }}
+      {...(option.description ? { helperText: option.description } : {})}
+    >
+      {option.options.map((o) => (
+        <MenuItem key={String(o.value)} value={String(o.value)}>
+          {o.name}
+        </MenuItem>
+      ))}
+    </TextField>
+  );
+}
+
+const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
 function SlashPicker({
   open,
@@ -712,6 +818,7 @@ function SlashPicker({
   commands,
   selectedIndex,
   onSelect,
+  onHighlight,
   onClose,
 }: {
   open: boolean;
@@ -719,8 +826,36 @@ function SlashPicker({
   commands: AvailableCommand[];
   selectedIndex: number;
   onSelect: (name: string) => void;
+  onHighlight: (i: number) => void;
   onClose: () => void;
 }): React.JSX.Element {
+  // Each row is a single ellipsized line (name + dimmed description) so the
+  // list stays scannable — skill blurbs are 1-3 sentences and used to wrap to
+  // 3-5 lines each, leaving only ~2 rows visible. Full text moves to an
+  // on-demand detail surface that differs by input model:
+  //
+  //   Desktop (pointer: fine) — a footer pinned under the list always mirrors
+  //   the highlighted row's full name + description. Arrow keys AND hover move
+  //   the highlight, so full info is one glance away with no gesture (the
+  //   editor-autocomplete "docs pane" idiom). A hover tooltip can't do this:
+  //   the palette is driven by the keyboard, where there's no hovered element.
+  //
+  //   Touch (pointer: coarse) — no hover, so a long-press peeks a row's full
+  //   text into the same footer; a plain tap still inserts. The footer is
+  //   absent until a peek, so it doesn't steal vertical space from the list
+  //   while the soft keyboard is already squeezing the viewport.
+  const coarse = useMediaQuery("(pointer: coarse)");
+  const [peekIndex, setPeekIndex] = useState<number | null>(null);
+  // Drop a stale peek whenever the filtered set or open-state changes — the
+  // index could otherwise point past the new list.
+  useEffect(() => {
+    setPeekIndex(null);
+  }, [commands, open]);
+
+  const detailIndex = coarse ? peekIndex : selectedIndex;
+  const detail =
+    detailIndex !== null && detailIndex >= 0 ? commands[detailIndex] : undefined;
+
   return (
     <Popper
       open={open}
@@ -737,43 +872,221 @@ function SlashPicker({
           sx={{
             width: anchorEl ? anchorEl.clientWidth : "auto",
             maxWidth: "min(560px, 92vw)",
-            maxHeight: 320,
-            overflowY: "auto",
             borderRadius: 1.5,
+            overflow: "hidden",
           }}
         >
-          <MenuList dense disablePadding>
+          <MenuList dense disablePadding sx={{ maxHeight: 280, overflowY: "auto" }}>
             {commands.map((c, i) => (
-              <MenuItem
+              <SlashRow
                 key={c.name}
+                command={c}
                 selected={i === selectedIndex}
-                onClick={(): void => onSelect(c.name)}
-                sx={{ alignItems: "flex-start", whiteSpace: "normal", py: 0.75 }}
+                coarse={coarse}
+                onSelect={(): void => onSelect(c.name)}
+                onHighlight={(): void => onHighlight(i)}
+                onPeek={(): void => setPeekIndex(i)}
+              />
+            ))}
+          </MenuList>
+          {detail && (
+            <Box
+              sx={{
+                borderTop: 1,
+                borderColor: "divider",
+                bgcolor: "action.hover",
+                px: 1.5,
+                py: 1,
+              }}
+            >
+              <Typography
+                variant="body2"
+                sx={{ fontWeight: 700, fontFamily: MONO }}
               >
-                <Stack sx={{ width: "100%", minWidth: 0 }}>
-                  <Stack direction="row" spacing={1} alignItems="baseline">
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        fontWeight: 600,
-                        fontFamily:
-                          "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      }}
-                    >
-                      /{c.name}
-                    </Typography>
-                  </Stack>
-                  {c.description && (
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{ whiteSpace: "normal" }}
-                    >
-                      {c.description}
-                    </Typography>
-                  )}
-                </Stack>
-              </MenuItem>
+                /{detail.name}
+              </Typography>
+              {detail.description && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", whiteSpace: "normal", mt: 0.25 }}
+                >
+                  {detail.description}
+                </Typography>
+              )}
+            </Box>
+          )}
+        </Paper>
+      </ClickAwayListener>
+    </Popper>
+  );
+}
+
+// One picker row: a single ellipsized line. On desktop, hovering raises the
+// keyboard highlight (so the detail footer follows the mouse too). On touch, a
+// ~450ms long-press peeks the full text without inserting; the `pressed` ref
+// then swallows the click that fires on pointer-up so the peek doesn't also
+// submit the command.
+function SlashRow({
+  command,
+  selected,
+  coarse,
+  onSelect,
+  onHighlight,
+  onPeek,
+}: {
+  command: AvailableCommand;
+  selected: boolean;
+  coarse: boolean;
+  onSelect: () => void;
+  onHighlight: () => void;
+  onPeek: () => void;
+}): React.JSX.Element {
+  const pressed = useRef(false);
+  const timer = useRef<number | null>(null);
+  const start = useRef({ x: 0, y: 0 });
+  const cancel = useCallback((): void => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
+
+  // Touch gets long-press peek; desktop gets hover-to-highlight. Keeping the
+  // two prop sets disjoint avoids a phantom hover firing on tap (some mobile
+  // browsers synthesize mouseenter on touch).
+  const interaction = coarse
+    ? {
+        onPointerDown: (e: React.PointerEvent): void => {
+          pressed.current = false;
+          start.current = { x: e.clientX, y: e.clientY };
+          timer.current = window.setTimeout((): void => {
+            pressed.current = true;
+            onPeek();
+          }, 450);
+        },
+        onPointerUp: cancel,
+        onPointerCancel: cancel,
+        onPointerLeave: cancel,
+        onPointerMove: (e: React.PointerEvent): void => {
+          // A scroll start (noticeable move) cancels the press so dragging the
+          // list doesn't peek.
+          if (
+            Math.abs(e.clientX - start.current.x) > 8 ||
+            Math.abs(e.clientY - start.current.y) > 8
+          ) {
+            cancel();
+          }
+        },
+        // Swallow the OS long-press context menu so the peek lands on us.
+        onContextMenu: (e: React.MouseEvent): void => e.preventDefault(),
+      }
+    : { onMouseEnter: onHighlight };
+
+  return (
+    <MenuItem
+      selected={selected}
+      onClick={(): void => {
+        if (pressed.current) {
+          pressed.current = false;
+          return;
+        }
+        onSelect();
+      }}
+      sx={{ py: 0.5 }}
+      {...interaction}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 1,
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
+        <Typography
+          variant="body2"
+          sx={{
+            fontWeight: 600,
+            fontFamily: MONO,
+            flexShrink: 0,
+            maxWidth: "60%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          /{command.name}
+        </Typography>
+        {command.description && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {command.description}
+          </Typography>
+        )}
+      </Box>
+    </MenuItem>
+  );
+}
+
+// File picker for the `@` reference. Mirrors SlashPicker's Popper + keyboard
+// model, but rows are file paths: the basename leads (monospace) with the
+// parent directory trailing, dimmed, so a long path stays scannable. No detail
+// footer — a path is its own description.
+function AtPicker({
+  open,
+  anchorEl,
+  files,
+  selectedIndex,
+  onSelect,
+  onHighlight,
+  onClose,
+}: {
+  open: boolean;
+  anchorEl: HTMLElement | null;
+  files: string[];
+  selectedIndex: number;
+  onSelect: (path: string) => void;
+  onHighlight: (i: number) => void;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <Popper
+      open={open}
+      anchorEl={anchorEl}
+      placement="top-start"
+      modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
+      sx={{ zIndex: (theme): number => theme.zIndex.modal + 1 }}
+    >
+      <ClickAwayListener onClickAway={onClose}>
+        <Paper
+          elevation={6}
+          sx={{
+            width: anchorEl ? anchorEl.clientWidth : "auto",
+            maxWidth: "min(560px, 92vw)",
+            borderRadius: 1.5,
+            overflow: "hidden",
+          }}
+        >
+          <MenuList dense disablePadding sx={{ maxHeight: 280, overflowY: "auto" }}>
+            {files.map((path, i) => (
+              <AtRow
+                key={path}
+                path={path}
+                selected={i === selectedIndex}
+                onSelect={(): void => onSelect(path)}
+                onHighlight={(): void => onHighlight(i)}
+              />
             ))}
           </MenuList>
         </Paper>
@@ -782,76 +1095,68 @@ function SlashPicker({
   );
 }
 
-function AttachmentPreview({
-  blocks,
-  onRemove,
+function AtRow({
+  path,
+  selected,
+  onSelect,
+  onHighlight,
 }: {
-  blocks: ContentBlock[];
-  onRemove: (i: number) => void;
+  path: string;
+  selected: boolean;
+  onSelect: () => void;
+  onHighlight: () => void;
 }): React.JSX.Element {
+  const slash = path.lastIndexOf("/");
+  const name = slash >= 0 ? path.slice(slash + 1) : path;
+  const dir = slash >= 0 ? path.slice(0, slash) : "";
   return (
-    <Stack direction="row" spacing={1} sx={{ mb: 1, overflowX: "auto" }}>
-      {blocks.map((b, i) => {
-        if (b.type !== "image" || typeof b.data !== "string") return null;
-        const mt = typeof b.mimeType === "string" ? b.mimeType : "image/png";
-        return (
-          <Box
-            key={i}
+    <MenuItem
+      selected={selected}
+      onClick={onSelect}
+      onMouseEnter={onHighlight}
+      sx={{ py: 0.5 }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 1,
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
+        <Typography
+          variant="body2"
+          sx={{
+            fontFamily: MONO,
+            flexShrink: 0,
+            maxWidth: "60%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </Typography>
+        {dir && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
             sx={{
-              position: "relative",
-              width: 64,
-              height: 64,
-              borderRadius: 1,
-              border: 1,
-              borderColor: "divider",
+              flex: 1,
+              minWidth: 0,
+              fontFamily: MONO,
               overflow: "hidden",
-              flexShrink: 0,
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
-            <img
-              src={`data:${mt};base64,${b.data}`}
-              alt="attachment"
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
-            <IconButton
-              size="small"
-              onClick={(): void => onRemove(i)}
-              sx={{
-                position: "absolute",
-                top: 2,
-                right: 2,
-                width: 22,
-                height: 22,
-                bgcolor: "rgba(0,0,0,0.55)",
-                color: "#fff",
-                "&:hover": { bgcolor: "rgba(0,0,0,0.75)" },
-              }}
-            >
-              <Close sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Box>
-        );
-      })}
-    </Stack>
+            {dir}
+          </Typography>
+        )}
+      </Box>
+    </MenuItem>
   );
-}
-
-async function readAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = (): void => reject(reader.error);
-    reader.onload = (): void => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        reject(new Error("expected data URL"));
-        return;
-      }
-      // result is "data:<mime>;base64,<XXX>"; strip the prefix.
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 // Find the most recent `available_commands_update` payload in the session's
@@ -878,5 +1183,17 @@ function latestAvailableCommands(timeline: Envelope[]): AvailableCommand[] {
 // user gets the picker only when starting a fresh slash command.
 function parseSlashQuery(text: string): string | null {
   const m = /^\/(\S*)$/.exec(text);
+  return m ? (m[1] ?? "") : null;
+}
+
+// Trailing `@token` matcher: an `@` at the start of input or after whitespace,
+// followed by the run of non-space chars up to the end of the input. Anchored
+// to `$` so it only fires while the reference is the thing being actively
+// typed; a space (or a newline) after the token ends the match and closes the
+// picker. Reused by `insertFile` to locate the slice to replace.
+const AT_QUERY_RE = /(?:^|\s)@(\S*)$/;
+
+function parseAtQuery(text: string): string | null {
+  const m = AT_QUERY_RE.exec(text);
   return m ? (m[1] ?? "") : null;
 }

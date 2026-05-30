@@ -9,6 +9,19 @@ export type Status = "starting" | "running" | "busy" | "exited" | "crashed";
 // will omit it; treat absent as "api".
 export type SessionOrigin = "api" | "web" | "zed";
 
+// Human label for the surface that opened a session. Absent origin (older
+// daemons) reads as "API", matching the daemon's `SessionOrigin` default.
+export function originLabel(o: SessionOrigin | undefined): string {
+  switch (o ?? "api") {
+    case "zed":
+      return "Zed";
+    case "web":
+      return "Web";
+    default:
+      return "API";
+  }
+}
+
 export interface SessionMeta {
   id: string;
   provider: string;

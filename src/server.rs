@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, State};
+use axum::extract::{Json, Path, Query, State};
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
@@ -125,6 +125,7 @@ async fn serve_axum(
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/sessions", post(api_new_session))
+        .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
         // client-side routes.
@@ -193,6 +194,54 @@ async fn api_new_session(
         }
         Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
     }
+}
+
+/// Query string for `GET /api/sessions/{id}/files` — the composer's `@` picker.
+#[derive(Debug, Deserialize)]
+struct FileSearchQuery {
+    /// Fuzzy query; empty returns the "most useful" files (shallow + recent).
+    #[serde(default)]
+    q: String,
+    #[serde(default = "default_file_limit")]
+    limit: usize,
+}
+
+fn default_file_limit() -> usize {
+    20
+}
+
+#[derive(Debug, Serialize)]
+struct FileSearchResponse {
+    files: Vec<String>,
+}
+
+/// Rank files under a session's working directory for the `@` reference picker.
+///
+/// The cwd comes from the session itself (never from the client) so a browser
+/// can't walk arbitrary paths. The walk + fuzzy match is blocking, so it runs
+/// on a blocking thread; a missing session is `404`, an empty tree is `200`
+/// with `[]`.
+async fn api_search_files(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<FileSearchQuery>,
+) -> Response {
+    let Some(cwd) = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|m| m.id == session_id)
+        .map(|m| m.cwd)
+    else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let limit = query.limit.clamp(1, 100);
+    let files = tokio::task::spawn_blocking(move || {
+        crate::files::search(std::path::Path::new(&cwd), &query.q, limit)
+    })
+    .await
+    .unwrap_or_default();
+    Json(FileSearchResponse { files }).into_response()
 }
 
 /// The built web UI (Vite output), embedded at compile time. The flake builds

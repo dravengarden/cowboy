@@ -56,6 +56,7 @@ export default defineConfig({
     proxy: {
       "/ws": { target: devBackend, ws: true },
       "/healthz": devBackend,
+      "/api": devBackend,
     },
   },
 });

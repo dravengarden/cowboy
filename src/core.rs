@@ -157,7 +157,7 @@ pub enum Inbound {
     /// remove the entry from the Hub, and broadcast the updated session list
     /// to every connected client (so other surfaces auto-clear).
     DeleteSession { session_id: String },
-    /// Rename a session — the user-customizable title shown in the AppBar
+    /// Rename a session — the user-customizable title shown in the `AppBar`
     /// and (post-rename) in the sidebar list. Empty title is rejected at
     /// the server before this point.
     RenameSession {
@@ -167,7 +167,7 @@ pub enum Inbound {
     /// Set one config option on the session (mode / model / effort / future).
     /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
     /// request that handles all three via the same shape. cowboy sends it as
-    /// an ACP ext_method (the 0.4 crate lacks a typed wrapper); the agent
+    /// an ACP `ext_method` (the 0.4 crate lacks a typed wrapper); the agent
     /// answers with the refreshed `configOptions` array, which the daemon
     /// then re-broadcasts as [`Outbound::ConfigOptions`].
     SetConfigOption {
@@ -278,7 +278,7 @@ impl Hub {
     /// state is metadata + history only, not a live ACP connection. Letting
     /// a restored row keep its persisted `Running`/`Busy` status creates the
     /// trap of a UI that looks alive but rejects every prompt with `unknown
-    /// session` (no agent_tx in the supervisor). Mark them dead so the UI
+    /// session` (no `agent_tx` in the supervisor). Mark them dead so the UI
     /// shows them as ended and disables the composer; resume via
     /// session/load is a future follow-up (design §7).
     pub fn restore(&self, sessions: Vec<(SessionMeta, Vec<Envelope>, u64)>) {
@@ -393,7 +393,7 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            s.meta.title = title.clone();
+            s.meta.title.clone_from(&title);
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateTitle {
@@ -469,7 +469,7 @@ impl Hub {
     /// Store the latest agent-advertised config options for a session and
     /// fan them out to every client. Called from acp.rs when the upstream
     /// emits a `config_option_update` notification, and from the
-    /// SetConfigOption reply path (the agent's authoritative response
+    /// `SetConfigOption` reply path (the agent's authoritative response
     /// refreshes the same array).
     pub fn set_config_options(&self, session_id: &str, options: serde_json::Value) {
         {

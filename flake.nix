@@ -59,7 +59,7 @@
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-RWz+9qduQZPvNtWBkxXwuAR34+BY1CVizHzoQ3ohBGU=";
+        outputHash = "sha256-9TD5ND6eNPwwpkhrkZNt/ENotYE2Quq4UPfXnxAsmdY=";
       };
 
       # Step 2 — the Rust binary, embedding the built SPA via rust-embed
@@ -73,7 +73,7 @@
         # crates via python-requests, which sends a User-Agent. crates.io now
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-YSWws4KEyP9BoBz/XBwWYfidTjGoy6I00yW6dXU0aQg=";
+        cargoHash = "sha256-0AyXaJGw03g5A03T3P6Zoj5OdrV9XWTAL95vhRSvjbw=";
         preBuild = ''
           mkdir -p web/dist
           cp -R ${cowboy-web}/. web/dist/
