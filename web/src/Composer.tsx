@@ -247,8 +247,8 @@ export function Composer({
         // devices without a home bar.
         pt: { xs: 1, sm: 1.5 },
         pb: { xs: "max(calc(env(safe-area-inset-bottom) - 20px), 2px)", sm: 1.5 },
-        pl: { xs: "max(env(safe-area-inset-left), 16px)", sm: "max(env(safe-area-inset-left), 16px)" },
-        pr: { xs: "max(env(safe-area-inset-right), 16px)", sm: "max(env(safe-area-inset-right), 16px)" },
+        pl: { xs: "max(env(safe-area-inset-left), 18px)", sm: "max(env(safe-area-inset-left), 18px)" },
+        pr: { xs: "max(env(safe-area-inset-right), 18px)", sm: "max(env(safe-area-inset-right), 18px)" },
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
