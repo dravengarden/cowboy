@@ -24,21 +24,33 @@
         height: 100%;
         overscroll-behavior: none;
       }
-      /* The page itself must never scroll — all scrolling lives inside the
-         transcript pane. Without this, iOS can leave the whole page scrolled
-         after the keyboard closes. */
-      html, body {
+      /* Lock the page so iOS CAN'T scroll it. This is the crux of the keyboard
+         fix: when an input is focused, iOS chooses between two behaviours —
+         shrink the visual viewport (good, we track it) OR scroll the page to
+         reveal the input (bad: it leaves the composer behind the keyboard / the
+         page stuck-scrolled, and offsetTop goes haywire). position:fixed on the
+         body removes the scroll option entirely, forcing iOS down the resize
+         path every time — which is what makes the fix reliable instead of
+         intermittent. All real scrolling lives inside the transcript pane. */
+      html {
+        overflow: hidden;
+      }
+      body {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
         overflow: hidden;
       }
       /* The root tracks the *visual* viewport height (set by main.tsx from
          window.visualViewport) so the bottom composer stays above the iOS
-         software keyboard. NOTE: an earlier attempt also did position:fixed +
-         translateY(visualViewport.offsetTop), but in Safari that over-lifted
-         the app by a big chunk (offsetTop double-counts here) — so we track
-         height ONLY and leave the root in normal flow. Falls back to 100%
-         before the script runs / where visualViewport is unsupported. */
+         software keyboard. Height ONLY — an earlier attempt also followed
+         visualViewport.offsetTop via a transform, but in Safari that over-lifted
+         the app (offsetTop double-counts here). Falls back to 100dvh (then the
+         static 100%) before the script runs / where visualViewport is absent. */
       #root {
-        height: var(--app-height, 100%);
+        height: var(--app-height, 100dvh);
       }
     </style>
   </head>

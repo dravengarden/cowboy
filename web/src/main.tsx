@@ -26,12 +26,27 @@ function Root(): React.JSX.Element {
 // transform, but in Safari that over-lifted the app. No-op on desktop (visual
 // == layout viewport). Listeners are passive and never removed — the app lives
 // for the whole document lifetime.
-function syncAppHeight(): void {
-  const vv = globalThis.visualViewport;
+function applyAppHeight(): void {
+  const vvp = globalThis.visualViewport;
   document.documentElement.style.setProperty(
     "--app-height",
-    `${vv ? vv.height : globalThis.innerHeight}px`,
+    `${vvp ? vvp.height : globalThis.innerHeight}px`,
   );
+}
+let rafId = 0;
+let lateId = 0;
+function syncAppHeight(): void {
+  // Coalesce a burst of resize/scroll events into one write per frame...
+  if (rafId) globalThis.cancelAnimationFrame(rafId);
+  rafId = globalThis.requestAnimationFrame(() => {
+    rafId = 0;
+    applyAppHeight();
+  });
+  // ...and re-read once more after the keyboard animation settles: iOS Safari
+  // reports the post-keyboard visualViewport height a beat late (WebKit
+  // #265578), so the immediate read can catch a stale value.
+  if (lateId) globalThis.clearTimeout(lateId);
+  lateId = globalThis.setTimeout(applyAppHeight, 300);
 }
 const vv = globalThis.visualViewport;
 if (vv) {
@@ -39,7 +54,7 @@ if (vv) {
   vv.addEventListener("scroll", syncAppHeight);
 }
 globalThis.addEventListener("orientationchange", syncAppHeight);
-syncAppHeight();
+applyAppHeight();
 
 // Diagnostic overlay, opt-in via `?vvdebug=1`. Prints the live viewport numbers
 // so the iOS keyboard behaviour can be read off-device. Off (and tree-shaken to
