@@ -241,12 +241,12 @@ export function Composer({
         // `env(safe-area-inset-left/right)` is 0, so floor the side padding to
         // 12px to keep those tap targets off the corner radius; in landscape the
         // non-zero side insets push them clear of the notch too. Bottom: the
-        // home-indicator inset minus 18px so the action row sits tight (~16px on
+        // home-indicator inset minus 20px so the action row sits tight (~14px on
         // a home-bar iPhone instead of the full ~34px) — the buttons reach a bit
         // into the indicator zone, which is fine for taps. Floored to 2px on
         // devices without a home bar.
         pt: { xs: 1, sm: 1.5 },
-        pb: { xs: "max(calc(env(safe-area-inset-bottom) - 18px), 2px)", sm: 1.5 },
+        pb: { xs: "max(calc(env(safe-area-inset-bottom) - 20px), 2px)", sm: 1.5 },
         pl: { xs: "max(env(safe-area-inset-left), 12px)", sm: "max(env(safe-area-inset-left), 12px)" },
         pr: { xs: "max(env(safe-area-inset-right), 12px)", sm: "max(env(safe-area-inset-right), 12px)" },
         borderTop: 1,
