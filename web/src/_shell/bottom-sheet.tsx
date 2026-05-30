@@ -4,51 +4,26 @@
 // ║  Edit there, then re-run `harness shell sync` to propagate.      ║
 // ╚════════════════════════════════════════════════════════════════╝
 
-// BottomSheet — the unified atlantis bottom-sheet primitive.
+// BottomSheet — the unified atlantis modal-sheet primitive.
 //
-// MUI ships no draggable/resizable bottom sheet, so this hand-rolls one: a grab
-// bar at the top resizes the sheet by dragging it up/down. On desktop it falls
-// back to a centered dialog — a bottom sheet reads wrong on a wide,
-// pointer-driven screen. Content scrolls; the bottom carries safe-area padding
-// so the last row clears the iOS home indicator and the device's rounded
-// corners. Every app's modal sheet should use THIS instead of a bespoke Drawer.
+// One affordance, two surfaces by viewport:
+//   • mobile (< sm): the shared DetentSheet — a momentum two-detent sheet that
+//     slides up from the bottom (drag the bar to expand, flick down to dismiss).
+//   • desktop (≥ sm): a centered MUI Dialog — a sheet + drag handle read wrong
+//     on a wide, pointer-driven screen.
 //
-// Perf — the drag must not drop frames. So during a drag the sheet height is
-// written STRAIGHT TO THE DOM (one rAF-coalesced style write per frame, no
-// React re-render), the same trick the image lightbox uses for its transform.
-// React state is touched once, on release, to remember the size. `contain`
-// keeps each frame's reflow inside the sheet instead of the whole document.
+// The mobile feel lives entirely in DetentSheet (dep-free, non-Modal so it never
+// perturbs a hosted iframe). BottomSheet just maps its title/children/actions
+// onto DetentSheet's header/body/footer, so every app's modal sheet (omega's
+// settings/logs, the shared SettingsSheet, …) shares the exact same behaviour as
+// the portal's launcher. Every app's modal sheet should use THIS, not a bespoke
+// Drawer.
 
 import CloseIcon from "@mui/icons-material/Close";
-import {
-  Box,
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  Drawer,
-  IconButton,
-  Typography,
-  useMediaQuery,
-  useTheme,
-} from "@mui/material";
-import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useState } from "react";
+import { Box, Dialog, DialogContent, DialogTitle, IconButton, Typography, useMediaQuery, useTheme } from "@mui/material";
+import type { ReactNode } from "react";
 
-// Sheet height as a fraction of the viewport (survives rotation/resize, unlike
-// a px height). Clamped so it can't shrink to nothing or cover the status bar.
-const MIN_FRACTION = 0.3;
-const MAX_FRACTION = 0.96;
-const DEFAULT_FRACTION = 0.6;
-
-const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
-
-// Pointer Y → fraction of the viewport a bottom-anchored sheet should occupy.
-function fractionFromPointer(clientY: number): number {
-  return clamp((window.innerHeight - clientY) / window.innerHeight, MIN_FRACTION, MAX_FRACTION);
-}
-
-// Bottom padding that clears the iOS home indicator and the sheet's rounded
-// corners, on whichever block is last (the actions row, else the body).
-const SAFE_BOTTOM = "calc(16px + env(safe-area-inset-bottom, 0px))";
+import { DetentSheet } from "./detent-sheet";
 
 export interface BottomSheetProps {
   readonly open: boolean;
@@ -65,39 +40,6 @@ export function BottomSheet({ open, onClose, title, children, actions }: BottomS
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
-  // Committed size — persists across re-renders and re-opens. The live drag
-  // bypasses this (writes the DOM directly) and only commits here on release.
-  const [fraction, setFraction] = useState(DEFAULT_FRACTION);
-
-  const onHandleDown = useCallback((e: ReactPointerEvent<HTMLDivElement>): void => {
-    e.preventDefault();
-    // Grab the actual Drawer paper from the handle; no React ref needed, and it
-    // sidesteps re-render churn entirely.
-    const paper = e.currentTarget.closest<HTMLElement>(".MuiDrawer-paper");
-    if (!paper) return;
-    let raf = 0;
-    let latestY = e.clientY;
-    let live = DEFAULT_FRACTION;
-    const flush = (): void => {
-      raf = 0;
-      live = fractionFromPointer(latestY);
-      // One compositor-cheap style write per frame — no setState, no React render.
-      paper.style.height = `${String(live * 100)}vh`;
-    };
-    const move = (ev: PointerEvent): void => {
-      latestY = ev.clientY;
-      if (raf === 0) raf = window.requestAnimationFrame(flush);
-    };
-    const up = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      if (raf !== 0) window.cancelAnimationFrame(raf);
-      setFraction(live); // single commit so the size sticks after re-render
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }, []);
-
   // Desktop: a centered dialog. A bottom sheet (and its drag handle) only makes
   // sense on a touch/phone viewport.
   if (!isMobile) {
@@ -112,87 +54,36 @@ export function BottomSheet({ open, onClose, title, children, actions }: BottomS
     );
   }
 
+  // Mobile: the shared momentum sheet. The title row rides the drag bar; its
+  // close button stops pointerdown so a tap closes instead of starting a drag.
   return (
-    <Drawer
-      anchor="bottom"
+    <DetentSheet
       open={open}
       onClose={onClose}
-      slotProps={{
-        paper: {
-          sx: {
-            borderTopLeftRadius: 16,
-            borderTopRightRadius: 16,
-            height: `${String(fraction * 100)}vh`,
-            maxHeight: "100vh",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-          },
-        },
-      }}
+      ariaLabel={typeof title === "string" ? title : undefined}
+      header={
+        title == null ? (
+          <Box sx={{ pb: 0.5 }} />
+        ) : (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 2, pb: 1 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, flexGrow: 1 }}>
+              {title}
+            </Typography>
+            <IconButton
+              aria-label="close"
+              edge="end"
+              size="small"
+              onClick={onClose}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        )
+      }
+      footer={actions ?? undefined}
     >
-      {/* Drag handle: resizes the sheet. touchAction:none so the gesture isn't
-          stolen by the page scroll / pull-to-refresh. */}
-      <Box
-        aria-label="resize"
-        onPointerDown={onHandleDown}
-        sx={{
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          pt: 1.25,
-          pb: 0.5,
-          cursor: "ns-resize",
-          touchAction: "none",
-        }}
-      >
-        <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: "divider" }} />
-      </Box>
-
-      {title == null ? null : (
-        <Box sx={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 1, px: 2, pb: 1 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, flexGrow: 1 }}>
-            {title}
-          </Typography>
-          <IconButton aria-label="close" edge="end" size="small" onClick={onClose}>
-            <CloseIcon fontSize="small" />
-          </IconButton>
-        </Box>
-      )}
-
-      <Box
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          px: 2,
-          // Bound each drag frame's reflow to this subtree (the sheet is
-          // position:fixed already, so this is the inner content).
-          contain: "layout",
-          // When there's no actions row the body is the last block, so it owns
-          // the safe-area bottom padding.
-          pb: actions == null ? SAFE_BOTTOM : 1,
-        }}
-      >
-        {children}
-      </Box>
-
-      {actions == null ? null : (
-        <Box
-          sx={{
-            flexShrink: 0,
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 1,
-            px: 2,
-            pt: 1,
-            pb: SAFE_BOTTOM,
-          }}
-        >
-          {actions}
-        </Box>
-      )}
-    </Drawer>
+      {children}
+    </DetentSheet>
   );
 }

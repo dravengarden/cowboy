@@ -16,6 +16,7 @@ export {
   type PortalLauncherButtonProps,
 } from "./app-grid-button";
 export { BottomSheet, type BottomSheetProps } from "./bottom-sheet";
+export { DetentSheet, type DetentSheetProps } from "./detent-sheet";
 export {
   NavShell,
   type NavShellApi,
