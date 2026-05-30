@@ -17,73 +17,14 @@ function Root(): React.JSX.Element {
   );
 }
 
-// Size the app to the *visual* viewport height (the area not covered by the iOS
-// software keyboard), published as the `--app-height` CSS var the #root rule
-// reads (see index.html). On iOS Safari the layout viewport doesn't shrink when
-// the keyboard opens (only the visual viewport does), so a full-height column
-// otherwise leaves the bottom composer behind the keyboard. We track height
-// ONLY: a previous attempt also followed visualViewport.offsetTop via a
-// transform, but in Safari that over-lifted the app. No-op on desktop (visual
-// == layout viewport). Listeners are passive and never removed — the app lives
-// for the whole document lifetime.
-function applyAppHeight(): void {
-  const vvp = globalThis.visualViewport;
-  document.documentElement.style.setProperty(
-    "--app-height",
-    `${vvp ? vvp.height : globalThis.innerHeight}px`,
-  );
-}
-let rafId = 0;
-let lateId = 0;
-function syncAppHeight(): void {
-  // Coalesce a burst of resize/scroll events into one write per frame...
-  if (rafId) globalThis.cancelAnimationFrame(rafId);
-  rafId = globalThis.requestAnimationFrame(() => {
-    rafId = 0;
-    applyAppHeight();
-  });
-  // ...and re-read once more after the keyboard animation settles: iOS Safari
-  // reports the post-keyboard visualViewport height a beat late (WebKit
-  // #265578), so the immediate read can catch a stale value.
-  if (lateId) globalThis.clearTimeout(lateId);
-  lateId = globalThis.setTimeout(applyAppHeight, 300);
-}
-const vv = globalThis.visualViewport;
-if (vv) {
-  vv.addEventListener("resize", syncAppHeight);
-  vv.addEventListener("scroll", syncAppHeight);
-}
-globalThis.addEventListener("orientationchange", syncAppHeight);
-applyAppHeight();
-
-// Diagnostic overlay, opt-in via `?vvdebug=1`. Prints the live viewport numbers
-// so the iOS keyboard behaviour can be read off-device. Off (and tree-shaken to
-// a dead branch) for everyone else. Remove once the keyboard handling is final.
-if (new URLSearchParams(globalThis.location.search).has("vvdebug")) {
-  const dbg = document.createElement("div");
-  dbg.style.cssText =
-    "position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,.82);" +
-    "color:#0f0;font:11px/1.5 ui-monospace,monospace;padding:3px 6px;" +
-    "pointer-events:none;white-space:pre-wrap;";
-  const render = (): void => {
-    const v = globalThis.visualViewport;
-    const appH = getComputedStyle(document.documentElement)
-      .getPropertyValue("--app-height")
-      .trim();
-    dbg.textContent =
-      `inner=${globalThis.innerHeight} ` +
-      `vv.h=${v ? Math.round(v.height) : "-"} ` +
-      `vv.top=${v ? Math.round(v.offsetTop) : "-"} ` +
-      `--app-height=${appH || "(unset)"}`;
-  };
-  document.addEventListener("DOMContentLoaded", () => document.body.appendChild(dbg));
-  if (document.body) document.body.appendChild(dbg);
-  vv?.addEventListener("resize", render);
-  vv?.addEventListener("scroll", render);
-  globalThis.addEventListener("resize", render);
-  globalThis.setInterval(render, 250);
-  render();
-}
+// iOS keyboard handling lives in CSS now (see index.html): #root is 100dvh and
+// the body is locked, with interactive-widget=resizes-content in the viewport
+// meta. The browser shrinks the layout viewport — and so #root — when the
+// keyboard opens, with no JS. The previous visualViewport --app-height scheme
+// is gone: on a real iPhone visualViewport.height is smaller than the
+// position:fixed body, so sizing #root from it left a blank strip at the bottom
+// (invisible in Chrome's device emulator, which doesn't split visual vs layout
+// viewport). Matches the atlantis portal, which uses the same dvh approach.
 
 const el = document.getElementById("root");
 if (el) {

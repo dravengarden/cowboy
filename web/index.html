@@ -24,14 +24,10 @@
         height: 100%;
         overscroll-behavior: none;
       }
-      /* Lock the page so iOS CAN'T scroll it. This is the crux of the keyboard
-         fix: when an input is focused, iOS chooses between two behaviours —
-         shrink the visual viewport (good, we track it) OR scroll the page to
-         reveal the input (bad: it leaves the composer behind the keyboard / the
-         page stuck-scrolled, and offsetTop goes haywire). position:fixed on the
-         body removes the scroll option entirely, forcing iOS down the resize
-         path every time — which is what makes the fix reliable instead of
-         intermittent. All real scrolling lives inside the transcript pane. */
+      /* Lock the page so iOS can't scroll it; all real scrolling lives inside
+         the transcript pane. The fixed body spans the layout viewport, which
+         interactive-widget=resizes-content (viewport meta) shrinks when the
+         keyboard opens — so #root (100dvh) follows it down with no JS. */
       html {
         overflow: hidden;
       }
@@ -43,14 +39,13 @@
         bottom: 0;
         overflow: hidden;
       }
-      /* The root tracks the *visual* viewport height (set by main.tsx from
-         window.visualViewport) so the bottom composer stays above the iOS
-         software keyboard. Height ONLY — an earlier attempt also followed
-         visualViewport.offsetTop via a transform, but in Safari that over-lifted
-         the app (offsetTop double-counts here). Falls back to 100dvh (then the
-         static 100%) before the script runs / where visualViewport is absent. */
+      /* 100dvh = the *dynamic* viewport (the actually-visible area), so #root
+         matches the body with no blank strip. The previous --app-height scheme
+         drove this from window.visualViewport.height, which on a real iPhone is
+         smaller than the fixed body → a gap at the bottom (invisible in Chrome's
+         device emulator). Pure CSS now; matches the atlantis portal. */
       #root {
-        height: var(--app-height, 100dvh);
+        height: 100dvh;
       }
     </style>
   </head>
