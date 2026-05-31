@@ -19,6 +19,7 @@ import {
     MenuItem,
     Snackbar,
     Stack,
+    Switch,
     TextField,
     Toolbar,
     Tooltip,
@@ -46,6 +47,7 @@ import {
     type Status,
 } from "./protocol";
 import { send, useStore } from "./store";
+import { setVimSetting, useVimSetting } from "./vimSetting";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, PortalLauncherButton, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
@@ -713,10 +715,44 @@ function SettingsShell({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
+    const vim = useVimSetting();
+    // Vim is desktop-only (ComposerEditor won't load it on touch), so the
+    // toggle only appears where a physical keyboard exists.
+    const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     return (
         <BottomSheet open={open} onClose={onClose} title="Settings">
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
+                {desktop && (
+                    <>
+                        <Divider />
+                        <Stack
+                            direction="row"
+                            alignItems="center"
+                            justifyContent="space-between"
+                            spacing={2}
+                        >
+                            <Stack>
+                                <Typography variant="body2">
+                                    Vim keybindings
+                                </Typography>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                >
+                                    Modal editing in the composer
+                                </Typography>
+                            </Stack>
+                            <Switch
+                                checked={vim}
+                                onChange={(e): void =>
+                                    setVimSetting(e.target.checked)
+                                }
+                                inputProps={{ "aria-label": "Vim keybindings" }}
+                            />
+                        </Stack>
+                    </>
+                )}
                 <Divider />
                 <Stack spacing={0.5}>
                     <Typography variant="overline" color="text.secondary">

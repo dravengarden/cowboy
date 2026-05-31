@@ -1,17 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
   CircularProgress,
-  ClickAwayListener,
   Divider,
   IconButton,
   List,
   Menu,
   MenuItem,
-  MenuList,
-  Paper,
-  Popper,
   Skeleton,
   Stack,
   TextField,
@@ -27,6 +23,8 @@ import {
   Stop,
   Tune,
 } from "@mui/icons-material";
+import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { useVimSetting } from "./vimSetting";
 import { send, useStore } from "./store";
 import { originLabel } from "./protocol";
 import type {
@@ -62,7 +60,7 @@ export function Composer({
   status: Status;
 }): React.JSX.Element {
   const [text, setText] = useState("");
-  const textFieldRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<ComposerEditorHandle>(null);
   const { configOptions, sessions, timelines } = useStore();
   // The active session's metadata, surfaced read-only inside the options
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
@@ -105,124 +103,20 @@ export function Composer({
   // empty for ~1 frame and then re-flows when the chips appear).
   const showSkeleton = !dead && options.length === 0 && (starting || status === "running");
 
-  // Slash-command picker: claude-agent-acp streams its `/help`, `/clear` etc
-  // via `available_commands_update` SessionUpdate. Read the latest one from
-  // the timeline rather than mirror it in store state — the list is small
-  // and only this component renders it.
+  // Slash skills + `@` file references are handled inside the editor now, via
+  // CodeMirror autocomplete (see ComposerEditor + composerCompletions): no more
+  // Popper pickers or caret/regex bookkeeping here. The editor reads the
+  // agent-advertised `/` commands through a thunk; `@` files come from the
+  // daemon's `/api/sessions/{id}/files` search.
   const availableCommands = useMemo(
     () => latestAvailableCommands(timelines.get(sessionId) ?? []),
     [timelines, sessionId],
   );
-  const slashQuery = useMemo(() => parseSlashQuery(text), [text]);
-  const slashOpen = slashQuery !== null && availableCommands.length > 0 && !dead;
-  const filteredCommands = useMemo(() => {
-    if (!slashOpen || slashQuery === null) return [];
-    const q = slashQuery.toLowerCase();
-    return availableCommands.filter((c) => c.name.toLowerCase().includes(q));
-  }, [slashOpen, slashQuery, availableCommands]);
-  const [slashIndex, setSlashIndex] = useState(0);
-  // Clamp the selected index back to range whenever the filter shrinks.
-  useEffect(() => {
-    setSlashIndex((i) => Math.max(0, Math.min(i, filteredCommands.length - 1)));
-  }, [filteredCommands.length]);
-  const insertCommand = useCallback(
-    (name: string): void => {
-      setText(`/${name} `);
-      setSlashIndex(0);
-      // Defer focus to the next tick so React's controlled-value update has
-      // applied before we put the caret at the end.
-      queueMicrotask(() => {
-        const input = textFieldRef.current?.querySelector("textarea");
-        if (input) {
-          input.focus();
-          const end = input.value.length;
-          input.setSelectionRange(end, end);
-        }
-      });
-    },
-    [],
-  );
 
-  // @-file picker. Unlike slash (whole-input only), `@` triggers whenever the
-  // text *ends* with an `@token` actively being typed — a trailing space or
-  // selecting a file completes the reference and closes the picker. The
-  // candidate list comes from the daemon (gitignore-aware fuzzy search of the
-  // session cwd); `atDismissed` lets Escape suppress it until the query moves.
-  const atQuery = useMemo(() => parseAtQuery(text), [text]);
-  const [atDismissed, setAtDismissed] = useState(false);
-  useEffect(() => {
-    setAtDismissed(false);
-  }, [atQuery]);
-  const [atFiles, setAtFiles] = useState<string[]>([]);
-  const [atIndex, setAtIndex] = useState(0);
-  const atOpen = atQuery !== null && !atDismissed && atFiles.length > 0 && !dead;
-  // Debounced fetch: a keystroke schedules a search 120ms out, and any newer
-  // query (or unmount) aborts the in-flight one so results can't land stale.
-  useEffect(() => {
-    if (atQuery === null || dead) {
-      setAtFiles([]);
-      return undefined;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      const url = `/api/sessions/${encodeURIComponent(sessionId)}/files?q=${
-        encodeURIComponent(atQuery)
-      }&limit=20`;
-      fetch(url, { signal: controller.signal })
-        .then((r) => (r.ok ? r.json() : { files: [] }))
-        .then((d: { files?: string[] }) =>
-          setAtFiles(Array.isArray(d.files) ? d.files : []),
-        )
-        .catch(() => {
-          /* aborted or transient network error — keep the last list */
-        });
-    }, 120);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [atQuery, dead, sessionId]);
-  // Clamp the selection when the candidate list shrinks.
-  useEffect(() => {
-    setAtIndex((i) => Math.max(0, Math.min(i, atFiles.length - 1)));
-  }, [atFiles.length]);
-  const insertFile = useCallback((path: string): void => {
-    setText((prev) => {
-      const m = AT_QUERY_RE.exec(prev);
-      if (m === null) return prev;
-      // The token sits at the very end (the regex is `$`-anchored), so cut from
-      // the `@` and append the picked path plus a trailing space — which also
-      // ends the `@token`, closing the picker on the next render.
-      const at = prev.length - (m[1] ?? "").length - 1;
-      const next = `${prev.slice(0, at)}@${path} `;
-      queueMicrotask(() => {
-        const input = textFieldRef.current?.querySelector("textarea");
-        if (input) {
-          input.focus();
-          const end = input.value.length;
-          input.setSelectionRange(end, end);
-        }
-      });
-      return next;
-    });
-  }, []);
-
-  // The `/` and `@` action buttons just type their trigger character into the
-  // field and focus it: `/` from an empty field opens the slash-command picker
-  // (same path as typing it); `@` starts a file reference that the agent reads
-  // from the prompt text. Append + focus rather than replace so an in-progress
-  // message isn't clobbered.
-  const appendToken = useCallback((ch: string): void => {
-    setText((t) => t + ch);
-    queueMicrotask(() => {
-      const input = textFieldRef.current?.querySelector("textarea");
-      if (input) {
-        input.focus();
-        const end = input.value.length;
-        input.setSelectionRange(end, end);
-      }
-    });
-  }, []);
+  // Vim is opt-in and desktop-only — ComposerEditor gates the actual
+  // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
+  // pays for it. The reactive setting is flipped by the Settings toggle.
+  const vim = useVimSetting();
 
   function submit(): void {
     if (!sendable) return;
@@ -255,91 +149,19 @@ export function Composer({
         position: "relative", // anchor for Popper portal placement
       }}
     >
-      {/* Simple composer: a plain MUI outlined input on top (default theme
-          radius — no oversized pill), with one action row beneath it. */}
-      <TextField
-        fullWidth
-        multiline
-        minRows={1}
-        maxRows={12}
-        size="small"
-        ref={textFieldRef}
-        placeholder={dead ? "Session ended" : "Message the agent…"}
+      {/* CodeMirror-6 editor styled as a MUI outlined field — replaces the
+          <textarea> (which forced the iOS keyboard bar) and folds the `@`/`/`
+          pickers into CM autocomplete. */}
+      <ComposerEditor
+        ref={editorRef}
         value={text}
+        onChange={setText}
+        onSubmit={submit}
+        sessionId={sessionId}
+        commands={(): AvailableCommand[] => availableCommands}
+        placeholder={dead ? "Session ended" : "Message the agent…"}
         disabled={dead}
-        onChange={(e): void => setText(e.target.value)}
-        onKeyDown={(e): void => {
-          // Slash picker keyboard control wins over send/newline so the
-          // user can pick a command without surprises.
-          if (slashOpen && filteredCommands.length > 0) {
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setSlashIndex((i) => (i + 1) % filteredCommands.length);
-              return;
-            }
-            if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setSlashIndex(
-                (i) => (i - 1 + filteredCommands.length) % filteredCommands.length,
-              );
-              return;
-            }
-            if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
-              const cmd = filteredCommands[slashIndex];
-              if (cmd) {
-                e.preventDefault();
-                insertCommand(cmd.name);
-                return;
-              }
-            }
-            if (e.key === "Escape") {
-              e.preventDefault();
-              setText("");
-              return;
-            }
-          }
-          // @-file picker keyboard control — same precedence over send/newline.
-          if (atOpen) {
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setAtIndex((i) => (i + 1) % atFiles.length);
-              return;
-            }
-            if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setAtIndex((i) => (i - 1 + atFiles.length) % atFiles.length);
-              return;
-            }
-            if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
-              const file = atFiles[atIndex];
-              if (file) {
-                e.preventDefault();
-                insertFile(file);
-                return;
-              }
-            }
-            if (e.key === "Escape") {
-              e.preventDefault();
-              setAtDismissed(true);
-              return;
-            }
-          }
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        slotProps={{
-          input: {
-            sx: {
-              fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-              // 16px on touch so iOS/iPadOS Safari doesn't auto-zoom on focus
-              // (it never zooms back out); 14px on desktop. See index.html.
-              fontSize: 14,
-              "@media (pointer: coarse)": { fontSize: 16 },
-            },
-          },
-        }}
+        vim={vim}
       />
       {/* Action row below the input: slash-command / @-reference triggers on
           the left, then the agent config (inline chips on desktop, the bottom
@@ -352,7 +174,7 @@ export function Composer({
               aria-label="slash command"
               disabled={dead}
               sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
-              onClick={(): void => appendToken("/")}
+              onClick={(): void => editorRef.current?.insertTrigger("/")}
             >
               <Box component="span" sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
                 /
@@ -366,7 +188,7 @@ export function Composer({
               aria-label="reference a file"
               disabled={dead}
               sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
-              onClick={(): void => appendToken("@")}
+              onClick={(): void => editorRef.current?.insertTrigger("@")}
             >
               <AlternateEmail fontSize="small" />
             </IconButton>
@@ -477,24 +299,6 @@ export function Composer({
           }
         />
       )}
-      <SlashPicker
-        open={slashOpen && filteredCommands.length > 0}
-        anchorEl={textFieldRef.current}
-        commands={filteredCommands}
-        selectedIndex={slashIndex}
-        onSelect={insertCommand}
-        onHighlight={(i): void => setSlashIndex(i)}
-        onClose={(): void => setText("")}
-      />
-      <AtPicker
-        open={atOpen}
-        anchorEl={textFieldRef.current}
-        files={atFiles}
-        selectedIndex={atIndex}
-        onSelect={insertFile}
-        onHighlight={(i): void => setAtIndex(i)}
-        onClose={(): void => setAtDismissed(true)}
-      />
     </Box>
   );
 }
@@ -784,353 +588,6 @@ function ConfigSheetDropdown({
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
-function SlashPicker({
-  open,
-  anchorEl,
-  commands,
-  selectedIndex,
-  onSelect,
-  onHighlight,
-  onClose,
-}: {
-  open: boolean;
-  anchorEl: HTMLElement | null;
-  commands: AvailableCommand[];
-  selectedIndex: number;
-  onSelect: (name: string) => void;
-  onHighlight: (i: number) => void;
-  onClose: () => void;
-}): React.JSX.Element {
-  // Each row is a single ellipsized line (name + dimmed description) so the
-  // list stays scannable — skill blurbs are 1-3 sentences and used to wrap to
-  // 3-5 lines each, leaving only ~2 rows visible. Full text moves to an
-  // on-demand detail surface that differs by input model:
-  //
-  //   Desktop (pointer: fine) — a footer pinned under the list always mirrors
-  //   the highlighted row's full name + description. Arrow keys AND hover move
-  //   the highlight, so full info is one glance away with no gesture (the
-  //   editor-autocomplete "docs pane" idiom). A hover tooltip can't do this:
-  //   the palette is driven by the keyboard, where there's no hovered element.
-  //
-  //   Touch (pointer: coarse) — no hover, so a long-press peeks a row's full
-  //   text into the same footer; a plain tap still inserts. The footer is
-  //   absent until a peek, so it doesn't steal vertical space from the list
-  //   while the soft keyboard is already squeezing the viewport.
-  const coarse = useMediaQuery("(pointer: coarse)");
-  const [peekIndex, setPeekIndex] = useState<number | null>(null);
-  // Drop a stale peek whenever the filtered set or open-state changes — the
-  // index could otherwise point past the new list.
-  useEffect(() => {
-    setPeekIndex(null);
-  }, [commands, open]);
-
-  const detailIndex = coarse ? peekIndex : selectedIndex;
-  const detail =
-    detailIndex !== null && detailIndex >= 0 ? commands[detailIndex] : undefined;
-
-  return (
-    <Popper
-      open={open}
-      anchorEl={anchorEl}
-      placement="top-start"
-      // Cover the textarea width up to a reasonable max so long command
-      // descriptions don't overflow the viewport on narrow phones.
-      modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
-      sx={{ zIndex: (theme): number => theme.zIndex.modal + 1 }}
-    >
-      <ClickAwayListener onClickAway={onClose}>
-        <Paper
-          elevation={6}
-          sx={{
-            width: anchorEl ? anchorEl.clientWidth : "auto",
-            maxWidth: "min(560px, 92vw)",
-            borderRadius: 1.5,
-            overflow: "hidden",
-          }}
-        >
-          <MenuList dense disablePadding sx={{ maxHeight: 280, overflowY: "auto" }}>
-            {commands.map((c, i) => (
-              <SlashRow
-                key={c.name}
-                command={c}
-                selected={i === selectedIndex}
-                coarse={coarse}
-                onSelect={(): void => onSelect(c.name)}
-                onHighlight={(): void => onHighlight(i)}
-                onPeek={(): void => setPeekIndex(i)}
-              />
-            ))}
-          </MenuList>
-          {detail && (
-            <Box
-              sx={{
-                borderTop: 1,
-                borderColor: "divider",
-                bgcolor: "action.hover",
-                px: 1.5,
-                py: 1,
-              }}
-            >
-              <Typography
-                variant="body2"
-                sx={{ fontWeight: 700, fontFamily: MONO }}
-              >
-                /{detail.name}
-              </Typography>
-              {detail.description && (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ display: "block", whiteSpace: "normal", mt: 0.25 }}
-                >
-                  {detail.description}
-                </Typography>
-              )}
-            </Box>
-          )}
-        </Paper>
-      </ClickAwayListener>
-    </Popper>
-  );
-}
-
-// One picker row: a single ellipsized line. On desktop, hovering raises the
-// keyboard highlight (so the detail footer follows the mouse too). On touch, a
-// ~450ms long-press peeks the full text without inserting; the `pressed` ref
-// then swallows the click that fires on pointer-up so the peek doesn't also
-// submit the command.
-function SlashRow({
-  command,
-  selected,
-  coarse,
-  onSelect,
-  onHighlight,
-  onPeek,
-}: {
-  command: AvailableCommand;
-  selected: boolean;
-  coarse: boolean;
-  onSelect: () => void;
-  onHighlight: () => void;
-  onPeek: () => void;
-}): React.JSX.Element {
-  const pressed = useRef(false);
-  const timer = useRef<number | null>(null);
-  const start = useRef({ x: 0, y: 0 });
-  const cancel = useCallback((): void => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-  }, []);
-
-  // Touch gets long-press peek; desktop gets hover-to-highlight. Keeping the
-  // two prop sets disjoint avoids a phantom hover firing on tap (some mobile
-  // browsers synthesize mouseenter on touch).
-  const interaction = coarse
-    ? {
-        onPointerDown: (e: React.PointerEvent): void => {
-          pressed.current = false;
-          start.current = { x: e.clientX, y: e.clientY };
-          timer.current = window.setTimeout((): void => {
-            pressed.current = true;
-            onPeek();
-          }, 450);
-        },
-        onPointerUp: cancel,
-        onPointerCancel: cancel,
-        onPointerLeave: cancel,
-        onPointerMove: (e: React.PointerEvent): void => {
-          // A scroll start (noticeable move) cancels the press so dragging the
-          // list doesn't peek.
-          if (
-            Math.abs(e.clientX - start.current.x) > 8 ||
-            Math.abs(e.clientY - start.current.y) > 8
-          ) {
-            cancel();
-          }
-        },
-        // Swallow the OS long-press context menu so the peek lands on us.
-        onContextMenu: (e: React.MouseEvent): void => e.preventDefault(),
-      }
-    : { onMouseEnter: onHighlight };
-
-  return (
-    <MenuItem
-      selected={selected}
-      onClick={(): void => {
-        if (pressed.current) {
-          pressed.current = false;
-          return;
-        }
-        onSelect();
-      }}
-      sx={{ py: 0.5 }}
-      {...interaction}
-    >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "baseline",
-          gap: 1,
-          width: "100%",
-          minWidth: 0,
-        }}
-      >
-        <Typography
-          variant="body2"
-          sx={{
-            fontWeight: 600,
-            fontFamily: MONO,
-            flexShrink: 0,
-            maxWidth: "60%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          /{command.name}
-        </Typography>
-        {command.description && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {command.description}
-          </Typography>
-        )}
-      </Box>
-    </MenuItem>
-  );
-}
-
-// File picker for the `@` reference. Mirrors SlashPicker's Popper + keyboard
-// model, but rows are file paths: the basename leads (monospace) with the
-// parent directory trailing, dimmed, so a long path stays scannable. No detail
-// footer — a path is its own description.
-function AtPicker({
-  open,
-  anchorEl,
-  files,
-  selectedIndex,
-  onSelect,
-  onHighlight,
-  onClose,
-}: {
-  open: boolean;
-  anchorEl: HTMLElement | null;
-  files: string[];
-  selectedIndex: number;
-  onSelect: (path: string) => void;
-  onHighlight: (i: number) => void;
-  onClose: () => void;
-}): React.JSX.Element {
-  return (
-    <Popper
-      open={open}
-      anchorEl={anchorEl}
-      placement="top-start"
-      modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
-      sx={{ zIndex: (theme): number => theme.zIndex.modal + 1 }}
-    >
-      <ClickAwayListener onClickAway={onClose}>
-        <Paper
-          elevation={6}
-          sx={{
-            width: anchorEl ? anchorEl.clientWidth : "auto",
-            maxWidth: "min(560px, 92vw)",
-            borderRadius: 1.5,
-            overflow: "hidden",
-          }}
-        >
-          <MenuList dense disablePadding sx={{ maxHeight: 280, overflowY: "auto" }}>
-            {files.map((path, i) => (
-              <AtRow
-                key={path}
-                path={path}
-                selected={i === selectedIndex}
-                onSelect={(): void => onSelect(path)}
-                onHighlight={(): void => onHighlight(i)}
-              />
-            ))}
-          </MenuList>
-        </Paper>
-      </ClickAwayListener>
-    </Popper>
-  );
-}
-
-function AtRow({
-  path,
-  selected,
-  onSelect,
-  onHighlight,
-}: {
-  path: string;
-  selected: boolean;
-  onSelect: () => void;
-  onHighlight: () => void;
-}): React.JSX.Element {
-  const slash = path.lastIndexOf("/");
-  const name = slash >= 0 ? path.slice(slash + 1) : path;
-  const dir = slash >= 0 ? path.slice(0, slash) : "";
-  return (
-    <MenuItem
-      selected={selected}
-      onClick={onSelect}
-      onMouseEnter={onHighlight}
-      sx={{ py: 0.5 }}
-    >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "baseline",
-          gap: 1,
-          width: "100%",
-          minWidth: 0,
-        }}
-      >
-        <Typography
-          variant="body2"
-          sx={{
-            fontFamily: MONO,
-            flexShrink: 0,
-            maxWidth: "60%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {name}
-        </Typography>
-        {dir && (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{
-              flex: 1,
-              minWidth: 0,
-              fontFamily: MONO,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {dir}
-          </Typography>
-        )}
-      </Box>
-    </MenuItem>
-  );
-}
-
 // Find the most recent `available_commands_update` payload in the session's
 // event log. Walks in reverse so the cost is at most one event when the
 // agent already advertised, and the empty-array baseline is cheap on first
@@ -1148,24 +605,3 @@ function latestAvailableCommands(timeline: Envelope[]): AvailableCommand[] {
   return [];
 }
 
-// Parse a leading `/<word>?` from the current text input. Returns the word
-// after the slash (possibly empty) when the input is *exactly* one slash-
-// prefixed token with no spaces or newlines, otherwise null (= picker
-// stays closed). This matches Slack's first-position-only behavior; the
-// user gets the picker only when starting a fresh slash command.
-function parseSlashQuery(text: string): string | null {
-  const m = /^\/(\S*)$/.exec(text);
-  return m ? (m[1] ?? "") : null;
-}
-
-// Trailing `@token` matcher: an `@` at the start of input or after whitespace,
-// followed by the run of non-space chars up to the end of the input. Anchored
-// to `$` so it only fires while the reference is the thing being actively
-// typed; a space (or a newline) after the token ends the match and closes the
-// picker. Reused by `insertFile` to locate the slice to replace.
-const AT_QUERY_RE = /(?:^|\s)@(\S*)$/;
-
-function parseAtQuery(text: string): string | null {
-  const m = AT_QUERY_RE.exec(text);
-  return m ? (m[1] ?? "") : null;
-}
