@@ -14,20 +14,23 @@ export function cmTheme(theme: Theme): Extension {
     'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   return EditorView.theme(
     {
+      // 16px everywhere — and explicitly on `.cm-content` (the focused element)
+      // — so iOS Safari never focus-zooms. A media-query split (14px desktop)
+      // proved unreliable inside EditorView.theme, and 16px reads fine on
+      // desktop for a chat composer anyway.
       "&": {
         color: theme.palette.text.primary,
         backgroundColor: "transparent",
-        // 14px desktop; 16px on touch so iOS Safari doesn't focus-zoom.
-        fontSize: "14px",
+        fontSize: "16px",
       },
-      "@media (pointer: coarse)": { "&": { fontSize: "16px" } },
       ".cm-content": {
         fontFamily: fontStack,
-        padding: "8px 0",
+        fontSize: "16px",
+        padding: "6px 0",
         caretColor: accent,
         lineHeight: "1.5",
       },
-      ".cm-scroller": { fontFamily: fontStack, lineHeight: "1.5" },
+      ".cm-scroller": { fontFamily: fontStack, fontSize: "16px", lineHeight: "1.5" },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: accent },
       ".cm-placeholder": { color: theme.palette.text.disabled },
       "&.cm-focused": { outline: "none" },

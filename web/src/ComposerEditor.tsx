@@ -145,15 +145,15 @@ export const ComposerEditor = forwardRef<
       sx={{
         border: 1,
         borderColor: disabled ? "action.disabledBackground" : "divider",
-        borderRadius: 1,
+        borderRadius: 2,
         bgcolor: "background.paper",
-        px: 1.25,
-        transition: "border-color 120ms, box-shadow 120ms",
-        "&:hover": disabled ? {} : { borderColor: "text.primary" },
-        "&:focus-within": {
-          borderColor: "primary.main",
-          boxShadow: (t) => `inset 0 0 0 1px ${t.palette.primary.main}`,
-        },
+        px: 1.5,
+        py: 0.25,
+        // Subtle, MUI-input-like: a 1px border that simply recolors on focus —
+        // no heavy glow/double-border.
+        transition: "border-color 120ms",
+        "&:hover": disabled ? {} : { borderColor: "text.secondary" },
+        "&:focus-within": { borderColor: "primary.main" },
       }}
     >
       <CodeMirror
