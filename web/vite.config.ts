@@ -1,9 +1,23 @@
+import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // In dev, proxy the WebSocket + health endpoints to a locally running daemon
 // (`cowboy serve`). Override the target with COWBOY_DEV_BACKEND.
 const devBackend = process.env.COWBOY_DEV_BACKEND ?? "http://127.0.0.1:3333";
+
+// The shared app-shell SDK lives in the sibling atlantis project and is
+// referenced (not vendored): `web/src/_shell` is a symlink to
+// `projects/atlantis/main/components` for local dev (the build stages real
+// copies via the flake). Resolve the symlink target so the dev server is
+// allowed to serve it. Best-effort: absent symlink (e.g. fresh checkout) → skip.
+let shellRealRoot: string | undefined;
+try {
+  shellRealRoot = dirname(realpathSync("src/_shell"));
+} catch {
+  shellRealRoot = undefined;
+}
 
 export default defineConfig({
   build: {
@@ -51,8 +65,27 @@ export default defineConfig({
     },
     chunkSizeWarningLimit: 800,
   },
+  // The app-shell SDK is imported through the `_shell` symlink into the sibling
+  // atlantis project. Without deduping, vite/rollup resolves those files'
+  // `react` / `@mui` / `@emotion` imports relative to the symlink TARGET (the
+  // atlantis tree, which has no resolvable copy) and the build fails. Dedupe
+  // forces the shared singletons to resolve from this app's own node_modules —
+  // which is also what we want at runtime (one React, one MUI, one Emotion).
+  resolve: {
+    dedupe: [
+      "react",
+      "react-dom",
+      "@mui/material",
+      "@mui/icons-material",
+      "@emotion/react",
+      "@emotion/styled",
+    ],
+  },
   plugins: [react()],
   server: {
+    // Allow the dev server to serve the symlinked atlantis shell source (it
+    // lives outside this project root). Only relevant to `dev-web`.
+    fs: { allow: [".", "..", ...(shellRealRoot ? [shellRealRoot] : [])] },
     proxy: {
       "/ws": { target: devBackend, ws: true },
       "/healthz": devBackend,
