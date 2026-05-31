@@ -10,7 +10,10 @@ import type { Extension } from "@codemirror/state";
 export function cmTheme(theme: Theme): Extension {
   const dark = theme.palette.mode === "dark";
   const accent = theme.palette.primary.main;
+  // Match the MUI theme's own typography so the editor text is indistinguishable
+  // from a real MUI input.
   const fontStack =
+    theme.typography.fontFamily ??
     'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   return EditorView.theme(
     {
@@ -26,7 +29,8 @@ export function cmTheme(theme: Theme): Extension {
       ".cm-content": {
         fontFamily: fontStack,
         fontSize: "16px",
-        padding: "6px 0",
+        // The MUI-outline shell owns the padding (see ComposerEditor).
+        padding: "0",
         caretColor: accent,
         lineHeight: "1.5",
       },

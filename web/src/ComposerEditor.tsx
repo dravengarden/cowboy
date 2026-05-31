@@ -140,22 +140,62 @@ export const ComposerEditor = forwardRef<
     [theme, sessionId, placeholder, vimExt],
   );
 
+  // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather
+  // than wrapped: the editable is a CM `contenteditable`, not an <input>, so we
+  // can't hand it to MUI's InputBase. Instead the chrome is an absolutely-
+  // positioned `<fieldset>` (MUI's "notched outline" technique) using MUI's own
+  // tokens — rest rgba(…,.23), hover text.primary, focus primary.main at 2px —
+  // so the 1px→2px focus transition costs no reflow, identical to MUI.
+  const restBorder =
+    theme.palette.mode === "light"
+      ? "rgba(0, 0, 0, 0.23)"
+      : "rgba(255, 255, 255, 0.23)";
   return (
     <Box
+      onMouseDown={(e): void => {
+        // Click anywhere in the padding focuses the editor, like a real input.
+        if (e.target === e.currentTarget) {
+          e.preventDefault();
+          cmRef.current?.view?.focus();
+        }
+      }}
       sx={{
-        border: 1,
-        borderColor: disabled ? "action.disabledBackground" : "divider",
-        borderRadius: 2,
+        position: "relative",
+        borderRadius: `${theme.shape.borderRadius}px`,
         bgcolor: "background.paper",
-        px: 1.5,
-        py: 0.25,
-        // Subtle, MUI-input-like: a 1px border that simply recolors on focus —
-        // no heavy glow/double-border.
-        transition: "border-color 120ms",
-        "&:hover": disabled ? {} : { borderColor: "text.secondary" },
-        "&:focus-within": { borderColor: "primary.main" },
+        // OutlinedInput small content padding.
+        px: "14px",
+        py: "8.5px",
+        cursor: "text",
+        "&:hover .composer-notch": disabled
+          ? {}
+          : { borderColor: "text.primary" },
+        "&:focus-within .composer-notch": {
+          borderColor: "primary.main",
+          borderWidth: "2px",
+        },
       }}
     >
+      <Box
+        component="fieldset"
+        aria-hidden="true"
+        className="composer-notch"
+        sx={{
+          position: "absolute",
+          inset: 0,
+          m: 0,
+          p: 0,
+          pointerEvents: "none",
+          borderRadius: "inherit",
+          borderStyle: "solid",
+          borderWidth: "1px",
+          borderColor: disabled ? "action.disabled" : restBorder,
+          transition: theme.transitions.create(
+            ["border-color", "border-width"],
+            { duration: theme.transitions.duration.shorter },
+          ),
+        }}
+      />
       <CodeMirror
         ref={cmRef}
         value={value}
