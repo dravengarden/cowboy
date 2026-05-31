@@ -24,6 +24,7 @@ import {
   Tune,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { useVimSetting } from "./vimSetting";
 import { send, useStore } from "./store";
 import { originLabel } from "./protocol";
 import type {
@@ -114,11 +115,8 @@ export function Composer({
 
   // Vim is opt-in and desktop-only — ComposerEditor gates the actual
   // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
-  // pays for it. Persisted in localStorage (a Settings toggle wires it —
-  // follow-up); defaults off.
-  const [vim] = useState<boolean>(
-    () => globalThis.localStorage?.getItem("cowboy:vim") === "1",
-  );
+  // pays for it. The reactive setting is flipped by the Settings toggle.
+  const vim = useVimSetting();
 
   function submit(): void {
     if (!sendable) return;

@@ -39,6 +39,22 @@ export default defineConfig({
           // the main entry chunk together; lazy chunks load in parallel
           // via modulepreload anyway.
           if (id.includes("node_modules")) {
+            // CodeMirror (editor core + autocomplete + uiw wrapper + lezer +
+            // its small deps). Split from the entry so the ~400 KB editor
+            // fetches in parallel with — and caches independently of — the app
+            // shell. No react/emotion cross-import cycle here, so it's safe to
+            // hoist out (unlike react/mui). Vim is already its own lazy chunk
+            // (desktop-only dynamic import), so it's not pulled in here.
+            if (
+              id.includes("@codemirror") ||
+              id.includes("@uiw/react-codemirror") ||
+              id.includes("@lezer") ||
+              id.includes("/crelt/") ||
+              id.includes("/style-mod/") ||
+              id.includes("/w3c-keyname/")
+            ) {
+              return "editor";
+            }
             if (
               id.includes("react-syntax-highlighter") ||
               id.includes("refractor") ||
