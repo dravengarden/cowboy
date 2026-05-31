@@ -17,7 +17,7 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
-import { fileChipPlugin } from "./fileTokenWidget";
+import { deleteTokenBackward, tokenChipPlugin } from "./fileTokenWidget";
 import {
   fileCompletionSource,
   slashCompletionSource,
@@ -110,7 +110,7 @@ export const ComposerEditor = forwardRef<
       history(),
       placeholderExt(placeholder ?? ""),
       cmTheme(theme),
-      fileChipPlugin,
+      tokenChipPlugin,
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
@@ -132,6 +132,9 @@ export const ComposerEditor = forwardRef<
           },
         ]),
       ),
+      // Backspace removes a whole `@path` / `/skill` chip in one press (above
+      // the default char-delete).
+      Prec.high(keymap.of([{ key: "Backspace", run: deleteTokenBackward }])),
       // completionKeymap first so Enter/Tab/arrows drive the picker when it's
       // open, falling through to newline/normal editing when it's closed.
       keymap.of([...completionKeymap, ...historyKeymap, ...defaultKeymap]),
@@ -162,7 +165,9 @@ export const ComposerEditor = forwardRef<
       sx={{
         position: "relative",
         borderRadius: `${theme.shape.borderRadius}px`,
-        bgcolor: "background.paper",
+        // Transparent like a real MUI OutlinedInput — inherits the composer
+        // bar's surface so there's never a background mismatch.
+        bgcolor: "transparent",
         // OutlinedInput small content padding.
         px: "14px",
         py: "8.5px",

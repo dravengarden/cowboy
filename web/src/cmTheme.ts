@@ -70,8 +70,8 @@ export function cmTheme(theme: Theme): Extension {
         marginLeft: "8px",
         fontSize: "0.85em",
       },
-      // `@path` reference chips (see fileTokenWidget).
-      ".cm-file-chip": {
+      // `@path` / `/skill` chips (see fileTokenWidget).
+      ".cm-token-chip": {
         display: "inline-flex",
         alignItems: "center",
         padding: "0 6px",
