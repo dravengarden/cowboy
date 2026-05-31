@@ -363,6 +363,17 @@ function PermissionCard({
                 option_id: opt.optionId,
               })
             }
+            // Allow/Reject is the highest-stakes, most-frequent tap in the
+            // app; size="small" (~30px) is too small to hit confidently on a
+            // phone. Grow to a comfortable ≥44px target on touch (ui.md §7),
+            // staying compact on desktop where the pointer is precise.
+            sx={{
+              "@media (pointer: coarse)": {
+                minHeight: 44,
+                px: 2,
+                fontSize: 15,
+              },
+            }}
           >
             {opt.name}
           </Button>
@@ -637,7 +648,11 @@ export function Transcript({
           sx={{
             position: "absolute",
             bottom: 16,
-            right: 16,
+            // The right pane spans the full device width on mobile (no
+            // sidebar), so in landscape this would sit under the notch /
+            // rounded corner. Floor the inset to keep it clear (0 off-device,
+            // so desktop is unchanged) — ui.md §7.
+            right: "max(env(safe-area-inset-right), 16px)",
             zIndex: 1,
             boxShadow: 3,
           }}
