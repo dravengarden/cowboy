@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -104,9 +105,48 @@ export const ComposerEditor = forwardRef<
     },
   }));
 
+  // iOS keyboard "Prev/Next" arrows appear when >1 element is in the tab order.
+  // While the composer is focused on touch, drop everything else out of the tab
+  // order (tabindex=-1) so it's the only sequentially-focusable element → no
+  // arrows. Taps still work (tabindex=-1 doesn't block clicks); desktop is left
+  // untouched for keyboard a11y. Fully reversed on blur/unmount. (The `Done`
+  // button is a separate iOS control this can't touch.)
+  const savedTabindex = useRef<{ el: Element; prev: string | null }[]>([]);
+  const releaseFocus = useCallback((): void => {
+    for (const { el, prev } of savedTabindex.current) {
+      if (prev === null) el.removeAttribute("tabindex");
+      else el.setAttribute("tabindex", prev);
+    }
+    savedTabindex.current = [];
+  }, []);
+  const constrainFocus = useCallback((): void => {
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    const keep = cmRef.current?.view?.contentDOM;
+    if (!keep) return;
+    const saved: { el: Element; prev: string | null }[] = [];
+    document
+      .querySelectorAll(
+        'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]',
+      )
+      .forEach((el) => {
+        if (el === keep || el.contains(keep) || keep.contains(el)) return;
+        saved.push({ el, prev: el.getAttribute("tabindex") });
+        el.setAttribute("tabindex", "-1");
+      });
+    savedTabindex.current = saved;
+  }, []);
+  useEffect(() => releaseFocus, [releaseFocus]);
+
   const extensions = useMemo<Extension[]>(
     () => [
       EditorView.lineWrapping,
+      // Suppression attributes (part of the documented "hide the iOS accessory
+      // bar" recipe — alongside the single-focusable trick below).
+      EditorView.contentAttributes.of({
+        autocorrect: "off",
+        autocapitalize: "off",
+        spellcheck: "false",
+      }),
       history(),
       placeholderExt(placeholder ?? ""),
       cmTheme(theme),
@@ -206,6 +246,8 @@ export const ComposerEditor = forwardRef<
         value={value}
         onChange={onChange}
         editable={!disabled}
+        onFocus={constrainFocus}
+        onBlur={releaseFocus}
         // `none` disables @uiw's built-in light theme (which paints the editor
         // white); our cmTheme keeps it transparent so it inherits the lavender
         // composer surface — no white box.
