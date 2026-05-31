@@ -46,6 +46,14 @@ export function useThemeMode(): ThemeControls {
   const theme = useMemo(
     () =>
       createTheme({
+        components: {
+          // Touch ergonomics (ui.md §7): on a coarse pointer no interactive
+          // control drops below the ~40px tap-target floor, even when size="small"
+          // is asked for desktop density — "mobile never small". Desktop keeps it.
+          MuiIconButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { width: 40, height: 40 } } } },
+          MuiButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40 } } } },
+          MuiToggleButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 } } } },
+        },
         palette: dark
           ? {
               mode: "dark",
