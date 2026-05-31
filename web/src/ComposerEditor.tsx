@@ -206,6 +206,10 @@ export const ComposerEditor = forwardRef<
         value={value}
         onChange={onChange}
         editable={!disabled}
+        // `none` disables @uiw's built-in light theme (which paints the editor
+        // white); our cmTheme keeps it transparent so it inherits the lavender
+        // composer surface — no white box.
+        theme="none"
         basicSetup={false}
         extensions={extensions}
         minHeight="24px"
