@@ -176,7 +176,10 @@ function SessionList({
                         key={s.id}
                         selected={s.id === activeId}
                         onClick={(): void => onPick(s.id)}
-                        sx={{ pr: 0.5 }}
+                        // Keep the trailing kebab off the screen edge: floor a
+                        // right inset so it never hugs the rounded corner / iOS
+                        // back-swipe edge (ui.md §7), where it was easy to miss.
+                        sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
                     >
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
@@ -220,16 +223,18 @@ function SessionList({
                             }}
                         />
                         <IconButton
-                            size="small"
-                            edge="end"
                             aria-label={`row actions ${s.id}`}
                             onClick={(e): void => {
                                 e.stopPropagation();
                                 setMenuAnchor({ row: s, el: e.currentTarget });
                             }}
-                            sx={{ ml: 0.5 }}
+                            // Full-size (≥40px) tap target with a real 24px
+                            // glyph. Was size="small" + fontSize="inherit"
+                            // (tiny) and edge="end" (negative margin pulling it
+                            // flush to the edge) — mis-tap-prone on touch.
+                            sx={{ ml: 0.5, width: 40, height: 40, flexShrink: 0 }}
                         >
-                            <MoreVert fontSize="inherit" />
+                            <MoreVert />
                         </IconButton>
                     </ListItemButton>
                 ))}
