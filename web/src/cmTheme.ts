@@ -63,6 +63,21 @@ export function cmTheme(theme: Theme): Extension {
         marginLeft: "8px",
         fontSize: "0.85em",
       },
+      // `@path` reference chips (see fileTokenWidget).
+      ".cm-file-chip": {
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "0 6px",
+        margin: "0 1px",
+        borderRadius: "6px",
+        backgroundColor: theme.palette.action.selected,
+        color: theme.palette.text.primary,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: "0.9em",
+        lineHeight: "1.5",
+        whiteSpace: "nowrap",
+        cursor: "default",
+      },
     },
     { dark },
   );

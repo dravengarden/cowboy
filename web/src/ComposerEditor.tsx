@@ -17,6 +17,7 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
+import { fileChipPlugin } from "./fileTokenWidget";
 import {
   fileCompletionSource,
   slashCompletionSource,
@@ -109,6 +110,7 @@ export const ComposerEditor = forwardRef<
       history(),
       placeholderExt(placeholder ?? ""),
       cmTheme(theme),
+      fileChipPlugin,
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
