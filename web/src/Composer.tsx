@@ -176,7 +176,7 @@ export function Composer({
               sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
               onClick={(): void => editorRef.current?.insertTrigger("/")}
             >
-              <Box component="span" sx={{ fontSize: 18, fontWeight: 700, lineHeight: 1 }}>
+              <Box component="span" sx={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
                 /
               </Box>
             </IconButton>
@@ -190,7 +190,7 @@ export function Composer({
               sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
               onClick={(): void => editorRef.current?.insertTrigger("@")}
             >
-              <AlternateEmail fontSize="small" />
+              <AlternateEmail />
             </IconButton>
           </span>
         </Tooltip>
@@ -204,7 +204,7 @@ export function Composer({
                 sx={{ width: 40, height: 40, flexShrink: 0 }}
                 onClick={(): void => setSheetOpen(true)}
               >
-                <Tune fontSize="small" />
+                <Tune />
               </IconButton>
             </span>
           </Tooltip>
