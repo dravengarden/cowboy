@@ -39,13 +39,15 @@
         bottom: 0;
         overflow: hidden;
       }
-      /* 100dvh = the *dynamic* viewport (the actually-visible area), so #root
-         matches the body with no blank strip. The previous --app-height scheme
-         drove this from window.visualViewport.height, which on a real iPhone is
-         smaller than the fixed body → a gap at the bottom (invisible in Chrome's
-         device emulator). Pure CSS now; matches the atlantis portal. */
+      /* #root fills the fixed body, i.e. the LAYOUT viewport, which
+         interactive-widget=resizes-content shrinks when the keyboard opens — so
+         #root follows with no JS. height:100% (NOT 100dvh): the body is
+         position:fixed inset:0 = the layout viewport, whereas 100dvh is the
+         DYNAMIC viewport; in Safari (toolbar) and in a standalone home-screen
+         PWA (home indicator) those differ, leaving a blank strip below #root.
+         100% always matches the body. Matches the atlantis portal. */
       #root {
-        height: 100dvh;
+        height: 100%;
       }
     </style>
   </head>
