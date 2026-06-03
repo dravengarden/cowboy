@@ -503,7 +503,15 @@ export function App({
             )}
 
             <Stack sx={{ flex: 1, minWidth: 0 }}>
-                <AppBar position="static" color="default" elevation={0}>
+                <AppBar
+                    position="static"
+                    color="default"
+                    elevation={0}
+                    // Clear the iPhone status bar / notch: hosted full-bleed in the
+                    // atlantis portal iframe, the header would otherwise collide with
+                    // the clock. Matches NavShell / the portal chrome.
+                    sx={{ pt: "env(safe-area-inset-top, 0px)" }}
+                >
                     <Toolbar
                         variant="dense"
                         sx={{ borderBottom: 1, borderColor: "divider" }}
