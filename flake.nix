@@ -70,7 +70,7 @@
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-/exy9ImaA/2miMU9gL7Ci8snJckLMK58aWxbbgGcl6M=";
+        outputHash = "sha256-RGT3QVgmhV45r4e8dwxQIm5NY7t+Ya5wGOaej3/YNkA=";
       };
 
       # Step 2 — the Rust binary, embedding the built SPA via rust-embed
