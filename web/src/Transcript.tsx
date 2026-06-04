@@ -20,6 +20,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   Fab,
   Paper,
   Skeleton,
@@ -30,6 +31,7 @@ import {
 } from "@mui/material";
 import {
   ArrowDownward,
+  AutoAwesome,
   CheckCircle,
   Code,
   Construction,
@@ -52,85 +54,76 @@ import { BottomSheet } from "./_shell";
 
 // --- Loading primitives -----------------------------------------------------
 
-// Bouncing dots — the ChatGPT / Slack "Y is typing" idiom. CSS keyframes
-// instead of a JS animation lib so it's free on bundle size and runs on the
-// compositor (smooth on low-end phones).
-const bounce = keyframes`
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
-  30%           { transform: translateY(-4px); opacity: 1; }
+// Soft opacity breathing — used both for the in-flight tool card and the
+// Claude "thinking" spark. CSS keyframes instead of a JS animation lib so it's
+// free on bundle size and runs on the compositor (smooth on low-end phones).
+const pulse = keyframes`
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 `;
 
-// Claude-flavored shimmer: a highlight band sweeps across the verb (the band's
-// color is provider-set, applied via background-clip:text in sx). Mirrors the
-// Claude Code "prompt keyword shimmer".
+// Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
+// verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
 
-// Codex-flavored breathe: a calm 0.4↔0.85 opacity pulse (Zed's agent panel uses
-// pulsating_between(0.3, 0.7) over 2s). No color sweep — motion alone signals
-// "alive", so the two providers read distinctly at a glance.
-const breathe = keyframes`
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 0.85; }
-`;
+// Claude Code's signature playful "spinner verbs" (the 黑话 vocabulary) — a
+// rotating bank of whimsical gerunds instead of a flat "Thinking…". This is
+// the Claude-flavored loading personality; Codex deliberately stays plain.
+const CLAUDE_VERBS = [
+  "Thinking",
+  "Cogitating",
+  "Pondering",
+  "Ruminating",
+  "Percolating",
+  "Noodling",
+  "Befuddling",
+  "Conjuring",
+  "Simmering",
+  "Marinating",
+  "Frolicking",
+  "Discombobulating",
+  "Synthesizing",
+  "Tinkering",
+  "Brewing",
+];
 
-interface ThinkStyle {
-  /** CSS accent color — the shimmer highlight / breathe tint / dot color. */
-  accent: string;
-  /** Which animation flavor the verb word uses. */
-  anim: "shimmer" | "breathe";
-  /** Rotating status verbs, cycled while the turn is live. */
-  verbs: string[];
-}
-
-// Per-provider "thinking" treatment. Claude = warm terracotta shimmer + playful
-// verbs (its brand fill #D97757, matching ProviderIcon); Codex = OpenAI teal
-// breathe + plain verbs (#10A37F). An unknown provider degrades to a neutral
-// muted breathe. Keeping the differences in data (color + anim + verbs) lets
-// one component serve every provider.
-function thinkStyle(provider: string, mutedFallback: string): ThinkStyle {
-  switch (provider) {
-    case "claude-code":
-      return {
-        accent: "#D97757",
-        anim: "shimmer",
-        verbs: ["Thinking", "Pondering", "Cogitating", "Brewing", "Synthesizing", "Ruminating"],
-      };
-    case "codex":
-      return {
-        accent: "#10A37F",
-        anim: "breathe",
-        verbs: ["Thinking", "Reasoning", "Working", "Analyzing", "Generating"],
-      };
-    default:
-      return { accent: mutedFallback, anim: "breathe", verbs: ["Thinking", "Working"] };
-  }
-}
-
-// The trailing "agent is working" indicator. Provider-flavored verb word (rotates
-// every ~3.5s) + three accent-tinted bouncing dots. All animations collapse to a
-// static muted word under `prefers-reduced-motion` (Anthropic shipped a fix
-// specifically because their shimmer ignored that setting — we honor it up front).
-function ThinkingIndicator({
-  provider,
-}: {
-  provider: string;
-}): React.JSX.Element {
+// Claude-code indicator: faithful to Claude Code's own status line — a pulsing
+// terracotta spark (#D97757, its brand fill) + a shimmer-swept verb that rotates
+// through the playful 黑话 bank (~3.5s) and a literal "…". The shimmer/pulse
+// collapse to a static muted word under `prefers-reduced-motion` (Anthropic
+// shipped a fix specifically because their shimmer ignored that setting — we
+// honor it up front). Verb rotation is content, not motion, so it stays.
+function ClaudeThinking(): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  const { accent, anim, verbs } = thinkStyle(provider, muted);
+  const accent = "#D97757";
   const [vi, setVi] = useState(0);
-  // Rotate the verb on a slow cadence (matches Claude's per-burst feel). The
-  // word change is content, not motion, so it stays even under reduced-motion.
   useEffect(() => {
     const id = globalThis.setInterval(() => setVi((v) => v + 1), 3500);
     return () => globalThis.clearInterval(id);
   }, []);
-  const verb = verbs[vi % verbs.length] ?? "Thinking";
+  const verb = CLAUDE_VERBS[vi % CLAUDE_VERBS.length] ?? "Thinking";
 
-  const wordSx =
-    anim === "shimmer"
-      ? {
-          // Highlight band sweeps left→right across the muted word.
+  return (
+    <Stack
+      direction="row"
+      spacing={0.75}
+      alignItems="center"
+      sx={{ py: 0.5, alignSelf: "flex-start" }}
+    >
+      <AutoAwesome
+        sx={{
+          fontSize: 14,
+          color: accent,
+          animation: `${pulse} 1.6s ease-in-out infinite`,
+          "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+        }}
+      />
+      <Typography
+        variant="caption"
+        sx={{
+          fontWeight: 500,
+          letterSpacing: 0.2,
           background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
           backgroundSize: "200% 100%",
           WebkitBackgroundClip: "text",
@@ -143,43 +136,42 @@ function ThinkingIndicator({
             color: muted,
             WebkitTextFillColor: muted,
           },
-        }
-      : {
-          color: accent,
-          animation: `${breathe} 2s ease-in-out infinite`,
-          "@media (prefers-reduced-motion: reduce)": { animation: "none", opacity: 1 },
-        };
+        }}
+      >
+        {verb}…
+      </Typography>
+    </Stack>
+  );
+}
 
-  const dotSx = {
-    display: "inline-block",
-    width: 5,
-    height: 5,
-    borderRadius: "50%",
-    bgcolor: accent,
-    animation: `${bounce} 1.2s infinite ease-in-out`,
-    "@media (prefers-reduced-motion: reduce)": { animation: "none", opacity: 0.6 },
-  } as const;
-
+// Default indicator (Codex + any non-Claude provider): the plain Material UI
+// loading look — a small CircularProgress + a muted "Thinking…" caption. No
+// shimmer, no jargon; MUI's own spinner carries it, deliberately understated
+// next to the Claude flavor.
+function DefaultThinking(): React.JSX.Element {
   return (
     <Stack
       direction="row"
-      spacing={0.75}
+      spacing={1}
       alignItems="center"
-      sx={{ py: 0.5, alignSelf: "flex-start" }}
+      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
     >
-      <Typography
-        variant="caption"
-        sx={{ fontWeight: 500, letterSpacing: 0.2, ...wordSx }}
-      >
-        {verb}
+      <CircularProgress size={16} thickness={5} />
+      <Typography variant="caption" color="text.secondary">
+        Thinking…
       </Typography>
-      <Box sx={{ display: "inline-flex", gap: 0.5 }}>
-        <Box sx={{ ...dotSx, animationDelay: "0ms" }} />
-        <Box sx={{ ...dotSx, animationDelay: "200ms" }} />
-        <Box sx={{ ...dotSx, animationDelay: "400ms" }} />
-      </Box>
     </Stack>
   );
+}
+
+// The trailing "agent is working" indicator. Claude-code gets its playful
+// shimmer-jargon personality; every other provider gets the default MUI spinner.
+function ThinkingIndicator({
+  provider,
+}: {
+  provider: string;
+}): React.JSX.Element {
+  return provider === "claude-code" ? <ClaudeThinking /> : <DefaultThinking />;
 }
 
 // Blinking text caret — Claude.ai / Cursor put one at the end of streaming
@@ -207,15 +199,6 @@ function StreamingCaret(): React.JSX.Element {
     />
   );
 }
-
-// Soft pulse for an in-flight tool card — the card is rendered already (you
-// can see what tool it is), but the opacity breathing tells the user that
-// the result is still landing. Different from a spinner (which feels like a
-// blocking modal).
-const pulse = keyframes`
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.55; }
-`;
 
 function toolColor(status: string): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
