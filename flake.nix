@@ -3,17 +3,17 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Shared front-end SDK (contract + UI primitives) from the atlantis project,
-  # staged into the web build — NOT vendored (web/src/_shell/ is gitignored,
-  # materialized at build / via `harness shell link` for local dev).
-  inputs.atlantis.url = "git+file:///home/draven/columbus/projects/atlantis/main";
-  inputs.atlantis.inputs.nixpkgs.follows = "nixpkgs";
+  # Shared front-end SDK (business- and portal-free React + MUI primitives) from
+  # the public shared-utils monorepo, staged into the web build — NOT vendored
+  # (web/src/_shell/ is gitignored, materialized at build / via the dev symlink).
+  inputs.shared-utils.url = "github:dravengarden/shared-utils";
+  inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
 
-  outputs = { self, nixpkgs, atlantis }:
+  outputs = { self, nixpkgs, shared-utils }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
-      appSdk = atlantis.packages.${system}.components;
+      sharedUiSrc = shared-utils.packages.${system}.ui;
 
       # Deno 2.8.1 — nixpkgs `nixos-unstable` only ships 2.7.14 today, so we
       # pull the official prebuilt binary directly. Standard pattern:
@@ -53,9 +53,9 @@
         buildPhase = ''
           export HOME=$TMPDIR
           export DENO_DIR=$TMPDIR/deno-cache
-          # Stage the shared SDK from the atlantis components package.
+          # Stage the shared SDK from the shared-utils ui package.
           mkdir -p web/src/_shell
-          cp ${appSdk}/* web/src/_shell/
+          cp ${sharedUiSrc}/* web/src/_shell/
           chmod -R u+w web/src/_shell
           cd web
           # No --frozen here: the FOD's outputHash already pins the bundle
@@ -70,7 +70,7 @@
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-RGT3QVgmhV45r4e8dwxQIm5NY7t+Ya5wGOaej3/YNkA=";
+        outputHash = "sha256-tlkKa7hblxM16L5geNoQX05npzeO0EzBuicw1KY9nUw=";
       };
 
       # Step 2 — the Rust binary, embedding the built SPA via rust-embed
@@ -85,11 +85,6 @@
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
         cargoHash = "sha256-0AyXaJGw03g5A03T3P6Zoj5OdrV9XWTAL95vhRSvjbw=";
-        # Build id the binary serves at /version.json for the atlantis portal's
-        # update-banner poll. The app's commit SHA changes every deploy; a dirty
-        # tree (local `nix build`) has no rev, so fall back to the static
-        # version. Read via option_env! in src/server.rs.
-        ATLANTIS_BUILD_VERSION = self.shortRev or "0.1.0";
         preBuild = ''
           mkdir -p web/dist
           cp -R ${cowboy-web}/. web/dist/

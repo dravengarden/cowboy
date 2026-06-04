@@ -20,4 +20,4 @@ web/dist/
 .sccache/
 
 # Materialized at build from the atlantis components package.
-web/src/_shell/
+web/src/_shell

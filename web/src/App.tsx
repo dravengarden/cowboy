@@ -49,7 +49,7 @@ import {
 import { send, useStore } from "./store";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import { ProviderIcon } from "./ProviderIcon";
-import { BottomSheet, PortalLauncherButton, ThemeModeControl } from "./_shell";
+import { BottomSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 
 // Sidebar width: fluid clamp instead of a fixed pixel value so the panel
@@ -451,8 +451,6 @@ export function App({
                 gap: 0.5,
             }}
         >
-            {/* Portal launcher — the app's absolute top-left; self-hides when not hosted. */}
-            <PortalLauncherButton edge="start" size="small" />
             <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
                 cowboy
             </Typography>
@@ -582,8 +580,6 @@ export function App({
                         >
                             <SettingsIcon />
                         </IconButton>
-                        {/* Launcher last — to the right of Settings (self-hides standalone). */}
-                        {mobile && <PortalLauncherButton size="small" />}
                     </Toolbar>
                 </AppBar>
 

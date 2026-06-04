@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cowboy">
+  <rect width="512" height="512" rx="112" fill="#d97706" />
+  <!-- Robot (smart_toy) on amber — content kept within the central safe zone so
+       the same art doubles as the maskable icon. -->
+  <g fill="#fff">
+    <rect x="248" y="120" width="16" height="40" rx="8" />
+    <circle cx="256" cy="112" r="18" />
+    <rect x="148" y="166" width="216" height="196" rx="44" />
+  </g>
+  <g fill="#d97706">
+    <circle cx="212" cy="250" r="26" />
+    <circle cx="300" cy="250" r="26" />
+    <rect x="206" y="304" width="100" height="20" rx="10" />
+  </g>
+</svg>

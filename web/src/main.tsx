@@ -3,16 +3,13 @@ import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { App } from "./App";
 import { useThemeMode } from "./theme";
-import { PortalProvider } from "./_shell";
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <PortalProvider appId="cowboy">
-        <App themeMode={mode} onSetThemeMode={setMode} />
-      </PortalProvider>
+      <App themeMode={mode} onSetThemeMode={setMode} />
     </ThemeProvider>
   );
 }
@@ -33,4 +30,11 @@ if (el) {
       <Root />
     </StrictMode>,
   );
+}
+
+// Standalone PWA: register the service worker (offline shell + installable).
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
 }

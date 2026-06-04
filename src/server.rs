@@ -124,7 +124,6 @@ async fn serve_axum(
 
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .route("/version.json", get(version_json))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/ws", any(ws_upgrade))
@@ -153,16 +152,6 @@ pub(crate) fn init_tracing() {
 
 async fn healthz() -> &'static str {
     "ok"
-}
-
-/// The deployed build id the atlantis portal polls to raise an update banner
-/// over a kept-alive iframe running a stale bundle (atlantis README → "Update
-/// notifications"). The flake injects the app's commit SHA at build time; a
-/// plain `cargo build` falls back to the crate version.
-async fn version_json() -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({
-        "version": option_env!("ATLANTIS_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
-    }))
 }
 
 /// Request body for `POST /api/sessions`.
