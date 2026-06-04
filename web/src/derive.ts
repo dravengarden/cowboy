@@ -201,7 +201,14 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         break;
     }
   }
-  return items;
+  // Drop thought items that never accrued any text. An `agent_thought_chunk`
+  // with empty/unsupported content (some agents emit a thinking-block *marker*
+  // with no text on a trivial turn) would otherwise leave a `text: ""` thought
+  // that ItemView renders as a perpetual loading spinner — it kept "thinking"
+  // forever, even after the turn ended, because that render path isn't gated on
+  // session status. The transient "thinking, no text yet" state is covered by
+  // the trailing indicator instead, so an empty thought carries nothing.
+  return items.filter((it) => it.kind !== "thought" || it.text.trim() !== "");
 }
 
 function titleOfToolCall(tc: unknown): string {

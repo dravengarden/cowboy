@@ -26,6 +26,7 @@ import {
   Stack,
   Typography,
   keyframes,
+  useTheme,
 } from "@mui/material";
 import {
   ArrowDownward,
@@ -59,37 +60,124 @@ const bounce = keyframes`
   30%           { transform: translateY(-4px); opacity: 1; }
 `;
 
-function LoadingDots({
-  label,
+// Claude-flavored shimmer: a highlight band sweeps across the verb (the band's
+// color is provider-set, applied via background-clip:text in sx). Mirrors the
+// Claude Code "prompt keyword shimmer".
+const shimmer = keyframes`to { background-position: -200% 0; }`;
+
+// Codex-flavored breathe: a calm 0.4↔0.85 opacity pulse (Zed's agent panel uses
+// pulsating_between(0.3, 0.7) over 2s). No color sweep — motion alone signals
+// "alive", so the two providers read distinctly at a glance.
+const breathe = keyframes`
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.85; }
+`;
+
+interface ThinkStyle {
+  /** CSS accent color — the shimmer highlight / breathe tint / dot color. */
+  accent: string;
+  /** Which animation flavor the verb word uses. */
+  anim: "shimmer" | "breathe";
+  /** Rotating status verbs, cycled while the turn is live. */
+  verbs: string[];
+}
+
+// Per-provider "thinking" treatment. Claude = warm terracotta shimmer + playful
+// verbs (its brand fill #D97757, matching ProviderIcon); Codex = OpenAI teal
+// breathe + plain verbs (#10A37F). An unknown provider degrades to a neutral
+// muted breathe. Keeping the differences in data (color + anim + verbs) lets
+// one component serve every provider.
+function thinkStyle(provider: string, mutedFallback: string): ThinkStyle {
+  switch (provider) {
+    case "claude-code":
+      return {
+        accent: "#D97757",
+        anim: "shimmer",
+        verbs: ["Thinking", "Pondering", "Cogitating", "Brewing", "Synthesizing", "Ruminating"],
+      };
+    case "codex":
+      return {
+        accent: "#10A37F",
+        anim: "breathe",
+        verbs: ["Thinking", "Reasoning", "Working", "Analyzing", "Generating"],
+      };
+    default:
+      return { accent: mutedFallback, anim: "breathe", verbs: ["Thinking", "Working"] };
+  }
+}
+
+// The trailing "agent is working" indicator. Provider-flavored verb word (rotates
+// every ~3.5s) + three accent-tinted bouncing dots. All animations collapse to a
+// static muted word under `prefers-reduced-motion` (Anthropic shipped a fix
+// specifically because their shimmer ignored that setting — we honor it up front).
+function ThinkingIndicator({
+  provider,
 }: {
-  /** Optional caption shown alongside the dots, e.g. "Thinking…". */
-  label?: string;
+  provider: string;
 }): React.JSX.Element {
+  const theme = useTheme();
+  const muted = theme.palette.text.secondary;
+  const { accent, anim, verbs } = thinkStyle(provider, muted);
+  const [vi, setVi] = useState(0);
+  // Rotate the verb on a slow cadence (matches Claude's per-burst feel). The
+  // word change is content, not motion, so it stays even under reduced-motion.
+  useEffect(() => {
+    const id = globalThis.setInterval(() => setVi((v) => v + 1), 3500);
+    return () => globalThis.clearInterval(id);
+  }, []);
+  const verb = verbs[vi % verbs.length] ?? "Thinking";
+
+  const wordSx =
+    anim === "shimmer"
+      ? {
+          // Highlight band sweeps left→right across the muted word.
+          background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
+          backgroundSize: "200% 100%",
+          WebkitBackgroundClip: "text",
+          backgroundClip: "text",
+          color: "transparent",
+          animation: `${shimmer} 2.4s linear infinite`,
+          "@media (prefers-reduced-motion: reduce)": {
+            animation: "none",
+            background: "none",
+            color: muted,
+            WebkitTextFillColor: muted,
+          },
+        }
+      : {
+          color: accent,
+          animation: `${breathe} 2s ease-in-out infinite`,
+          "@media (prefers-reduced-motion: reduce)": { animation: "none", opacity: 1 },
+        };
+
   const dotSx = {
     display: "inline-block",
-    width: 6,
-    height: 6,
+    width: 5,
+    height: 5,
     borderRadius: "50%",
-    bgcolor: "text.secondary",
+    bgcolor: accent,
     animation: `${bounce} 1.2s infinite ease-in-out`,
+    "@media (prefers-reduced-motion: reduce)": { animation: "none", opacity: 0.6 },
   } as const;
+
   return (
     <Stack
       direction="row"
-      spacing={1}
+      spacing={0.75}
       alignItems="center"
-      sx={{ color: "text.secondary", py: 0.5, alignSelf: "flex-start" }}
+      sx={{ py: 0.5, alignSelf: "flex-start" }}
     >
-      <Box sx={{ display: "inline-flex", gap: 0.6 }}>
+      <Typography
+        variant="caption"
+        sx={{ fontWeight: 500, letterSpacing: 0.2, ...wordSx }}
+      >
+        {verb}
+      </Typography>
+      <Box sx={{ display: "inline-flex", gap: 0.5 }}>
         <Box sx={{ ...dotSx, animationDelay: "0ms" }} />
         <Box sx={{ ...dotSx, animationDelay: "200ms" }} />
         <Box sx={{ ...dotSx, animationDelay: "400ms" }} />
       </Box>
-      {label && (
-        <Typography variant="caption" sx={{ color: "text.secondary" }}>
-          {label}
-        </Typography>
-      )}
     </Stack>
   );
 }
@@ -446,8 +534,10 @@ function ItemView({
         >
           <Psychology fontSize="small" />
           <Box sx={{ fontStyle: "italic", fontSize: "0.875rem", flex: 1 }}>
-            {item.text ? <Markdown text={item.text} /> : <LoadingDots />}
-            {streaming && item.text && <StreamingCaret />}
+            {/* `derive` drops empty thoughts, so a thought item always carries
+                text here — no perpetual-spinner fallback. */}
+            <Markdown text={item.text} />
+            {streaming && <StreamingCaret />}
           </Box>
         </Stack>
       );
@@ -495,10 +585,13 @@ export function Transcript({
   sessionId,
   timeline,
   status,
+  provider,
 }: {
   sessionId: string;
   timeline: Envelope[];
   status: Status;
+  /** Drives the per-provider "thinking" indicator flavor (color + verbs). */
+  provider: string;
 }): React.JSX.Element {
   const items = derive(timeline);
   // Latest unresolved tool-permission request, if any → drives the dedicated
@@ -672,7 +765,7 @@ export function Transcript({
                 }}
               >
                 {isTrailingDots ? (
-                  <LoadingDots label="Thinking…" />
+                  <ThinkingIndicator provider={provider} />
                 ) : item ? (
                   <ItemView item={item} streaming={streaming} />
                 ) : null}

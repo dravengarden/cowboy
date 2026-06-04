@@ -697,6 +697,7 @@ export function App({
                             sessionId={active.id}
                             timeline={timelines.get(active.id) ?? []}
                             status={active.status}
+                            provider={active.provider}
                         />
                         <Composer
                             sessionId={active.id}
