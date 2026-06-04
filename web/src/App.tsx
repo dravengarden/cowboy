@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     Alert,
     AppBar,
@@ -52,14 +52,29 @@ import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 
-// Sidebar width: fluid clamp instead of a fixed pixel value so the panel
-// grows on wide displays and shrinks on narrow ones without media-query
-// staircase steps. 240px is the floor (a list row stays readable at that
-// width), 22vw is the natural scale, 360px is the ceiling (any wider and
-// the list looks empty next to the transcript). On mobile the sidebar
-// becomes a top-anchored Drawer (full width), so there's no separate
-// mobile-width to declare.
-const SIDEBAR_WIDTH = "clamp(240px, 22vw, 360px)";
+// Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
+// persisted in localStorage. The bounds keep both panes usable — 240px floor
+// (a list row stays readable), 480px ceiling (wider and the list looks empty
+// next to the transcript). 300px default sits inside the old fluid
+// `clamp(240px, 22vw, 360px)` it replaces. Resize is desktop-only: below the
+// `lg` breakpoint the sidebar is a full-width top Drawer (touch layout), which
+// has no divider — so neither bound nor handle applies there.
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 300;
+const SIDEBAR_WIDTH_KEY = "cowboy:sidebar-width";
+
+function clampSidebarWidth(px: number): number {
+    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
+}
+
+// Seed the width from localStorage, re-clamped in case the bounds changed
+// since it was stored. Falls back to the default when unset or unparseable.
+function readSidebarWidth(): number {
+    const raw = globalThis.localStorage?.getItem(SIDEBAR_WIDTH_KEY);
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isFinite(n) ? clampSidebarWidth(n) : SIDEBAR_DEFAULT;
+}
 
 // Status is shown as a single color-coded dot (no text label), so the hue has
 // to carry the whole meaning. The palette tokens are chosen so the colors read
@@ -405,6 +420,31 @@ export function App({
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
+    // old fluid clamp) so the divider can set it directly; `resizing` drives
+    // the handle's active highlight and a body-wide drag cursor / no-select.
+    const [sidebarWidth, setSidebarWidth] = useState<number>(readSidebarWidth);
+    const [resizing, setResizing] = useState(false);
+    // Persist after a drag settles, not on every pointermove (localStorage is
+    // synchronous — writing per pixel would stutter the drag). The ref carries
+    // the latest dragged width into pointerup without re-binding listeners.
+    const widthRef = useRef(sidebarWidth);
+    widthRef.current = sidebarWidth;
+    // While dragging the divider, force the col-resize cursor and kill text
+    // selection document-wide — otherwise the pointer flickers to a text caret
+    // and a fast drag highlights the transcript. Restored on release/unmount.
+    useEffect(() => {
+        if (!resizing) return undefined;
+        const { body } = document;
+        const prevCursor = body.style.cursor;
+        const prevSelect = body.style.userSelect;
+        body.style.cursor = "col-resize";
+        body.style.userSelect = "none";
+        return (): void => {
+            body.style.cursor = prevCursor;
+            body.style.userSelect = prevSelect;
+        };
+    }, [resizing]);
     // Session targeted for deletion; non-null = the dialog is open. Held in
     // App so the dialog is a single instance instead of one per row, and so
     // its mobile vs desktop shell can react to `bottomSheet` from useMediaQuery.
@@ -423,6 +463,36 @@ export function App({
     function pick(id: string): void {
         setActiveId(id);
         setDrawerOpen(false);
+    }
+
+    // VSCode-style divider drag. Pointer capture keeps move/up events flowing
+    // to the handle even when the pointer outruns it, so a fast drag never
+    // "drops". Only the primary button starts a resize. Width is derived from
+    // the pointer delta off the drag's start, re-clamped each move; the final
+    // value is persisted on release (see widthRef rationale above).
+    function startResize(e: React.PointerEvent<HTMLDivElement>): void {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = widthRef.current;
+        const el = e.currentTarget;
+        el.setPointerCapture(e.pointerId);
+        setResizing(true);
+        const onMove = (ev: PointerEvent): void => {
+            setSidebarWidth(clampSidebarWidth(startWidth + (ev.clientX - startX)));
+        };
+        const onUp = (): void => {
+            el.releasePointerCapture(e.pointerId);
+            el.removeEventListener("pointermove", onMove);
+            el.removeEventListener("pointerup", onUp);
+            setResizing(false);
+            globalThis.localStorage?.setItem(
+                SIDEBAR_WIDTH_KEY,
+                String(widthRef.current),
+            );
+        };
+        el.addEventListener("pointermove", onMove);
+        el.addEventListener("pointerup", onUp);
     }
 
     const list = (
@@ -488,15 +558,53 @@ export function App({
             ) : (
                 <Stack
                     sx={{
-                        width: SIDEBAR_WIDTH,
+                        width: sidebarWidth,
                         flexShrink: 0,
                         borderRight: 1,
                         borderColor: "divider",
                         height: "100%",
+                        // Anchor the absolutely-positioned resize handle.
+                        position: "relative",
                     }}
                 >
                     {sidebarHeader}
                     <Box sx={{ flex: 1, minHeight: 0 }}>{list}</Box>
+                    {/* VSCode-style divider: a thin grab strip straddling the
+                    right border. Desktop-only — it lives in the non-Drawer
+                    branch, so iPad/iPhone never render it. Invisible until
+                    hover/drag; an accent line marks it on hover, the full
+                    strip tints while dragging. */}
+                    <Box
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="Resize sidebar"
+                        onPointerDown={startResize}
+                        sx={{
+                            position: "absolute",
+                            top: 0,
+                            right: -3,
+                            width: 6,
+                            height: "100%",
+                            cursor: "col-resize",
+                            zIndex: 2,
+                            // Centered 1px accent line that thickens on hover /
+                            // while dragging — the visible part of the handle.
+                            "&::after": {
+                                content: '""',
+                                position: "absolute",
+                                top: 0,
+                                left: "50%",
+                                transform: "translateX(-50%)",
+                                width: resizing ? 2 : 1,
+                                height: "100%",
+                                bgcolor: resizing ? "primary.main" : "transparent",
+                                transition: "background-color 120ms",
+                            },
+                            "&:hover::after": {
+                                bgcolor: resizing ? "primary.main" : "primary.light",
+                            },
+                        }}
+                    />
                 </Stack>
             )}
 
