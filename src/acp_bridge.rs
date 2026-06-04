@@ -449,6 +449,7 @@ fn dispatch_permission_request(
 /// # Errors
 /// If stdio setup or the daemon WS connect fails, or if either I/O loop ends
 /// with an error.
+#[allow(clippy::too_many_lines)] // one cohesive connect + IO-loop wiring
 pub async fn run(args: AcpBridgeArgs) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -560,7 +561,7 @@ pub async fn run(args: AcpBridgeArgs) -> Result<()> {
                 }
                 // Sessions / Snapshot / ConfigOptions / session-less Error are
                 // Web-UI bookkeeping; Zed has its own model, so drop them.
-                _ => continue,
+                _ => {}
             }
         }
     });
