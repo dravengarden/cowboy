@@ -524,16 +524,44 @@ pub async fn run(args: AcpBridgeArgs) -> Result<()> {
                     continue;
                 }
             };
-            let Outbound::Event { envelope } = outbound else {
-                // Sessions / Snapshot / Error are bookkeeping for Web UI;
-                // Zed has its own session-list model, so we drop them.
-                continue;
-            };
-            let session_id = envelope.session_id.clone();
-            if !state_for_recv.known_sessions.borrow().contains(&session_id) {
-                continue;
+            match outbound {
+                Outbound::Event { envelope } => {
+                    let session_id = envelope.session_id.clone();
+                    if !state_for_recv.known_sessions.borrow().contains(&session_id) {
+                        continue;
+                    }
+                    handle_envelope(
+                        &conn_for_recv,
+                        &state_for_recv,
+                        session_id,
+                        envelope.event,
+                    );
+                }
+                // A daemon-reported error for a session: if a prompt is in
+                // flight, the daemon won't emit a `TurnEnd` (the command was
+                // rejected before reaching an agent), so the pending-prompt
+                // oneshot would never resolve and Zed would spin forever.
+                // Resolve it here with `Cancelled` — the closest ACP
+                // stop_reason for "the turn did not run". Only fires when a
+                // prompt is actually pending for the session, so unrelated
+                // errors are still harmless no-ops.
+                Outbound::Error {
+                    session_id: Some(sid),
+                    message,
+                } => {
+                    if let Some(tx) = state_for_recv.pending_prompts.borrow_mut().remove(&sid) {
+                        tracing::warn!(
+                            session = %sid,
+                            error = %message,
+                            "daemon error for in-flight prompt; ending the turn",
+                        );
+                        let _ = tx.send(StopReason::Cancelled);
+                    }
+                }
+                // Sessions / Snapshot / ConfigOptions / session-less Error are
+                // Web-UI bookkeeping; Zed has its own model, so drop them.
+                _ => continue,
             }
-            handle_envelope(&conn_for_recv, &state_for_recv, session_id, envelope.event);
         }
     });
 

@@ -108,14 +108,91 @@ impl Supervisor {
 
     /// Forward a command to a session's agent thread.
     ///
+    /// Fast path: a live agent thread owns the session → deliver directly.
+    ///
+    /// Slow path — **post-restart resume**: after a daemon restart,
+    /// [`Hub::restore`] brings session metadata + event history back from
+    /// postgres, but `senders` starts empty, so a restored session has no
+    /// agent process. Without reviving it here the first command returned
+    /// `unknown session`, which the WS layer turns into a fire-and-forget
+    /// [`Outbound::Error`]; the ACP bridge's pending-prompt oneshot only
+    /// resolves on `TurnEnd`, so Zed hung forever AND the prompt never reached
+    /// an agent (so the Web UI stayed empty too). We lazily spawn a fresh
+    /// agent for the restored session and deliver the command to it. The new
+    /// agent starts without the prior turn's in-agent context — full
+    /// `session/load` replay is the deferred design §7 follow-up — but the
+    /// session continues and every surface stays in sync.
+    ///
+    /// [`Outbound::Error`]: crate::core::Outbound::Error
+    ///
     /// # Errors
-    /// If the session is unknown or its thread has already ended.
+    /// If the session is unknown to the Hub, its provider is no longer
+    /// registered, or the agent thread cannot be spawned.
     pub fn send(&self, session_id: &str, cmd: AgentCommand) -> Result<(), String> {
-        let senders = self.senders.lock().unwrap();
-        let tx = senders
+        // A failed `send` means the receiver (agent thread) is gone: drop the
+        // stale sender and fall through to revive, recovering the command from
+        // the `SendError` so we needn't require `AgentCommand: Clone`.
+        let cmd = {
+            let mut senders = self.senders.lock().unwrap();
+            match senders.get(session_id) {
+                Some(tx) => match tx.send(cmd) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        senders.remove(session_id);
+                        e.0
+                    }
+                },
+                None => cmd,
+            }
+        };
+        self.revive(session_id)?;
+        self.senders
+            .lock()
+            .unwrap()
             .get(session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?
+            .send(cmd)
+            .map_err(|_| "session ended".to_owned())
+    }
+
+    /// Spawn a fresh agent thread for a session that exists in the Hub but has
+    /// no live sender (typically one restored after a restart). Reuses the
+    /// persisted provider + cwd. Idempotent: if a concurrent caller revived it
+    /// first, this is a no-op.
+    ///
+    /// # Errors
+    /// If the session id is unknown to the Hub, the provider is no longer
+    /// registered, or the OS thread cannot be spawned.
+    fn revive(&self, session_id: &str) -> Result<(), String> {
+        // Read the persisted shape BEFORE taking the senders lock — the Hub
+        // has its own lock; keep the two un-nested.
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|m| m.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        tx.send(cmd).map_err(|_| "session ended".to_owned())
+        let spec = provider::lookup(&meta.provider)
+            .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
+        let cwd = PathBuf::from(&meta.cwd);
+
+        let mut senders = self.senders.lock().unwrap();
+        if senders.contains_key(session_id) {
+            return Ok(()); // a concurrent caller already revived it
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let hub = self.hub.clone();
+        let thread_id = session_id.to_owned();
+        std::thread::Builder::new()
+            .name(format!("agent-{session_id}"))
+            .spawn(move || acp::run_agent(&spec, &thread_id, cwd, rx, &hub))
+            .map_err(|e| format!("spawning agent thread: {e}"))?;
+        senders.insert(session_id.to_owned(), tx);
+        tracing::info!(
+            session = session_id,
+            "revived restored session with a fresh agent (post-restart; prior in-agent context not replayed)"
+        );
+        Ok(())
     }
 
     /// Tear down a session's agent thread. Sends `Cancel` (best-effort, so an
