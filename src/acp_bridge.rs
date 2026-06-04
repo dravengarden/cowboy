@@ -449,7 +449,6 @@ fn dispatch_permission_request(
 /// # Errors
 /// If stdio setup or the daemon WS connect fails, or if either I/O loop ends
 /// with an error.
-#[allow(clippy::too_many_lines)] // one cohesive connect + IO-loop wiring
 pub async fn run(args: AcpBridgeArgs) -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -464,15 +463,20 @@ pub async fn run(args: AcpBridgeArgs) -> Result<()> {
         "cowboy acp-bridge starting",
     );
 
-    // Connect to the daemon WS first; if the daemon isn't up, fail fast
-    // (Zed will surface the error to the Agent Panel).
-    let (ws, _resp) = tokio_tungstenite::connect_async(&args.daemon_url)
-        .await
-        .with_context(|| format!("connect to daemon ws {}", args.daemon_url))?;
-    tracing::info!("daemon ws connected");
-    let (mut ws_sink, mut ws_stream) = ws.split();
+    // Capture the daemon URL before `args` is partially moved into `Bridge`.
+    let daemon_url = args.daemon_url.clone();
 
-    let (ws_tx, mut ws_tx_rx) = mpsc::unbounded_channel::<Inbound>();
+    // Connect once up front; if the daemon is down at startup, fail fast so
+    // Zed surfaces it in the Agent Panel. After this first success the
+    // supervisor reconnects automatically — the daemon is a systemd unit that
+    // any cowboy-touching `nixos-rebuild` bounces, and the bridge must survive
+    // that rather than die with a dead WS (the old "daemon ws closed" hang).
+    let (ws, _resp) = tokio_tungstenite::connect_async(&daemon_url)
+        .await
+        .with_context(|| format!("connect to daemon ws {daemon_url}"))?;
+    tracing::info!("daemon ws connected");
+
+    let (ws_tx, ws_tx_rx) = mpsc::unbounded_channel::<Inbound>();
 
     let state = Rc::new(Bridge {
         provider: args.provider,
@@ -493,84 +497,166 @@ pub async fn run(args: AcpBridgeArgs) -> Result<()> {
     });
     let conn = Rc::new(conn);
 
-    // WS-send task: drain the bridge's Inbound channel onto the daemon WS.
-    let ws_send_task = tokio::task::spawn_local(async move {
-        while let Some(inbound) = ws_tx_rx.recv().await {
-            let text = match serde_json::to_string(&inbound) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!(error = %e, "serializing Inbound");
-                    continue;
-                }
-            };
-            if let Err(e) = ws_sink.send(Message::Text(text.into())).await {
-                tracing::warn!(error = %e, "ws send failed");
-                break;
-            }
-        }
-    });
-
-    // WS-recv task: each daemon Outbound is dispatched.
-    let conn_for_recv = conn.clone();
-    let state_for_recv = state.clone();
-    let ws_recv_task = tokio::task::spawn_local(async move {
-        while let Some(msg) = ws_stream.next().await {
-            let Ok(Message::Text(text)) = msg else {
-                continue;
-            };
-            let outbound: Outbound = match serde_json::from_str(&text) {
-                Ok(o) => o,
-                Err(e) => {
-                    tracing::warn!(error = %e, "decoding daemon Outbound");
-                    continue;
-                }
-            };
-            match outbound {
-                Outbound::Event { envelope } => {
-                    let session_id = envelope.session_id.clone();
-                    if !state_for_recv.known_sessions.borrow().contains(&session_id) {
-                        continue;
-                    }
-                    handle_envelope(
-                        &conn_for_recv,
-                        &state_for_recv,
-                        session_id,
-                        envelope.event,
-                    );
-                }
-                // A daemon-reported error for a session: if a prompt is in
-                // flight, the daemon won't emit a `TurnEnd` (the command was
-                // rejected before reaching an agent), so the pending-prompt
-                // oneshot would never resolve and Zed would spin forever.
-                // Resolve it here with `Cancelled` — the closest ACP
-                // stop_reason for "the turn did not run". Only fires when a
-                // prompt is actually pending for the session, so unrelated
-                // errors are still harmless no-ops.
-                Outbound::Error {
-                    session_id: Some(sid),
-                    message,
-                } => {
-                    if let Some(tx) = state_for_recv.pending_prompts.borrow_mut().remove(&sid) {
-                        tracing::warn!(
-                            session = %sid,
-                            error = %message,
-                            "daemon error for in-flight prompt; ending the turn",
-                        );
-                        let _ = tx.send(StopReason::Cancelled);
-                    }
-                }
-                // Sessions / Snapshot / ConfigOptions / session-less Error are
-                // Web-UI bookkeeping; Zed has its own model, so drop them.
-                _ => {}
-            }
-        }
-    });
+    // WS supervisor: owns the daemon connection + its send/recv for the whole
+    // bridge lifetime, reconnecting across daemon restarts. Crucially it owns
+    // `ws_tx_rx`, so the ACP handlers' `ws_tx.send` never sees a dropped
+    // receiver — a prompt sent during a brief disconnect is queued and flushed
+    // on reconnect instead of erroring "daemon ws closed".
+    let ws_supervisor = tokio::task::spawn_local(ws_loop(
+        state.clone(),
+        conn.clone(),
+        daemon_url,
+        ws_tx_rx,
+        ws,
+    ));
 
     // ACP IO loop. When stdio closes (Zed shuts the child down), the bridge
-    // exits and the WS tasks are aborted by drop.
+    // exits and the WS supervisor is aborted by drop.
     let r = acp_io.await.context("acp io");
-    ws_send_task.abort();
-    ws_recv_task.abort();
+    ws_supervisor.abort();
     r?;
     Ok(())
+}
+
+/// The daemon WS connection type (what `connect_async` yields for `ws://`).
+type DaemonWs =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Maintain the daemon WS for the bridge's lifetime, reconnecting when the
+/// daemon restarts. The Zed-facing ACP stdio connection stays up across daemon
+/// reconnects; only this WS is re-established. Returns when `ws_tx_rx` closes
+/// (the bridge is shutting down).
+async fn ws_loop(
+    state: Rc<Bridge>,
+    conn: Rc<AgentSideConnection>,
+    daemon_url: String,
+    mut ws_tx_rx: mpsc::UnboundedReceiver<Inbound>,
+    initial: DaemonWs,
+) {
+    let mut conn_ws = initial;
+    loop {
+        let (mut sink, mut stream) = conn_ws.split();
+        // Pump until the connection drops (or the bridge shuts down).
+        loop {
+            tokio::select! {
+                maybe = ws_tx_rx.recv() => match maybe {
+                    None => return, // ws_tx dropped → bridge shutting down
+                    Some(inbound) => {
+                        let text = match serde_json::to_string(&inbound) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "serializing Inbound");
+                                continue;
+                            }
+                        };
+                        if let Err(e) = sink.send(Message::Text(text.into())).await {
+                            tracing::warn!(error = %e, "ws send failed; reconnecting");
+                            break;
+                        }
+                    }
+                },
+                msg = stream.next() => match msg {
+                    Some(Ok(Message::Text(text))) => dispatch_outbound(&conn, &state, &text),
+                    Some(Ok(_)) => {} // non-text frame (ping/binary): ignore
+                    Some(Err(e)) => {
+                        tracing::warn!(error = %e, "ws recv error; reconnecting");
+                        break;
+                    }
+                    None => {
+                        tracing::warn!("daemon ws closed; reconnecting");
+                        break;
+                    }
+                },
+            }
+        }
+        // Disconnected. End any in-flight turns so Zed stops waiting for a
+        // `TurnEnd` that died with the old connection (the user resends; the
+        // resend flushes once we reconnect), then re-establish the WS.
+        fail_pending_on_disconnect(&state);
+        conn_ws = reconnect(&daemon_url).await;
+    }
+}
+
+/// Reconnect to the daemon with capped exponential backoff. Loops until it
+/// succeeds — the daemon is a local systemd unit, so "down" is virtually
+/// always "restarting, back in a moment", not "gone forever".
+async fn reconnect(daemon_url: &str) -> DaemonWs {
+    let mut delay = std::time::Duration::from_millis(250);
+    let cap = std::time::Duration::from_secs(5);
+    loop {
+        match tokio_tungstenite::connect_async(daemon_url).await {
+            Ok((ws, _resp)) => {
+                tracing::info!("daemon ws reconnected");
+                return ws;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    "daemon ws reconnect failed; retrying",
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(cap);
+            }
+        }
+    }
+}
+
+/// Dispatch one decoded daemon `Outbound`. Extracted so the connection loop
+/// stays readable and the recv logic is identical across reconnects.
+fn dispatch_outbound(conn: &Rc<AgentSideConnection>, state: &Rc<Bridge>, text: &str) {
+    let outbound: Outbound = match serde_json::from_str(text) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(error = %e, "decoding daemon Outbound");
+            return;
+        }
+    };
+    match outbound {
+        Outbound::Event { envelope } => {
+            let session_id = envelope.session_id.clone();
+            if !state.known_sessions.borrow().contains(&session_id) {
+                return;
+            }
+            handle_envelope(conn, state, session_id, envelope.event);
+        }
+        // A daemon-reported error for a session: if a prompt is in flight, the
+        // daemon won't emit a `TurnEnd` (the command was rejected before
+        // reaching an agent), so the pending-prompt oneshot would never
+        // resolve and Zed would spin forever. Resolve it here with `Cancelled`
+        // — the closest ACP stop_reason for "the turn did not run". Only fires
+        // when a prompt is actually pending, so unrelated errors are no-ops.
+        Outbound::Error {
+            session_id: Some(sid),
+            message,
+        } => {
+            if let Some(tx) = state.pending_prompts.borrow_mut().remove(&sid) {
+                tracing::warn!(
+                    session = %sid,
+                    error = %message,
+                    "daemon error for in-flight prompt; ending the turn",
+                );
+                let _ = tx.send(StopReason::Cancelled);
+            }
+        }
+        // Sessions / Snapshot / ConfigOptions / session-less Error are Web-UI
+        // bookkeeping; Zed has its own model, so drop them.
+        _ => {}
+    }
+}
+
+/// End every in-flight turn on a daemon disconnect so Zed stops waiting for a
+/// `TurnEnd` that died with the old connection. No-op when nothing is pending.
+fn fail_pending_on_disconnect(state: &Rc<Bridge>) {
+    let mut pending = state.pending_prompts.borrow_mut();
+    if pending.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = pending.len(),
+        "daemon disconnected; ending in-flight turns (resend to continue)",
+    );
+    for (_sid, tx) in pending.drain() {
+        let _ = tx.send(StopReason::Cancelled);
+    }
 }
