@@ -1,34 +1,7 @@
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { splashHtml } from "./src/_shell/splash";
-
-// Inject the shared pre-mount app-shell splash (from @shared-utils/ui via the
-// _shell symlink) into index.html at build time: the <style> before </head> and
-// the spinner markup inside #root. It paints with the document — before the SPA
-// bundle parses and the /ws socket connects — so the first frame is a themed
-// spinner, not a blank canvas. React's createRoot replaces #root's children on
-// mount (no teardown JS). Colours mirror theme.ts background.default + text
-// .secondary (light / dark) so there's no flash when React takes over. Same
-// source across all atlantis apps (cf. liveview's vite.config).
-function splashInjector(): Plugin {
-  const { head, body } = splashHtml({
-    title: "cowboy",
-    lightBg: "#f4ecf7",
-    lightFg: "#6b5e80",
-    darkBg: "#15111d",
-    darkFg: "#a899c4",
-  });
-  return {
-    name: "cowboy-splash-injector",
-    transformIndexHtml(html: string): string {
-      return html
-        .replace("</head>", `${head}\n  </head>`)
-        .replace('<div id="root"></div>', `<div id="root">${body}</div>`);
-    },
-  };
-}
 
 // In dev, proxy the WebSocket + health endpoints to a locally running daemon
 // (`cowboy serve`). Override the target with COWBOY_DEV_BACKEND.
@@ -124,7 +97,7 @@ export default defineConfig({
       "@emotion/styled",
     ],
   },
-  plugins: [react(), splashInjector()],
+  plugins: [react()],
   server: {
     // Allow the dev server to serve the symlinked atlantis shell source (it
     // lives outside this project root). Only relevant to `dev-web`.
