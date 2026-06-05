@@ -46,6 +46,18 @@ export function useThemeMode(): ThemeControls {
   const theme = useMemo(
     () =>
       createTheme({
+        typography: {
+          // Use the OS UI font + the OS default body size (16px), not MUI's
+          // bundled-Roboto default. Roboto isn't shipped here, so the default
+          // silently fell back to Helvetica/Arial — visibly NOT the system font,
+          // and a font-swap flash against index.html's `-apple-system` splash.
+          // This stack matches the splash and cmTheme.ts so mount is seamless.
+          // `fontSize: 16` (MUI's base coefficient defaults to 14) lifts body
+          // text to the native reading size instead of feeling shrunk.
+          fontFamily:
+            'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif',
+          fontSize: 16,
+        },
         components: {
           // Touch ergonomics (ui.md §7): on a coarse pointer no interactive
           // control drops below the ~40px tap-target floor, even when size="small"

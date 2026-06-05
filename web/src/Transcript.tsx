@@ -286,8 +286,12 @@ function MessageBubble({
       variant="outlined"
       sx={{
         p: { xs: 1, sm: 1.25 },
-        alignSelf: mine ? "flex-end" : "flex-start",
-        maxWidth: { xs: "96%", sm: "92%" },
+        // Assistant replies stretch the full column so they align flush with the
+        // full-width tool cards and use the whole screen width (no ragged column
+        // of short, content-hugging bubbles). Only the user's own messages stay
+        // as a right-aligned bubble, the conventional "my message" affordance.
+        alignSelf: mine ? "flex-end" : "stretch",
+        maxWidth: mine ? { xs: "88%", sm: "78%" } : "100%",
         bgcolor: mine ? "primary.main" : "background.paper",
         color: mine ? "primary.contrastText" : "text.primary",
         overflow: "hidden",
@@ -604,8 +608,8 @@ const ItemView = memo(function ItemView({
           spacing={1}
           sx={{
             color: "text.secondary",
-            alignSelf: "flex-start",
-            maxWidth: { xs: "96%", sm: "92%" },
+            alignSelf: "stretch",
+            maxWidth: "100%",
           }}
         >
           <Psychology fontSize="medium" />
