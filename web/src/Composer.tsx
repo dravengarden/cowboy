@@ -4,6 +4,11 @@ import {
   Button,
   CircularProgress,
   Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   IconButton,
   List,
@@ -112,6 +117,10 @@ export function Composer({
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Stopping a running turn is confirmed through a modal (Enter confirms, Esc
+  // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
+  // than cancelling on a single stray click/keypress.
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   const busy = status === "busy";
   const starting = status === "starting";
@@ -209,6 +218,17 @@ export function Composer({
         commands={(): AvailableCommand[] => availableCommands}
         placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
         vim={vim}
+        onEscape={(): boolean => {
+          // Esc cancels a running turn (via the confirm modal), but only when a
+          // turn is actually in flight — otherwise leave Esc to the editor. In
+          // vim, ComposerEditor only calls this once we're already in normal
+          // mode, so insert-mode Esc still just exits to normal.
+          if (busy) {
+            setCancelOpen(true);
+            return true;
+          }
+          return false;
+        }}
       />
       {/* Action row below the input: slash-command / @-reference triggers on
           the left, then the agent config (inline chips on desktop, the bottom
@@ -327,7 +347,7 @@ export function Composer({
                   color="error"
                   aria-label="cancel"
                   sx={TOOLBAR_ICON_BTN}
-                  onClick={(): void => send({ type: "cancel", session_id: sessionId })}
+                  onClick={(): void => setCancelOpen(true)}
                 >
                   <Stop />
                 </IconButton>
@@ -368,6 +388,45 @@ export function Composer({
           }
         />
       )}
+      {/* Confirm before stopping a running turn. The Stop button is destructive
+          (the in-flight turn ends), so a single click/Esc shouldn't trigger it.
+          The Stop action is autoFocused so Enter confirms; Esc dismisses (MUI
+          Dialog default), so a stray second Esc backs out rather than cancelling. */}
+      <Dialog
+        open={cancelOpen}
+        onClose={(): void => setCancelOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Stop the running turn?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The agent is still working. Stopping ends the current turn; whatever
+            it produced so far stays in the transcript.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="inherit"
+            onClick={(): void => setCancelOpen(false)}
+            sx={{ textTransform: "none" }}
+          >
+            Keep running
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            autoFocus
+            onClick={(): void => {
+              send({ type: "cancel", session_id: sessionId });
+              setCancelOpen(false);
+            }}
+            sx={{ textTransform: "none" }}
+          >
+            Stop
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

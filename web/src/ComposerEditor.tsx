@@ -31,10 +31,22 @@ export interface ComposerEditorHandle {
   insertTrigger: (ch: string) => void;
 }
 
+// Reads whether the editor is in Vim *insert* mode, via the loaded vim module's
+// CM5-compat handle. Lets the Escape keymap (below) decide whether Esc should
+// exit insert mode (vim's job) or bubble up to the app (cancel a running turn).
+type VimApi = {
+  getCM: (view: EditorView) => { state?: { vim?: { insertMode?: boolean } } } | null;
+};
+
 // Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
 // device has a precise pointer + hover (a real keyboard) — touch never imports
-// it, so it costs the mobile bundle nothing. (Plan Step 11 / REQ-2.)
-function useVimExtension(enabled: boolean): Extension | null {
+// it, so it costs the mobile bundle nothing. (Plan Step 11 / REQ-2.) Also
+// publishes the module's `getCM` into `apiRef` so the Escape handler can read
+// the live vim mode without re-importing.
+function useVimExtension(
+  enabled: boolean,
+  apiRef: { current: VimApi | null },
+): Extension | null {
   const [ext, setExt] = useState<Extension | null>(null);
   useEffect(() => {
     const desktop =
@@ -42,20 +54,25 @@ function useVimExtension(enabled: boolean): Extension | null {
       window.matchMedia("(pointer: fine) and (hover: hover)").matches;
     if (!enabled || !desktop) {
       setExt(null);
+      apiRef.current = null;
       return undefined;
     }
     let alive = true;
     void import("@replit/codemirror-vim")
       .then((m) => {
-        if (alive) setExt(m.vim());
+        if (alive) {
+          setExt(m.vim());
+          apiRef.current = { getCM: m.getCM as VimApi["getCM"] };
+        }
       })
       .catch(() => {
         /* vim is best-effort; ignore load failures */
       });
     return () => {
       alive = false;
+      apiRef.current = null;
     };
-  }, [enabled]);
+  }, [enabled, apiRef]);
   return ext;
 }
 
@@ -73,9 +90,14 @@ export const ComposerEditor = forwardRef<
     placeholder?: string;
     disabled?: boolean;
     vim?: boolean;
+    // Called on Escape when it should act on the app, not the editor: vim OFF,
+    // or vim ON and already in normal/visual mode. Returns true if it consumed
+    // the key. In vim insert mode Esc is left to the vim extension (→ normal),
+    // so the first Esc exits insert and the second reaches here (Zed-style).
+    onEscape?: () => boolean;
   }
 >(function ComposerEditor(
-  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, vim },
+  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, vim, onEscape },
   ref,
 ): React.JSX.Element {
   const theme = useTheme();
@@ -86,8 +108,13 @@ export const ComposerEditor = forwardRef<
   onSubmitRef.current = onSubmit;
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
+  // Set by useVimExtension once the lazy vim module loads; read by the Escape
+  // keymap to tell insert mode from normal/visual.
+  const vimApiRef = useRef<VimApi | null>(null);
 
-  const vimExt = useVimExtension(vim ?? false);
+  const vimExt = useVimExtension(vim ?? false, vimApiRef);
 
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
@@ -135,6 +162,23 @@ export const ComposerEditor = forwardRef<
       // Backspace removes a whole `@path` / `/skill` chip in one press (above
       // the default char-delete).
       Prec.high(keymap.of([{ key: "Backspace", run: deleteTokenBackward }])),
+      // Escape: in vim insert mode, yield (return false) so the vim extension
+      // takes it as exit-to-normal — the SECOND Esc, now in normal mode, reaches
+      // onEscape. With vim off, or already in normal/visual, Esc goes straight to
+      // onEscape (the app uses it to cancel a running turn). High precedence so
+      // it beats the default keymap's Escape (clear-selection).
+      Prec.high(
+        keymap.of([
+          {
+            key: "Escape",
+            run: (view): boolean => {
+              const insert = vimApiRef.current?.getCM(view)?.state?.vim?.insertMode ?? false;
+              if (insert) return false;
+              return onEscapeRef.current?.() ?? false;
+            },
+          },
+        ]),
+      ),
       // completionKeymap first so Enter/Tab/arrows drive the picker when it's
       // open, falling through to newline/normal editing when it's closed.
       keymap.of([...completionKeymap, ...historyKeymap, ...defaultKeymap]),
