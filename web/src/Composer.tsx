@@ -3,11 +3,13 @@ import {
   Box,
   Button,
   CircularProgress,
+  Collapse,
   Divider,
   IconButton,
   List,
   Menu,
   MenuItem,
+  Paper,
   Skeleton,
   Stack,
   TextField,
@@ -18,14 +20,27 @@ import {
 } from "@mui/material";
 import {
   AlternateEmail,
+  ChevronRight,
+  Close,
+  EditOutlined,
   ExpandMore,
   Send,
   Stop,
   Tune,
+  VerticalAlignTop,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { useVimSetting } from "./vimSetting";
-import { send, useStore } from "./store";
+import {
+  clearQueue,
+  editQueued,
+  type QueuedMessage,
+  removeQueued,
+  requestSendQueued,
+  send,
+  submitPrompt,
+  useStore,
+} from "./store";
 import { originLabel } from "./protocol";
 import type {
   AcpUpdate,
@@ -61,7 +76,8 @@ export function Composer({
 }): React.JSX.Element {
   const [text, setText] = useState("");
   const editorRef = useRef<ComposerEditorHandle>(null);
-  const { configOptions, sessions, timelines } = useStore();
+  const { configOptions, queues, sessions, timelines } = useStore();
+  const queue = queues.get(sessionId) ?? [];
   // The active session's metadata, surfaced read-only inside the options
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
   // in the always-visible sidebar, so the sheet — and this lookup — only
@@ -122,7 +138,10 @@ export function Composer({
     if (!sendable) return;
     const trimmed = text.trimEnd();
     if (!trimmed) return;
-    send({ type: "prompt", session_id: sessionId, text: trimmed });
+    // submitPrompt sends straight through when the session can take a turn now,
+    // and otherwise stacks the prompt on the queue (busy / starting / a turn of
+    // ours still in flight) — the daemon can't run a second concurrent turn.
+    submitPrompt(sessionId, status, trimmed);
     setText("");
   }
 
@@ -149,6 +168,12 @@ export function Composer({
         position: "relative", // anchor for Popper portal placement
       }}
     >
+      {/* Zed-style queued prompts: while the agent is busy, messages stack here
+          and drain one per turn-end. Sits above the editor so it reads as "what
+          will be sent next". Hidden when empty. */}
+      {queue.length > 0 && (
+        <QueuedMessages sessionId={sessionId} queue={queue} status={status} />
+      )}
       {/* CodeMirror-6 editor styled as a MUI outlined field — replaces the
           <textarea> (which forced the iOS keyboard bar) and folds the `@`/`/`
           pickers into CM autocomplete. */}
@@ -250,21 +275,43 @@ export function Composer({
             color="text.disabled"
             sx={{ whiteSpace: "nowrap", fontSize: 11, flexShrink: 0, mr: 0.5 }}
           >
-            ⌘/Ctrl + Enter = send
+            ⌘/Ctrl + Enter = {busy || starting ? "queue" : "send"}
           </Typography>
         )}
 
-        {busy ? (
-          <Tooltip title="Stop">
-            <IconButton
-              color="error"
-              aria-label="cancel"
-              sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
-              onClick={(): void => send({ type: "cancel", session_id: sessionId })}
-            >
-              <Stop />
-            </IconButton>
-          </Tooltip>
+        {/* Busy: the agent owns the turn, so the primary button is Stop. A
+            secondary "queue" button appears once there's text to stack, so the
+            enqueue affordance is visible (not just ⌘/Ctrl+Enter). Idle: a single
+            Send button, the unchanged fast path. */}
+        {busy || starting ? (
+          <>
+            {sendable && (
+              <Tooltip title="Queue (⌘/Ctrl + Enter)">
+                <span>
+                  <IconButton
+                    color="primary"
+                    aria-label="queue message"
+                    sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                    onClick={submit}
+                  >
+                    <Send />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+            {busy && (
+              <Tooltip title="Stop">
+                <IconButton
+                  color="error"
+                  aria-label="cancel"
+                  sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                  onClick={(): void => send({ type: "cancel", session_id: sessionId })}
+                >
+                  <Stop />
+                </IconButton>
+              </Tooltip>
+            )}
+          </>
         ) : (
           <Tooltip title="Send (⌘/Ctrl + Enter)">
             <span>
@@ -300,6 +347,217 @@ export function Composer({
         />
       )}
     </Box>
+  );
+}
+
+// The Zed-style queue panel above the editor. A collapsible header ("N Queued
+// Messages" + Clear All) over a scroll-capped list of rows. Mirrors Zed's agent
+// panel: the queue is the staging area for prompts the busy agent can't take yet.
+function QueuedMessages({
+  sessionId,
+  queue,
+  status,
+}: {
+  sessionId: string;
+  queue: QueuedMessage[];
+  /** Session status — drives Send-now (idle) vs Send-next (busy) per row. */
+  status: Status;
+}): React.JSX.Element {
+  const idle = status === "running";
+  // Default expanded. Collapsed state is local + ephemeral (resets on session
+  // switch / remount) — the count stays visible either way, which is the part
+  // that matters at a glance.
+  const [collapsed, setCollapsed] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const count = queue.length;
+  return (
+    <Box
+      sx={{
+        mb: 1,
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 1,
+        bgcolor: "action.hover",
+        overflow: "hidden",
+      }}
+    >
+      <Stack direction="row" alignItems="center" sx={{ pl: 0.5, pr: 0.75, py: 0.25 }}>
+        <IconButton
+          size="small"
+          aria-label={collapsed ? "expand queue" : "collapse queue"}
+          onClick={(): void => setCollapsed((c) => !c)}
+          sx={{ flexShrink: 0 }}
+        >
+          {collapsed ? <ChevronRight fontSize="small" /> : <ExpandMore fontSize="small" />}
+        </IconButton>
+        <Typography
+          variant="caption"
+          sx={{ fontWeight: 600, flex: 1, minWidth: 0, cursor: "pointer" }}
+          onClick={(): void => setCollapsed((c) => !c)}
+        >
+          {count} Queued Message{count === 1 ? "" : "s"}
+        </Typography>
+        <Button
+          size="small"
+          color="inherit"
+          onClick={(): void => clearQueue(sessionId)}
+          sx={{ textTransform: "none", color: "text.secondary", minWidth: 0, px: 0.75 }}
+        >
+          Clear All
+        </Button>
+      </Stack>
+      <Collapse in={!collapsed}>
+        <Stack
+          spacing={0.5}
+          sx={{
+            px: 0.5,
+            pb: 0.5,
+            // Cap so a long backlog scrolls instead of pushing the editor off
+            // a phone viewport; the editor must always stay reachable.
+            maxHeight: "30vh",
+            overflowY: "auto",
+          }}
+        >
+          {queue.map((m) => (
+            <QueuedRow
+              key={m.id}
+              sessionId={sessionId}
+              message={m}
+              status={status}
+              idle={idle}
+              isFront={m.id === queue[0]?.id}
+              editing={editingId === m.id}
+              onEdit={(): void => setEditingId(m.id)}
+              onEditDone={(): void => setEditingId(null)}
+            />
+          ))}
+        </Stack>
+      </Collapse>
+    </Box>
+  );
+}
+
+// One queued prompt. Read mode shows the (clamped) text + Send / Edit / Delete.
+// Edit mode swaps in a small multiline field (Enter saves, Esc cancels). "Send"
+// dispatches immediately when idle, else promotes to the front of the queue —
+// the daemon can't run a concurrent turn, so "now" becomes "next" while busy.
+function QueuedRow({
+  sessionId,
+  message,
+  status,
+  idle,
+  isFront,
+  editing,
+  onEdit,
+  onEditDone,
+}: {
+  sessionId: string;
+  message: QueuedMessage;
+  status: Status;
+  /** status === "running"; drives the Send-now vs Send-next icon + tooltip. */
+  idle: boolean;
+  isFront: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onEditDone: () => void;
+}): React.JSX.Element {
+  const [draft, setDraft] = useState(message.text);
+  // "Send now" is only meaningful at the front when idle; promoting the front
+  // item while busy is a no-op, so hide the action there to avoid a dead button.
+  const showSend = idle || !isFront;
+  if (editing) {
+    const save = (): void => {
+      editQueued(sessionId, message.id, draft);
+      onEditDone();
+    };
+    return (
+      <Paper variant="outlined" sx={{ p: 0.75 }}>
+        <TextField
+          autoFocus
+          fullWidth
+          multiline
+          size="small"
+          maxRows={6}
+          value={draft}
+          onChange={(e): void => setDraft(e.target.value)}
+          onKeyDown={(e): void => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setDraft(message.text);
+              onEditDone();
+            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              save();
+            }
+          }}
+        />
+        <Stack direction="row" spacing={0.5} justifyContent="flex-end" sx={{ mt: 0.5 }}>
+          <Button
+            size="small"
+            color="inherit"
+            onClick={(): void => {
+              setDraft(message.text);
+              onEditDone();
+            }}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+          </Button>
+          <Button size="small" variant="contained" onClick={save} sx={{ textTransform: "none" }}>
+            Save
+          </Button>
+        </Stack>
+      </Paper>
+    );
+  }
+  return (
+    <Paper variant="outlined" sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          // Two-line clamp: keep rows compact so several queued prompts fit;
+          // the full text is editable via the pencil.
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {message.text}
+      </Typography>
+      <Stack direction="row" sx={{ flexShrink: 0 }}>
+        {showSend && (
+          <Tooltip title={idle ? "Send now" : "Send next"}>
+            <IconButton
+              size="small"
+              color="primary"
+              aria-label={idle ? "send now" : "send next"}
+              onClick={(): void => requestSendQueued(sessionId, status, message.id)}
+            >
+              {idle ? <Send fontSize="small" /> : <VerticalAlignTop fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        )}
+        <Tooltip title="Edit">
+          <IconButton size="small" aria-label="edit queued message" onClick={onEdit}>
+            <EditOutlined fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Remove">
+          <IconButton
+            size="small"
+            aria-label="remove queued message"
+            onClick={(): void => removeQueued(sessionId, message.id)}
+          >
+            <Close fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+    </Paper>
   );
 }
 
