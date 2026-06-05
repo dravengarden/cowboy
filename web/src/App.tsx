@@ -541,6 +541,18 @@ export function App({
                 borderColor: "divider",
                 flexShrink: 0,
                 gap: 0.5,
+                // Installed desktop PWA (manifest `display_override:
+                // window-controls-overlay`): the browser's title bar is gone and
+                // content reaches the window's top edge. macOS overlays its window
+                // controls (the traffic lights) top-left — i.e. over this sidebar
+                // brand — so inset past them and make the bar a drag handle (no
+                // other drag surface exists once the title bar is removed).
+                // `env(titlebar-area-x)` is 0 unless WCO is active, so the media
+                // query keeps this scoped to the installed PWA.
+                "@media (display-mode: window-controls-overlay)": {
+                    pl: "calc(env(titlebar-area-x, 0px) + 12px)",
+                    WebkitAppRegion: "drag",
+                },
             }}
         >
             <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
@@ -642,7 +654,21 @@ export function App({
                 >
                     <Toolbar
                         variant="dense"
-                        sx={{ borderBottom: 1, borderColor: "divider" }}
+                        sx={{
+                            borderBottom: 1,
+                            borderColor: "divider",
+                            // Narrow installed PWA: the sidebar has collapsed to a
+                            // drawer, so this bar is full-width and the macOS window
+                            // controls now overlay ITS left (the hamburger). Inset
+                            // past them only in that mode — when the sidebar is
+                            // visible the controls sit over it instead (see
+                            // sidebarHeader), and this bar must stay flush.
+                            ...(mobile && {
+                                "@media (display-mode: window-controls-overlay)": {
+                                    pl: "calc(env(titlebar-area-x, 0px) + 12px)",
+                                },
+                            }),
+                        }}
                     >
                         {/* On mobile the sidebar (with its launcher) is hidden, so the
                 drawer toggle leads the bar; the launcher moves to the far right,
