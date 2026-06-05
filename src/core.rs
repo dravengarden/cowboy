@@ -103,6 +103,13 @@ pub struct SessionMeta {
     /// Who opened the session (UI surface that called `new_session`).
     #[serde(default)]
     pub origin: SessionOrigin,
+    /// The downstream agent's OWN session id (the ACP id it returns from
+    /// `session/new`). Captured on first start; used by the supervisor to
+    /// resume the prior conversation via `session/load` when reviving a
+    /// session whose agent process is gone (design §7). `None` until the
+    /// agent assigns one, and for providers that don't support resume.
+    #[serde(default)]
+    pub agent_session_id: Option<String>,
 }
 
 /// Per-session state: metadata + the seq-ordered event log.
@@ -160,10 +167,7 @@ pub enum Inbound {
     /// Rename a session — the user-customizable title shown in the `AppBar`
     /// and (post-rename) in the sidebar list. Empty title is rejected at
     /// the server before this point.
-    RenameSession {
-        session_id: String,
-        title: String,
-    },
+    RenameSession { session_id: String, title: String },
     /// Set one config option on the session (mode / model / effort / future).
     /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
     /// request that handles all three via the same shape. cowboy sends it as
@@ -225,6 +229,10 @@ pub enum StoreWrite {
     AppendEvent(Envelope),
     UpdateStatus { session_id: String, status: Status },
     UpdateTitle { session_id: String, title: String },
+    SetAgentSessionId {
+        session_id: String,
+        agent_session_id: String,
+    },
     DeleteSession(String),
 }
 
@@ -340,6 +348,7 @@ impl Hub {
             title,
             status: Status::Starting,
             origin,
+            agent_session_id: None,
         };
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -402,6 +411,27 @@ impl Hub {
             });
         }
         self.broadcast_sessions();
+    }
+
+    /// Record the downstream agent's own session id for a session, persisting
+    /// it so a future revive can resume via `session/load`. Updates in-memory
+    /// metadata + write-behind store; no broadcast (the id isn't rendered, and
+    /// the status/lifecycle events already drive the UI). Unknown ids are
+    /// ignored (matches `set_status`).
+    pub fn set_agent_session_id(&self, session_id: &str, agent_session_id: String) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.meta.agent_session_id = Some(agent_session_id.clone());
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::SetAgentSessionId {
+                session_id: session_id.to_owned(),
+                agent_session_id,
+            });
+        }
     }
 
     /// Update a session's status, emit a `Lifecycle` event, refresh the list.

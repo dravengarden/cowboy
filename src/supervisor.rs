@@ -14,8 +14,8 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 use crate::acp::{self, AgentCommand};
-use crate::core::{Hub, SessionOrigin};
-use crate::provider;
+use crate::core::{Hub, SessionOrigin, Status};
+use crate::provider::{self, LaunchSpec};
 
 /// Spawns and tracks agent sessions; routes commands to their threads.
 pub struct Supervisor {
@@ -38,7 +38,10 @@ impl Supervisor {
         let initial = hub
             .session_list()
             .iter()
-            .filter_map(|m| m.id.strip_prefix("sess-").and_then(|n| n.parse::<u64>().ok()))
+            .filter_map(|m| {
+                m.id.strip_prefix("sess-")
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
             .max()
             .map_or(1, |max| max + 1);
         Self {
@@ -93,17 +96,43 @@ impl Supervisor {
             origin,
         );
 
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.senders.lock().unwrap().insert(id.clone(), tx);
-
-        let hub = self.hub.clone();
-        let thread_id = id.clone();
-        std::thread::Builder::new()
-            .name(format!("agent-{id}"))
-            .spawn(move || acp::run_agent(&spec, &thread_id, cwd, rx, &hub))
-            .map_err(|e| format!("spawning agent thread: {e}"))?;
-
+        // Fresh session — no agent id to resume.
+        self.spawn_agent(&id, &spec, cwd, None)?;
         Ok(id)
+    }
+
+    /// Spawn an agent thread for `session_id` and register its command sender.
+    /// The single place that starts an [`acp::run_agent`] OS thread — both the
+    /// fresh [`Self::new_session`] path and the [`Self::revive`] path go
+    /// through here, differing only in `resume` (the agent's prior id to
+    /// re-attach via `session/load`, or `None` for a blank session).
+    ///
+    /// Idempotent: if a live sender already exists (a concurrent caller won the
+    /// race), this is a no-op. The Hub session must already exist.
+    ///
+    /// # Errors
+    /// If the OS thread cannot be spawned.
+    fn spawn_agent(
+        &self,
+        session_id: &str,
+        spec: &LaunchSpec,
+        cwd: PathBuf,
+        resume: Option<String>,
+    ) -> Result<(), String> {
+        let mut senders = self.senders.lock().unwrap();
+        if senders.contains_key(session_id) {
+            return Ok(()); // already live
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let hub = self.hub.clone();
+        let spec = spec.clone();
+        let thread_id = session_id.to_owned();
+        std::thread::Builder::new()
+            .name(format!("agent-{session_id}"))
+            .spawn(move || acp::run_agent(&spec, &thread_id, cwd, resume, rx, &hub))
+            .map_err(|e| format!("spawning agent thread: {e}"))?;
+        senders.insert(session_id.to_owned(), tx);
+        Ok(())
     }
 
     /// Forward a command to a session's agent thread.
@@ -155,17 +184,18 @@ impl Supervisor {
             .map_err(|_| "session ended".to_owned())
     }
 
-    /// Spawn a fresh agent thread for a session that exists in the Hub but has
-    /// no live sender (typically one restored after a restart). Reuses the
-    /// persisted provider + cwd. Idempotent: if a concurrent caller revived it
-    /// first, this is a no-op.
+    /// Spawn an agent thread for a session that exists in the Hub but has no
+    /// live sender (one restored after a restart, or whose agent crashed).
+    /// Reuses the persisted provider + cwd, and hands the agent its prior
+    /// `agent_session_id` so it resumes the conversation via `session/load`
+    /// (design §7) — the prior context is restored, not dropped, when the
+    /// provider supports it. Idempotent: a no-op if a concurrent caller
+    /// revived it first.
     ///
     /// # Errors
     /// If the session id is unknown to the Hub, the provider is no longer
     /// registered, or the OS thread cannot be spawned.
     fn revive(&self, session_id: &str) -> Result<(), String> {
-        // Read the persisted shape BEFORE taking the senders lock — the Hub
-        // has its own lock; keep the two un-nested.
         let meta = self
             .hub
             .session_list()
@@ -176,21 +206,14 @@ impl Supervisor {
             .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
         let cwd = PathBuf::from(&meta.cwd);
 
-        let mut senders = self.senders.lock().unwrap();
-        if senders.contains_key(session_id) {
-            return Ok(()); // a concurrent caller already revived it
-        }
-        let (tx, rx) = mpsc::unbounded_channel();
-        let hub = self.hub.clone();
-        let thread_id = session_id.to_owned();
-        std::thread::Builder::new()
-            .name(format!("agent-{session_id}"))
-            .spawn(move || acp::run_agent(&spec, &thread_id, cwd, rx, &hub))
-            .map_err(|e| format!("spawning agent thread: {e}"))?;
-        senders.insert(session_id.to_owned(), tx);
+        // Reflect the reconnect immediately so the UI shows "starting" rather
+        // than a stale "exited" while the agent re-handshakes (a few seconds).
+        self.hub.set_status(session_id, Status::Starting, None);
+        self.spawn_agent(session_id, &spec, cwd, meta.agent_session_id.clone())?;
         tracing::info!(
             session = session_id,
-            "revived restored session with a fresh agent (post-restart; prior in-agent context not replayed)"
+            resume = ?meta.agent_session_id,
+            "revived session (session/load when the agent's prior id is known)"
         );
         Ok(())
     }

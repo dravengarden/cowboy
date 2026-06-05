@@ -16,11 +16,12 @@ pub struct LaunchSpec {
     pub command: String,
     /// Arguments passed to the executable.
     pub args: Vec<String>,
-    /// Whether the agent can resume a prior session via `session/load`
-    /// (design §7 restart recovery). Informational until resume lands.
-    #[allow(dead_code)]
-    pub resume: bool,
 }
+
+// Note: whether an agent can resume via `session/load` (design §7) is read at
+// runtime from its `initialize` response (`agent_capabilities.load_session` —
+// see `crate::acp::agent_main`), which is authoritative, so it isn't duplicated
+// as a static flag here.
 
 /// Built-in providers. claude-code and codex first (design build order).
 ///
@@ -40,7 +41,6 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
             id: "claude-code",
             command: "npx".into(),
             args: vec!["-y".into(), "@agentclientprotocol/claude-agent-acp".into()],
-            resume: true,
         },
     );
     m.insert(
@@ -49,7 +49,6 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
             id: "codex",
             command: "npx".into(),
             args: vec!["-y".into(), "@zed-industries/codex-acp".into()],
-            resume: false,
         },
     );
     m

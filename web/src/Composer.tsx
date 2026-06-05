@@ -96,7 +96,10 @@ export function Composer({
   const busy = status === "busy";
   const starting = status === "starting";
   const dead = status === "exited" || status === "crashed";
-  const sendable = !!text.trim() && !dead;
+  // A dead session is still sendable: sending resumes it (the daemon revives
+  // the agent via session/load — see supervisor.rs). Matches Zed, where a
+  // thread is never permanently unusable just because its agent process ended.
+  const sendable = !!text.trim();
 
   // Pull the agent-advertised options for this session, if known. Sorted in
   // a fixed display order so dropdowns don't flicker between
@@ -184,8 +187,7 @@ export function Composer({
         onSubmit={submit}
         sessionId={sessionId}
         commands={(): AvailableCommand[] => availableCommands}
-        placeholder={dead ? "Session ended" : "Message the agent…"}
-        disabled={dead}
+        placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
         vim={vim}
       />
       {/* Action row below the input: slash-command / @-reference triggers on

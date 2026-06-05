@@ -77,7 +77,7 @@ impl Store {
     /// If a query fails or a payload is unparseable.
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, provider, cwd, title, origin, status, next_seq, created_at \
+            "SELECT id, provider, cwd, title, origin, status, agent_session_id, next_seq, created_at \
              FROM sessions ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -150,6 +150,27 @@ impl Store {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session status {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the downstream agent's own session id (the ACP id it returns
+    /// from `session/new`). Stored so a revived agent can resume the prior
+    /// conversation via `session/load` instead of starting blank. Mirrors the
+    /// other `update_*` helpers — only this column and `updated_at` move.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_agent_session_id(
+        &self,
+        session_id: &str,
+        agent_session_id: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE sessions SET agent_session_id = $1, updated_at = now() WHERE id = $2")
+            .bind(agent_session_id)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
         Ok(())
     }
 
@@ -265,6 +286,7 @@ struct SessionRow {
     title: String,
     origin: String,
     status: String,
+    agent_session_id: Option<String>,
     next_seq: i64,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
@@ -279,6 +301,7 @@ impl SessionRow {
             title: self.title,
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
+            agent_session_id: self.agent_session_id,
         }
     }
 }

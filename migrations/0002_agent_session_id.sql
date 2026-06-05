@@ -1,0 +1,14 @@
+-- Resume support (design §7).
+--
+-- Record the downstream agent's OWN session id (the id claude-agent-acp /
+-- codex-acp assigns at `session/new`). When a cowboy session's agent process
+-- is gone — after a daemon restart, or an agent crash — a revived agent can
+-- re-attach the prior conversation via ACP `session/load(agent_session_id)`
+-- instead of opening a blank `session/new`. That is exactly how Zed keeps a
+-- thread resumable forever.
+--
+-- NULL until the agent's first `session/new` returns an id, and stays NULL for
+-- providers that don't support resume (the agent simply starts fresh on
+-- revive). Adding it nullable means no backfill: pre-existing rows resume as
+-- fresh sessions, same as before this migration.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_session_id text;

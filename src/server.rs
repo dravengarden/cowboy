@@ -106,6 +106,14 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
             StoreWrite::UpdateTitle { session_id, title } => {
                 store.update_title(session_id, title).await
             }
+            StoreWrite::SetAgentSessionId {
+                session_id,
+                agent_session_id,
+            } => {
+                store
+                    .update_agent_session_id(session_id, agent_session_id)
+                    .await
+            }
             StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         };
         if let Err(e) = result {

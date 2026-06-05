@@ -19,9 +19,10 @@ use std::rc::Rc;
 
 use agent_client_protocol::{
     Agent, CancelNotification, Client, ClientSideConnection, ContentBlock, Error, ExtRequest,
-    InitializeRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionModeId,
-    SessionNotification, SetSessionModeRequest, V1,
+    InitializeRequest, LoadSessionRequest, NewSessionRequest, PermissionOptionId,
+    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionId, SessionModeId, SessionNotification, SetSessionModeRequest,
+    V1,
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -70,6 +71,13 @@ struct CowboyClient {
     session_id: String,
     pending: Pending,
     next_perm: Rc<Cell<u64>>,
+    /// While `true`, incoming `session/update` notifications are dropped rather
+    /// than pushed to the Hub. Set only around a `session/load` resume: the
+    /// agent replays the whole prior conversation as updates, but cowboy's own
+    /// persisted log is the source of truth and already holds that history —
+    /// re-pushing it would duplicate every message. `load_session` is used
+    /// purely to re-warm the agent's internal context, not to rebuild ours.
+    suppress_updates: Rc<Cell<bool>>,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -112,6 +120,11 @@ impl Client for CowboyClient {
     }
 
     async fn session_notification(&self, args: SessionNotification) -> Result<(), Error> {
+        // During a `session/load` resume the agent replays prior turns; drop
+        // them — cowboy already has this history persisted (see field docs).
+        if self.suppress_updates.get() {
+            return Ok(());
+        }
         // Pass the whole ACP SessionUpdate through as JSON (design §5): message
         // / thought chunks, tool calls + updates, plan, available commands, and
         // mode all reach the UI without per-variant re-modelling.
@@ -125,10 +138,16 @@ impl Client for CowboyClient {
 
 /// OS-thread entry point: run one agent session to completion on a
 /// current-thread runtime + `LocalSet`. A failure marks the session crashed.
+///
+/// `resume` carries the downstream agent's own session id when this is a
+/// revive of a session whose prior agent process is gone: if the agent
+/// supports it, the conversation is re-attached via `session/load` instead of
+/// a blank `session/new`. `None` ⇒ a brand-new session.
 pub fn run_agent(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
+    resume: Option<String>,
     cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
 ) {
@@ -143,7 +162,7 @@ pub fn run_agent(
         }
     };
     let local = tokio::task::LocalSet::new();
-    let result = local.block_on(&rt, agent_main(spec, session_id, cwd, cmd_rx, hub));
+    let result = local.block_on(&rt, agent_main(spec, session_id, cwd, resume, cmd_rx, hub));
     match result {
         Ok(()) => hub.set_status(session_id, Status::Exited, None),
         Err(e) => {
@@ -158,6 +177,7 @@ async fn agent_main(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
+    resume: Option<String>,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
 ) -> Result<()> {
@@ -204,11 +224,11 @@ async fn agent_main(
             let rewritten = if let Ok(mut val) =
                 serde_json::from_str::<serde_json::Value>(line.trim_end())
             {
-                let method = val.get("method").and_then(|m| m.as_str()).map(str::to_owned);
-                let needs_rewrite = matches!(
-                    method.as_deref(),
-                    Some("_session/set_config_option")
-                );
+                let method = val
+                    .get("method")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_owned);
+                let needs_rewrite = matches!(method.as_deref(), Some("_session/set_config_option"));
                 if needs_rewrite {
                     // Snake-case wire name per claude-agent-acp's SDK
                     // (`AGENT_METHODS.session_set_config_option =
@@ -282,8 +302,7 @@ async fn agent_main(
                             count = count,
                             "intercept: config_option_update"
                         );
-                        hub_for_intercept
-                            .set_config_options(&session_id_for_intercept, opts);
+                        hub_for_intercept.set_config_options(&session_id_for_intercept, opts);
                     }
                     // Swallow — the crate's strict decoder would log a
                     // useless rpc error if we forwarded this notification.
@@ -299,11 +318,13 @@ async fn agent_main(
     let incoming = bridge_reader.compat();
 
     let pending: Pending = Rc::new(RefCell::new(HashMap::new()));
+    let suppress_updates = Rc::new(Cell::new(false));
     let client = CowboyClient {
         hub: hub.clone(),
         session_id: session_id.to_owned(),
         pending: pending.clone(),
         next_perm: Rc::new(Cell::new(0)),
+        suppress_updates: suppress_updates.clone(),
     };
 
     let (conn, io_task) = ClientSideConnection::new(client, outgoing, incoming, |fut| {
@@ -316,31 +337,73 @@ async fn agent_main(
         }
     });
 
-    conn.initialize(InitializeRequest {
-        protocol_version: V1,
-        client_capabilities: agent_client_protocol::ClientCapabilities::default(),
-        meta: None,
-    })
-    .await
-    .context("initialize")?;
-
-    let session = conn
-        .new_session(NewSessionRequest {
-            cwd,
-            mcp_servers: vec![],
+    let init = conn
+        .initialize(InitializeRequest {
+            protocol_version: V1,
+            client_capabilities: agent_client_protocol::ClientCapabilities::default(),
             meta: None,
         })
         .await
-        .context("new_session")?;
-    let acp_id = session.session_id;
-    tracing::info!(session = session_id, acp_id = %acp_id.0, "session created");
+        .context("initialize")?;
+    let agent_can_load = init.agent_capabilities.load_session;
+
+    // Establish the agent session. Resume the agent's own memory via
+    // `session/load` when (a) we were handed its prior id and (b) the agent
+    // advertises load support; otherwise open a fresh `session/new`. On a
+    // fresh start, persist the agent's assigned id so a later revive can
+    // resume it. A failed load degrades gracefully to fresh (context lost, but
+    // the session stays usable) — matching Zed's always-resumable thread.
+    let mut acp_id: Option<SessionId> = None;
+    let mut modes = None;
+    if let Some(resume_id) = resume.filter(|_| agent_can_load) {
+        let load_id = SessionId(Arc::from(resume_id.as_str()));
+        suppress_updates.set(true);
+        let loaded = conn
+            .load_session(LoadSessionRequest {
+                session_id: load_id.clone(),
+                cwd: cwd.clone(),
+                mcp_servers: vec![],
+                meta: None,
+            })
+            .await;
+        suppress_updates.set(false);
+        match loaded {
+            Ok(resp) => {
+                tracing::info!(session = session_id, acp_id = %resume_id, "session resumed via session/load");
+                acp_id = Some(load_id);
+                modes = resp.modes;
+            }
+            Err(e) => {
+                tracing::warn!(session = session_id, error = ?e, "session/load failed; starting fresh");
+            }
+        }
+    }
+    let acp_id = match acp_id {
+        Some(id) => id,
+        None => {
+            let session = conn
+                .new_session(NewSessionRequest {
+                    cwd: cwd.clone(),
+                    mcp_servers: vec![],
+                    meta: None,
+                })
+                .await
+                .context("new_session")?;
+            // Persist the agent's own id so a future revive can resume this
+            // exact conversation rather than opening a blank one.
+            hub.set_agent_session_id(session_id, session.session_id.0.to_string());
+            tracing::info!(session = session_id, acp_id = %session.session_id.0, "session created");
+            modes = session.modes;
+            session.session_id
+        }
+    };
     hub.set_status(session_id, Status::Running, None);
 
     // Match Zed's claude-acp default UX: open at `bypassPermissions` if the
     // upstream advertises it. This is what most users want for an agent
     // panel — explicit permission prompts dominate the UX otherwise — and
     // it matches the v0 spec the user is iterating against.
-    if let Some(modes) = session.modes.as_ref() {
+    if let Some(modes) = modes.as_ref() {
         let want = "bypassPermissions";
         let has = modes
             .available_modes
@@ -478,19 +541,14 @@ async fn agent_main(
                     match conn.ext_method(req).await {
                         Ok(resp) => {
                             // Response carries `{ configOptions: [...] }`.
-                            if let Ok(val) =
-                                serde_json::from_str::<serde_json::Value>(resp.get())
-                            {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(resp.get()) {
                                 if let Some(opts) = val.get("configOptions").cloned() {
                                     hub.set_config_options(&sid, opts);
                                 }
                             }
                         }
                         Err(e) => {
-                            hub.broadcast_error(
-                                Some(sid.clone()),
-                                format!("set {config_id}: {e}"),
-                            );
+                            hub.broadcast_error(Some(sid.clone()), format!("set {config_id}: {e}"));
                         }
                     }
                 });

@@ -90,7 +90,12 @@ function handle(msg: Outbound): void {
       const prevStatus = new Map<string, Status>(state.sessions.map((s) => [s.id, s.status]));
       for (const s of msg.sessions) {
         const prev = prevStatus.get(s.id);
-        if (s.status === "running" && prev !== "running") inFlight.delete(s.id);
+        // Clear the in-flight guard on a true turn-end (busy → running) or on
+        // death. NOT on starting → running: a revive (resuming a dead session)
+        // passes through starting → running while our dispatched prompt is
+        // still queued in the daemon, so clearing there would prematurely
+        // release the next queued prompt and overlap turns.
+        if (s.status === "running" && prev === "busy") inFlight.delete(s.id);
         if (s.status === "exited" || s.status === "crashed") inFlight.delete(s.id);
       }
       let queues = state.queues;
@@ -184,7 +189,13 @@ function nextQueuedId(): string {
 }
 
 function canDispatch(sessionId: string, status: Status): boolean {
-  return status === "running" && !inFlight.has(sessionId);
+  // "running" is the normal idle-ready state. "exited"/"crashed" are also
+  // dispatchable: sending to a dead session is what resumes it — the daemon
+  // revives the agent (session/load) on receiving the prompt. Without this a
+  // prompt to a dead session would sit in the queue forever (nothing would
+  // ever flip it to "running" first).
+  const resumable = status === "running" || status === "exited" || status === "crashed";
+  return resumable && !inFlight.has(sessionId);
 }
 
 function dispatchPrompt(sessionId: string, text: string): void {
