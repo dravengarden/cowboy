@@ -15,7 +15,7 @@ use anyhow::Context as _;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path, Query, State};
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
@@ -252,7 +252,18 @@ struct Assets;
 
 /// Serve an embedded asset by path, falling back to `index.html` so the SPA
 /// owns client-side routing. Missing `index.html` (UI not built) → 404.
-async fn static_handler(uri: Uri) -> Response {
+///
+/// Caching: rust-embed computes a per-file SHA256 at compile time, which we use
+/// as a content ETag (stable across rebuilds when the bytes are unchanged). The
+/// cache policy is split by whether the filename is content-addressed:
+///   - `/assets/*` — Vite emits content-hashed names, so the bytes behind a name
+///     never change → `immutable` with a one-year max-age, never revalidated.
+///   - everything else (index.html, sw.js, manifest, favicon, icons) —
+///     `no-cache`: the browser may store it but MUST revalidate via the ETag on
+///     every use, so a redeploy is picked up immediately while unchanged files
+///     cost only a 304. This is what stops a redeployed favicon/icon from being
+///     pinned to a stale copy in the browser's HTTP cache.
+async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
     let requested = uri.path().trim_start_matches('/');
     let requested = if requested.is_empty() {
         "index.html"
@@ -267,17 +278,43 @@ async fn static_handler(uri: Uri) -> Response {
         Some(f) => (requested, Some(f)),
         None => ("index.html", Assets::get("index.html")),
     };
-    match file {
-        Some(content) => {
-            let mime = mime_guess::from_path(name).first_or_octet_stream();
-            (
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                Body::from(content.data),
-            )
-                .into_response()
+    let Some(content) = file else {
+        return (StatusCode::NOT_FOUND, "UI not built").into_response();
+    };
+
+    // Content ETag from rust-embed's compile-time SHA256 (first 16 bytes is
+    // ample to avoid collisions for a handful of static files).
+    let h = content.metadata.sha256_hash();
+    let etag = format!(
+        "\"{:016x}{:016x}\"",
+        u64::from_be_bytes(h[0..8].try_into().expect("8 bytes")),
+        u64::from_be_bytes(h[8..16].try_into().expect("8 bytes")),
+    );
+
+    // Conditional request: the browser echoes our ETag in If-None-Match; if it
+    // still matches, skip the body. `contains` (not strict equality) tolerates a
+    // comma-list or a `W/` weak prefix some clients send.
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if inm.contains(etag.as_str()) {
+            return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
         }
-        None => (StatusCode::NOT_FOUND, "UI not built").into_response(),
     }
+
+    let cache_control = if name.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    let mime = mime_guess::from_path(name).first_or_octet_stream();
+    (
+        [
+            (header::CONTENT_TYPE, mime.as_ref()),
+            (header::CACHE_CONTROL, cache_control),
+            (header::ETAG, etag.as_str()),
+        ],
+        Body::from(content.data),
+    )
+        .into_response()
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
