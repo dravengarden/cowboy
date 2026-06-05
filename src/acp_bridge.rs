@@ -463,6 +463,22 @@ pub async fn run(args: AcpBridgeArgs) -> Result<()> {
         "cowboy acp-bridge starting",
     );
 
+    // Fail fast on an unknown provider id. Each Zed `agent_servers` entry binds
+    // one provider via `--provider` (e.g. a "Claude Code" entry and a "Codex"
+    // entry both pointing at this bridge). A typo there would otherwise start
+    // cleanly and only error on the first `session/new` — a lazy failure
+    // surfaced mid-conversation. Bailing here makes Zed show the launch failure
+    // immediately, with the valid ids in stderr.
+    if crate::provider::lookup(&args.provider).is_none() {
+        let mut known: Vec<&str> = crate::provider::builtin().into_keys().collect();
+        known.sort_unstable();
+        anyhow::bail!(
+            "unknown provider {:?}; known providers: {}",
+            args.provider,
+            known.join(", "),
+        );
+    }
+
     // Capture the daemon URL before `args` is partially moved into `Bridge`.
     let daemon_url = args.daemon_url.clone();
 
