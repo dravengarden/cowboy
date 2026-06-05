@@ -10,10 +10,11 @@
 // Heavy stuff (Prism, language defs) is dynamic-imported by RSH on first
 // use so the initial page load stays light.
 
-import { memo, type ReactNode } from "react";
+import { memo, type ReactNode, useMemo, useState } from "react";
 import { Box, Link, useTheme } from "@mui/material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ImageLightbox } from "./_shell";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   oneDark,
@@ -53,6 +54,23 @@ SyntaxHighlighter.registerLanguage("ts", typescript);
 SyntaxHighlighter.registerLanguage("yaml", yaml);
 SyntaxHighlighter.registerLanguage("yml", yaml);
 
+// Markdown images in document order, so the `img` override can find a clicked
+// thumbnail's index and the lightbox can page through the whole message's
+// images. Only `![alt](url)` syntax — cowboy doesn't enable raw HTML, so there
+// are no `<img>` tags to miss.
+const IMAGE_RE = /!\[([^\]]*)\]\(\s*(<[^>]+>|[^()\s]+)\s*(?:"[^"]*")?\)/g;
+function parseImages(md: string): { src: string; alt: string }[] {
+  const out: { src: string; alt: string }[] = [];
+  for (const m of md.matchAll(IMAGE_RE)) {
+    const alt = m[1] ?? "";
+    // `<url>` angle-bracket form strips the brackets.
+    const raw = m[2] ?? "";
+    const src = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
+    if (src) out.push({ src, alt });
+  }
+  return out;
+}
+
 /// Render markdown text. Memoized on `text` so streamed updates don't
 /// re-parse from scratch on every chunk (React reconciliation already helps,
 /// but the markdown AST is the expensive bit).
@@ -73,7 +91,38 @@ const MarkdownImpl = memo(function MarkdownImpl({
   const theme = useTheme();
   const codeTheme = theme.palette.mode === "dark" || invert ? oneDark : oneLight;
 
+  // Images render as capped thumbnails in the bubble; tapping opens the shared
+  // fullscreen lightbox. Gallery = this message's images (per-message scope), so
+  // swipe/←→ pages within the one message.
+  const galleryImages = useMemo(() => parseImages(text), [text]);
+  const [lbIndex, setLbIndex] = useState<number | null>(null);
+
   const components: Components = {
+    img({ src, alt }) {
+      const url = typeof src === "string" ? src : "";
+      const i = galleryImages.findIndex((g) => g.src === url);
+      return (
+        <Box
+          component="img"
+          src={url}
+          alt={alt ?? ""}
+          loading="lazy"
+          onClick={() => setLbIndex(i >= 0 ? i : 0)}
+          sx={{
+            display: "block",
+            maxWidth: "100%",
+            maxHeight: 200,
+            width: "auto",
+            my: 0.5,
+            borderRadius: 1,
+            border: 1,
+            borderColor: "divider",
+            objectFit: "contain",
+            cursor: "zoom-in",
+          }}
+        />
+      );
+    },
     // Inline `code` uses a subtle tint; fenced blocks get Prism.
     code({ className, children, ...rest }) {
       const inline = !className?.startsWith("language-");
@@ -176,17 +225,28 @@ const MarkdownImpl = memo(function MarkdownImpl({
   };
 
   return (
-    <Box
-      sx={{
-        wordBreak: "break-word",
-        "& :first-child": { mt: 0 },
-        "& :last-child": { mb: 0 },
-      }}
-    >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {text}
-      </ReactMarkdown>
-    </Box>
+    <>
+      <Box
+        sx={{
+          wordBreak: "break-word",
+          "& :first-child": { mt: 0 },
+          "& :last-child": { mb: 0 },
+        }}
+      >
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {text}
+        </ReactMarkdown>
+      </Box>
+      {/* plate={false}: chat images are screenshots/photos, not white-bg
+          diagrams, so no white framing behind them. */}
+      <ImageLightbox
+        images={galleryImages}
+        index={lbIndex}
+        onIndex={setLbIndex}
+        onClose={() => setLbIndex(null)}
+        plate={false}
+      />
+    </>
   );
 });
 
