@@ -197,8 +197,22 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         }
         break;
       }
-      case "turn_end":
+      case "turn_end": {
+        // The turn is over, so nothing from it is still "in flight". Some agents
+        // end a turn without emitting the final tool_call_update (or it races the
+        // stop), leaving a tool stuck on `pending`/`in_progress`. Settle those to
+        // a terminal state here so (a) the card stops showing a live chip after
+        // the turn, and (b) the "agent is working" indicator — which keys off any
+        // in-flight tool to survive status races — doesn't spin forever on a
+        // replayed/abandoned turn. `completed` is the likeliest truth for a tool
+        // the agent moved past; a genuinely failed one would have reported it.
+        for (const it of items) {
+          if (it.kind === "tool" && (it.status === "pending" || it.status === "in_progress")) {
+            it.status = "completed";
+          }
+        }
         break;
+      }
     }
   }
   // Drop thought items that never accrued any text. An `agent_thought_chunk`

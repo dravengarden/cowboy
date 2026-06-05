@@ -679,21 +679,38 @@ export function Transcript({
   const permissionOpen =
     pendingPermission !== undefined && pendingReqId !== reviewClosedFor;
   const busy = status === "busy";
+  const dead = status === "exited" || status === "crashed";
+  // "Working" is broader than the raw `busy` status: a tool call still in flight
+  // means the agent is mid-work even when the session status momentarily reads
+  // "running". The daemon flips status → running the instant a turn's prompt()
+  // resolves, and reconnects re-broadcast status before replaying the timeline,
+  // so a pending/in_progress tool can coexist with a non-busy status for a beat.
+  // Keying the indicator off status alone made it blink out then (the reported
+  // bug). `derive` settles tools to terminal on turn_end, so this can't latch on
+  // a finished turn; the `dead` guard stops it latching on a crashed one.
+  const toolInFlight =
+    !dead &&
+    items.some(
+      (it) =>
+        it.kind === "tool" &&
+        (it.status === "pending" || it.status === "in_progress"),
+    );
+  const working = busy || toolInFlight;
   const lastIdx = items.length - 1;
   const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
-  // The last item is "streaming" if the session is busy AND it's an
+  // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
   const lastIsStreamingAssistant =
-    busy &&
+    working &&
     !!lastItem &&
     ((lastItem.kind === "message" && lastItem.role === "assistant") ||
       lastItem.kind === "thought");
-  // Show the trailing "dots" row when busy AND we're NOT already showing
+  // Show the trailing "dots" row when working AND we're NOT already showing
   // a caret-tipped streaming assistant bubble at the bottom (i.e. between
   // sending a prompt and the first chunk landing, or after a tool call
   // completes while waiting for the model to start text again).
-  const showTrailingDots = busy && !lastIsStreamingAssistant;
+  const showTrailingDots = working && !lastIsStreamingAssistant;
   // The virtualizer's row count includes a phantom "dots" row at the end
   // when we're showing it. Keeping it as a virtualized row (rather than a
   // sibling) means scroll-stickiness Just Works.
@@ -826,7 +843,7 @@ export function Transcript({
           {virtualizer.getVirtualItems().map((vi) => {
             const isTrailingDots = showTrailingDots && vi.index === items.length;
             const item = isTrailingDots ? undefined : items[vi.index];
-            const streaming = busy && vi.index === lastIdx;
+            const streaming = working && vi.index === lastIdx;
             return (
               <Box
                 key={vi.key}
