@@ -25,10 +25,12 @@ import {
 } from "@mui/material";
 import {
   AlternateEmail,
+  AttachFile,
   ChevronRight,
   Close,
   EditOutlined,
   ExpandMore,
+  InsertDriveFileOutlined,
   Send,
   Stop,
   Tune,
@@ -36,6 +38,7 @@ import {
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { useVimSetting } from "./vimSetting";
+import { type Attachment, filesToAttachments } from "./attachments";
 import {
   clearQueue,
   editQueued,
@@ -100,7 +103,11 @@ export function Composer({
   status: Status;
 }): React.JSX.Element {
   const [text, setText] = useState("");
+  // Staged image / file attachments — previewed above the editor and sent as
+  // ACP content blocks alongside the text (see attachments.ts). Cleared on send.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const editorRef = useRef<ComposerEditorHandle>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { configOptions, queues, sessions, timelines } = useStore();
   const queue = queues.get(sessionId) ?? [];
   // The active session's metadata, surfaced read-only inside the options
@@ -128,7 +135,22 @@ export function Composer({
   // A dead session is still sendable: sending resumes it (the daemon revives
   // the agent via session/load — see supervisor.rs). Matches Zed, where a
   // thread is never permanently unusable just because its agent process ended.
-  const sendable = !!text.trim();
+  // An attachment-only prompt (e.g. just a pasted screenshot) is also sendable.
+  const sendable = !!text.trim() || attachments.length > 0;
+
+  // Read picked / pasted files into ACP content blocks and stage them. Async
+  // (FileReader), so previews appear once each file is encoded; unreadable
+  // files are silently dropped (filesToAttachments filters them).
+  function addFiles(files: File[]): void {
+    if (files.length === 0) return;
+    void filesToAttachments(files).then((added) => {
+      if (added.length > 0) setAttachments((prev) => [...prev, ...added]);
+    });
+  }
+
+  function removeAttachment(id: string): void {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
 
   // Pull the agent-advertised options for this session, if known. Sorted in
   // a fixed display order so dropdowns don't flicker between
@@ -169,11 +191,10 @@ export function Composer({
   function submit(): void {
     if (!sendable) return;
     const trimmed = text.trimEnd();
-    if (!trimmed) return;
     // submitPrompt sends straight through when the session can take a turn now,
     // and otherwise stacks the prompt on the queue (busy / starting / a turn of
     // ours still in flight) — the daemon can't run a second concurrent turn.
-    submitPrompt(sessionId, status, trimmed);
+    submitPrompt(sessionId, status, trimmed, attachments);
     // Clear the CodeMirror document imperatively, not just via `value=""`: the
     // editor's 200ms typing latch defers prop-driven clears when you submit
     // right after typing, leaving the sent text lingering. See clear() in
@@ -181,6 +202,7 @@ export function Composer({
     // value now matches the empty doc, so no second dispatch).
     editorRef.current?.clear();
     setText("");
+    setAttachments([]);
   }
 
   return (
@@ -212,6 +234,25 @@ export function Composer({
       {queue.length > 0 && (
         <QueuedMessages sessionId={sessionId} queue={queue} status={status} />
       )}
+      {/* Staged attachments (image thumbnails / file chips) sit above the editor
+          so they read as "what will be sent with this message". */}
+      {attachments.length > 0 && (
+        <AttachmentPreviews attachments={attachments} onRemove={removeAttachment} />
+      )}
+      {/* Hidden multi-file picker driven by the paperclip button. `accept` is
+          left open so any file type can be attached (images embed inline, other
+          files ride as ACP resource blocks — see attachments.ts). */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e): void => {
+          addFiles(Array.from(e.target.files ?? []));
+          // Reset so picking the same file twice in a row still fires change.
+          e.target.value = "";
+        }}
+      />
       {/* CodeMirror-6 editor styled as a MUI outlined field — replaces the
           <textarea> (which forced the iOS keyboard bar) and folds the `@`/`/`
           pickers into CM autocomplete. */}
@@ -224,6 +265,7 @@ export function Composer({
         commands={(): AvailableCommand[] => availableCommands}
         placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
         vim={vim}
+        onPasteFiles={addFiles}
         onEscape={(): boolean => {
           // Esc cancels a running turn (via the confirm modal), but only when a
           // turn is actually in flight — otherwise leave Esc to the editor. In
@@ -264,6 +306,18 @@ export function Composer({
               onClick={(): void => editorRef.current?.insertTrigger("@")}
             >
               <AlternateEmail />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Attach image or file">
+          <span>
+            <IconButton
+              aria-label="attach image or file"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => fileInputRef.current?.click()}
+            >
+              <AttachFile />
             </IconButton>
           </span>
         </Tooltip>
@@ -437,6 +491,111 @@ export function Composer({
   );
 }
 
+// Staged-attachment strip shown above the editor. Image attachments render as
+// capped thumbnails; other files as a labelled chip. Each carries a remove
+// button. Horizontally scrollable so a handful of attachments never wraps the
+// composer or pushes the editor down (the editor must stay reachable on a
+// phone). The strip scrolls inside the bar — not flush to the device bottom
+// edge — so the iOS bottom-edge gesture doesn't eat the scroll (ui.md §7).
+function AttachmentPreviews({
+  attachments,
+  onRemove,
+}: {
+  attachments: Attachment[];
+  onRemove: (id: string) => void;
+}): React.JSX.Element {
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      sx={{
+        mb: 1,
+        pb: 0.5,
+        overflowX: "auto",
+        scrollbarWidth: "thin",
+        "&::-webkit-scrollbar": { height: 6 },
+      }}
+    >
+      {attachments.map((a) => (
+        <Box key={a.id} sx={{ position: "relative", flexShrink: 0 }}>
+          {a.isImage && a.previewUrl ? (
+            <Box
+              component="img"
+              src={a.previewUrl}
+              alt={a.name}
+              sx={{
+                width: 56,
+                height: 56,
+                objectFit: "cover",
+                borderRadius: 1,
+                border: 1,
+                borderColor: "divider",
+                display: "block",
+              }}
+            />
+          ) : (
+            <Stack
+              direction="row"
+              spacing={0.75}
+              alignItems="center"
+              sx={{
+                height: 56,
+                maxWidth: 180,
+                px: 1,
+                borderRadius: 1,
+                border: 1,
+                borderColor: "divider",
+                bgcolor: "action.hover",
+              }}
+            >
+              <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
+              <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
+                {a.name}
+              </Typography>
+            </Stack>
+          )}
+          <IconButton
+            aria-label={`remove ${a.name}`}
+            size="small"
+            onClick={(): void => onRemove(a.id)}
+            sx={{
+              position: "absolute",
+              top: -8,
+              right: -8,
+              width: 22,
+              height: 22,
+              bgcolor: "background.paper",
+              border: 1,
+              borderColor: "divider",
+              "&:hover": { bgcolor: "action.hover" },
+            }}
+          >
+            <Close sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+
+// Compact, read-only attachment summary for a queued prompt row — a paperclip
+// glyph + count, so a queued message that carries images/files reads as such
+// without re-rendering full thumbnails in the cramped queue list.
+function QueuedAttachmentChips({
+  attachments,
+}: {
+  attachments: Attachment[];
+}): React.JSX.Element {
+  return (
+    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ color: "text.secondary", mt: 0.25 }}>
+      <AttachFile sx={{ fontSize: 14 }} />
+      <Typography variant="caption">
+        {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
+      </Typography>
+    </Stack>
+  );
+}
+
 // The Zed-style queue panel above the editor. A collapsible header ("N Queued
 // Messages" + Clear All) over a scroll-capped list of rows. Mirrors Zed's agent
 // panel: the queue is the staging area for prompts the busy agent can't take yet.
@@ -599,23 +758,28 @@ function QueuedRow({
   }
   return (
     <Paper variant="outlined" sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
-      <Typography
-        variant="body2"
-        sx={{
-          flex: 1,
-          minWidth: 0,
-          // Two-line clamp: keep rows compact so several queued prompts fit;
-          // the full text is editable via the pencil.
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
-      >
-        {message.text}
-      </Typography>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        {message.text && (
+          <Typography
+            variant="body2"
+            sx={{
+              // Two-line clamp: keep rows compact so several queued prompts fit;
+              // the full text is editable via the pencil.
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {message.text}
+          </Typography>
+        )}
+        {message.attachments.length > 0 && (
+          <QueuedAttachmentChips attachments={message.attachments} />
+        )}
+      </Box>
       <Stack direction="row" sx={{ flexShrink: 0 }}>
         {showSend && (
           <Tooltip title={idle ? "Send now" : "Send next"}>

@@ -104,9 +104,13 @@ export const ComposerEditor = forwardRef<
     // the key. In vim insert mode Esc is left to the vim extension (→ normal),
     // so the first Esc exits insert and the second reaches here (Zed-style).
     onEscape?: () => boolean;
+    // Called with image / file blobs found on a clipboard paste (a screenshot,
+    // a copied image). When it handles them the editor swallows the paste so
+    // no stray base64 / filename text lands in the document.
+    onPasteFiles?: (files: File[]) => void;
   }
 >(function ComposerEditor(
-  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, vim, onEscape },
+  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, vim, onEscape, onPasteFiles },
   ref,
 ): React.JSX.Element {
   const theme = useTheme();
@@ -119,6 +123,8 @@ export const ComposerEditor = forwardRef<
   commandsRef.current = commands;
   const onEscapeRef = useRef(onEscape);
   onEscapeRef.current = onEscape;
+  const onPasteFilesRef = useRef(onPasteFiles);
+  onPasteFilesRef.current = onPasteFiles;
   // Set by useVimExtension once the lazy vim module loads; read by the Escape
   // keymap to tell insert mode from normal/visual.
   const vimApiRef = useRef<VimApi | null>(null);
@@ -148,6 +154,20 @@ export const ComposerEditor = forwardRef<
   const extensions = useMemo<Extension[]>(
     () => [
       EditorView.lineWrapping,
+      // Clipboard paste of image / file blobs (a screenshot, a copied image)
+      // is lifted out to the composer as attachments; only a files-bearing
+      // paste is swallowed, so plain-text paste keeps CodeMirror's behaviour.
+      EditorView.domEventHandlers({
+        paste: (event): boolean => {
+          const cb = event.clipboardData;
+          if (!cb) return false;
+          const files = Array.from(cb.files);
+          if (files.length === 0 || !onPasteFilesRef.current) return false;
+          event.preventDefault();
+          onPasteFilesRef.current(files);
+          return true;
+        },
+      }),
       history(),
       placeholderExt(placeholder ?? ""),
       cmTheme(theme),

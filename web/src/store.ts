@@ -8,6 +8,7 @@
 // harmless.
 
 import { useSyncExternalStore } from "react";
+import { type Attachment, buildContentBlocks } from "./attachments";
 import type {
   ConfigOption,
   Envelope,
@@ -35,6 +36,9 @@ export interface ErrorNotice {
 export interface QueuedMessage {
   id: string;
   text: string;
+  /** Staged image / file attachments sent alongside the text as ACP content
+   *  blocks. Empty for a plain text prompt. */
+  attachments: Attachment[];
 }
 
 export interface State {
@@ -99,7 +103,8 @@ function handle(msg: Outbound): void {
         if (s.status === "exited" || s.status === "crashed") inFlight.delete(s.id);
       }
       let queues = state.queues;
-      const toSend: { sessionId: string; text: string }[] = [];
+      const toSend: QueuedMessage[] = [];
+      const toSendIds: string[] = [];
       for (const s of msg.sessions) {
         if (!canDispatch(s.id, s.status)) continue;
         const q = queues.get(s.id);
@@ -110,10 +115,14 @@ function handle(msg: Outbound): void {
         if (rest.length > 0) queues.set(s.id, rest);
         else queues.delete(s.id);
         inFlight.add(s.id); // claim the slot now so a same-tick re-broadcast can't double-send
-        toSend.push({ sessionId: s.id, text: head.text });
+        toSend.push(head);
+        toSendIds.push(s.id);
       }
       setState({ ...state, sessions: msg.sessions, queues });
-      for (const p of toSend) send({ type: "prompt", session_id: p.sessionId, text: p.text });
+      for (const [i, head] of toSend.entries()) {
+        const sessionId = toSendIds[i];
+        if (sessionId) send(promptCommand(sessionId, head.text, head.attachments));
+      }
       break;
     }
     case "snapshot": {
@@ -198,26 +207,43 @@ function canDispatch(sessionId: string, status: Status): boolean {
   return resumable && !inFlight.has(sessionId);
 }
 
-function dispatchPrompt(sessionId: string, text: string): void {
-  inFlight.add(sessionId);
-  send({ type: "prompt", session_id: sessionId, text });
+// Build the WS prompt command for a turn. With attachments, send the ACP
+// `content` block array (images / embedded file resources + a trailing text
+// block); without, the legacy text-only shape the daemon wraps in one Text
+// block. See attachments.ts + src/core.rs `Inbound::Prompt`.
+function promptCommand(sessionId: string, text: string, attachments: Attachment[]): Inbound {
+  const content = buildContentBlocks(text, attachments);
+  if (content) return { type: "prompt", session_id: sessionId, content };
+  return { type: "prompt", session_id: sessionId, text };
 }
 
-function enqueue(sessionId: string, text: string): void {
+function dispatchPrompt(sessionId: string, text: string, attachments: Attachment[]): void {
+  inFlight.add(sessionId);
+  send(promptCommand(sessionId, text, attachments));
+}
+
+function enqueue(sessionId: string, text: string, attachments: Attachment[]): void {
   const next = new Map(state.queues);
   const q = next.get(sessionId) ?? [];
-  next.set(sessionId, [...q, { id: nextQueuedId(), text }]);
+  next.set(sessionId, [...q, { id: nextQueuedId(), text, attachments }]);
   setState({ ...state, queues: next });
 }
 
 // The single entry point the composer calls to send a user prompt. Sends
 // straight through when the session can take a turn right now; otherwise stacks
-// it on the queue to drain on the next turn-end. Empty text is ignored.
-export function submitPrompt(sessionId: string, status: Status, text: string): void {
+// it on the queue to drain on the next turn-end. A prompt with at least one
+// attachment is valid even with empty text (an image speaks for itself);
+// otherwise empty text is ignored.
+export function submitPrompt(
+  sessionId: string,
+  status: Status,
+  text: string,
+  attachments: Attachment[] = [],
+): void {
   const trimmed = text.trimEnd();
-  if (!trimmed.trim()) return;
-  if (canDispatch(sessionId, status)) dispatchPrompt(sessionId, trimmed);
-  else enqueue(sessionId, trimmed);
+  if (!trimmed.trim() && attachments.length === 0) return;
+  if (canDispatch(sessionId, status)) dispatchPrompt(sessionId, trimmed, attachments);
+  else enqueue(sessionId, trimmed, attachments);
 }
 
 // "Send now" on a queued row. If the session can take a turn this instant, send
@@ -229,7 +255,7 @@ export function requestSendQueued(sessionId: string, status: Status, id: string)
     const item = state.queues.get(sessionId)?.find((m) => m.id === id);
     if (!item) return;
     removeQueued(sessionId, id);
-    dispatchPrompt(sessionId, item.text);
+    dispatchPrompt(sessionId, item.text, item.attachments);
   } else {
     promoteQueued(sessionId, id);
   }
@@ -238,12 +264,17 @@ export function requestSendQueued(sessionId: string, status: Status, id: string)
 // Edit a queued prompt in place. Clearing the text removes the entry.
 export function editQueued(sessionId: string, id: string, text: string): void {
   const trimmed = text.trimEnd();
-  if (!trimmed.trim()) {
-    removeQueued(sessionId, id);
-    return;
-  }
   const q = state.queues.get(sessionId);
   if (!q) return;
+  // Clearing the text removes the entry only when it carries no attachments —
+  // an attachment-only prompt (e.g. just a pasted screenshot) stays valid.
+  if (!trimmed.trim()) {
+    const existing = q.find((m) => m.id === id);
+    if (!existing || existing.attachments.length === 0) {
+      removeQueued(sessionId, id);
+      return;
+    }
+  }
   const next = new Map(state.queues);
   next.set(sessionId, q.map((m) => (m.id === id ? { ...m, text: trimmed } : m)));
   setState({ ...state, queues: next });

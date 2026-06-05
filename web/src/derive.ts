@@ -48,11 +48,22 @@ function chunkOf(update: AcpUpdate): ContentChunk | null {
         url?: string;
         mimeType?: string;
         media_type?: string;
+        name?: string;
+        uri?: string;
         source?: { type?: string; data?: string; url?: string; media_type?: string };
+        resource?: { uri?: string; text?: string; blob?: string; mimeType?: string };
       };
   if (!c) return null;
   if (c.type === "text") {
     return { type: "text", text: c.text ?? "" };
+  }
+  if (c.type === "resource" || c.type === "resource_link") {
+    // A file the user attached (embedded resource or link). The agent reads the
+    // bytes; in the transcript we just echo a paperclip + the file name so the
+    // user sees what they sent. Derive a readable name from the uri.
+    const uri = c.resource?.uri ?? c.uri ?? "";
+    const name = c.name ?? decodeURIComponent(uri.split("/").pop() ?? uri) ?? "attachment";
+    return { type: "text", text: `📎 ${name}` };
   }
   if (c.type === "image") {
     // ACP image content blocks have a few shapes; cover both flat

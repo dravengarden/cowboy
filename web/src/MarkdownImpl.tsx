@@ -71,6 +71,30 @@ function parseImages(md: string): { src: string; alt: string }[] {
   return out;
 }
 
+// Build a heading component renderer at a given em size + line-height. Kept at
+// module scope so the `components` map below stays declarative; `mt`/`mb` are
+// uniform so consecutive headings/paragraphs keep an even rhythm.
+function makeHeading(
+  fontSize: string,
+  lineHeight: number,
+): (props: { children?: ReactNode }) => React.JSX.Element {
+  return function Heading({ children }): React.JSX.Element {
+    return (
+      <Box
+        sx={{
+          fontSize,
+          fontWeight: 600,
+          lineHeight,
+          mt: 1.2,
+          mb: 0.5,
+        }}
+      >
+        {children}
+      </Box>
+    );
+  };
+}
+
 /// Render markdown text. Memoized on `text` so streamed updates don't
 /// re-parse from scratch on every chunk (React reconciliation already helps,
 /// but the markdown AST is the expensive bit).
@@ -123,10 +147,15 @@ const MarkdownImpl = memo(function MarkdownImpl({
         />
       );
     },
-    // Inline `code` uses a subtle tint; fenced blocks get Prism.
+    // Inline `code` uses a subtle tint; fenced blocks get Prism. A fence with
+    // NO language tag carries no `language-*` class, so the className test alone
+    // misclassified it as inline — it then rendered as a tinted span inside
+    // ReactMarkdown's default `<pre>` (no overflow handling → clipped by the
+    // transcript's `overflow-x: hidden`). Treat any multi-line content as a
+    // block too, so an un-tagged fence still gets the scrollable highlighter.
     code({ className, children, ...rest }) {
-      const inline = !className?.startsWith("language-");
       const text = String(children).replace(/\n$/, "");
+      const inline = !className?.startsWith("language-") && !text.includes("\n");
       if (inline) {
         return (
           <Box
@@ -148,11 +177,28 @@ const MarkdownImpl = memo(function MarkdownImpl({
       }
       const lang = className?.replace("language-", "") ?? "";
       return (
-        <Box sx={{ my: 1, "& pre": { borderRadius: 1, fontSize: "0.8em" } }}>
+        <Box
+          sx={{
+            my: 1,
+            maxWidth: "100%",
+            // `wrapLongLines={false}` keeps lines intact; the pre scrolls
+            // sideways (touch momentum) instead of overflowing the bubble.
+            "& pre": {
+              borderRadius: 1,
+              fontSize: "0.8em",
+              overflowX: "auto",
+              maxWidth: "100%",
+              WebkitOverflowScrolling: "touch",
+            },
+          }}
+        >
           <SyntaxHighlighter
             language={lang || "text"}
             style={codeTheme}
-            customStyle={{ margin: 0, padding: 12 }}
+            // overflowX on the inline customStyle (highest specificity) so it
+            // wins over the prism theme's own pre style — the long-line scroll
+            // must not depend on the emotion class losing/winning the cascade.
+            customStyle={{ margin: 0, padding: 12, overflowX: "auto", maxWidth: "100%" }}
             wrapLongLines={false}
             PreTag="pre"
           >
@@ -160,6 +206,14 @@ const MarkdownImpl = memo(function MarkdownImpl({
           </SyntaxHighlighter>
         </Box>
       );
+    },
+    // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
+    // above already renders its own scrollable container (the highlighter's
+    // pre), so collapse the outer default `<pre>` to a passthrough — otherwise
+    // it's a second, un-styled pre that expands to the code's width and gets
+    // clipped by the transcript's `overflow-x: hidden` instead of scrolling.
+    pre({ children }) {
+      return <>{children}</>;
     },
     a({ children, href }) {
       return (
@@ -169,9 +223,22 @@ const MarkdownImpl = memo(function MarkdownImpl({
       );
     },
     table({ children }) {
+      // Wide tables scroll horizontally inside the bubble rather than wrapping
+      // their cells into an unreadable squish or stretching the message off the
+      // viewport. The ancestor `wordBreak: break-word` would otherwise force
+      // every cell to wrap (so a table never overflows, it just crams) — the
+      // `nowrap` on th/td below is what lets the overflow-x actually engage.
+      // `maxWidth: 100%` keeps the scroll region inside the bubble; touch
+      // momentum scrolling for iOS.
       return (
         <Box
-          sx={{ overflowX: "auto", my: 1, "& table": { borderCollapse: "collapse" } }}
+          sx={{
+            overflowX: "auto",
+            maxWidth: "100%",
+            my: 1,
+            WebkitOverflowScrolling: "touch",
+            "& table": { borderCollapse: "collapse", width: "max-content" },
+          }}
         >
           <table>{children as ReactNode}</table>
         </Box>
@@ -181,7 +248,14 @@ const MarkdownImpl = memo(function MarkdownImpl({
       return (
         <Box
           component="th"
-          sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5, textAlign: "left" }}
+          sx={{
+            border: 1,
+            borderColor: "divider",
+            px: 1,
+            py: 0.5,
+            textAlign: "left",
+            whiteSpace: "nowrap",
+          }}
         >
           {children}
         </Box>
@@ -191,12 +265,23 @@ const MarkdownImpl = memo(function MarkdownImpl({
       return (
         <Box
           component="td"
-          sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5 }}
+          sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5, whiteSpace: "nowrap" }}
         >
           {children}
         </Box>
       );
     },
+    // Headings were unstyled, so they fell back to the browser's `<h1>`/`<h2>`
+    // defaults (2em / 1.5em + large margins) — oversized in a chat bubble and
+    // especially heavy on a phone. Render them em-relative (so they still scale
+    // with the OS base size) but tighter, with compact margins. Sizes step down
+    // h1→h4; h5/h6 collapse to body weight-only emphasis.
+    h1: makeHeading("1.35em", 1.3),
+    h2: makeHeading("1.2em", 1.3),
+    h3: makeHeading("1.08em", 1.35),
+    h4: makeHeading("1em", 1.4),
+    h5: makeHeading("0.92em", 1.4),
+    h6: makeHeading("0.85em", 1.4),
     p({ children }) {
       return <Box sx={{ my: 0.5, lineHeight: 1.5 }}>{children}</Box>;
     },
