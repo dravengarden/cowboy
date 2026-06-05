@@ -15,7 +15,7 @@
 // a card after scrolling away is required. Tool cards default to collapsed,
 // so this is mostly a non-issue.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -32,7 +32,6 @@ import {
 } from "@mui/material";
 import {
   ArrowDownward,
-  AutoAwesome,
   CheckCircle,
   Code,
   Construction,
@@ -47,6 +46,7 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
@@ -67,43 +67,46 @@ const pulse = keyframes`
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
 
-// Claude Code's signature playful "spinner verbs" (the 黑话 vocabulary) — a
-// rotating bank of whimsical gerunds instead of a flat "Thinking…". This is
-// the Claude-flavored loading personality; Codex deliberately stays plain.
-const CLAUDE_VERBS = [
-  "Thinking",
-  "Cogitating",
-  "Pondering",
-  "Ruminating",
-  "Percolating",
-  "Noodling",
-  "Befuddling",
-  "Conjuring",
-  "Simmering",
-  "Marinating",
-  "Frolicking",
-  "Discombobulating",
-  "Synthesizing",
-  "Tinkering",
-  "Brewing",
-];
+// Claude Code's morphing star glyph — the literal frames its terminal spinner
+// cycles through (from CC's Spinner/utils.ts `getDefaultCharacters`, the
+// non-darwin set). The "·→✢→*→✶→✻→✽" growth IS the animation; CC advances one
+// frame every 120ms (`Math.floor(time / 120)`), so we match that exactly. The
+// 黑话 verb bank lives in ./claudeVerbs (full 187-word copy of CC's own list).
+const CLAUDE_SPINNER_FRAMES = ["·", "✢", "*", "✶", "✻", "✽"];
+const CLAUDE_FRAME_MS = 120;
 
-// Claude-code indicator: faithful to Claude Code's own status line — a pulsing
-// terracotta spark (#D97757, its brand fill) + a shimmer-swept verb that rotates
-// through the playful 黑话 bank (~3.5s) and a literal "…". The shimmer/pulse
-// collapse to a static muted word under `prefers-reduced-motion` (Anthropic
-// shipped a fix specifically because their shimmer ignored that setting — we
-// honor it up front). Verb rotation is content, not motion, so it stays.
+// Claude-code indicator: a character-level recreation of Claude Code's own
+// status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 120ms, in CC's
+// terracotta brand fill #D97757) + a shimmer-swept verb that rotates through the
+// playful 黑话 bank (~3.5s) and a literal "…". Under `prefers-reduced-motion` the
+// glyph freezes on frame 0 ("·") and the verb shimmer collapses to a static
+// muted word (CC freezes the glyph the same way — `reducedMotion ? 0 : …`).
+// Verb rotation is content, not motion, so it stays.
 function ClaudeThinking(): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
   const accent = "#D97757";
+  const reducedMotion = globalThis.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
   const [vi, setVi] = useState(0);
+  const [frame, setFrame] = useState(0);
   useEffect(() => {
     const id = globalThis.setInterval(() => setVi((v) => v + 1), 3500);
     return () => globalThis.clearInterval(id);
   }, []);
+  useEffect(() => {
+    if (reducedMotion) return undefined;
+    const id = globalThis.setInterval(
+      () => setFrame((f) => f + 1),
+      CLAUDE_FRAME_MS,
+    );
+    return () => globalThis.clearInterval(id);
+  }, [reducedMotion]);
   const verb = CLAUDE_VERBS[vi % CLAUDE_VERBS.length] ?? "Thinking";
+  const glyph = reducedMotion
+    ? CLAUDE_SPINNER_FRAMES[0]
+    : CLAUDE_SPINNER_FRAMES[frame % CLAUDE_SPINNER_FRAMES.length];
 
   return (
     <Stack
@@ -112,14 +115,23 @@ function ClaudeThinking(): React.JSX.Element {
       alignItems="center"
       sx={{ py: 0.5, alignSelf: "flex-start" }}
     >
-      <AutoAwesome
+      <Box
+        component="span"
+        aria-hidden
         sx={{
+          width: 14,
+          textAlign: "center",
           fontSize: 14,
+          lineHeight: 1,
+          fontWeight: 700,
           color: accent,
-          animation: `${pulse} 1.6s ease-in-out infinite`,
-          "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+          // Monospace + tabular so the glyph swap doesn't shift the verb.
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         }}
-      />
+      >
+        {glyph}
+      </Box>
       <Typography
         variant="caption"
         sx={{
@@ -200,6 +212,10 @@ function StreamingCaret(): React.JSX.Element {
     />
   );
 }
+
+// Pixels above the bottom past which the scroll-to-latest FAB appears. Matches
+// Slack / Telegram / Linear — roughly one short message worth of hidden content.
+const FAB_THRESHOLD = 200;
 
 function toolColor(status: string): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
@@ -558,7 +574,12 @@ function PermissionSheet({
   );
 }
 
-function ItemView({
+// `memo`'d: with `derive` memoized upstream, each item keeps a stable identity
+// across renders that don't change the timeline (e.g. scroll-threshold or
+// permission-sheet state). Without this, any such re-render would re-run the
+// markdown parser + syntax highlighter for every visible row — the source of
+// the scroll jitter on mobile.
+const ItemView = memo(function ItemView({
   item,
   streaming,
 }: {
@@ -618,7 +639,7 @@ function ItemView({
         </Stack>
       );
   }
-}
+});
 
 export function Transcript({
   sessionId,
@@ -632,7 +653,11 @@ export function Transcript({
   /** Drives the per-provider "thinking" indicator flavor (color + verbs). */
   provider: string;
 }): React.JSX.Element {
-  const items = derive(timeline);
+  // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
+  // new array when a new event actually lands, so this O(n) fold runs once per
+  // event — NOT on every scroll-driven re-render. Stable item identities also
+  // let the `memo`'d `ItemView` rows skip re-rendering.
+  const items = useMemo(() => derive(timeline), [timeline]);
   // Latest unresolved tool-permission request, if any → drives the dedicated
   // PermissionSheet. `reviewClosedFor` remembers a request the user flicked the
   // sheet shut on, so it doesn't keep re-popping while still leaving the sticky
@@ -696,14 +721,20 @@ export function Transcript({
     getScrollElement: () => parentRef.current,
     estimateSize: () => 80,
     overscan: 6,
-    measureElement: (el) => el.getBoundingClientRect().height,
+    // Round to whole pixels: a raw fractional getBoundingClientRect height
+    // re-measures to a hair-different value on each pass (80.33 → 80.34 …),
+    // and each change nudges every following row's offset — visible as a
+    // shimmy when scrolling up through measured rows.
+    measureElement: (el) => Math.round(el.getBoundingClientRect().height),
   });
 
-  // How far above the bottom the viewport currently sits. The scroll-to-
-  // latest FAB only renders when this exceeds a small threshold, so a 3-
-  // message transcript that already fits the viewport doesn't ever surface
-  // a useless button.
-  const [distFromBottom, setDistFromBottom] = useState(0);
+  // Whether the viewport sits far enough above the bottom to surface the
+  // scroll-to-latest FAB (a 3-message transcript that fits the viewport never
+  // does). Stored as a BOOLEAN, not the raw pixel distance: `onScroll` fires
+  // every frame, and setting a numeric state each time would re-render the
+  // whole Transcript on every scroll tick (the jitter). A boolean only flips
+  // when crossing the threshold, so React bails out of the in-between renders.
+  const [farFromBottom, setFarFromBottom] = useState(false);
 
   // Wire user-intent listeners ONCE; they read parentRef each time so the
   // dependency on the ref's contents stays out of React's eyes.
@@ -718,7 +749,9 @@ export function Transcript({
     };
     const onScroll = (): void => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setDistFromBottom(dist);
+      // Functional update returning the unchanged value → React skips the
+      // re-render, so mid-scroll frames that don't cross the threshold are free.
+      setFarFromBottom((prev) => (dist > FAB_THRESHOLD) === prev ? prev : dist > FAB_THRESHOLD);
       const atBottom = dist < 24;
       if (atBottom && !stick.current) {
         stick.current = true;
@@ -746,7 +779,10 @@ export function Transcript({
   // appear without an actual scroll event firing.
   useLayoutEffect(() => {
     const el = parentRef.current;
-    if (el) setDistFromBottom(el.scrollHeight - el.scrollTop - el.clientHeight);
+    if (el) {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setFarFromBottom(dist > FAB_THRESHOLD);
+    }
     if (!stick.current || rowCount === 0) return;
     virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
   }, [rowCount, virtualizer]);
@@ -813,7 +849,7 @@ export function Transcript({
           })}
         </Box>
       </Box>
-      {detached && distFromBottom > 200 && (
+      {detached && farFromBottom && (
         // Threshold matches Slack / Telegram / Linear: only surface the
         // jump-down affordance when there's at least ~one short message
         // worth of hidden content below. A three-line transcript that
