@@ -1,16 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cowboy">
-  <rect width="512" height="512" rx="112" fill="#7c3aed"/>
-  <!-- A cowboy hat — a name-derived mark in the app's violet brand, in the same
-       "one solid colour + one white glyph" family as omega (Ω) and atlantis
-       (trident). The crown carries the cattleman centre crease and the brim
-       sweeps up at the tips; everything stays inside the maskable safe zone so
-       the same art works rounded, full-bleed, and circle-masked. -->
+  <!-- Brand violet, but a vertical gradient (light violet → deep indigo-violet)
+       instead of a flat fill: the same "one colour + one white glyph" family as
+       omega (Ω) and atlantis (trident), just with depth so it doesn't read as a
+       garish slab of #7c3aed. Stays inside the maskable safe zone, so the art
+       survives rounded, full-bleed, and circle-masked. -->
+  <defs>
+    <linearGradient id="cowboyBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9d6bff"/>
+      <stop offset="1" stop-color="#6629d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#cowboyBg)"/>
+  <!-- The hat: a cleaner cattleman silhouette. The crown tapers in toward the
+       band and carries a soft centre crease (the dip at the top); the brim is a
+       gull-wing — the front edge dips, the wings sweep up at the tips. -->
   <g fill="#fff">
-    <path d="M186 314 L183 220 C180 172 207 154 233 168 C245 174 251 185 256 187
-             C261 185 267 174 279 168 C305 154 332 172 329 220 L326 314 Z"/>
-    <path d="M70 300 C150 306 205 300 256 298 C307 300 362 306 442 300
-             C398 358 330 374 256 374 C182 374 114 358 70 300 Z"/>
+    <!-- crown -->
+    <path d="M190 300
+             C187 256 190 210 205 184
+             C214 170 232 170 242 180
+             C248 185 252 187 256 187
+             C260 187 264 185 270 180
+             C280 170 298 170 307 184
+             C322 210 325 256 322 300 Z"/>
+    <!-- brim -->
+    <path d="M56 302
+             C150 296 200 300 256 300
+             C312 300 362 296 456 302
+             C414 356 342 376 256 376
+             C170 376 98 356 56 302 Z"/>
   </g>
-  <!-- Hat band, punched back to the brand violet. -->
-  <rect x="186" y="272" width="140" height="32" rx="4" fill="#7c3aed"/>
+  <!-- Hat band, punched back to the brand violet, with a small lighter buckle. -->
+  <rect x="190" y="272" width="132" height="30" rx="6" fill="#6629d4"/>
+  <rect x="246" y="278" width="20" height="18" rx="3" fill="#c9a8ff"/>
 </svg>
