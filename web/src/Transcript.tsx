@@ -210,15 +210,15 @@ function toolColor(status: string): "default" | "success" | "error" | "warning" 
 function toolIcon(kind: string): React.ReactElement {
   switch (kind) {
     case "read":
-      return <Folder fontSize="small" />;
+      return <Folder fontSize="medium" />;
     case "edit":
-      return <Code fontSize="small" />;
+      return <Code fontSize="medium" />;
     case "execute":
-      return <Terminal fontSize="small" />;
+      return <Terminal fontSize="medium" />;
     case "search":
-      return <Search fontSize="small" />;
+      return <Search fontSize="medium" />;
     default:
-      return <Construction fontSize="small" />;
+      return <Construction fontSize="medium" />;
   }
 }
 
@@ -338,7 +338,7 @@ function ToolCard({
           {item.title}
         </Typography>
         <Chip size="small" color={toolColor(item.status)} label={item.status} variant="outlined" />
-        {hasDetail && (open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />)}
+        {hasDetail && (open ? <ExpandLess fontSize="medium" /> : <ExpandMore fontSize="medium" />)}
       </Stack>
       {open && hasDetail && (
         <Box sx={{ borderTop: 1, borderColor: "divider", p: 1, bgcolor: "action.hover" }}>
@@ -418,7 +418,7 @@ function PermissionCard({
       alignItems="center"
       sx={{ alignSelf: "flex-start", color: "warning.main", px: 0.5 }}
     >
-      <WarningAmberRounded sx={{ fontSize: 16, flexShrink: 0 }} />
+      <WarningAmberRounded fontSize="medium" sx={{ flexShrink: 0 }} />
       <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
         Permission requested · {item.title}
       </Typography>
@@ -515,7 +515,7 @@ function ItemView({
             maxWidth: { xs: "96%", sm: "92%" },
           }}
         >
-          <Psychology fontSize="small" />
+          <Psychology fontSize="medium" />
           <Box sx={{ fontStyle: "italic", fontSize: "0.875rem", flex: 1 }}>
             {/* `derive` drops empty thoughts, so a thought item always carries
                 text here — no perpetual-spinner fallback. */}
@@ -534,9 +534,9 @@ function ItemView({
             {item.entries.map((e, j) => (
               <Stack key={j} direction="row" spacing={1} alignItems="center">
                 {e.status === "completed" ? (
-                  <CheckCircle fontSize="small" color="success" />
+                  <CheckCircle fontSize="medium" color="success" />
                 ) : (
-                  <RadioButtonUnchecked fontSize="small" color="disabled" />
+                  <RadioButtonUnchecked fontSize="medium" color="disabled" />
                 )}
                 <Typography variant="body2">{e.content}</Typography>
               </Stack>
@@ -554,7 +554,7 @@ function ItemView({
           alignItems="center"
           sx={{ color: item.status === "crashed" ? "error.main" : "text.secondary" }}
         >
-          <ErrorOutline fontSize="small" />
+          <ErrorOutline fontSize="medium" />
           <Typography variant="caption">
             {item.status}
             {item.detail ? `: ${item.detail}` : ""}

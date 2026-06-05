@@ -349,7 +349,7 @@ function ConfigOptionChip({
         variant="outlined"
         color="inherit"
         disabled={disabled}
-        endIcon={<ExpandMore fontSize="small" />}
+        endIcon={<ExpandMore fontSize="medium" />}
         onClick={(e): void => setAnchor(e.currentTarget)}
         sx={{
           textTransform: "none",

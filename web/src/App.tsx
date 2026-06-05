@@ -209,7 +209,8 @@ function SessionList({
                                 >
                                     <ProviderIcon
                                         provider={s.provider}
-                                        sx={{ fontSize: 16, flexShrink: 0 }}
+                                        fontSize="medium"
+                                        sx={{ flexShrink: 0 }}
                                     />
                                     <Typography
                                         variant="body2"
@@ -278,7 +279,7 @@ function SessionList({
                     }}
                 >
                     <ListItemIcon>
-                        <DriveFileRenameOutline fontSize="small" />
+                        <DriveFileRenameOutline fontSize="medium" />
                     </ListItemIcon>
                     <ListItemText primary="Rename" />
                 </MenuItem>
@@ -290,7 +291,7 @@ function SessionList({
                     sx={{ color: "error.main" }}
                 >
                     <ListItemIcon>
-                        <DeleteOutline fontSize="small" color="error" />
+                        <DeleteOutline fontSize="medium" color="error" />
                     </ListItemIcon>
                     <ListItemText primary="Delete" />
                 </MenuItem>
@@ -649,7 +650,8 @@ export function App({
                                 <StatusDot status={active.status} />
                                 <ProviderIcon
                                     provider={active.provider}
-                                    sx={{ fontSize: 20, flexShrink: 0 }}
+                                    fontSize="medium"
+                                    sx={{ flexShrink: 0 }}
                                 />
                                 <Tooltip title={active.title} enterDelay={400}>
                                     <Typography
