@@ -40,10 +40,55 @@
         };
       };
 
-      # Step 1 — build the SPA. Fixed-output derivation because
-      # `deno install` needs network; the hash only changes when the bundle
-      # changes. Output is the built `web/dist`. Refresh the hash with
+      # Step 1 — build the SPA, split so SOURCE CHANGES ALWAYS REBUILD.
+      #
+      # The bundle's bytes vary with source, so it must NOT be a fixed-output
+      # derivation (FOD): an FOD is addressed by its declared `outputHash`, so
+      # Nix reuses the cached output whenever that hash is unchanged — silently
+      # embedding a STALE bundle when only the source moved. That is the "why
+      # isn't the UI updating after a rebuild" footgun; it forced a manual hash
+      # rebump on every single web edit (and bit us in prod).
+      #
+      # Fix = separate the two concerns the old single FOD conflated:
+      #   web-deps   — a SMALL FOD that only vendors the npm deps (the part that
+      #                needs network). Keyed by the lockfiles, so its hash changes
+      #                ONLY when deno.lock / package.json change.
+      #   cowboy-web — a NORMAL, sandboxed, content-addressed derivation that
+      #                consumes that vendored cache OFFLINE. Any source edit → new
+      #                inputs → automatic rebuild. No hash bump, ever.
+
+      # Deps-only FOD: populate a relocatable DENO_DIR npm cache from the
+      # lockfiles alone. Refresh the hash ONLY when deps change:
       # `lib.fakeHash` → build → copy the "got" hash back.
+      web-deps = pkgs.stdenvNoCC.mkDerivation {
+        pname = "cowboy-web-deps";
+        version = "0.1.0";
+        src = pkgs.runCommandLocal "cowboy-web-deps-src" { } ''
+          mkdir -p $out
+          cp ${./web/deno.json} $out/deno.json
+          cp ${./web/deno.lock} $out/deno.lock
+          cp ${./web/package.json} $out/package.json
+        '';
+        nativeBuildInputs = [ deno pkgs.nodejs_24 ];
+        dontUnpack = true;
+        dontConfigure = true;
+        buildPhase = ''
+          export HOME=$TMPDIR
+          export DENO_DIR=$out
+          cp -RL $src/. .
+          chmod -R u+w .
+          deno install
+        '';
+        dontInstall = true;
+        dontFixup = true;
+        outputHashMode = "recursive";
+        outputHashAlgo = "sha256";
+        outputHash = "sha256-kAJVt2SFRj4mzQsf6bUQtByqJ1GjsXliZ6uidAfa1V0=";
+      };
+
+      # Offline SPA build. NORMAL derivation (no outputHash) → rebuilds on any
+      # source change. Stages the shared SDK + the vendored deno cache, then
+      # builds with no network: a missing dep fails loudly instead of drifting.
       cowboy-web = pkgs.stdenvNoCC.mkDerivation {
         pname = "cowboy-web";
         version = "0.1.0";
@@ -52,25 +97,25 @@
         dontConfigure = true;
         buildPhase = ''
           export HOME=$TMPDIR
+          # DENO_DIR must be writable (deno touches it); copy the vendored cache.
           export DENO_DIR=$TMPDIR/deno-cache
+          cp -R ${web-deps} $DENO_DIR
+          chmod -R u+w $DENO_DIR
           # Stage the shared SDK from the shared-utils ui package.
           mkdir -p web/src/_shell
           cp ${sharedUiSrc}/* web/src/_shell/
           chmod -R u+w web/src/_shell
           cd web
-          # No --frozen here: the FOD's outputHash already pins the bundle
-          # bit-for-bit, and the lockfile lives in-tree so an in-source
-          # update is what we want when a dep is bumped.
-          deno install
+          # --frozen: never mutate the lock here (deps are pre-vendored); the
+          # sandbox has no network, so this only re-materializes node_modules
+          # from the cached tarballs.
+          deno install --frozen
           deno task build
         '';
         installPhase = ''
           cp -R dist $out
         '';
         dontFixup = true;
-        outputHashMode = "recursive";
-        outputHashAlgo = "sha256";
-        outputHash = "sha256-3U8UgUkv5f7dvOiNxNZhL68UV4FVGTuYv46dWJ7umls=";
       };
 
       # Step 2 — the Rust binary, embedding the built SPA via rust-embed
