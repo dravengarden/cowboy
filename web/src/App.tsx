@@ -5,6 +5,7 @@ import {
     Box,
     Button,
     Chip,
+    CircularProgress,
     Dialog,
     DialogContent,
     DialogTitle,
@@ -135,15 +136,33 @@ function StatusDot({
     status: Status;
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
-    return (
-        <Tooltip title={statusLabel(status)} enterDelay={300}>
+    const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
+    // "busy" is the one *active* state — a turn is in flight — so a static dot
+    // reads as idle/stuck (the reported "yellow dot is weird while running").
+    // Swap it for a tiny spinner sized to the dot so the row says "working",
+    // keeping the amber (warning) hue for continuity with the dot palette. Every
+    // other state is a settled condition, so it stays a color-coded dot.
+    const indicator =
+        status === "busy" ? (
+            <CircularProgress
+                size={11}
+                thickness={6}
+                color="warning"
+                aria-label={statusLabel(status)}
+                sx={[{ flexShrink: 0 }, ...extra]}
+            />
+        ) : (
             <Circle
                 aria-label={statusLabel(status)}
                 sx={[
                     { fontSize: 10, flexShrink: 0, color: statusColor(status) },
-                    ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+                    ...extra,
                 ]}
             />
+        );
+    return (
+        <Tooltip title={statusLabel(status)} enterDelay={300}>
+            {indicator}
         </Tooltip>
     );
 }
