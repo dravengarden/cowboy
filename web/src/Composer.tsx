@@ -174,6 +174,12 @@ export function Composer({
     // and otherwise stacks the prompt on the queue (busy / starting / a turn of
     // ours still in flight) — the daemon can't run a second concurrent turn.
     submitPrompt(sessionId, status, trimmed);
+    // Clear the CodeMirror document imperatively, not just via `value=""`: the
+    // editor's 200ms typing latch defers prop-driven clears when you submit
+    // right after typing, leaving the sent text lingering. See clear() in
+    // ComposerEditor. setText("") then keeps React state in sync (idempotent —
+    // value now matches the empty doc, so no second dispatch).
+    editorRef.current?.clear();
     setText("");
   }
 

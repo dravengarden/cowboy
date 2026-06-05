@@ -29,6 +29,15 @@ export interface ComposerEditorHandle {
   // Insert a trigger char (`/` or `@`) at the caret + open the picker — used by
   // the action-row buttons. Mirrors the old `appendToken` + focus behavior.
   insertTrigger: (ch: string) => void;
+  // Clear the document imperatively. Submit can't rely on the controlled
+  // `value=""` prop to empty the editor: @uiw/react-codemirror (≥4.24) holds a
+  // 200ms "typing latch" and DEFERS external value-prop changes while you're
+  // still within 200ms of your last keystroke (an IME-echo guard). Hitting
+  // Cmd-Enter right after typing lands inside that window, so the prop-driven
+  // clear gets parked until the latch expires — the text lingers after the
+  // message already sent. Dispatching straight to the view bypasses the latch
+  // and clears now.
+  clear: () => void;
 }
 
 // Reads whether the editor is in Vim *insert* mode, via the loaded vim module's
@@ -128,6 +137,11 @@ export const ComposerEditor = forwardRef<
       });
       view.focus();
       startCompletion(view);
+    },
+    clear: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
     },
   }));
 
