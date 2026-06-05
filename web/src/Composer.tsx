@@ -67,6 +67,26 @@ import { BottomSheet } from "./_shell";
 // textarea so the textarea always stays wide and tap-able. The row is
 // horizontally scrollable on narrow viewports so any number of dropdowns
 // doesn't force a wrap.
+
+// Toolbar control sizing keys off POINTER TYPE, not viewport width. A desktop
+// with a narrow window is still a mouse (precise) and wants dense controls; any
+// touch device wants the ≥40px tap target (ui.md §7 "mobile never small"). The
+// old `{ xs: 40, lg: 36 }` viewport-breakpoint sizing got this wrong twice: a
+// sub-`lg` desktop window fell back to the chunky 40px touch size, and an iPad
+// in a wide (≥`lg`) layout got the cramped 36px desktop size. `pointer: coarse`
+// is the right axis — it tracks the input device, not the window. Desktop is a
+// dense 32px; coarse pointers bump every control to 40.
+const TOOLBAR_ICON_BTN = {
+  width: 32,
+  height: 32,
+  flexShrink: 0,
+  "@media (pointer: coarse)": { width: 40, height: 40 },
+} as const;
+const TOOLBAR_MIN_H = {
+  minHeight: 34,
+  "@media (pointer: coarse)": { minHeight: 40 },
+} as const;
+
 export function Composer({
   sessionId,
   status,
@@ -194,13 +214,13 @@ export function Composer({
           the left, then the agent config (inline chips on desktop, the bottom
           sheet on touch), then the send button. Buttons are 40px on touch so
           the side safe-area floor keeps them off the iPhone corner radius. */}
-      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.75, minHeight: 40 }}>
+      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.75, ...TOOLBAR_MIN_H }}>
         <Tooltip title="Slash command / skill">
           <span>
             <IconButton
               aria-label="slash command"
               disabled={dead}
-              sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+              sx={TOOLBAR_ICON_BTN}
               onClick={(): void => editorRef.current?.insertTrigger("/")}
             >
               <Box component="span" sx={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
@@ -214,7 +234,7 @@ export function Composer({
             <IconButton
               aria-label="reference a file"
               disabled={dead}
-              sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+              sx={TOOLBAR_ICON_BTN}
               onClick={(): void => editorRef.current?.insertTrigger("@")}
             >
               <AlternateEmail />
@@ -228,7 +248,7 @@ export function Composer({
               <IconButton
                 aria-label="options"
                 disabled={dead}
-                sx={{ width: 40, height: 40, flexShrink: 0 }}
+                sx={TOOLBAR_ICON_BTN}
                 onClick={(): void => setSheetOpen(true)}
               >
                 <Tune />
@@ -293,7 +313,7 @@ export function Composer({
                   <IconButton
                     color="primary"
                     aria-label="queue message"
-                    sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                    sx={TOOLBAR_ICON_BTN}
                     onClick={submit}
                   >
                     <Send />
@@ -306,7 +326,7 @@ export function Composer({
                 <IconButton
                   color="error"
                   aria-label="cancel"
-                  sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                  sx={TOOLBAR_ICON_BTN}
                   onClick={(): void => send({ type: "cancel", session_id: sessionId })}
                 >
                   <Stop />
@@ -321,7 +341,7 @@ export function Composer({
                 color="primary"
                 aria-label="send"
                 disabled={!sendable}
-                sx={{ width: { xs: 40, lg: 36 }, height: { xs: 40, lg: 36 }, flexShrink: 0 }}
+                sx={TOOLBAR_ICON_BTN}
                 onClick={submit}
               >
                 <Send />
@@ -613,7 +633,7 @@ function ConfigOptionChip({
         onClick={(e): void => setAnchor(e.currentTarget)}
         sx={{
           textTransform: "none",
-          minHeight: 36,
+          ...TOOLBAR_MIN_H,
           px: 1.25,
           flexShrink: 0,
           fontWeight: 500,
