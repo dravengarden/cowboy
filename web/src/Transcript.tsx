@@ -793,6 +793,29 @@ export function Transcript({
     };
   }, []);
 
+  // Opening / switching a session always starts pinned to the latest message
+  // (chat default). The component isn't remounted per session, so `stick`
+  // would otherwise carry over a scrolled-up position from the previous
+  // session. We also can't rely on a single scroll: react-virtual measures
+  // rows lazily, so the first `scrollToIndex` lands short of the true bottom
+  // (estimated 80px rows are usually shorter than real ones). Re-pin via
+  // `scrollTop = scrollHeight` across a few frames so it converges to the
+  // actual bottom as heights settle.
+  useLayoutEffect(() => {
+    stick.current = true;
+    setDetached(false);
+    setFarFromBottom(false);
+    let raf = 0;
+    let tries = 0;
+    const pin = (): void => {
+      const el = parentRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      if (++tries < 5) raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(raf);
+  }, [sessionId]);
+
   // Auto-snap only on rowCount changes, ONLY if we're still stuck.
   // We also recompute `distFromBottom` here because the virtualizer's
   // total height changes when new events stream in — the user may be
