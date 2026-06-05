@@ -574,9 +574,10 @@ export function App({
                 },
             }}
         >
-            <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500 }}>
-                cowboy
-            </Typography>
+            {/* Brand label intentionally omitted — the empty bar is kept only
+                for its two structural roles: matching the right pane's AppBar
+                height (so the session list aligns with the chat header) and
+                serving as the PWA window-drag region (see sx above). */}
         </Toolbar>
     );
 
