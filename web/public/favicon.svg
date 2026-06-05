@@ -1,35 +1,52 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cowboy">
-  <!-- Cowboy hat seen from a 3/4 angle, looking down from the upper-left
-       (atlantis-style hero perspective). The crown stays tall and dominant so
-       it reads as a hat, not a plate; the brim opens into a foreshortened oval
-       with visible thickness; light comes from the upper-left (lit left lobe,
-       shadowed right). Leather gradients, a dark band + gold buckle (echoing
-       atlantis' gold), and a cast shadow keep it dimensional. -->
+  <!-- Cowboy hat, atlantis-style: a warm dimensional object on a cool ground.
+       The two earlier failure modes are fixed here: (1) the crown overlaps the
+       brim instead of floating above it (no violet gap), and (2) the brim is a
+       solid disc rendered DARKER than the crown, so it reads as the crown
+       sitting on a brim rather than two detached shapes. Leather gradients give
+       roundness, a darker offset under the brim is its thickness, a dark band +
+       gold buckle (echoing atlantis' gold) wrap the crown, plus sheen and a
+       blurred cast shadow. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9d6bff"/><stop offset="1" stop-color="#6629d4"/></linearGradient>
-    <linearGradient id="brim" x1="0.1" y1="0" x2="0.7" y2="1"><stop offset="0" stop-color="#dfac64"/><stop offset="1" stop-color="#8c5d2c"/></linearGradient>
-    <linearGradient id="crown" x1="0" y1="0" x2="0.55" y2="1"><stop offset="0" stop-color="#f4d9a3"/><stop offset="0.5" stop-color="#d39c53"/><stop offset="1" stop-color="#955f2c"/></linearGradient>
-    <linearGradient id="buckle" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f7dc8c"/><stop offset="1" stop-color="#c69736"/></linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9d6bff"/><stop offset="1" stop-color="#6629d4"/>
+    </linearGradient>
+    <linearGradient id="crown" x1="0" y1="0" x2="0.12" y2="1">
+      <stop offset="0" stop-color="#f1d39c"/><stop offset="0.5" stop-color="#d49e55"/><stop offset="1" stop-color="#a87238"/>
+    </linearGradient>
+    <linearGradient id="brim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c4904c"/><stop offset="1" stop-color="#92622e"/>
+    </linearGradient>
+    <linearGradient id="buckle" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7dc8c"/><stop offset="1" stop-color="#c69736"/>
+    </linearGradient>
     <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="8"/></filter>
-    <clipPath id="crownClip"><path d="M190 300 C186 248 190 196 206 176 C216 164 232 166 242 177 C248 182 251 184 256 184 C261 184 264 182 270 177 C280 166 296 164 306 176 C322 196 326 248 322 300 C308 312 288 316 256 316 C224 316 204 312 190 300 Z"/></clipPath>
+    <clipPath id="crownClip">
+      <path d="M188 304 C186 252 188 200 204 178 C214 165 232 166 242 178 C248 184 252 186 256 186 C260 186 264 184 270 178 C280 166 298 165 308 178 C324 200 326 252 324 304 C310 318 290 322 256 322 C222 322 202 318 188 304 Z"/>
+    </clipPath>
   </defs>
+
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
 
-  <ellipse cx="256" cy="338" rx="182" ry="60" fill="#350f63" opacity="0.45" filter="url(#soft)"/>
+  <ellipse cx="256" cy="372" rx="194" ry="30" fill="#350f63" opacity="0.5" filter="url(#soft)"/>
 
-  <!-- brim: thickness (offset down) then the foreshortened top surface -->
-  <path d="M78 314 C140 296 200 300 256 302 C312 300 372 296 434 314 C410 352 340 366 256 364 C172 366 102 352 78 314 Z" transform="translate(0 12)" fill="#6f4a22"/>
-  <path d="M78 314 C140 296 200 300 256 302 C312 300 372 296 434 314 C410 352 340 366 256 364 C172 366 102 352 78 314 Z" fill="url(#brim)"/>
-  <path d="M104 311 C150 300 206 303 250 305 C206 309 150 309 112 317 Z" fill="#ffffff" opacity="0.10"/>
+  <!-- brim underside (thickness), then the brim disc -->
+  <path d="M56 318 C100 304 170 310 256 310 C342 310 412 304 456 318 C450 356 374 380 256 380 C138 380 62 356 56 318 Z"
+        transform="translate(0 9)" fill="#6f4a22"/>
+  <path d="M56 318 C100 304 170 310 256 310 C342 310 412 304 456 318 C450 356 374 380 256 380 C138 380 62 356 56 318 Z"
+        fill="url(#brim)"/>
+  <path d="M86 320 C150 312 210 316 252 318 C210 322 150 320 92 326 Z" fill="#ffffff" opacity="0.10"/>
 
-  <!-- crown: tall, dominant, soft cattleman crease -->
-  <path d="M190 300 C186 248 190 196 206 176 C216 164 232 166 242 177 C248 182 251 184 256 184 C261 184 264 182 270 177 C280 166 296 164 306 176 C322 196 326 248 322 300 C308 312 288 316 256 316 C224 316 204 312 190 300 Z" fill="url(#crown)"/>
-  <path d="M256 172 C250 190 250 206 256 222 C262 206 262 190 256 172 Z" fill="#955f2c" opacity="0.35"/>
-  <!-- right-lobe shadow (light is upper-left) -->
-  <ellipse clip-path="url(#crownClip)" cx="300" cy="250" rx="26" ry="64" fill="#6f4422" opacity="0.22" transform="rotate(8 300 250)"/>
-  <!-- band + gold buckle -->
-  <g clip-path="url(#crownClip)"><rect x="180" y="288" width="152" height="22" fill="#43291a"/></g>
-  <rect x="244" y="291" width="26" height="18" rx="3" fill="url(#buckle)"/>
-  <!-- left-lobe sheen -->
-  <ellipse clip-path="url(#crownClip)" cx="222" cy="208" rx="14" ry="46" fill="#ffffff" opacity="0.18" transform="rotate(-10 222 208)"/>
+  <!-- crown (overlaps the brim) -->
+  <path d="M188 304 C186 252 188 200 204 178 C214 165 232 166 242 178 C248 184 252 186 256 186 C260 186 264 184 270 178 C280 166 298 165 308 178 C324 200 326 252 324 304 C310 318 290 322 256 322 C222 322 202 318 188 304 Z"
+        fill="url(#crown)"/>
+  <!-- band + gold buckle, clipped to the crown -->
+  <g clip-path="url(#crownClip)">
+    <rect x="180" y="286" width="152" height="34" fill="#43291a"/>
+    <rect x="180" y="286" width="152" height="8" fill="#5e3a24"/>
+  </g>
+  <rect x="240" y="291" width="32" height="26" rx="4" fill="url(#buckle)"/>
+  <rect x="247" y="297" width="18" height="14" rx="2" fill="#9a6f24"/>
+  <!-- crown sheen -->
+  <ellipse clip-path="url(#crownClip)" cx="218" cy="230" rx="20" ry="70" fill="#ffffff" opacity="0.16" transform="rotate(-10 218 230)"/>
 </svg>
