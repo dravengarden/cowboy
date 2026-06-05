@@ -1,36 +1,67 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cowboy">
-  <!-- Brand violet, but a vertical gradient (light violet → deep indigo-violet)
-       instead of a flat fill: the same "one colour + one white glyph" family as
-       omega (Ω) and atlantis (trident), just with depth so it doesn't read as a
-       garish slab of #7c3aed. Stays inside the maskable safe zone, so the art
-       survives rounded, full-bleed, and circle-masked. -->
+  <!-- Same recipe atlantis nails: a warm, dimensional object on a cool ground,
+       not a flat glyph. The hat is rendered as tan leather — light-to-dark
+       gradients give the crown its roundness, a darker offset shape under the
+       brim reads as the brim's thickness, soft white streaks are the sheen, and
+       a blurred shadow lifts it off the violet. The gold buckle echoes atlantis'
+       gold trident so the two icons feel like a set. Everything stays inside the
+       maskable safe zone. -->
   <defs>
-    <linearGradient id="cowboyBg" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#9d6bff"/>
       <stop offset="1" stop-color="#6629d4"/>
     </linearGradient>
+    <linearGradient id="crown" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#f0d199"/>
+      <stop offset="0.45" stop-color="#d49e55"/>
+      <stop offset="1" stop-color="#9a6630"/>
+    </linearGradient>
+    <linearGradient id="brim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e0ad66"/>
+      <stop offset="1" stop-color="#b07c3c"/>
+    </linearGradient>
+    <linearGradient id="buckle" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7dc8c"/>
+      <stop offset="1" stop-color="#c69736"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#cowboyBg)"/>
-  <!-- The hat: a cleaner cattleman silhouette. The crown tapers in toward the
-       band and carries a soft centre crease (the dip at the top); the brim is a
-       gull-wing — the front edge dips, the wings sweep up at the tips. -->
-  <g fill="#fff">
-    <!-- crown -->
-    <path d="M190 300
-             C187 256 190 210 205 184
-             C214 170 232 170 242 180
-             C248 185 252 187 256 187
-             C260 187 264 185 270 180
-             C280 170 298 170 307 184
-             C322 210 325 256 322 300 Z"/>
-    <!-- brim -->
-    <path d="M56 302
-             C150 296 200 300 256 300
-             C312 300 362 296 456 302
-             C414 356 342 376 256 376
-             C170 376 98 356 56 302 Z"/>
-  </g>
-  <!-- Hat band, punched back to the brand violet, with a small lighter buckle. -->
-  <rect x="190" y="272" width="132" height="30" rx="6" fill="#6629d4"/>
-  <rect x="246" y="278" width="20" height="18" rx="3" fill="#c9a8ff"/>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- cast shadow (deep violet so it melts into the ground, not a grey blob) -->
+  <ellipse cx="256" cy="390" rx="196" ry="24" fill="#350f63" opacity="0.45" filter="url(#soft)"/>
+
+  <!-- brim underside: same outline pushed down 11px, darker — the visible
+       sliver along the front is the brim's thickness -->
+  <path d="M54 311 C150 304 202 308 256 308 C310 308 362 304 458 311
+           C414 364 342 385 256 385 C170 385 98 364 54 311 Z" fill="#79491f"/>
+  <!-- brim top surface -->
+  <path d="M54 300 C150 293 202 297 256 297 C310 297 362 293 458 300
+           C414 353 342 374 256 374 C170 374 98 353 54 300 Z" fill="url(#brim)"/>
+
+  <!-- crown -->
+  <path d="M192 300
+           C189 256 192 211 206 185
+           C215 171 233 171 243 181
+           C249 186 252 188 256 188
+           C260 188 263 186 269 181
+           C279 171 297 171 306 185
+           C320 211 323 256 320 300 Z" fill="url(#crown)"/>
+
+  <!-- hat band + a small gold buckle -->
+  <rect x="192" y="270" width="128" height="32" rx="8" fill="#43291a"/>
+  <rect x="192" y="270" width="128" height="7" rx="3.5" fill="#5e3a24"/>
+  <rect x="243" y="275" width="26" height="22" rx="4" fill="url(#buckle)"/>
+  <rect x="249" y="281" width="14" height="10" rx="2" fill="#9a6f24"/>
+
+  <!-- sheen: a soft highlight down the left of the crown, and a thin glint
+       along the top-left of the brim -->
+  <path d="M216 192 C208 216 207 258 211 292 L223 292
+           C220 258 221 217 229 197 C226 190 220 188 216 192 Z"
+        fill="#ffffff" opacity="0.22"/>
+  <path d="M74 301 C140 295 200 298 250 299 C200 303 140 301 80 306 Z"
+        fill="#ffffff" opacity="0.16"/>
 </svg>
