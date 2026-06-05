@@ -27,6 +27,28 @@ function applyThemeColor(dark: boolean): void {
     ?.setAttribute("content", dark ? "#15111d" : "#f4ecf7");
 }
 
+// Native desktop UIs size their system font per-OS: macOS renders SF at ~13px,
+// Windows/Linux UIs sit a touch larger. The web default of 16px is a *document
+// reading* size and looks oversized for an app chrome on macOS (the reference
+// being native apps like Zed) — so pick the platform's native UI size and the
+// panel reads like a native app, not a web page. Touch (iOS/iPad) stays at 16:
+// it's the right reading size for a phone, and < 16px on inputs triggers iOS's
+// focus auto-zoom. Computed once at module load — platform doesn't change mid-
+// session — and the `system-ui` font stack already matches each OS's UI face.
+function osBaseFontSize(): number {
+  const nav = globalThis.navigator as
+    | (Navigator & { userAgentData?: { platform?: string } })
+    | undefined;
+  if (globalThis.matchMedia?.("(pointer: coarse)").matches) return 16;
+  const ua = nav?.userAgent ?? "";
+  const platform = nav?.userAgentData?.platform ?? nav?.platform ?? "";
+  if (/mac/i.test(platform) || /Macintosh/i.test(ua)) return 13;
+  if (/win/i.test(platform) || /Windows/i.test(ua)) return 14;
+  return 14; // Linux / other — GTK/Qt UIs sit around 14–15px
+}
+
+const OS_BASE_FONT_SIZE = osBaseFontSize();
+
 export interface ThemeControls {
   theme: Theme;
   mode: Mode;
@@ -52,11 +74,12 @@ export function useThemeMode(): ThemeControls {
           // silently fell back to Helvetica/Arial — visibly NOT the system font,
           // and a font-swap flash against index.html's `-apple-system` splash.
           // This stack matches the splash and cmTheme.ts so mount is seamless.
-          // `fontSize: 16` (MUI's base coefficient defaults to 14) lifts body
-          // text to the native reading size instead of feeling shrunk.
+          // Base size follows the OS's native UI size (osBaseFontSize) instead of
+          // the one-size-fits-all 16px, which read oversized as app chrome on
+          // macOS. MUI's base coefficient defaults to 14.
           fontFamily:
             'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif',
-          fontSize: 16,
+          fontSize: OS_BASE_FONT_SIZE,
         },
         components: {
           // Touch ergonomics (ui.md §7): on a coarse pointer no interactive

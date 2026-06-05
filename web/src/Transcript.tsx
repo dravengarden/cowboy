@@ -69,14 +69,17 @@ const shimmer = keyframes`to { background-position: -200% 0; }`;
 
 // Claude Code's morphing star glyph — the literal frames its terminal spinner
 // cycles through (from CC's Spinner/utils.ts `getDefaultCharacters`, the
-// non-darwin set). The "·→✢→*→✶→✻→✽" growth IS the animation; CC advances one
-// frame every 120ms (`Math.floor(time / 120)`), so we match that exactly. The
-// 黑话 verb bank lives in ./claudeVerbs (full 187-word copy of CC's own list).
+// non-darwin set). The "·→✢→*→✶→✻→✽" growth IS the animation. CC advances one
+// frame every 120ms in the terminal, where the glyph is small. Rendered larger
+// and higher-contrast on this web surface, that 120ms beat reads as jittery
+// "蹦", so we deliberately diverge from CC and slow it to 200ms — a calmer
+// 1.2s/cycle breath that still reads as alive. The 黑话 verb bank lives in
+// ./claudeVerbs (full 187-word copy of CC's own list).
 const CLAUDE_SPINNER_FRAMES = ["·", "✢", "*", "✶", "✻", "✽"];
-const CLAUDE_FRAME_MS = 120;
+const CLAUDE_FRAME_MS = 200;
 
 // Claude-code indicator: a character-level recreation of Claude Code's own
-// status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 120ms, in CC's
+// status line — its morphing star glyph (CLAUDE_SPINNER_FRAMES @ 200ms, in CC's
 // terracotta brand fill #D97757) + a shimmer-swept verb that rotates through the
 // playful 黑话 bank (~3.5s) and a literal "…". Under `prefers-reduced-motion` the
 // glyph freezes on frame 0 ("·") and the verb shimmer collapses to a static
@@ -281,30 +284,39 @@ function MessageBubble({
 }): React.JSX.Element {
   const mine = role === "user";
   const lastChunkIdx = chunks.length - 1;
+  const body = chunks.map((c, i) => (
+    <Box key={i} sx={{ position: "relative" }}>
+      <ChunkView chunk={c} invert={mine} />
+      {streaming && i === lastChunkIdx && c.type === "text" && (
+        <StreamingCaret />
+      )}
+    </Box>
+  ));
+  // Assistant replies render flush in the page (Zed-style): no border, no card
+  // background, just markdown flowing inline. The per-item `py` in the
+  // virtualizer row is the only separator between consecutive replies. Only the
+  // user's own messages keep the right-aligned bubble — the conventional "my
+  // message" affordance.
+  if (!mine) {
+    return (
+      <Box sx={{ alignSelf: "stretch", maxWidth: "100%", color: "text.primary" }}>
+        {body}
+      </Box>
+    );
+  }
   return (
     <Paper
       variant="outlined"
       sx={{
         p: { xs: 1, sm: 1.25 },
-        // Assistant replies stretch the full column so they align flush with the
-        // full-width tool cards and use the whole screen width (no ragged column
-        // of short, content-hugging bubbles). Only the user's own messages stay
-        // as a right-aligned bubble, the conventional "my message" affordance.
-        alignSelf: mine ? "flex-end" : "stretch",
-        maxWidth: mine ? { xs: "88%", sm: "78%" } : "100%",
-        bgcolor: mine ? "primary.main" : "background.paper",
-        color: mine ? "primary.contrastText" : "text.primary",
+        alignSelf: "flex-end",
+        maxWidth: { xs: "88%", sm: "78%" },
+        bgcolor: "primary.main",
+        color: "primary.contrastText",
         overflow: "hidden",
       }}
     >
-      {chunks.map((c, i) => (
-        <Box key={i} sx={{ position: "relative" }}>
-          <ChunkView chunk={c} invert={mine} />
-          {streaming && i === lastChunkIdx && c.type === "text" && (
-            <StreamingCaret />
-          )}
-        </Box>
-      ))}
+      {body}
     </Paper>
   );
 }

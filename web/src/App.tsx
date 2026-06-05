@@ -87,22 +87,25 @@ function readActiveSession(): string | null {
     return globalThis.localStorage?.getItem(ACTIVE_SESSION_KEY) ?? null;
 }
 
-// Status is shown as a single color-coded dot (no text label), so the hue has
-// to carry the whole meaning. The palette tokens are chosen so the colors read
-// the same here and in any future status surface:
-//   green  (success) — running: connected, idle, ready for your next prompt
-//   amber  (warning) — busy:    a turn is in flight, the agent is working
-//   blue   (info)    — starting: process spinning up, not ready yet
-//   red    (error)   — exited / crashed: the session is gone
+// Status is shown as a single color-coded dot/spinner (no text label), so the
+// hue has to carry the whole meaning. The palette tokens are chosen so the
+// colors read the same here and in any future status surface:
+//   green (success)       — live:     running (idle, ready) or busy (a turn in
+//                                      flight). busy renders the green as a spinner.
+//   blue  (info)          — starting:  process spinning up, not ready yet (spinner).
+//   grey  (text.disabled) — dormant:   exited cleanly + resumable — "asleep, wakes
+//                                       on resume". Deliberately NOT a warning hue.
+//   red   (error)         — crashed:   died abnormally, can't reply.
 function statusColor(s: Status): string {
     switch (s) {
         case "running":
-            return "success.main";
         case "busy":
-            return "warning.main";
+            return "success.main";
         case "starting":
             return "info.main";
-        default:
+        case "exited":
+            return "text.disabled";
+        case "crashed":
             return "error.main";
     }
 }
@@ -112,21 +115,21 @@ function statusColor(s: Status): string {
 function statusLabel(s: Status): string {
     switch (s) {
         case "running":
-            return "Ready";
+            return "Live";
         case "busy":
-            return "Working…";
+            return "Running…";
         case "starting":
             return "Starting…";
         case "exited":
-            return "Exited";
+            return "Dormant";
         case "crashed":
             return "Crashed";
     }
 }
 
 // One status indicator, shared by the header and the sidebar list so the
-// "green = ready, amber = working" code reads identically everywhere. The dot
-// encodes state by color; the tooltip + aria-label spell it out for hover and
+// "green = live/running, grey = dormant" code reads identically everywhere. The
+// dot encodes state by color; the tooltip + aria-label spell it out for hover and
 // assistive tech (touch has no hover, but the wording is also redundant with
 // the surrounding chrome).
 function StatusDot({
@@ -137,19 +140,21 @@ function StatusDot({
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
     const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
-    // "busy" is the one *active* state — a turn is in flight — so a static dot
-    // reads as idle/stuck (the reported "yellow dot is weird while running").
-    // Swap it for a tiny spinner sized to the dot so the row says "working",
-    // keeping the amber (warning) hue for continuity with the dot palette. Every
-    // other state is a settled condition, so it stays a color-coded dot.
-    const indicator =
-        status === "busy" ? (
+    // "busy" and "starting" are the *active* states — a turn is in flight, or the
+    // process is spinning up — so a static dot would read as idle/stuck. Render
+    // them as a tiny spinner sized to the dot (green for busy = "running", blue
+    // for starting), with the stroke following statusColor for palette
+    // continuity. running / exited / crashed are settled, so they stay a
+    // color-coded dot. `color="inherit"` lets the sx `color` (statusColor) drive
+    // the stroke instead of a fixed MUI palette slot.
+    const active = status === "busy" || status === "starting";
+    const indicator = active ? (
             <CircularProgress
                 size={11}
                 thickness={6}
-                color="warning"
+                color="inherit"
                 aria-label={statusLabel(status)}
-                sx={[{ flexShrink: 0 }, ...extra]}
+                sx={[{ flexShrink: 0, color: statusColor(status) }, ...extra]}
             />
         ) : (
             <Circle

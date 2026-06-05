@@ -7,11 +7,13 @@ import react from "@vitejs/plugin-react";
 // (`cowboy serve`). Override the target with COWBOY_DEV_BACKEND.
 const devBackend = process.env.COWBOY_DEV_BACKEND ?? "http://127.0.0.1:3333";
 
-// The shared app-shell SDK lives in the sibling atlantis project and is
+// The shared front-end SDK lives in the public shared-utils monorepo and is
 // referenced (not vendored): `web/src/_shell` is a symlink to
-// `projects/atlantis/main/components` for local dev (the build stages real
-// copies via the flake). Resolve the symlink target so the dev server is
-// allowed to serve it. Best-effort: absent symlink (e.g. fresh checkout) → skip.
+// `shared-utils/packages/ui` for local dev (the Nix build stages real copies
+// from the pinned `shared-utils` flake input instead). `_shell` is the stable
+// staging-seam name shared across the atlantis apps. Resolve the symlink target
+// so the dev server is allowed to serve it (it lives outside this project
+// root). Best-effort: absent symlink (e.g. fresh checkout) → skip.
 let shellRealRoot: string | undefined;
 try {
   shellRealRoot = dirname(realpathSync("src/_shell"));
@@ -81,10 +83,10 @@ export default defineConfig({
     },
     chunkSizeWarningLimit: 800,
   },
-  // The app-shell SDK is imported through the `_shell` symlink into the sibling
-  // atlantis project. Without deduping, vite/rollup resolves those files'
+  // The shared SDK is imported through the `_shell` symlink into the sibling
+  // shared-utils monorepo. Without deduping, vite/rollup resolves those files'
   // `react` / `@mui` / `@emotion` imports relative to the symlink TARGET (the
-  // atlantis tree, which has no resolvable copy) and the build fails. Dedupe
+  // shared-utils tree, which has no resolvable copy) and the build fails. Dedupe
   // forces the shared singletons to resolve from this app's own node_modules —
   // which is also what we want at runtime (one React, one MUI, one Emotion).
   resolve: {
@@ -99,7 +101,7 @@ export default defineConfig({
   },
   plugins: [react()],
   server: {
-    // Allow the dev server to serve the symlinked atlantis shell source (it
+    // Allow the dev server to serve the symlinked shared-utils SDK source (it
     // lives outside this project root). Only relevant to `dev-web`.
     fs: { allow: [".", "..", ...(shellRealRoot ? [shellRealRoot] : [])] },
     proxy: {
