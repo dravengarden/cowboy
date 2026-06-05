@@ -76,6 +76,16 @@ function readSidebarWidth(): number {
     return Number.isFinite(n) ? clampSidebarWidth(n) : SIDEBAR_DEFAULT;
 }
 
+// The session the user last had focused, so a page reload (or PWA relaunch)
+// reopens it instead of snapping back to the top of the list. Just an id; if it
+// names a session that no longer exists (deleted elsewhere) the `active`
+// derivation falls back to the first session, so no validation is needed here.
+const ACTIVE_SESSION_KEY = "cowboy:active-session";
+
+function readActiveSession(): string | null {
+    return globalThis.localStorage?.getItem(ACTIVE_SESSION_KEY) ?? null;
+}
+
 // Status is shown as a single color-coded dot (no text label), so the hue has
 // to carry the whole meaning. The palette tokens are chosen so the colors read
 // the same here and in any future status surface:
@@ -417,7 +427,7 @@ export function App({
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
     const mobile = useMediaQuery(theme.breakpoints.down("lg"));
-    const [activeId, setActiveId] = useState<string | null>(null);
+    const [activeId, setActiveId] = useState<string | null>(readActiveSession);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -460,6 +470,17 @@ export function App({
     // Default to the first session once one exists.
     const active =
         sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+
+    // Persist the *resolved* focus so a reload reopens it. Keyed on `active.id`
+    // (not raw `activeId`) so a stale stored id that fell back to sessions[0]
+    // gets corrected to what's actually shown. Skip while `active` is null —
+    // during the initial load (sessions not yet broadcast) we must not clobber
+    // the stored id with null before it has a chance to resolve.
+    useEffect(() => {
+        if (active) {
+            globalThis.localStorage?.setItem(ACTIVE_SESSION_KEY, active.id);
+        }
+    }, [active]);
 
     function pick(id: string): void {
         setActiveId(id);
