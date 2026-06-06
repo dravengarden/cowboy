@@ -439,98 +439,77 @@ function NewSessionDialog({
     );
 }
 
-// Seconds the update overlay counts down before reloading on its own.
+// Seconds the update bar counts down before reloading on its own.
 const UPDATE_COUNTDOWN_SECS = 3;
 
-// Floating overlay shown when a redeploy is detected. Unlike the status bar it
-// never participates in layout — `position: fixed` keeps it on top of everything
-// without pushing the panes down, so it never disturbs the current session. It
-// counts 3→0 and then hard-reloads into the new build by itself; there's no
-// button to click.
-function UpdateOverlay(): React.JSX.Element {
+// Full-width overlay bar that tracks the live WebSocket (see store.ts `Banner`).
+// All three states are the SAME bar — `position: fixed` keeps it on top of
+// everything and out of the layout flow, so it never pushes the panes down or
+// disturbs the current session (`pointer-events: none` also lets clicks fall
+// through to the chrome it floats over):
+//   - red "down"          — reconnect has failed past the threshold (spinner);
+//   - green "reconnected"  — recovery, auto-dismissed (check);
+//   - blue "update"        — a redeploy was detected; counts 3→0 and then
+//                            hard-reloads into the new build on its own.
+function ConnectionBanner(): React.JSX.Element | null {
+    const { banner } = useStore();
+    const isUpdate = banner?.kind === "update";
     const [secs, setSecs] = useState(UPDATE_COUNTDOWN_SECS);
+
+    // Drive the update countdown (and only it). Resets whenever we're not on the
+    // update state so a later redeploy starts a fresh 3→0.
     useEffect(() => {
+        if (!isUpdate) {
+            setSecs(UPDATE_COUNTDOWN_SECS);
+            return undefined;
+        }
         if (secs < 0) {
             applyUpdate();
             return undefined;
         }
         const t = setTimeout(() => setSecs((s) => s - 1), 1000);
         return (): void => clearTimeout(t);
-    }, [secs]);
+    }, [isUpdate, secs]);
+
+    if (!banner) return null;
+
+    const palette =
+        banner.kind === "down"
+            ? "error"
+            : banner.kind === "reconnected"
+              ? "success"
+              : "info";
+    const label =
+        banner.kind === "down"
+            ? "Connection lost — reconnecting…"
+            : banner.kind === "reconnected"
+              ? "Reconnected"
+              : `New version · reloading in ${Math.max(0, secs)}s`;
     return (
         <Box
             role="status"
             aria-live="polite"
             sx={{
                 position: "fixed",
+                top: 0,
                 left: 0,
                 right: 0,
-                // Clear the notch; floored so it still hangs off the top edge
-                // off-device.
-                top: "calc(env(safe-area-inset-top, 0px) + 12px)",
-                display: "flex",
-                justifyContent: "center",
-                // Purely informational — never eat clicks meant for the UI
-                // underneath it.
-                pointerEvents: "none",
-                zIndex: (t) => t.zIndex.tooltip + 1,
-            }}
-        >
-            <Box
-                sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 1,
-                    px: 2,
-                    py: 0.875,
-                    borderRadius: 999,
-                    bgcolor: "info.main",
-                    color: "info.contrastText",
-                    fontSize: "0.8125rem",
-                    fontWeight: 500,
-                    boxShadow: 6,
-                }}
-            >
-                <span>New version · reloading in {Math.max(0, secs)}s</span>
-            </Box>
-        </Box>
-    );
-}
-
-// Full-width status bar that tracks the live WebSocket (see store.ts `Banner`):
-// red "down" once reconnect has failed past the threshold, green "reconnected"
-// when the socket recovers (auto-dismissed). The blue "update" state instead
-// renders as a non-intrusive floating overlay (see UpdateOverlay) that reloads
-// on its own.
-function ConnectionBanner(): React.JSX.Element | null {
-    const { banner } = useStore();
-    if (!banner) return null;
-    if (banner.kind === "update") return <UpdateOverlay />;
-    const palette = banner.kind === "down" ? "error" : "success";
-    const label =
-        banner.kind === "down"
-            ? "Connection lost — reconnecting…"
-            : "Reconnected";
-    return (
-        <Box
-            role="status"
-            aria-live="polite"
-            sx={{
-                flexShrink: 0,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 1,
                 px: 2,
                 py: 0.75,
-                // Owns the notch when shown (it's the topmost element); matches
-                // the AppBar's safe-area handling for the no-banner case.
+                // Owns the notch when shown (it's the topmost element).
                 pt: "calc(env(safe-area-inset-top, 0px) + 6px)",
                 bgcolor: `${palette}.main`,
                 color: `${palette}.contrastText`,
                 fontSize: "0.8125rem",
                 fontWeight: 500,
-                zIndex: (t) => t.zIndex.appBar + 1,
+                // Purely informational — never eat clicks meant for the UI
+                // underneath it.
+                pointerEvents: "none",
+                zIndex: (t) => t.zIndex.tooltip + 1,
             }}
         >
             {banner.kind === "down" && (
