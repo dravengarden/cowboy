@@ -225,20 +225,6 @@ export function Composer({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
-  // Open the native file picker. iOS LIMITATION: the system file/photo picker is
-  // its own surface that takes first responder, so the keyboard collapses and the
-  // composer blurs while it's open — a pure web app CANNOT keep the keyboard up
-  // under it (same class as the iOS keyboard-bar / audio-on-lock limits; only a
-  // native WKWebView/Capacitor shell could). We deliberately DON'T programmatically
-  // refocus afterwards: on iOS a stray `.focus()` puts the web view in a phantom
-  // keyboard state that `interactive-widget=resizes-content` shrinks the layout
-  // viewport for — without showing a keyboard — leaving a dead gap below the UI.
-  // The typed text is preserved; the user taps the composer to resume. See
-  // [[ios-file-picker-keyboard-limit]].
-  function openFilePicker(): void {
-    fileInputRef.current?.click();
-  }
-
   // Pull the agent-advertised options for this session, if known. Sorted in
   // a fixed display order so dropdowns don't flicker between
   // config_option_update notifications.
@@ -376,8 +362,9 @@ export function Composer({
           addFiles(Array.from(e.target.files ?? []));
           // Reset so picking the same file twice in a row still fires change.
           e.target.value = "";
-          // NB: do NOT refocus the composer here — on iOS it triggers a phantom
-          // keyboard-viewport shrink (dead gap). See openFilePicker.
+          // NB: do NOT refocus the composer here — on iOS it leaves a phantom
+          // keyboard-viewport shrink (dead gap below the UI). The picker drops the
+          // keyboard regardless (platform limit); the user taps to resume.
         }}
       />
       {/* Input tier: native textarea on touch (CodeMirror's contenteditable
@@ -468,7 +455,7 @@ export function Composer({
               aria-label="attach image or file"
               disabled={dead}
               sx={TOOLBAR_ICON_BTN}
-              onClick={openFilePicker}
+              onClick={(): void => fileInputRef.current?.click()}
             >
               <AttachFile />
             </IconButton>
