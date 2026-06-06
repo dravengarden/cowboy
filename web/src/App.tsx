@@ -6,9 +6,6 @@ import {
     Button,
     Chip,
     CircularProgress,
-    Dialog,
-    DialogContent,
-    DialogTitle,
     Divider,
     Drawer,
     IconButton,
@@ -60,6 +57,11 @@ import {
     setPadding,
     useReadingSettings,
 } from "./readingSettings";
+import {
+    type NavbarPosition,
+    setNavbarPosition,
+    useNavbarPosition,
+} from "./navbarSettings";
 import { FONT_PRESETS } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, ThemeModeControl } from "./_shell";
@@ -368,71 +370,72 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    const create = (): void => {
+        // POST (not the fire-and-forget WS `new_session`) so we get the assigned
+        // id back synchronously and can focus the new session the moment it's
+        // created.
+        void fetch("/api/sessions", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider, cwd, origin: "web" }),
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { session_id?: string } | null) => {
+                if (data?.session_id) onCreated(data.session_id);
+            })
+            .catch(() => {
+                // Network/daemon error surfaces via the WS error channel.
+            });
+        onClose();
+    };
+    // BottomSheet (not a centered Dialog) to match the rest of the modals — they
+    // all rise from the bottom on the mobile tier.
     return (
-        <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-            <DialogTitle>New session</DialogTitle>
-            <DialogContent>
-                <Stack spacing={2} sx={{ mt: 1 }}>
-                    <TextField
-                        select
-                        label="Provider"
-                        value={provider}
-                        onChange={(e): void => setProvider(e.target.value)}
-                    >
-                        {PROVIDERS.map((p) => (
-                            <MenuItem key={p} value={p}>
-                                {p}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                    <TextField
-                        select
-                        label="Working directory"
-                        value={cwd}
-                        onChange={(e): void => setCwd(e.target.value)}
-                        helperText={
-                            WORKING_DIRS.find((w) => w.value === cwd)?.help ??
-                            ""
-                        }
-                    >
-                        {WORKING_DIRS.map((w) => (
-                            <MenuItem key={w.value} value={w.value}>
-                                {w.label}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                    <Button
-                        variant="contained"
-                        onClick={(): void => {
-                            // POST (not the fire-and-forget WS `new_session`) so
-                            // we get the assigned id back synchronously and can
-                            // focus the new session the moment it's created.
-                            void fetch("/api/sessions", {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: JSON.stringify({
-                                    provider,
-                                    cwd,
-                                    origin: "web",
-                                }),
-                            })
-                                .then((r) => (r.ok ? r.json() : null))
-                                .then((data: { session_id?: string } | null) => {
-                                    if (data?.session_id)
-                                        onCreated(data.session_id);
-                                })
-                                .catch(() => {
-                                    // Network/daemon error surfaces via the WS
-                                    // error channel; nothing to do here.
-                                });
-                            onClose();
-                        }}
-                    >
+        <BottomSheet
+            open={open}
+            onClose={onClose}
+            title="New session"
+            actions={
+                <>
+                    <Button onClick={onClose} color="inherit">
+                        Cancel
+                    </Button>
+                    <Button onClick={create} variant="contained">
                         Create
                     </Button>
-                </Stack>
-            </DialogContent>
-        </Dialog>
+                </>
+            }
+        >
+            <Stack spacing={2} sx={{ mt: 1 }}>
+                <TextField
+                    select
+                    label="Provider"
+                    value={provider}
+                    onChange={(e): void => setProvider(e.target.value)}
+                >
+                    {PROVIDERS.map((p) => (
+                        <MenuItem key={p} value={p}>
+                            {p}
+                        </MenuItem>
+                    ))}
+                </TextField>
+                <TextField
+                    select
+                    label="Working directory"
+                    value={cwd}
+                    onChange={(e): void => setCwd(e.target.value)}
+                    helperText={
+                        WORKING_DIRS.find((w) => w.value === cwd)?.help ?? ""
+                    }
+                >
+                    {WORKING_DIRS.map((w) => (
+                        <MenuItem key={w.value} value={w.value}>
+                            {w.label}
+                        </MenuItem>
+                    ))}
+                </TextField>
+            </Stack>
+        </BottomSheet>
     );
 }
 
@@ -515,7 +518,7 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { connected, sessions, timelines, lastError } = useStore();
+    const { sessions, timelines, lastError } = useStore();
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -535,6 +538,11 @@ export function App({
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
     const mobile = useMediaQuery(theme.breakpoints.down("lg"));
+    // Navbar placement: a mobile-only setting (desktop is always top). When the
+    // user picks "bottom" on the compact tier the AppBar moves below the
+    // transcript, just above the composer (mobile-browser bottom-bar feel).
+    const navbarPos = useNavbarPosition();
+    const navbarAtBottom = mobile && navbarPos === "bottom";
     const [activeId, setActiveId] = useState<string | null>(readActiveSession);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -774,15 +782,27 @@ export function App({
                     position="static"
                     color="default"
                     elevation={0}
-                    // Clear the iPhone status bar / notch: hosted full-bleed in the
-                    // atlantis portal iframe, the header would otherwise collide with
-                    // the clock. Matches NavShell / the portal chrome.
-                    sx={{ pt: "env(safe-area-inset-top, 0px)" }}
+                    sx={{
+                        // Bottom mode (mobile, navbar-pos=bottom): flex `order`
+                        // moves the bar below the transcript, just above the
+                        // composer (which is order 2). Top mode: order 0, first
+                        // child.
+                        order: navbarAtBottom ? 1 : 0,
+                        // Clear the iPhone status bar / notch only at the top —
+                        // hosted full-bleed in the atlantis portal iframe, a top
+                        // bar would otherwise collide with the clock. At the
+                        // bottom the composer below owns the bottom safe-area
+                        // inset, so no inset here.
+                        pt: navbarAtBottom ? 0 : "env(safe-area-inset-top, 0px)",
+                    }}
                 >
                     <Toolbar
                         variant="dense"
                         sx={{
-                            borderBottom: 1,
+                            // Separator faces the transcript: bottom border at the
+                            // top, top border when the bar sits at the bottom.
+                            borderBottom: navbarAtBottom ? 0 : 1,
+                            borderTop: navbarAtBottom ? 1 : 0,
                             borderColor: "divider",
                             // Narrow installed PWA: the sidebar has collapsed to a
                             // drawer, so this bar is full-width and the macOS window
@@ -842,20 +862,23 @@ export function App({
                                             : active.title}
                                     </Typography>
                                 </Tooltip>
+                                <Tooltip title="Rename session">
+                                    <IconButton
+                                        size="small"
+                                        aria-label="rename session"
+                                        onClick={(): void =>
+                                            setPendingRename(active)}
+                                        sx={{ flexShrink: 0 }}
+                                    >
+                                        <DriveFileRenameOutline fontSize="small" />
+                                    </IconButton>
+                                </Tooltip>
                             </Stack>
                         ) : (
                             // No session: the content pane already says "No
                             // session selected", so the bar shows nothing — no
                             // redundant brand/emoji.
                             <Box sx={{ flex: 1, minWidth: 0 }} />
-                        )}
-                        {!connected && (
-                            <Chip
-                                size="small"
-                                color="error"
-                                label="offline"
-                                sx={{ mr: 1 }}
-                            />
                         )}
                         <IconButton
                             onClick={(): void => setSettingsOpen(true)}
@@ -875,15 +898,21 @@ export function App({
                             status={active.status}
                             provider={active.provider}
                         />
-                        <Composer
-                            // Remount per session: each session owns its draft
-                            // (seeded from the per-session draft store) and a
-                            // fresh CodeMirror editor, so one session's
-                            // in-progress text never bleeds into another.
-                            key={active.id}
-                            sessionId={active.id}
-                            status={active.status}
-                        />
+                        {/* order 2 in bottom mode keeps the composer below the
+                            navbar (order 1); order 0 (default DOM order) at the
+                            top. minWidth:0 so long content can't overflow the
+                            column. */}
+                        <Box sx={{ order: navbarAtBottom ? 2 : 0, minWidth: 0 }}>
+                            <Composer
+                                // Remount per session: each session owns its draft
+                                // (seeded from the per-session draft store) and a
+                                // fresh CodeMirror editor, so one session's
+                                // in-progress text never bleeds into another.
+                                key={active.id}
+                                sessionId={active.id}
+                                status={active.status}
+                            />
+                        </Box>
                     </>
                 ) : (
                     // Empty state: relative parent + absolutely-positioned content
@@ -1012,6 +1041,11 @@ function SettingsShell({
 }): React.JSX.Element {
     const vim = useVimSetting();
     const reading = useReadingSettings();
+    const navbarPos = useNavbarPosition();
+    const theme = useTheme();
+    // Navbar position is a mobile-only setting (same compact tier that drives
+    // the whole mobile shell); desktop is always top.
+    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -1157,6 +1191,41 @@ function SettingsShell({
                         </Select>
                     </Stack>
                 </Stack>
+                {mobile && (
+                    <>
+                        <Divider />
+                        <Stack
+                            direction="row"
+                            alignItems="center"
+                            justifyContent="space-between"
+                            spacing={2}
+                        >
+                            <Stack>
+                                <Typography variant="body2">
+                                    Navbar position
+                                </Typography>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                >
+                                    Bottom = mobile-browser style
+                                </Typography>
+                            </Stack>
+                            <Select
+                                size="small"
+                                value={navbarPos}
+                                onChange={(e): void =>
+                                    setNavbarPosition(
+                                        e.target.value as NavbarPosition,
+                                    )}
+                                sx={{ minWidth: 104 }}
+                            >
+                                <MenuItem value="top">Top</MenuItem>
+                                <MenuItem value="bottom">Bottom</MenuItem>
+                            </Select>
+                        </Stack>
+                    </>
+                )}
                 {desktop && (
                     <>
                         <Divider />

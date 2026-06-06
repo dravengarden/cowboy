@@ -413,6 +413,33 @@ impl Hub {
         self.broadcast_sessions();
     }
 
+    /// Auto-name a session from its first prompt, but ONLY while the title is
+    /// still the creation-time default (`provider · cwd`). The agent never
+    /// pushes a title over ACP, so cowboy derives one itself; gating on the
+    /// default makes this fire once (a later prompt sees a non-default title)
+    /// and never clobber a manual rename. Check + write under one lock so a
+    /// concurrent rename can't race it.
+    pub fn auto_title(&self, session_id: &str, title: String) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let default = format!("{} · {}", s.meta.provider, s.meta.cwd);
+            if s.meta.title != default {
+                return; // manually renamed or already auto-titled
+            }
+            s.meta.title.clone_from(&title);
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateTitle {
+                session_id: session_id.to_owned(),
+                title,
+            });
+        }
+        self.broadcast_sessions();
+    }
+
     /// Record the downstream agent's own session id for a session, persisting
     /// it so a future revive can resume via `session/load`. Updates in-memory
     /// metadata + write-behind store; no broadcast (the id isn't rendered, and

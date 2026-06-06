@@ -378,24 +378,23 @@ async fn agent_main(
             }
         }
     }
-    let acp_id = match acp_id {
-        Some(id) => id,
-        None => {
-            let session = conn
-                .new_session(NewSessionRequest {
-                    cwd: cwd.clone(),
-                    mcp_servers: vec![],
-                    meta: None,
-                })
-                .await
-                .context("new_session")?;
-            // Persist the agent's own id so a future revive can resume this
-            // exact conversation rather than opening a blank one.
-            hub.set_agent_session_id(session_id, session.session_id.0.to_string());
-            tracing::info!(session = session_id, acp_id = %session.session_id.0, "session created");
-            modes = session.modes;
-            session.session_id
-        }
+    let acp_id = if let Some(id) = acp_id {
+        id
+    } else {
+        let session = conn
+            .new_session(NewSessionRequest {
+                cwd: cwd.clone(),
+                mcp_servers: vec![],
+                meta: None,
+            })
+            .await
+            .context("new_session")?;
+        // Persist the agent's own id so a future revive can resume this
+        // exact conversation rather than opening a blank one.
+        hub.set_agent_session_id(session_id, session.session_id.0.to_string());
+        tracing::info!(session = session_id, acp_id = %session.session_id.0, "session created");
+        modes = session.modes;
+        session.session_id
     };
     hub.set_status(session_id, Status::Running, None);
 
