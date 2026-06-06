@@ -1177,7 +1177,7 @@ function SettingsShell({
                                 variant="caption"
                                 color="text.secondary"
                             >
-                                Scales message text
+                                Scales all app text
                             </Typography>
                         </Stack>
                         <Select

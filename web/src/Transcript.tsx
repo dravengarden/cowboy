@@ -717,16 +717,16 @@ export function Transcript({
   // event — NOT on every scroll-driven re-render. Stable item identities also
   // let the `memo`'d `ItemView` rows skip re-rendering.
   const items = useMemo(() => derive(timeline), [timeline]);
-  // Reader-comfort controls (Settings → Reading). `fontScale` is applied as an
-  // `em` on the scroll container so the markdown body + its em-relative
-  // headings/code scale together while the MUI chrome (tool cards, captions)
-  // keeps its fixed rem size; `padding` is the column's side gutter;
-  // The reading font-family swaps via the `--cowboy-reading-font` CSS var that
-  // useReadingFontFaces (mounted at the app root) sets + lazy-loads; code fences
-  // keep their own monospace. A change re-renders here, and the virtualizer
-  // re-measures row heights on the next pass, so live adjustments reflow
-  // without a reload.
-  const { fontScale, padding, lineHeight } = useReadingSettings();
+  // Reader-comfort controls (Settings → Reading). The font-size SCALE is now a
+  // GLOBAL app zoom on the root <html> font-size (useGlobalFontScale at the app
+  // root), so chrome + prose scale together — it is NOT re-applied here. The
+  // reading column inherits it like everything else. `padding` is the column's
+  // side gutter; `lineHeight` drives the prose leading (MarkdownImpl `p`
+  // inherits it). The reading font-family swaps via the `--cowboy-reading-font`
+  // CSS var (useReadingFontFaces). A change re-renders here and the virtualizer
+  // re-measures rows on the next pass, so live adjustments reflow without a
+  // reload.
+  const { padding, lineHeight } = useReadingSettings();
   // Latest unresolved tool-permission request, if any → drives the dedicated
   // PermissionSheet. `reviewClosedFor` remembers a request the user flicked the
   // sheet shut on, so it doesn't keep re-popping while still leaving the sticky
@@ -935,9 +935,6 @@ export function Transcript({
           // liveview's reading margin); vertical padding stays responsive.
           px: `${padding}px`,
           py: { xs: 1, sm: 1.5 },
-          // `em` multiplier on the reading content only (1 = unchanged). MUI
-          // Typography descendants set their own rem size and so stay fixed.
-          fontSize: `${fontScale}em`,
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text

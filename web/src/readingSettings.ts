@@ -144,6 +144,22 @@ export function setFontVariant(id: string): void {
 }
 
 /**
+ * Apply the reading font scale as a GLOBAL app text zoom by scaling the root
+ * <html> font-size. Everything sized in rem/em — all MUI Typography (navbar
+ * title, tool cards, captions) AND the transcript prose — scales uniformly,
+ * while px-based layout (MUI spacing, safe-area insets) holds. The composer
+ * floors at 16px (cmTheme `max(16px, 1rem)`) so iOS never focus-zooms it but it
+ * still grows when you scale up. Mount once at the app root (see main.tsx).
+ */
+export function useGlobalFontScale(): void {
+  const { fontScale } = useReadingSettings();
+  useEffect(() => {
+    const root = globalThis.document?.documentElement;
+    if (root) root.style.fontSize = `${String(fontScale * 100)}%`;
+  }, [fontScale]);
+}
+
+/**
  * Lazily inject the @fontsource faces for the currently selected reading font,
  * and expose the resolved family stack via the `--cowboy-reading-font` CSS
  * variable. Mount once at the app root (see main.tsx). The selected face's

@@ -17,18 +17,21 @@ export function cmTheme(theme: Theme): Extension {
     'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   return EditorView.theme(
     {
-      // 16px everywhere — and explicitly on `.cm-content` (the focused element)
-      // — so iOS Safari never focus-zooms. A media-query split (14px desktop)
-      // proved unreliable inside EditorView.theme, and 16px reads fine on
-      // desktop for a chat composer anyway.
+      // `max(16px, 1rem)` everywhere — and explicitly on `.cm-content` (the
+      // focused element). The 16px floor keeps iOS Safari from focus-zooming
+      // (it zooms any focused input under 16px); the `1rem` lets the composer
+      // grow with the global font-size zoom (useGlobalFontScale scales the root
+      // <html> font-size) so it scales UP with the rest of the app but never
+      // shrinks below the iOS-safe floor. A media-query split proved unreliable
+      // inside EditorView.theme, and 16px reads fine on desktop anyway.
       "&": {
         color: theme.palette.text.primary,
         backgroundColor: "transparent",
-        fontSize: "16px",
+        fontSize: "max(16px, 1rem)",
       },
       ".cm-content": {
         fontFamily: fontStack,
-        fontSize: "16px",
+        fontSize: "max(16px, 1rem)",
         // The MUI-outline shell owns the padding (see ComposerEditor).
         padding: "0",
         caretColor: accent,
@@ -51,7 +54,7 @@ export function cmTheme(theme: Theme): Extension {
       // getBoundingClientRect-based cursor/selection measurement is unaffected.
       ".cm-scroller": {
         fontFamily: fontStack,
-        fontSize: "16px",
+        fontSize: "max(16px, 1rem)",
         lineHeight: "1.5",
         transform: "translateZ(0)",
       },
