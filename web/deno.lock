@@ -7,6 +7,14 @@
     "npm:@codemirror/view@^6.36.0": "6.43.0",
     "npm:@emotion/react@^11.13.0": "11.14.0_react@19.2.6",
     "npm:@emotion/styled@^11.13.0": "11.14.1_@emotion+react@11.14.0__react@19.2.6_react@19.2.6",
+    "npm:@fontsource-variable/ibm-plex-sans@^5.2.8": "5.2.8",
+    "npm:@fontsource-variable/inter@^5.2.8": "5.2.8",
+    "npm:@fontsource-variable/lora@^5.2.8": "5.2.8",
+    "npm:@fontsource-variable/newsreader@^5.2.10": "5.2.10",
+    "npm:@fontsource-variable/source-serif-4@^5.2.9": "5.2.9",
+    "npm:@fontsource/atkinson-hyperlegible@^5.2.8": "5.2.8",
+    "npm:@fontsource/noto-sans-sc@^5.2.9": "5.2.9",
+    "npm:@fontsource/noto-serif-sc@^5.2.9": "5.2.9",
     "npm:@mui/icons-material@7": "7.3.11_@mui+material@7.3.11__@emotion+react@11.14.0___react@19.2.6__@emotion+styled@11.14.1___@emotion+react@11.14.0____react@19.2.6___react@19.2.6__@types+react@19.2.15__react@19.2.6__react-dom@19.2.6___react@19.2.6_@types+react@19.2.15_react@19.2.6_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@mui/material@7": "7.3.11_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_@types+react@19.2.15_react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@replit/codemirror-vim@^6.3.0": "6.3.0_@codemirror+commands@6.10.3_@codemirror+language@6.12.3_@codemirror+search@6.7.0_@codemirror+state@6.6.0_@codemirror+view@6.43.0",
@@ -458,6 +466,30 @@
       "integrity": "sha512-56hiAJPhwQ1R4i+21FVF7V8kSD5zZTdHcVuRFMW0hn753vVfQN8xlx4uOPT4xoGH0Z/oVATuR82AiqSTDIpaHg==",
       "os": ["win32"],
       "cpu": ["x64"]
+    },
+    "@fontsource-variable/ibm-plex-sans@5.2.8": {
+      "integrity": "sha512-n5PF2iFa0CZT0QYTPzxvZ39opC9LnU0zdoRccoADbs+Dtsd+lbXOZF7RNuIPHcQX1dKjF63sxnRImQIB5eD0Ag=="
+    },
+    "@fontsource-variable/inter@5.2.8": {
+      "integrity": "sha512-kOfP2D+ykbcX/P3IFnokOhVRNoTozo5/JxhAIVYLpea/UBmCQ/YWPBfWIDuBImXX/15KH+eKh4xpEUyS2sQQGQ=="
+    },
+    "@fontsource-variable/lora@5.2.8": {
+      "integrity": "sha512-cxjTJ9BbOWIzusewR4UMBLVePvTSWV6dtNaNsCkF/oKoyA68fJGWfaYCILOOP1BObE4dmjfZ3xo6m9hdHhtYhg=="
+    },
+    "@fontsource-variable/newsreader@5.2.10": {
+      "integrity": "sha512-MdI2iRwrqWpMOU/2aV2BgfZ4dJNlj/XlYaY8Zb7t87mWqHskYW0XiUANkt1cyOCiEfW2VQ0bQ5vZgGPp6B2B4w=="
+    },
+    "@fontsource-variable/source-serif-4@5.2.9": {
+      "integrity": "sha512-PPcxjLFk/fS0WHg79pDM2YNvz61kC+oYZ5cWZZyCS0DHpJncmuYOuiZAsvj4tDxlWPBEvxxcRLQQNmSaRbPkqw=="
+    },
+    "@fontsource/atkinson-hyperlegible@5.2.8": {
+      "integrity": "sha512-HciLcJ5DIK/OVOdo71EbEN4NnvDFlp6/SpAxtcbWf2aAdcsOuPqITxj5KNEXb48qSPSdnnZdGGnSJChPKi3/bA=="
+    },
+    "@fontsource/noto-sans-sc@5.2.9": {
+      "integrity": "sha512-bTUIWGBgJDpwi5qAr+x0/lcgv80IHTB9vl6s2f6EymZEa7qYV99yNRBZuKFT+SYDKVunZrjCEhWtpxqmbXWl5Q=="
+    },
+    "@fontsource/noto-serif-sc@5.2.9": {
+      "integrity": "sha512-+wosdNmyrtRjnqJ/4A6i99jApm6ye34n8Nh7jUO3P/+6Hd1ZBY1gB9yGaI5jVxb56RS1lM2kTc0DzX1ifRO2MA=="
     },
     "@jridgewell/gen-mapping@0.3.13": {
       "integrity": "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==",
@@ -2201,6 +2233,14 @@
         "npm:@codemirror/view@^6.36.0",
         "npm:@emotion/react@^11.13.0",
         "npm:@emotion/styled@^11.13.0",
+        "npm:@fontsource-variable/ibm-plex-sans@^5.2.8",
+        "npm:@fontsource-variable/inter@^5.2.8",
+        "npm:@fontsource-variable/lora@^5.2.8",
+        "npm:@fontsource-variable/newsreader@^5.2.10",
+        "npm:@fontsource-variable/source-serif-4@^5.2.9",
+        "npm:@fontsource/atkinson-hyperlegible@^5.2.8",
+        "npm:@fontsource/noto-sans-sc@^5.2.9",
+        "npm:@fontsource/noto-serif-sc@^5.2.9",
         "npm:@mui/icons-material@7",
         "npm:@mui/material@7",
         "npm:@replit/codemirror-vim@^6.3.0",

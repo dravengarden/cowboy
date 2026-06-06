@@ -3,9 +3,12 @@ import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { App } from "./App";
 import { useThemeMode } from "./theme";
+import { useReadingFontFaces } from "./readingSettings";
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
+  // Lazy-load + apply the selected reading font (sets --cowboy-reading-font).
+  useReadingFontFaces();
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />

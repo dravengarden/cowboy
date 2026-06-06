@@ -18,6 +18,7 @@ import {
     ListItemText,
     Menu,
     MenuItem,
+    Select,
     Snackbar,
     Stack,
     Switch,
@@ -31,6 +32,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    Check as CheckIcon,
     Circle,
     DeleteOutline,
     DriveFileRenameOutline,
@@ -49,6 +51,16 @@ import {
 } from "./protocol";
 import { send, useStore } from "./store";
 import { setVimSetting, useVimSetting } from "./vimSetting";
+import {
+    FONT_SCALE_PRESETS,
+    nearestPreset,
+    PADDING_PRESETS,
+    setFontScale,
+    setFontVariant,
+    setPadding,
+    useReadingSettings,
+} from "./readingSettings";
+import { FONT_PRESETS } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
@@ -903,6 +915,7 @@ function SettingsShell({
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
     const vim = useVimSetting();
+    const reading = useReadingSettings();
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -910,6 +923,144 @@ function SettingsShell({
         <BottomSheet open={open} onClose={onClose} title="Settings">
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
+
+                {/* Reading comfort — scales only the transcript message content
+                    and its side gutter (chrome stays put). Dropdowns, not a
+                    slider: they tap cleanly on touch (see readingSettings). */}
+                <Divider />
+                <Stack spacing={2}>
+                    <Typography variant="overline" color="text.secondary">
+                        Reading
+                    </Typography>
+
+                    {/* Font family — a card per preset, each previewed in its
+                        own face (the @fontsource woff2 loads lazily once
+                        selected; until then the card shows the fallback stack).
+                        Same picker shape as liveview. */}
+                    <Stack spacing={0.75}>
+                        {FONT_PRESETS.map((preset) => {
+                            const selected = reading.fontVariant === preset.id;
+                            return (
+                                <Box
+                                    key={preset.id}
+                                    onClick={(): void =>
+                                        setFontVariant(preset.id)}
+                                    sx={{
+                                        cursor: "pointer",
+                                        borderRadius: 1,
+                                        border: 2,
+                                        borderColor: selected
+                                            ? "primary.main"
+                                            : "divider",
+                                        px: 1.5,
+                                        py: 1,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        gap: 1,
+                                        transition: "border-color 0.15s ease",
+                                        "&:hover": {
+                                            borderColor: selected
+                                                ? "primary.main"
+                                                : "text.secondary",
+                                        },
+                                    }}
+                                >
+                                    <Box sx={{ minWidth: 0 }}>
+                                        <Typography
+                                            sx={{
+                                                fontFamily: preset.stack,
+                                                fontSize: "1.05rem",
+                                                lineHeight: 1.3,
+                                            }}
+                                            noWrap
+                                        >
+                                            {preset.label} · 阅读 Aa
+                                        </Typography>
+                                        <Typography
+                                            variant="caption"
+                                            color="text.secondary"
+                                            noWrap
+                                        >
+                                            {preset.note}
+                                        </Typography>
+                                    </Box>
+                                    {selected && (
+                                        <CheckIcon
+                                            fontSize="medium"
+                                            color="primary"
+                                        />
+                                    )}
+                                </Box>
+                            );
+                        })}
+                    </Stack>
+
+                    <Stack
+                        direction="row"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        spacing={2}
+                    >
+                        <Stack>
+                            <Typography variant="body2">Font size</Typography>
+                            <Typography
+                                variant="caption"
+                                color="text.secondary"
+                            >
+                                Scales message text
+                            </Typography>
+                        </Stack>
+                        <Select
+                            size="small"
+                            value={nearestPreset(
+                                reading.fontScale,
+                                FONT_SCALE_PRESETS,
+                            )}
+                            onChange={(e): void =>
+                                setFontScale(Number(e.target.value))}
+                            sx={{ minWidth: 104 }}
+                        >
+                            {FONT_SCALE_PRESETS.map((v) => (
+                                <MenuItem key={v} value={v}>
+                                    {Math.round(v * 100)}%
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </Stack>
+                    <Stack
+                        direction="row"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        spacing={2}
+                    >
+                        <Stack>
+                            <Typography variant="body2">Padding</Typography>
+                            <Typography
+                                variant="caption"
+                                color="text.secondary"
+                            >
+                                Side gutter of the transcript
+                            </Typography>
+                        </Stack>
+                        <Select
+                            size="small"
+                            value={nearestPreset(
+                                reading.padding,
+                                PADDING_PRESETS,
+                            )}
+                            onChange={(e): void =>
+                                setPadding(Number(e.target.value))}
+                            sx={{ minWidth: 104 }}
+                        >
+                            {PADDING_PRESETS.map((v) => (
+                                <MenuItem key={v} value={v}>
+                                    {v === 0 ? "None" : `${v}px`}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </Stack>
+                </Stack>
                 {desktop && (
                     <>
                         <Divider />
