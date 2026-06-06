@@ -880,7 +880,7 @@ export function App({
                                 <StatusDot status={active.status} />
                                 <ProviderIcon
                                     provider={active.provider}
-                                    fontSize="medium"
+                                    fontSize="small"
                                     sx={{ flexShrink: 0 }}
                                 />
                                 <Tooltip title={active.title} enterDelay={400}>
@@ -1265,6 +1265,10 @@ function SettingsShell({
                                     setNavbarPosition(
                                         e.target.value as NavbarPosition,
                                     )}
+                                // See the reading Selects above: lift the dropdown
+                                // above the non-Modal mobile sheet so it's tappable
+                                // on touch (else the menu opens behind the sheet).
+                                MenuProps={{ sx: (t) => ({ zIndex: t.zIndex.modal + 2 }) }}
                                 sx={{ minWidth: 104 }}
                             >
                                 <MenuItem value="top">Top</MenuItem>
