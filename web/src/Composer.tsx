@@ -39,6 +39,7 @@ import {
   VerticalAlignBottom,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
@@ -231,6 +232,9 @@ export function Composer({
   // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
   // pays for it. The reactive setting is flipped by the Settings toggle.
   const vim = useVimSetting();
+  // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
+  // completion). See ComposerTextarea for the why.
+  const touchInput = useTouchComposer();
 
   function submit(): void {
     if (!sendable) return;
@@ -305,32 +309,51 @@ export function Composer({
           e.target.value = "";
         }}
       />
-      {/* CodeMirror-6 editor styled as a MUI outlined field — replaces the
-          <textarea> (which forced the iOS keyboard bar) and folds the `@`/`/`
-          pickers into CM autocomplete. */}
-      <ComposerEditor
-        ref={editorRef}
-        // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
-        value={initialDraftText.current}
-        onChange={setText}
-        onSubmit={submit}
-        sessionId={sessionId}
-        commands={(): AvailableCommand[] => availableCommands}
-        placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
-        vim={vim}
-        onPasteFiles={addFiles}
-        onEscape={(): boolean => {
-          // Esc cancels a running turn (via the confirm modal), but only when a
-          // turn is actually in flight — otherwise leave Esc to the editor. In
-          // vim, ComposerEditor only calls this once we're already in normal
-          // mode, so insert-mode Esc still just exits to normal.
-          if (busy) {
-            setCancelOpen(true);
-            return true;
-          }
-          return false;
-        }}
-      />
+      {/* Input tier: native textarea on touch (CodeMirror's contenteditable
+          strands IME pinyin on iOS — see ComposerTextarea), CodeMirror on
+          desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */}
+      {touchInput ? (
+        <ComposerTextarea
+          ref={editorRef}
+          // Controlled by `text` (a native textarea handles IME under control).
+          value={text}
+          onChange={setText}
+          onSubmit={submit}
+          placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
+          onPasteFiles={addFiles}
+          onEscape={(): boolean => {
+            if (busy) {
+              setCancelOpen(true);
+              return true;
+            }
+            return false;
+          }}
+        />
+      ) : (
+        <ComposerEditor
+          ref={editorRef}
+          // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
+          value={initialDraftText.current}
+          onChange={setText}
+          onSubmit={submit}
+          sessionId={sessionId}
+          commands={(): AvailableCommand[] => availableCommands}
+          placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
+          vim={vim}
+          onPasteFiles={addFiles}
+          onEscape={(): boolean => {
+            // Esc cancels a running turn (via the confirm modal), but only when a
+            // turn is actually in flight — otherwise leave Esc to the editor. In
+            // vim, ComposerEditor only calls this once we're already in normal
+            // mode, so insert-mode Esc still just exits to normal.
+            if (busy) {
+              setCancelOpen(true);
+              return true;
+            }
+            return false;
+          }}
+        />
+      )}
       {/* Action row below the input: slash-command / @-reference triggers on
           the left, then the agent config (inline chips on desktop, the bottom
           sheet on touch), then the send button. Buttons are 40px on touch so
@@ -824,6 +847,8 @@ function QueuedRow({
   // "running" is the idle-ready state; "exited"/"crashed" dispatch a revive.
   // Anything else ("busy"/"starting") has an in-flight turn → force push.
   const dispatchable = status === "running" || status === "exited" || status === "crashed";
+  // Touch → native textarea (correct IME); desktop → CodeMirror.
+  const touchInput = useTouchComposer();
   // Focus the editor when the row enters edit mode. useLayoutEffect, NOT
   // useEffect: a passive effect runs after paint, outside the tap's user-
   // activation window, so iOS Safari silently refuses to raise the keyboard for
@@ -861,24 +886,39 @@ function QueuedRow({
               setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
           />
         )}
-        <ComposerEditor
-          ref={editorRef}
-          // The edit box mounts fresh each time the row enters edit mode (the
-          // read-mode branch has no ComposerEditor), so this seeds the current
-          // text. Uncontrolled thereafter — onChange feeds `draft`, never back
-          // into `value` (mirrors the main composer's latch-avoidance).
-          value={message.text}
-          onChange={setDraft}
-          onSubmit={save}
-          sessionId={sessionId}
-          commands={commands}
-          placeholder="Edit queued message…"
-          onPasteFiles={addEditFiles}
-          onEscape={(): boolean => {
-            cancel();
-            return true;
-          }}
-        />
+        {touchInput ? (
+          <ComposerTextarea
+            ref={editorRef}
+            value={draft}
+            onChange={setDraft}
+            onSubmit={save}
+            placeholder="Edit queued message…"
+            onPasteFiles={addEditFiles}
+            onEscape={(): boolean => {
+              cancel();
+              return true;
+            }}
+          />
+        ) : (
+          <ComposerEditor
+            ref={editorRef}
+            // The edit box mounts fresh each time the row enters edit mode (the
+            // read-mode branch has no ComposerEditor), so this seeds the current
+            // text. Uncontrolled thereafter — onChange feeds `draft`, never back
+            // into `value` (mirrors the main composer's latch-avoidance).
+            value={message.text}
+            onChange={setDraft}
+            onSubmit={save}
+            sessionId={sessionId}
+            commands={commands}
+            placeholder="Edit queued message…"
+            onPasteFiles={addEditFiles}
+            onEscape={(): boolean => {
+              cancel();
+              return true;
+            }}
+          />
+        )}
         <Stack direction="row" spacing={0.5} justifyContent="flex-end" sx={{ mt: 0.5 }}>
           <Button
             size="small"
