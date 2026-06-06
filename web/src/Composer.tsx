@@ -396,7 +396,11 @@ export function Composer({
               sx={TOOLBAR_ICON_BTN}
               onClick={(): void => editorRef.current?.insertTrigger("/")}
             >
-              <Box component="span" sx={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
+              {/* rem, NOT px: the global font scale (useGlobalFontScale) grows
+                  the app via the root font-size, so the sibling SvgIcons (rem)
+                  scale but a px glyph wouldn't. 1.375rem = the old 22px at 100%,
+                  tracking the ~1.5rem medium icons next to it. */}
+              <Box component="span" sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}>
                 /
               </Box>
             </IconButton>
