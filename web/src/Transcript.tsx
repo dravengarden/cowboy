@@ -52,7 +52,7 @@ import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import { send } from "./store";
 import { useReadingSettings } from "./readingSettings";
-import { BottomSheet } from "./_shell";
+import { BottomSheet, ImageLightbox } from "./_shell";
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -243,6 +243,42 @@ function toolIcon(kind: string): React.ReactElement {
   }
 }
 
+// A transcript image: a bounded, tappable thumbnail that opens the shared
+// zoom/pan lightbox. The chunk's src is already a downscaled (~1568px) data URL
+// (see attachments.ts), so it's light enough to inline here and sharp enough to
+// zoom. plate={false}: chat images are screenshots/photos, not white-bg figures
+// that need a frame.
+function TranscriptImage({ src, alt }: { src: string; alt: string }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Box
+        component="img"
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onClick={(): void => setOpen(true)}
+        sx={{
+          maxWidth: "min(240px, 100%)",
+          maxHeight: 240,
+          objectFit: "cover",
+          display: "block",
+          borderRadius: 1,
+          my: 0.5,
+          cursor: "zoom-in",
+        }}
+      />
+      <ImageLightbox
+        images={[{ src, alt }]}
+        index={open ? 0 : null}
+        onIndex={(): void => undefined}
+        onClose={(): void => setOpen(false)}
+        plate={false}
+      />
+    </>
+  );
+}
+
 function ChunkView({
   chunk,
   invert,
@@ -251,23 +287,7 @@ function ChunkView({
   invert: boolean;
 }): React.JSX.Element {
   if (chunk.type === "image") {
-    return (
-      <Box
-        component="img"
-        src={chunk.src}
-        alt={chunk.alt ?? ""}
-        sx={{
-          maxWidth: "100%",
-          // Cap image preview height in dvh so it scales with viewport
-          // (mobile portrait stays bounded; desktop can show bigger).
-          maxHeight: "50dvh",
-          display: "block",
-          borderRadius: 1,
-          my: 0.5,
-        }}
-        loading="lazy"
-      />
-    );
+    return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
   }
   return <Markdown text={chunk.text} invert={invert} />;
 }
