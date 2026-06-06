@@ -385,16 +385,34 @@ async fn run_session(
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 cx.clone().spawn(async move {
-                    let stop_reason = match cx
+                    match cx
                         .send_request(PromptRequest::new(acp, blocks))
                         .block_task()
                         .await
                     {
-                        Ok(r) => format!("{:?}", r.stop_reason),
-                        Err(e) => format!("error: {e}"),
-                    };
-                    hub.push(&sid, Event::TurnEnd { stop_reason });
-                    hub.set_status(&sid, Status::Running, None);
+                        Ok(r) => {
+                            // Turn completed normally — including a `Cancelled`
+                            // stop from a force-push (that's an Ok response, and
+                            // we WANT the queue to drain the promoted prompt).
+                            // Going Running lets the auto-drain send the next one.
+                            hub.push(&sid, Event::TurnEnd {
+                                stop_reason: format!("{:?}", r.stop_reason),
+                            });
+                            hub.set_status(&sid, Status::Running, None);
+                        }
+                        Err(e) => {
+                            // The prompt itself FAILED (agent/connection error) —
+                            // the task didn't finish. Do NOT go Running, or the
+                            // auto-drain would fire the next queued prompt into a
+                            // failed turn ("a task wasn't done but the queue
+                            // auto-sent"). Mark crashed so the queue holds; an
+                            // explicit resend / send-now revives and resumes.
+                            hub.push(&sid, Event::TurnEnd {
+                                stop_reason: format!("error: {e}"),
+                            });
+                            hub.set_status(&sid, Status::Crashed, Some(e.to_string()));
+                        }
+                    }
                     Ok(())
                 })?;
             }

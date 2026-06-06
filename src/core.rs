@@ -823,21 +823,37 @@ impl Hub {
         }
     }
 
-    /// Whether a queued prompt can be dispatched right now: the dispatcher is
-    /// wired, the agent can take a turn (idle/ready or dead-but-resumable), and
-    /// nothing of ours is already in flight.
-    fn dispatchable(s: &Session) -> bool {
-        matches!(
-            s.meta.status,
-            Status::Running | Status::Exited | Status::Crashed
-        ) && !s.in_flight
+    /// Whether a queued prompt can be dispatched now. `allow_revive` is the
+    /// crucial distinction between the two callers:
+    ///
+    /// - **AUTO-drain** (turn-end / a queue mutation while idle) passes `false`,
+    ///   so it ONLY fires into an alive, idle agent (`Running`). It must never
+    ///   revive a dead one — otherwise an agent that exits or crashes MID-TASK
+    ///   clears the in-flight guard on its death edge and the auto-drain would
+    ///   immediately send the next queued prompt into a freshly-revived agent
+    ///   that has lost the unfinished task. That is the "a task wasn't done but
+    ///   the queue auto-sent" bug.
+    /// - **EXPLICIT** sends (submit a new message, "send now") pass `true`,
+    ///   deliberately reviving an exited/crashed session via `session/load`.
+    ///
+    /// Both require that nothing of ours is already in flight.
+    fn ready(s: &Session, allow_revive: bool) -> bool {
+        let can = if allow_revive {
+            matches!(
+                s.meta.status,
+                Status::Running | Status::Exited | Status::Crashed
+            )
+        } else {
+            s.meta.status == Status::Running
+        };
+        can && !s.in_flight
     }
 
     /// Dispatch the head of a session's queue if it can take a turn and the head
     /// isn't held for editing. Pops the head, marks in-flight, hands the prompt
     /// to the dispatcher task, and re-broadcasts the shrunken queue. No-op
-    /// otherwise. Called after every queue mutation and on every turn-end edge.
-    fn try_drain(&self, session_id: &str) {
+    /// otherwise. `allow_revive` is forwarded to [`Self::ready`].
+    fn drain_head(&self, session_id: &str, allow_revive: bool) {
         // Without a dispatcher wired we must not pop (the prompt would be lost).
         if self.inner.dispatch_tx.lock().unwrap().is_none() {
             return;
@@ -847,7 +863,7 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if !Self::dispatchable(s) {
+            if !Self::ready(s, allow_revive) {
                 return;
             }
             let Some(head) = s.queue.first() else {
@@ -866,6 +882,12 @@ impl Hub {
         };
         self.emit_pending(session_id);
         self.send_dispatch(req);
+    }
+
+    /// The AUTO-drain: only fires into an alive idle agent (never revives a dead
+    /// one). Called after every queue mutation and on every status change.
+    fn try_drain(&self, session_id: &str) {
+        self.drain_head(session_id, false);
     }
 
     /// Clear the in-flight guard (used by the dispatcher when a send fails) and
@@ -891,7 +913,7 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if wired && Self::dispatchable(s) && s.queue.is_empty() {
+            if wired && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight = true;
                 dispatch = Some(DispatchReq {
                     session_id: session_id.to_owned(),
@@ -967,8 +989,10 @@ impl Hub {
         self.emit_pending(session_id);
     }
 
-    /// Move a queued prompt to the front, then drain — dispatches it if the
-    /// session can take a turn now, otherwise it's simply next in line.
+    /// "Send now": move a queued prompt to the front, then dispatch it. This is
+    /// an EXPLICIT user action, so it may revive an exited/crashed session
+    /// (`allow_revive` = true) — unlike the auto-drain. If the agent is mid-turn it
+    /// just becomes next in line.
     pub fn request_send_queued(&self, session_id: &str, id: &str) {
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -983,7 +1007,7 @@ impl Hub {
             }
         }
         self.emit_pending(session_id);
-        self.try_drain(session_id);
+        self.drain_head(session_id, true);
     }
 
     /// Move a queued prompt back to drafts.
