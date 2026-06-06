@@ -265,23 +265,24 @@ function SessionList({
                         // back-swipe edge (ui.md §7), where it was easy to miss.
                         sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
                     >
-                        {/* Leading grip — drag to reorder. stopPropagation in
-                            handleProps keeps a tap on the row (select) and the
-                            sheet's own drag separate from a reorder. */}
-                        <Box
+                        {/* Leading grip — drag to reorder. A real IconButton so
+                            the drag/tap area stays a fixed 40px (matching the
+                            trailing kebab) even as the glyph scales with the
+                            font. stopPropagation in handleProps keeps a row tap
+                            (select) and the sheet's drag separate from a reorder. */}
+                        <IconButton
                             {...sortable.handleProps(s.id)}
                             aria-label="Drag to reorder"
                             sx={{
-                                display: "flex",
-                                alignItems: "center",
-                                mr: 0.5,
-                                ml: -0.5,
-                                color: "text.disabled",
+                                width: 40,
+                                height: 40,
                                 flexShrink: 0,
+                                ml: -1,
+                                color: "text.disabled",
                             }}
                         >
                             <DragIndicator fontSize="small" />
-                        </Box>
+                        </IconButton>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={

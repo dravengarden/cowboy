@@ -915,15 +915,17 @@ function PendingPanel({
                 spacing={0.5}
               >
                 {/* Leading grip — drag to reorder; hidden while this row is being
-                    edited (the edit field owns the row then). */}
+                    edited (the edit field owns the row then). A real IconButton so
+                    the drag area stays a fixed tap target (matching the row's
+                    other buttons) even as the glyph scales with the font. */}
                 {editingId !== m.id && (
-                  <Box
+                  <IconButton
                     {...sortable.handleProps(m.id)}
                     aria-label="Drag to reorder"
-                    sx={{ display: "flex", alignItems: "center", color: "text.disabled", flexShrink: 0 }}
+                    sx={{ ...TOOLBAR_ICON_BTN, color: "text.disabled" }}
                   >
                     <DragIndicator fontSize="small" />
-                  </Box>
+                  </IconButton>
                 )}
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <PendingRow
