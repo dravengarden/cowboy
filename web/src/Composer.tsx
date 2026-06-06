@@ -374,6 +374,8 @@ export function Composer({
           value={text}
           onChange={setText}
           onSubmit={submit}
+          sessionId={sessionId}
+          commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
           onPasteFiles={addFiles}
           onEscape={(): boolean => {
@@ -1031,6 +1033,8 @@ function PendingRow({
             value={draft}
             onChange={setDraft}
             onSubmit={save}
+            sessionId={sessionId}
+            commands={commands}
             placeholder="Edit queued message…"
             onPasteFiles={addEditFiles}
             onEscape={(): boolean => {
