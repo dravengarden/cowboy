@@ -817,12 +817,16 @@ export function App({
                         // Top mode: order 0, first child.
                         order: navbarAtBottom ? 2 : 0,
                         // Own the safe-area inset of whichever edge the bar hugs.
-                        // Top: clear the status bar / notch. Bottom: clear the
-                        // home-indicator (pb) and, in landscape, the rounded-corner
-                        // side insets (pl/pr) so the bar never tucks under the iPhone
-                        // / iPad R角. All env() insets are 0 off-device + when hosted.
+                        // Top: clear the status bar / notch. Bottom: sit TIGHT into
+                        // the home-indicator zone the same way the composer action
+                        // row does — `home-inset − 20px` (≈14px on a home-bar iPhone
+                        // instead of the full ~34px), floored to 2px on devices
+                        // without a home bar — so the bar drops low instead of
+                        // floating with a big gap below it. Landscape rounded-corner
+                        // side insets (pl/pr) keep the bar clear of the iPhone/iPad
+                        // R角. All env() insets are 0 off-device + when hosted.
                         pt: navbarAtBottom ? 0 : "env(safe-area-inset-top, 0px)",
-                        pb: navbarAtBottom ? "env(safe-area-inset-bottom, 0px)" : 0,
+                        pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 20px), 2px)" : 0,
                         pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                     }}
