@@ -225,6 +225,20 @@ export function Composer({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
+  // Open the native file picker, restoring composer focus when the web view
+  // regains it. iOS LIMITATION: the system file/photo picker is its own surface
+  // that takes first responder, so the soft keyboard collapses and the composer
+  // blurs while it's open — a pure web app CANNOT keep the keyboard up under it
+  // (same class as the iOS keyboard-bar / audio-on-lock limits; only a native
+  // WKWebView/Capacitor shell could). Best-effort: refocus on the next window
+  // focus (covers pick AND cancel). On selection the change handler also
+  // refocuses; Android re-raises the keyboard, iOS restores the caret (a tap
+  // may be needed to re-raise the keyboard there).
+  function openFilePicker(): void {
+    globalThis.addEventListener?.("focus", () => editorRef.current?.focus(), { once: true });
+    fileInputRef.current?.click();
+  }
+
   // Pull the agent-advertised options for this session, if known. Sorted in
   // a fixed display order so dropdowns don't flicker between
   // config_option_update notifications.
@@ -362,6 +376,9 @@ export function Composer({
           addFiles(Array.from(e.target.files ?? []));
           // Reset so picking the same file twice in a row still fires change.
           e.target.value = "";
+          // Restore composer focus after a pick so the user keeps typing without
+          // re-tapping (see openFilePicker for the iOS caveat).
+          editorRef.current?.focus();
         }}
       />
       {/* Input tier: native textarea on touch (CodeMirror's contenteditable
@@ -452,7 +469,7 @@ export function Composer({
               aria-label="attach image or file"
               disabled={dead}
               sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => fileInputRef.current?.click()}
+              onClick={openFilePicker}
             >
               <AttachFile />
             </IconButton>
