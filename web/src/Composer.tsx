@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -787,9 +787,16 @@ function QueuedRow({
   // "running" is the idle-ready state; "exited"/"crashed" dispatch a revive.
   // Anything else ("busy"/"starting") has an in-flight turn → force push.
   const dispatchable = status === "running" || status === "exited" || status === "crashed";
-  // Focus the editor when the row enters edit mode (the old TextField used
-  // autoFocus; ComposerEditor exposes an imperative focus()).
-  useEffect(() => {
+  // Focus the editor when the row enters edit mode. useLayoutEffect, NOT
+  // useEffect: a passive effect runs after paint, outside the tap's user-
+  // activation window, so iOS Safari silently refuses to raise the keyboard for
+  // the programmatic focus — the edit box opened but stayed unfocused. A layout
+  // effect runs synchronously in the same task as the Edit-button click, before
+  // paint; @uiw creates the CM view in its own (child) layout effect, which
+  // fires first, so the view already exists here. Focusing from here keeps it
+  // inside the gesture and pops the keyboard. (@uiw's own autoFocus wouldn't
+  // help: it focuses from a passive useEffect — the same late timing.)
+  useLayoutEffect(() => {
     if (editing) editorRef.current?.focus();
   }, [editing]);
   if (editing) {
