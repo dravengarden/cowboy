@@ -36,6 +36,7 @@ import {
   Send,
   Stop,
   Tune,
+  VerticalAlignBottom,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { useVimSetting } from "./vimSetting";
@@ -52,6 +53,7 @@ import {
   useStore,
 } from "./store";
 import { getDraft, setDraft } from "./draftStore";
+import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { originLabel } from "./protocol";
 import type {
   AcpUpdate,
@@ -153,6 +155,11 @@ export function Composer({
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
   const [cancelOpen, setCancelOpen] = useState(false);
+  // "Stick to bottom" (auto-scroll) state for this session — owned by the
+  // Transcript's scroll engine, surfaced here as a persistent toggle. Active =
+  // following the latest message; tap while inactive scrolls to the bottom and
+  // resumes following, tap while active stops following.
+  const sticky = useSticky(sessionId);
 
   const busy = status === "busy";
   const starting = status === "starting";
@@ -396,6 +403,25 @@ export function Composer({
         )}
 
         <Box sx={{ flex: 1 }} />
+
+        {/* Sticky / auto-scroll toggle. Always visible (out of the scrollable
+            config-chip area), default ON. Active = primary; inactive = muted.
+            Tap while inactive → scroll to bottom + follow again; tap while
+            active → stop following. The Transcript owns the actual scrolling
+            (stickyStore). */}
+        <Tooltip title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}>
+          <IconButton
+            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
+            color={sticky ? "primary" : "default"}
+            sx={TOOLBAR_ICON_BTN}
+            onClick={(): void =>
+              sticky
+                ? setSticky(sessionId, false)
+                : requestStickToBottom(sessionId)}
+          >
+            <VerticalAlignBottom />
+          </IconButton>
+        </Tooltip>
 
         {!compact && (
           <Typography

@@ -31,7 +31,6 @@ import {
   useTheme,
 } from "@mui/material";
 import {
-  ArrowDownward,
   CheckCircle,
   Code,
   Construction,
@@ -52,6 +51,11 @@ import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import { send } from "./store";
 import { useReadingSettings } from "./readingSettings";
+import {
+  resetSticky,
+  setSticky,
+  useScrollNonce,
+} from "./stickyStore";
 import { BottomSheet, ImageLightbox } from "./_shell";
 
 // --- Loading primitives -----------------------------------------------------
@@ -216,10 +220,6 @@ function StreamingCaret(): React.JSX.Element {
     />
   );
 }
-
-// Pixels above the bottom past which the scroll-to-latest FAB appears. Matches
-// Slack / Telegram / Linear — roughly one short message worth of hidden content.
-const FAB_THRESHOLD = 200;
 
 function toolColor(status: string): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
@@ -775,10 +775,18 @@ export function Transcript({
   //   actually at the bottom (the user manually scrolled all the way back).
   // - Auto-snap on new items uses the **`stick` value at the time of the
   //   commit** — i.e. via a ref so we don't re-render to keep it.
-  // - A floating "↓" button surfaces when the user is detached so they can
-  //   re-stick without scrolling manually.
+  // - The on/off state is mirrored to the per-session stickyStore so the
+  //   composer's sticky toggle reflects + drives it (it shows active when
+  //   stuck, and a tap bumps scrollNonce → we scroll to the bottom below).
   const stick = useRef(true);
-  const [detached, setDetached] = useState(false);
+  // Transcript is NOT remounted per session (it re-pins via the sessionId
+  // effect), so the once-wired scroll listeners would capture a stale
+  // sessionId. Read it through a ref that tracks the latest prop.
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  // Bumped by the composer toggle (requestStickToBottom) to ask us to scroll to
+  // the bottom now; the effect below reacts to a change.
+  const scrollNonce = useScrollNonce(sessionId);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -792,34 +800,28 @@ export function Transcript({
     measureElement: (el) => Math.round(el.getBoundingClientRect().height),
   });
 
-  // Whether the viewport sits far enough above the bottom to surface the
-  // scroll-to-latest FAB (a 3-message transcript that fits the viewport never
-  // does). Stored as a BOOLEAN, not the raw pixel distance: `onScroll` fires
-  // every frame, and setting a numeric state each time would re-render the
-  // whole Transcript on every scroll tick (the jitter). A boolean only flips
-  // when crossing the threshold, so React bails out of the in-between renders.
-  const [farFromBottom, setFarFromBottom] = useState(false);
-
-  // Wire user-intent listeners ONCE; they read parentRef each time so the
-  // dependency on the ref's contents stays out of React's eyes.
+  // Wire user-intent listeners ONCE; they read parentRef + sessionIdRef each
+  // time so the dependency on the ref's contents stays out of React's eyes.
   useEffect(() => {
     const el = parentRef.current;
     if (!el) return undefined;
     const detach = (): void => {
       if (stick.current) {
         stick.current = false;
-        setDetached(true);
+        // Reading back history → stop following; the composer toggle goes
+        // inactive. setSticky no-ops when already off, so this is cheap even
+        // though `wheel`/`scroll` fire often.
+        setSticky(sessionIdRef.current, false);
       }
     };
     const onScroll = (): void => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      // Functional update returning the unchanged value → React skips the
-      // re-render, so mid-scroll frames that don't cross the threshold are free.
-      setFarFromBottom((prev) => (dist > FAB_THRESHOLD) === prev ? prev : dist > FAB_THRESHOLD);
       const atBottom = dist < 24;
       if (atBottom && !stick.current) {
+        // Manually scrolled all the way back to the bottom → re-stick + the
+        // toggle reactivates (REQ-4).
         stick.current = true;
-        setDetached(false);
+        setSticky(sessionIdRef.current, true);
       }
     };
     el.addEventListener("wheel", detach, { passive: true });
@@ -846,8 +848,9 @@ export function Transcript({
   // actual bottom as heights settle.
   useLayoutEffect(() => {
     stick.current = true;
-    setDetached(false);
-    setFarFromBottom(false);
+    // A (re)opened session starts pinned + following, regardless of a prior
+    // detached state (REQ: default on).
+    resetSticky(sessionId);
     let raf = 0;
     let tries = 0;
     const pin = (): void => {
@@ -859,28 +862,26 @@ export function Transcript({
     return () => cancelAnimationFrame(raf);
   }, [sessionId]);
 
-  // Auto-snap only on rowCount changes, ONLY if we're still stuck.
-  // We also recompute `distFromBottom` here because the virtualizer's
-  // total height changes when new events stream in — the user may be
-  // detached, watching a partial reply, and the FAB needs to (start to)
-  // appear without an actual scroll event firing.
+  // Auto-snap (the actual "sticky" behaviour) only on rowCount changes, ONLY if
+  // we're still stuck — new streamed content keeps the view pinned to the latest
+  // line.
   useLayoutEffect(() => {
-    const el = parentRef.current;
-    if (el) {
-      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setFarFromBottom(dist > FAB_THRESHOLD);
-    }
     if (!stick.current || rowCount === 0) return;
     virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
   }, [rowCount, virtualizer]);
 
-  function jumpToBottom(): void {
+  // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
+  // bottom and resume following. Guarded so it only fires on an actual bump
+  // (not on mount / session switch, where the sessionId effect already pins).
+  const lastNonceRef = useRef(scrollNonce);
+  useEffect(() => {
+    if (scrollNonce === lastNonceRef.current) return;
+    lastNonceRef.current = scrollNonce;
     stick.current = true;
-    setDetached(false);
     if (rowCount > 0) {
       virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
     }
-  }
+  }, [scrollNonce, rowCount, virtualizer]);
 
   return (
     <Box sx={{ flex: 1, position: "relative", overflow: "hidden" }}>
@@ -945,31 +946,8 @@ export function Transcript({
           })}
         </Box>
       </Box>
-      {detached && farFromBottom && (
-        // Threshold matches Slack / Telegram / Linear: only surface the
-        // jump-down affordance when there's at least ~one short message
-        // worth of hidden content below. A three-line transcript that
-        // fits the viewport never sees this button.
-        <Fab
-          size="small"
-          color="primary"
-          aria-label="scroll to latest"
-          onClick={jumpToBottom}
-          sx={{
-            position: "absolute",
-            bottom: 16,
-            // The right pane spans the full device width on mobile (no
-            // sidebar), so in landscape this would sit under the notch /
-            // rounded corner. Floor the inset to keep it clear (0 off-device,
-            // so desktop is unchanged) — ui.md §7.
-            right: "max(env(safe-area-inset-right), 16px)",
-            zIndex: 1,
-            boxShadow: 3,
-          }}
-        >
-          <ArrowDownward />
-        </Fab>
-      )}
+      {/* The "scroll to latest" affordance is now the persistent sticky toggle
+          in the composer (stickyStore + Composer), not a transient Fab here. */}
       {pendingPermission && (
         <PermissionSheet
           sessionId={sessionId}
