@@ -968,11 +968,25 @@ export function Transcript({
   // (not on mount / session switch, where the sessionId effect already pins).
   const lastNonceRef = useRef(scrollNonce);
   useEffect(() => {
-    if (scrollNonce === lastNonceRef.current) return;
+    if (scrollNonce === lastNonceRef.current) return undefined;
     lastNonceRef.current = scrollNonce;
     stick.current = true;
-    const el = parentRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    // Converge across a few frames like the session-pin (NOT a single scroll):
+    // react-virtual measures rows lazily and markdown/images settle after paint,
+    // so one `scrollTop = scrollHeight` lands SHORT of the true bottom while a
+    // tall last bubble is still being measured — that's the "tapped the sticky
+    // toggle but it didn't reach the bottom" bug. Re-pin until scrollHeight
+    // stops growing; later async growth (an image load) is caught by the
+    // totalSize auto-snap above, now that stick is back on.
+    let raf = 0;
+    let tries = 0;
+    const pin = (): void => {
+      const el = parentRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      if (++tries < 5) raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(raf);
   }, [scrollNonce]);
 
   return (
