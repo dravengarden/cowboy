@@ -1,67 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cowboy">
-  <!-- Cowboy hat, the iconic head-on/side silhouette: a creased "cattleman"
-       crown (a centre dip between two soft peaks) over a wide brim that rolls UP
-       at both tips and dips in the middle. A single top-left light warms the
-       up-left leather and darkens the down-right; a dark hatband + gold buckle
-       wrap the crown; a blurred shadow falls bottom-right. This shape reads as a
-       cowboy hat instantly, unlike the old 3/4 front view. -->
+  <!-- Cowboy hat, bold + FLAT (Red Hat logic). Viewed front-3/4 like Red Hat's
+       fedora: the crown carries a SINGLE asymmetric front pinch (one soft dent
+       toward the front, the back rounding higher) — not a symmetric "M" cattleman
+       crease, which reads awkward head-on. Cowboy character comes from the wide
+       brim rolling up at both tips + the dent + a flat dark band. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#a987ff"/>
       <stop offset="0.55" stop-color="#7c3aed"/>
       <stop offset="1" stop-color="#4a1d96"/>
     </linearGradient>
-    <linearGradient id="leather" x1="0.1" y1="0.04" x2="0.92" y2="1">
-      <stop offset="0" stop-color="#f3d39a"/>
-      <stop offset="0.5" stop-color="#cf9a52"/>
-      <stop offset="1" stop-color="#83561e"/>
-    </linearGradient>
-    <linearGradient id="brimGrad" x1="0.16" y1="0" x2="0.9" y2="1">
-      <stop offset="0" stop-color="#e7bb72"/>
-      <stop offset="0.55" stop-color="#bd8542"/>
-      <stop offset="1" stop-color="#855820"/>
-    </linearGradient>
-    <linearGradient id="buckle" x1="0" y1="0" x2="0.4" y2="1">
-      <stop offset="0" stop-color="#fbe79a"/>
-      <stop offset="1" stop-color="#bb8a2c"/>
-    </linearGradient>
-    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="9"/></filter>
     <clipPath id="crownClip">
-      <path d="M 160 296 C 152 246 158 192 180 170 C 190 159 202 156 212 160 C 226 168 242 182 256 182 C 270 182 286 168 300 160 C 310 156 322 159 332 170 C 354 192 360 246 352 296 C 330 306 290 309 256 309 C 222 309 182 306 160 296 Z"/>
+      <path d="M 170 292 C 162 244 168 196 188 176 C 199 165 211 161 221 164 C 230 168 236 178 247 178 C 259 174 271 164 286 161 C 306 157 326 163 339 178 C 357 200 361 246 350 292 C 328 302 290 305 256 305 C 224 305 188 302 170 292 Z"/>
     </clipPath>
   </defs>
 
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <ellipse cx="150" cy="150" rx="215" ry="215" fill="#ffffff" opacity="0.10" filter="url(#soft)"/>
 
-  <g id="hat">
-    <!-- cast shadow, bottom-right -->
-    <ellipse cx="276" cy="372" rx="202" ry="26" fill="#280c50" opacity="0.5" filter="url(#soft)"/>
+  <path d="M 42 262
+           C 95 290 136 296 170 296
+           C 162 244 168 196 188 176
+           C 199 165 211 161 221 164
+           C 230 168 236 178 247 178
+           C 259 174 271 164 286 161
+           C 306 157 326 163 339 178
+           C 357 200 361 246 350 296
+           C 380 296 417 290 470 262
+           C 450 282 372 332 256 332
+           C 140 332 62 282 42 262 Z"
+        fill="#eccb7b"/>
 
-    <!-- BRIM: underside thickness, then the rolled top -->
-    <path d="M 42 268 C 120 302 200 306 256 306 C 312 306 392 302 470 268 C 450 286 372 334 256 334 C 140 334 62 286 42 268 Z"
-          transform="translate(0 10)" fill="#6a4420"/>
-    <path d="M 42 268 C 120 302 200 306 256 306 C 312 306 392 302 470 268 C 450 286 372 334 256 334 C 140 334 62 286 42 268 Z"
-          fill="url(#brimGrad)"/>
-    <!-- top sheen along the up-left edge -->
-    <path d="M 70 264 C 140 296 206 302 256 303 C 206 300 140 296 80 305 Z" fill="#ffffff" opacity="0.14"/>
-
-    <!-- CROWN -->
-    <path d="M 160 296 C 152 246 158 192 180 170 C 190 159 202 156 212 160 C 226 168 242 182 256 182 C 270 182 286 168 300 160 C 310 156 322 159 332 170 C 354 192 360 246 352 296 C 330 306 290 309 256 309 C 222 309 182 306 160 296 Z"
-          fill="url(#leather)"/>
-    <!-- bottom-right body shading -->
-    <path clip-path="url(#crownClip)" d="M 300 158 C 336 210 360 262 352 304 L 360 312 L 214 312 C 296 308 312 248 300 158 Z" fill="#5c3a18" opacity="0.28"/>
-    <!-- crease valley (the cattleman dip between the peaks) -->
-    <path d="M 230 170 C 243 184 269 184 282 170 C 271 196 241 196 230 170 Z" fill="#90602b" opacity="0.45"/>
-    <!-- left-peak highlight (faces the light) -->
-    <ellipse clip-path="url(#crownClip)" cx="200" cy="214" rx="15" ry="50" fill="#fbe7bd" opacity="0.4" transform="rotate(-10 200 214)"/>
-
-    <!-- hatband + gold buckle -->
-    <g clip-path="url(#crownClip)">
-      <rect x="150" y="270" width="208" height="30" fill="#3c2516"/>
-      <rect x="150" y="270" width="208" height="6" fill="#53331f"/>
-    </g>
-    <rect x="240" y="274" width="32" height="24" rx="4" fill="url(#buckle)"/>
-    <rect x="247" y="280" width="18" height="12" rx="2" fill="#8f6620"/>
+  <g clip-path="url(#crownClip)">
+    <rect x="150" y="268" width="216" height="30" fill="#43291a"/>
   </g>
 </svg>
