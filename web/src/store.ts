@@ -93,8 +93,9 @@ let state: State = {
   hydrated: new Set(),
   configOptions: new Map(),
   queues: new Map(),
-  // Restore persisted drafts + recover any persisted (undrained) queue as drafts.
-  drafts: loadDrafts(),
+  // Seeded just below once loadDrafts + its localStorage helpers are defined
+  // (calling loadDrafts here would hit those consts in the temporal dead zone).
+  drafts: new Map(),
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -202,6 +203,10 @@ function loadDrafts(): Map<string, QueuedMessage[]> {
   }
   return drafts;
 }
+
+// Seed the initial drafts now that loadDrafts + its helpers are defined. No
+// subscribers exist yet (module is still evaluating), so a direct assign is safe.
+state = { ...state, drafts: loadDrafts() };
 
 function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<string, Envelope[]> {
   const next = new Map(timelines);
