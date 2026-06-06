@@ -217,6 +217,18 @@ export const ComposerEditor = forwardRef<
           });
           return false;
         },
+        // Self-heal the compositing layer on focus loss. Safari can interrupt a
+        // composition WITHOUT firing compositionend — most notably the native
+        // photo picker (the attach button) stealing focus mid-pinyin. That would
+        // strand the scroller at `transform: none` (set on compositionstart),
+        // reviving the very "typed text won't repaint" bug the layer exists to
+        // fix — so after attaching an image, the next keystrokes misbehave.
+        // A blur always restores the layer, so whatever state a half-finished
+        // composition left, losing focus puts it back.
+        blur: (_event, view): boolean => {
+          view.scrollDOM.style.transform = "";
+          return false;
+        },
       }),
       history(),
       placeholderExt(placeholder ?? ""),

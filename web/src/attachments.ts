@@ -149,7 +149,17 @@ function drawScaled(bmp: ImageBitmap, maxEdge: number, quality: number): Raster 
 // the caller then falls back to embedding the original bytes verbatim.
 async function encodeImage(file: File): Promise<{ send: Raster; thumb: Raster } | null> {
   try {
-    const bmp = await createImageBitmap(file);
+    // Bound the decode. iOS Safari's createImageBitmap can hang indefinitely on
+    // some images (e.g. right after the native photo picker closes); an
+    // unsettled promise here would leave filesToAttachments' Promise.allSettled
+    // pending forever, so the attachment never stages and no preview ever
+    // appears. On timeout we resolve null and fall back to embedding the raw
+    // bytes — the chip/preview still shows.
+    const bmp = await Promise.race([
+      createImageBitmap(file),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
+    ]);
+    if (!bmp) return null;
     try {
       return { send: drawScaled(bmp, 1568, 0.85), thumb: drawScaled(bmp, 256, 0.7) };
     } finally {

@@ -562,6 +562,13 @@ function AttachmentPreviews({
   attachments: Attachment[];
   onRemove: (id: string) => void;
 }): React.JSX.Element {
+  // Thumbnails whose <img> failed to paint — fall them back to the named file
+  // chip. On iOS the picker can hand back a HEIC the canvas couldn't rasterize
+  // (encodeImage returned null), so the previewUrl is a `data:image/heic` URL
+  // Safari won't render in an <img>: it loaded "successfully" as empty, leaving
+  // a blank box. onError catches the decode failure so the user still sees the
+  // attachment (a chip) instead of nothing.
+  const [failedIds, setFailedIds] = useState<ReadonlySet<string>>(new Set());
   return (
     <Stack
       direction="row"
@@ -572,15 +579,23 @@ function AttachmentPreviews({
         overflowX: "auto",
         scrollbarWidth: "thin",
         "&::-webkit-scrollbar": { height: 6 },
+        // iOS repaint fix, same root cause as the editor (cmTheme): inside the
+        // position:fixed body WebKit may not paint freshly-inserted nodes —
+        // here the thumbnail that appears after returning from the native photo
+        // picker. Promoting the strip to its own compositing layer forces the
+        // paint, so the preview shows up immediately.
+        transform: "translateZ(0)",
       }}
     >
       {attachments.map((a) => (
         <Box key={a.id} sx={{ position: "relative", flexShrink: 0 }}>
-          {a.isImage && a.previewUrl ? (
+          {a.isImage && a.previewUrl && !failedIds.has(a.id) ? (
             <Box
               component="img"
               src={a.previewUrl}
               alt={a.name}
+              onError={(): void =>
+                setFailedIds((prev) => new Set(prev).add(a.id))}
               sx={{
                 width: 56,
                 height: 56,
