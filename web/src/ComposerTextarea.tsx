@@ -1,6 +1,7 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
-import { TextField } from "@mui/material";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
+import type { AvailableCommand } from "./protocol";
 
 // True on touch devices (coarse pointer). Computed once — a device doesn't flip
 // pointer type mid-session, and the composer remounts per session anyway.
@@ -13,6 +14,65 @@ export function useTouchComposer(): boolean {
   );
 }
 
+interface PickerOption {
+  /** Text to splice in (replaces the trigger token); includes a trailing space. */
+  apply: string;
+  primary: string;
+  secondary?: string;
+}
+
+// The active `@`/`/` trigger token at the caret, if any.
+interface Trigger {
+  type: "@" | "/";
+  from: number;
+  query: string;
+}
+
+// Find an active trigger token immediately before the caret — mirrors the desktop
+// CodeMirror rules (composerCompletions.ts): `/` only at the very start of the
+// input; `@` at the start or after whitespace. Returns null when neither applies
+// (caret moved / a space ended the token / the trigger was deleted), which
+// dismisses the popup.
+function computeTrigger(value: string, caret: number): Trigger | null {
+  const before = value.slice(0, caret);
+  const slash = /^\/(\S*)$/u.exec(before);
+  if (slash) return { type: "/", from: 0, query: slash[1] ?? "" };
+  const at = /(?:^|\s)@(\S*)$/u.exec(before);
+  if (at) {
+    const q = at[1] ?? "";
+    return { type: "@", from: caret - q.length - 1, query: q };
+  }
+  return null;
+}
+
+async function fetchFileOptions(sessionId: string, query: string): Promise<PickerOption[]> {
+  const url = `/api/sessions/${encodeURIComponent(sessionId)}/files?q=${
+    encodeURIComponent(query)
+  }&limit=20`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return [];
+    const d = (await r.json()) as { files?: string[] };
+    return (d.files ?? []).map((path) => {
+      const slash = path.lastIndexOf("/");
+      return {
+        apply: `@${path} `,
+        primary: slash >= 0 ? path.slice(slash + 1) : path,
+        ...(slash >= 0 ? { secondary: path.slice(0, slash) } : {}),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function slashOptions(commands: AvailableCommand[], query: string): PickerOption[] {
+  const q = query.toLowerCase();
+  return commands
+    .filter((c) => c.name.toLowerCase().includes(q))
+    .map((c) => ({ apply: `/${c.name} `, primary: `/${c.name}`, secondary: c.description }));
+}
+
 // Native-<textarea> composer for TOUCH devices, exposing the same
 // ComposerEditorHandle as the CodeMirror one so callers swap them transparently.
 //
@@ -21,28 +81,74 @@ export function useTouchComposer(): boolean {
 // with no upstream fix. A native textarea hands IME to the OS, so CJK input is
 // always correct.
 //
-// NB: an inline @/​/ picker was tried here and removed — its deferred
-// (requestAnimationFrame) refocus put iOS into a phantom keyboard-focus state
-// that `interactive-widget=resizes-content` shrank the layout viewport for
-// without showing a keyboard, leaving a dead gap below the UI. On touch the
-// action-row buttons just insert the trigger char and the user types the rest;
-// the live picker stays desktop-only (CodeMirror).
+// The `@`/`/` picker (this file): a filtered list anchored ABOVE the input (Slack
+// / iMessage idiom — in context, above the keyboard, not a modal). CRITICAL: the
+// option rows are NON-FOCUSABLE plain elements with `preventDefault` on
+// mousedown, so tapping one NEVER blurs the textarea — the keyboard stays up
+// through the whole pick and there's no deferred refocus (a focusable button +
+// rAF refocus previously caused an iOS phantom-keyboard viewport gap; see
+// [[ios-file-picker-keyboard-limit]] family). `@` fuzzy-searches files via the
+// daemon; `/` lists agent commands. Matches the desktop completion data + token
+// format.
 export const ComposerTextarea = forwardRef<
   ComposerEditorHandle,
   {
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
+    sessionId: string;
+    commands: () => AvailableCommand[];
     placeholder?: string;
     disabled?: boolean;
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
   }
 >(function ComposerTextarea(
-  { value, onChange, onSubmit, placeholder, disabled, onEscape, onPasteFiles },
+  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, onEscape, onPasteFiles },
   ref,
 ): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [trigger, setTrigger] = useState<Trigger | null>(null);
+  const [options, setOptions] = useState<PickerOption[]>([]);
+  const commandsRef = useRef(commands);
+  commandsRef.current = commands;
+
+  const sync = (v: string, caret: number): void => setTrigger(computeTrigger(v, caret));
+
+  useEffect(() => {
+    if (!trigger) {
+      setOptions([]);
+      return undefined;
+    }
+    if (trigger.type === "/") {
+      setOptions(slashOptions(commandsRef.current(), trigger.query));
+      return undefined;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      void fetchFileOptions(sessionId, trigger.query).then((opts) => {
+        if (!cancelled) setOptions(opts);
+      });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [trigger?.type, trigger?.query, sessionId]);
+
+  // Splice the chosen token in. NO .focus() here: the option row's mousedown
+  // preventDefault kept the textarea focused (keyboard never dropped), so we only
+  // move the caret (in a rAF, after the controlled value re-renders). Calling
+  // focus() — especially deferred — is what caused the iOS phantom-keyboard gap.
+  const applyOption = (apply: string): void => {
+    if (!trigger) return;
+    const end = trigger.from + 1 + trigger.query.length;
+    const next = value.slice(0, trigger.from) + apply + value.slice(end);
+    onChange(next);
+    setTrigger(null);
+    const pos = trigger.from + apply.length;
+    requestAnimationFrame(() => inputRef.current?.setSelectionRange(pos, pos));
+  };
 
   useImperativeHandle(ref, () => ({
     focus: (): void => inputRef.current?.focus(),
@@ -57,66 +163,123 @@ export const ComposerTextarea = forwardRef<
       const ta = inputRef.current;
       const at = ta?.selectionStart ?? value.length;
       const to = ta?.selectionEnd ?? at;
-      onChange(value.slice(0, at) + ch + value.slice(to));
-      ta?.focus();
-      // Caret lands just after the inserted char once the controlled value
-      // re-renders the textarea.
+      const next = value.slice(0, at) + ch + value.slice(to);
+      onChange(next);
+      ta?.focus(); // synchronous, inside the toolbar-button tap gesture — safe
+      const pos = at + ch.length;
       requestAnimationFrame(() => {
-        const p = at + ch.length;
-        inputRef.current?.setSelectionRange(p, p);
+        inputRef.current?.setSelectionRange(pos, pos);
+        sync(next, pos);
       });
     },
-    // Controlled by `value`; the caller empties it via onChange("") on submit,
-    // so there's nothing to clear imperatively.
     clear: (): void => undefined,
   }));
 
-  return (
-    <TextField
-      inputRef={inputRef}
-      value={value}
-      onChange={(e): void => onChange(e.target.value)}
-      onKeyDown={(e): void => {
-        // Hardware keyboard (e.g. iPad): Cmd/Ctrl+Enter sends; plain Enter stays
-        // a newline. Escape defers to the caller (cancel a running turn).
-        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-          e.preventDefault();
-          onSubmit();
-        } else if (e.key === "Escape" && onEscape?.()) {
-          e.preventDefault();
-        }
-      }}
-      onPaste={(e): void => {
-        const files = Array.from(e.clipboardData.files);
-        if (files.length > 0 && onPasteFiles) {
-          e.preventDefault();
-          onPasteFiles(files);
-        }
-      }}
-      placeholder={placeholder}
-      disabled={disabled}
-      multiline
-      minRows={1}
-      maxRows={10}
-      size="small"
-      fullWidth
+  const popup = trigger && options.length > 0 && (
+    <Paper
+      elevation={6}
       sx={{
-        // Keep a usable tap target even when a small font scale shrinks the
-        // text: the input box shouldn't collapse to a thin sliver. The textarea
-        // still grows from here as you type (top-aligned).
-        "& .MuiInputBase-root": {
-          minHeight: 44,
-          alignItems: "flex-start",
-        },
-        // `1rem` so the input tracks the reading font-size setting both up and
-        // down (useGlobalFontScale scales the root font-size); line-height
-        // follows the reading line-height var. No 16px floor — the installed PWA
-        // disables focus-zoom via the viewport meta. Matches cmTheme's sizing.
-        "& .MuiInputBase-input": {
-          fontSize: "1rem",
-          lineHeight: "var(--cowboy-reading-line-height, 1.5)",
-        },
+        position: "absolute",
+        bottom: "100%",
+        left: 0,
+        right: 0,
+        mb: 0.5,
+        maxHeight: "40vh",
+        overflowY: "auto",
+        borderRadius: 1.5,
+        zIndex: 4,
+        py: 0.5,
       }}
-    />
+    >
+      {options.map((o) => (
+        <Box
+          key={o.apply}
+          role="option"
+          // preventDefault on mousedown keeps the textarea focused (the keyboard
+          // never drops); a plain Box isn't focusable so it can't steal focus.
+          // Select on click so the list can still be scrolled by dragging.
+          onMouseDown={(e): void => e.preventDefault()}
+          onClick={(): void => applyOption(o.apply)}
+          sx={{
+            px: 1.5,
+            py: 1,
+            cursor: "pointer",
+            minWidth: 0,
+            "&:active": { bgcolor: "action.selected" },
+            "@media (hover: hover)": { "&:hover": { bgcolor: "action.hover" } },
+          }}
+        >
+          <Typography variant="body2" noWrap>
+            {o.primary}
+          </Typography>
+          {o.secondary != null && o.secondary !== "" && (
+            <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+              {o.secondary}
+            </Typography>
+          )}
+        </Box>
+      ))}
+    </Paper>
+  );
+
+  return (
+    <Box sx={{ position: "relative" }}>
+      {popup}
+      <TextField
+        inputRef={inputRef}
+        value={value}
+        onChange={(e): void => {
+          onChange(e.target.value);
+          sync(e.target.value, e.target.selectionStart ?? e.target.value.length);
+        }}
+        onSelect={(e): void => {
+          const ta = e.target as HTMLTextAreaElement;
+          sync(ta.value, ta.selectionStart ?? ta.value.length);
+        }}
+        onKeyDown={(e): void => {
+          if (e.key === "Escape" && trigger) {
+            e.preventDefault();
+            setTrigger(null);
+            return;
+          }
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            onSubmit();
+          } else if (e.key === "Escape" && onEscape?.()) {
+            e.preventDefault();
+          }
+        }}
+        onBlur={(): void => setTrigger(null)}
+        onPaste={(e): void => {
+          const files = Array.from(e.clipboardData.files);
+          if (files.length > 0 && onPasteFiles) {
+            e.preventDefault();
+            onPasteFiles(files);
+          }
+        }}
+        placeholder={placeholder}
+        disabled={disabled}
+        multiline
+        minRows={1}
+        maxRows={10}
+        size="small"
+        fullWidth
+        sx={{
+          // Keep a usable tap target even when a small font scale shrinks the
+          // text. The textarea still grows from here as you type (top-aligned).
+          "& .MuiInputBase-root": {
+            minHeight: 44,
+            alignItems: "flex-start",
+          },
+          // `1rem` so the input tracks the reading font-size setting both up and
+          // down; line-height follows the reading line-height var. No 16px floor
+          // — the installed PWA disables focus-zoom via the viewport meta.
+          "& .MuiInputBase-input": {
+            fontSize: "1rem",
+            lineHeight: "var(--cowboy-reading-line-height, 1.5)",
+          },
+        }}
+      />
+    </Box>
   );
 });
