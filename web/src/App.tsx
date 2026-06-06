@@ -795,7 +795,19 @@ export function App({
                 </Stack>
             )}
 
-            <Stack sx={{ flex: 1, minWidth: 0 }}>
+            <Stack
+                sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    // Lift the whole column off the on-screen keyboard + its
+                    // iOS-native accessory bar: this padding (the keyboard's
+                    // overlap, published by useKeyboardInset) reserves space at
+                    // the bottom, so the flex:1 transcript shrinks and the bottom
+                    // group (composer, or the navbar in bottom mode) rises clear
+                    // of the keyboard. 0 when no keyboard.
+                    pb: "var(--kb-inset, 0px)",
+                }}
+            >
                 <AppBar
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT

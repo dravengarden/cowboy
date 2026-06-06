@@ -912,11 +912,22 @@ export function Transcript({
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
     el.addEventListener("keydown", detach);
+    // Keep pinned when the container resizes UNDER us — the on-screen keyboard
+    // opening lifts the composer (via --kb-inset) and shrinks this pane, which
+    // no doc/selection change accompanies, so the totalSize auto-snap wouldn't
+    // fire. Only re-pin while still stuck (a scrolled-up reader isn't yanked
+    // down). A programmatic scrollTop write doesn't trip `detach` (not a
+    // wheel/touch), so this can't fight the user.
+    const ro = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
     return () => {
       el.removeEventListener("wheel", detach);
       el.removeEventListener("touchstart", detach);
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("keydown", detach);
+      ro.disconnect();
     };
   }, []);
 

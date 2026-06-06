@@ -4,6 +4,7 @@ import { CssBaseline, ThemeProvider } from "@mui/material";
 import { App } from "./App";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
+import { useKeyboardInset } from "./keyboardInset";
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
@@ -11,6 +12,9 @@ function Root(): React.JSX.Element {
   useReadingFontFaces();
   // Apply the font-size scale as a global app text zoom (root <html> font-size).
   useGlobalFontScale();
+  // Publish the keyboard overlap as `--kb-inset` so the composer lifts clear of
+  // the keyboard + its iOS-native accessory bar.
+  useKeyboardInset();
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
