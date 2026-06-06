@@ -60,6 +60,11 @@ import {
     setPadding,
     useReadingSettings,
 } from "./readingSettings";
+import {
+    type NavbarPosition,
+    setNavbarPosition,
+    useNavbarPosition,
+} from "./navbarSettings";
 import { FONT_PRESETS } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, ThemeModeControl } from "./_shell";
@@ -535,6 +540,11 @@ export function App({
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
     const mobile = useMediaQuery(theme.breakpoints.down("lg"));
+    // Navbar placement: a mobile-only setting (desktop is always top). When the
+    // user picks "bottom" on the compact tier the AppBar moves below the
+    // transcript, just above the composer (mobile-browser bottom-bar feel).
+    const navbarPos = useNavbarPosition();
+    const navbarAtBottom = mobile && navbarPos === "bottom";
     const [activeId, setActiveId] = useState<string | null>(readActiveSession);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -774,15 +784,27 @@ export function App({
                     position="static"
                     color="default"
                     elevation={0}
-                    // Clear the iPhone status bar / notch: hosted full-bleed in the
-                    // atlantis portal iframe, the header would otherwise collide with
-                    // the clock. Matches NavShell / the portal chrome.
-                    sx={{ pt: "env(safe-area-inset-top, 0px)" }}
+                    sx={{
+                        // Bottom mode (mobile, navbar-pos=bottom): flex `order`
+                        // moves the bar below the transcript, just above the
+                        // composer (which is order 2). Top mode: order 0, first
+                        // child.
+                        order: navbarAtBottom ? 1 : 0,
+                        // Clear the iPhone status bar / notch only at the top —
+                        // hosted full-bleed in the atlantis portal iframe, a top
+                        // bar would otherwise collide with the clock. At the
+                        // bottom the composer below owns the bottom safe-area
+                        // inset, so no inset here.
+                        pt: navbarAtBottom ? 0 : "env(safe-area-inset-top, 0px)",
+                    }}
                 >
                     <Toolbar
                         variant="dense"
                         sx={{
-                            borderBottom: 1,
+                            // Separator faces the transcript: bottom border at the
+                            // top, top border when the bar sits at the bottom.
+                            borderBottom: navbarAtBottom ? 0 : 1,
+                            borderTop: navbarAtBottom ? 1 : 0,
                             borderColor: "divider",
                             // Narrow installed PWA: the sidebar has collapsed to a
                             // drawer, so this bar is full-width and the macOS window
@@ -875,15 +897,21 @@ export function App({
                             status={active.status}
                             provider={active.provider}
                         />
-                        <Composer
-                            // Remount per session: each session owns its draft
-                            // (seeded from the per-session draft store) and a
-                            // fresh CodeMirror editor, so one session's
-                            // in-progress text never bleeds into another.
-                            key={active.id}
-                            sessionId={active.id}
-                            status={active.status}
-                        />
+                        {/* order 2 in bottom mode keeps the composer below the
+                            navbar (order 1); order 0 (default DOM order) at the
+                            top. minWidth:0 so long content can't overflow the
+                            column. */}
+                        <Box sx={{ order: navbarAtBottom ? 2 : 0, minWidth: 0 }}>
+                            <Composer
+                                // Remount per session: each session owns its draft
+                                // (seeded from the per-session draft store) and a
+                                // fresh CodeMirror editor, so one session's
+                                // in-progress text never bleeds into another.
+                                key={active.id}
+                                sessionId={active.id}
+                                status={active.status}
+                            />
+                        </Box>
                     </>
                 ) : (
                     // Empty state: relative parent + absolutely-positioned content
@@ -1012,6 +1040,11 @@ function SettingsShell({
 }): React.JSX.Element {
     const vim = useVimSetting();
     const reading = useReadingSettings();
+    const navbarPos = useNavbarPosition();
+    const theme = useTheme();
+    // Navbar position is a mobile-only setting (same compact tier that drives
+    // the whole mobile shell); desktop is always top.
+    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -1157,6 +1190,41 @@ function SettingsShell({
                         </Select>
                     </Stack>
                 </Stack>
+                {mobile && (
+                    <>
+                        <Divider />
+                        <Stack
+                            direction="row"
+                            alignItems="center"
+                            justifyContent="space-between"
+                            spacing={2}
+                        >
+                            <Stack>
+                                <Typography variant="body2">
+                                    Navbar position
+                                </Typography>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                >
+                                    Bottom = mobile-browser style
+                                </Typography>
+                            </Stack>
+                            <Select
+                                size="small"
+                                value={navbarPos}
+                                onChange={(e): void =>
+                                    setNavbarPosition(
+                                        e.target.value as NavbarPosition,
+                                    )}
+                                sx={{ minWidth: 104 }}
+                            >
+                                <MenuItem value="top">Top</MenuItem>
+                                <MenuItem value="bottom">Bottom</MenuItem>
+                            </Select>
+                        </Stack>
+                    </>
+                )}
                 {desktop && (
                     <>
                         <Divider />
