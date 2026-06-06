@@ -31,6 +31,7 @@ import {
     Check as CheckIcon,
     Circle,
     DeleteOutline,
+    DragIndicator,
     DriveFileRenameOutline,
     ExpandLess,
     ExpandMore,
@@ -47,7 +48,8 @@ import {
     type SessionOrigin,
     type Status,
 } from "./protocol";
-import { applyUpdate, notify, openSession, send, useStore } from "./store";
+import { applyUpdate, notify, openSession, reorderSessions, send, useStore } from "./store";
+import { useSortable } from "./useSortable";
 import { setNotifySetting, useNotifySetting } from "./turnNotify";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
@@ -229,6 +231,12 @@ function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
+    // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const sortable = useSortable({
+        ids: sessions.map((s) => s.id),
+        onReorder: reorderSessions,
+    });
     return (
         <Stack sx={{ height: "100%" }}>
             <Box sx={{ p: 1 }}>
@@ -242,9 +250,14 @@ function SessionList({
                 </Button>
             </Box>
             <List dense sx={{ flex: 1, overflowY: "auto" }}>
-                {sessions.map((s) => (
+                {sortable.order.map((id) => {
+                    const s = byId.get(id);
+                    if (!s) return null;
+                    return (
                     <ListItemButton
                         key={s.id}
+                        ref={sortable.registerItem(s.id)}
+                        style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
                         onClick={(): void => onPick(s.id)}
                         // Keep the trailing kebab off the screen edge: floor a
@@ -252,6 +265,23 @@ function SessionList({
                         // back-swipe edge (ui.md §7), where it was easy to miss.
                         sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
                     >
+                        {/* Leading grip — drag to reorder. stopPropagation in
+                            handleProps keeps a tap on the row (select) and the
+                            sheet's own drag separate from a reorder. */}
+                        <Box
+                            {...sortable.handleProps(s.id)}
+                            aria-label="Drag to reorder"
+                            sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                mr: 0.5,
+                                ml: -0.5,
+                                color: "text.disabled",
+                                flexShrink: 0,
+                            }}
+                        >
+                            <DragIndicator fontSize="small" />
+                        </Box>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
@@ -309,7 +339,8 @@ function SessionList({
                             <MoreVert />
                         </IconButton>
                     </ListItemButton>
-                ))}
+                    );
+                })}
                 {sessions.length === 0 && (
                     <Typography
                         variant="body2"

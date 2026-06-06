@@ -142,6 +142,9 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
                 queue,
                 drafts,
             } => store.update_pending(session_id, queue, drafts).await,
+            StoreWrite::UpdateSessionOrder { order } => {
+                store.update_session_order(order).await
+            }
         };
         if let Err(e) = result {
             tracing::warn!(error = %e, "store writer failed an intent (intent dropped)");
@@ -639,8 +642,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::RemoveDraft { session_id, .. }
         | Inbound::ClearDrafts { session_id }
         | Inbound::ActivateDraft { session_id, .. }
-        | Inbound::ActivateAllDrafts { session_id } => Some(session_id.clone()),
-        Inbound::NewSession { .. } => None,
+        | Inbound::ActivateAllDrafts { session_id }
+        | Inbound::ReorderQueue { session_id, .. }
+        | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
+        Inbound::NewSession { .. } | Inbound::ReorderSessions { .. } => None,
     };
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
@@ -843,6 +848,18 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         }
         Inbound::ActivateAllDrafts { session_id } => {
             state.hub.activate_all_drafts(&session_id);
+            Ok(())
+        }
+        Inbound::ReorderSessions { order } => {
+            state.hub.reorder_sessions(&order);
+            Ok(())
+        }
+        Inbound::ReorderQueue { session_id, order } => {
+            state.hub.reorder_queue(&session_id, &order);
+            Ok(())
+        }
+        Inbound::ReorderDrafts { session_id, order } => {
+            state.hub.reorder_drafts(&session_id, &order);
             Ok(())
         }
     };

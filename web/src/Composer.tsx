@@ -30,6 +30,7 @@ import {
   Bolt,
   ChevronRight,
   Close,
+  DragIndicator,
   EditNoteOutlined,
   EditOutlined,
   ExpandMore,
@@ -58,12 +59,15 @@ import {
   queuedToDraft,
   removeDraft,
   removeQueued,
+  reorderDrafts,
+  reorderQueue,
   requestSendQueued,
   send,
   setQueueEditing,
   submitPrompt,
   useStore,
 } from "./store";
+import { useSortable } from "./useSortable";
 import { getDraft, setDraft } from "./draftStore";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
@@ -818,6 +822,23 @@ function PendingPanel({
     setQueueEditing(sessionId, editingId);
     return (): void => setQueueEditing(sessionId, null);
   }, [kind, sessionId, editingId]);
+  // Drag-to-reorder. For the QUEUE, a drag behaves like an edit: hold the head so
+  // the WHOLE queue pauses (drain is front-to-back) until the drop commits the
+  // new order and releases. Drafts don't drain, so no hold.
+  const byId = new Map(items.map((m) => [m.id, m]));
+  const sortable = useSortable({
+    ids: items.map((m) => m.id),
+    onReorder: (order) =>
+      kind === "queued" ? reorderQueue(sessionId, order) : reorderDrafts(sessionId, order),
+    onDragStart:
+      kind === "queued"
+        ? (): void => {
+            const head = items[0];
+            if (head) setQueueEditing(sessionId, head.id);
+          }
+        : undefined,
+    onDragEnd: kind === "queued" ? (): void => setQueueEditing(sessionId, null) : undefined,
+  });
   const noun = kind === "queued" ? "Queued Message" : "Draft";
   return (
     <Box
@@ -879,19 +900,44 @@ function PendingPanel({
             overflowY: "auto",
           }}
         >
-          {items.map((m) => (
-            <PendingRow
-              key={m.id}
-              kind={kind}
-              sessionId={sessionId}
-              message={m}
-              status={status}
-              commands={commands}
-              editing={editingId === m.id}
-              onEdit={(): void => setEditingId(m.id)}
-              onEditDone={(): void => setEditingId(null)}
-            />
-          ))}
+          {sortable.order.map((id) => {
+            const m = byId.get(id);
+            if (!m) return null;
+            return (
+              <Stack
+                key={m.id}
+                ref={sortable.registerItem(m.id)}
+                style={sortable.itemStyle(m.id)}
+                direction="row"
+                alignItems="center"
+                spacing={0.5}
+              >
+                {/* Leading grip — drag to reorder; hidden while this row is being
+                    edited (the edit field owns the row then). */}
+                {editingId !== m.id && (
+                  <Box
+                    {...sortable.handleProps(m.id)}
+                    aria-label="Drag to reorder"
+                    sx={{ display: "flex", alignItems: "center", color: "text.disabled", flexShrink: 0 }}
+                  >
+                    <DragIndicator fontSize="small" />
+                  </Box>
+                )}
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <PendingRow
+                    kind={kind}
+                    sessionId={sessionId}
+                    message={m}
+                    status={status}
+                    commands={commands}
+                    editing={editingId === m.id}
+                    onEdit={(): void => setEditingId(m.id)}
+                    onEditDone={(): void => setEditingId(null)}
+                  />
+                </Box>
+              </Stack>
+            );
+          })}
         </Stack>
       </Collapse>
     </Box>

@@ -186,6 +186,11 @@ export type Inbound =
   | { type: "remove_draft"; session_id: string; id: string }
   | { type: "clear_drafts"; session_id: string }
   | { type: "activate_draft"; session_id: string; id: string }
-  | { type: "activate_all_drafts"; session_id: string };
+  | { type: "activate_all_drafts"; session_id: string }
+  // Drag-to-arrange (server-authoritative, synced). `order` is the full list of
+  // ids in the new order; omitted ids keep their relative order at the end.
+  | { type: "reorder_sessions"; order: string[] }
+  | { type: "reorder_queue"; session_id: string; order: string[] }
+  | { type: "reorder_drafts"; session_id: string; order: string[] };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;

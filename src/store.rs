@@ -82,7 +82,7 @@ impl Store {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, cwd, title, origin, status, agent_session_id, next_seq, \
              queue, drafts, created_at \
-             FROM sessions ORDER BY created_at ASC",
+             FROM sessions ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -254,6 +254,29 @@ impl Store {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session pending {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the manual session ordering: write each id's index as its
+    /// `position`. `load_all` then restores the drag-arranged order (NULLS LAST
+    /// + created_at keeps any unknown/never-reordered rows sensible). One UPDATE
+    /// per id in a single transaction — the list is short (a handful of
+    /// sessions).
+    ///
+    /// # Errors
+    /// If the transaction or an UPDATE fails.
+    pub async fn update_session_order(&self, order: &[String]) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        for (i, id) in order.iter().enumerate() {
+            let pos = i64::try_from(i).unwrap_or(i64::MAX);
+            sqlx::query("UPDATE sessions SET position = $1, updated_at = now() WHERE id = $2")
+                .bind(pos)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("UPDATE position for {id}"))?;
+        }
+        tx.commit().await.context("commit update_session_order")?;
         Ok(())
     }
 

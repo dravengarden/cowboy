@@ -475,6 +475,22 @@ export function queuedToDraft(sessionId: string, id: string): void {
   send({ type: "queued_to_draft", session_id: sessionId, id });
 }
 
+// --- Reorder (drag) ---------------------------------------------------------
+// Server-authoritative: send the full new id order; the daemon reorders + echoes
+// the list back (sessions / queues broadcast) so every terminal stays in sync.
+
+export function reorderSessions(order: string[]): void {
+  send({ type: "reorder_sessions", order });
+}
+
+export function reorderQueue(sessionId: string, order: string[]): void {
+  send({ type: "reorder_queue", session_id: sessionId, order });
+}
+
+export function reorderDrafts(sessionId: string, order: string[]): void {
+  send({ type: "reorder_drafts", session_id: sessionId, order });
+}
+
 function subscribe(listener: () => void): () => void {
   if (listeners.size === 0 && !socket) connect();
   listeners.add(listener);

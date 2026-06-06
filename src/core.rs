@@ -309,6 +309,22 @@ pub enum Inbound {
     ActivateDraft { session_id: String, id: String },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },
+
+    // --- Reorder (drag-to-arrange, server-authoritative + synced) -------------
+    /// Reorder the session list to match `order` (a full list of session ids;
+    /// any omitted ids keep their relative order at the end). Persisted +
+    /// broadcast so every terminal shows the same arrangement.
+    ReorderSessions { order: Vec<String> },
+    /// Reorder one session's send-queue to match `order` (queued message ids).
+    ReorderQueue {
+        session_id: String,
+        order: Vec<String>,
+    },
+    /// Reorder one session's drafts to match `order` (draft ids).
+    ReorderDrafts {
+        session_id: String,
+        order: Vec<String>,
+    },
 }
 
 /// What the server pushes to a WebSocket client.
@@ -377,6 +393,9 @@ pub enum StoreWrite {
         queue: Vec<QueuedMessage>,
         drafts: Vec<QueuedMessage>,
     },
+    /// Persist the manual session ordering (a `position` per id) so a drag-
+    /// arranged list survives a daemon restart.
+    UpdateSessionOrder { order: Vec<String> },
 }
 
 /// The single source of truth. Cloneable handle (`Arc` inside) shared by the
@@ -1099,6 +1118,68 @@ impl Hub {
             self.submit(session_id, m.text, m.content);
         }
     }
+
+    // --- Reorder --------------------------------------------------------------
+
+    /// Reorder one session's queue to the given id order, then re-broadcast +
+    /// persist. Ids not in `order` keep their relative order at the end (a
+    /// stable sort), so a stale/partial order can't drop messages. Also re-tries
+    /// the drain in case the new head is now dispatchable.
+    pub fn reorder_queue(&self, session_id: &str, order: &[String]) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            sort_by_id_order(&mut s.queue, order, |m| &m.id);
+        }
+        self.emit_pending(session_id);
+        self.try_drain(session_id);
+    }
+
+    /// Reorder one session's drafts to the given id order (see `reorder_queue`).
+    pub fn reorder_drafts(&self, session_id: &str, order: &[String]) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            sort_by_id_order(&mut s.drafts, order, |m| &m.id);
+        }
+        self.emit_pending(session_id);
+    }
+
+    /// Reorder the session list to the given id order, then persist + broadcast.
+    /// Ids not in `order` keep their relative order at the end.
+    pub fn reorder_sessions(&self, order: &[String]) {
+        {
+            let mut list = self.inner.order.lock().unwrap();
+            list.sort_by_key(|id| {
+                order
+                    .iter()
+                    .position(|o| o == id)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateSessionOrder {
+                order: self.inner.order.lock().unwrap().clone(),
+            });
+        }
+        self.broadcast_sessions();
+    }
+}
+
+/// Stable reorder of `items` to match `order` (by each item's id). Items whose
+/// id isn't in `order` sort to the end keeping their prior relative order, so a
+/// partial / stale order never drops or duplicates anything.
+fn sort_by_id_order<T>(items: &mut [T], order: &[String], id_of: impl Fn(&T) -> &str) {
+    items.sort_by_key(|item| {
+        order
+            .iter()
+            .position(|o| o == id_of(item))
+            .unwrap_or(usize::MAX)
+    });
 }
 
 impl Default for Hub {
