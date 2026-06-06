@@ -226,17 +226,46 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   return items.filter((it) => it.kind !== "thought" || it.text.trim() !== "");
 }
 
-/// The session's current plan (latest ACP `plan` update's entries), or null if
-/// it has none / an empty one. A cheap last-wins scan so the pinned PlanDock can
-/// read the plan without deriving the whole transcript.
-export function latestPlan(timeline: Envelope[]): PlanEntry[] | null {
+/// The session's current plan, or null if it has none.
+export interface CurrentPlan {
+  entries: PlanEntry[];
+  /// A stable id for this plan: the list of step contents. Unchanged as the
+  /// agent flips statuses (in_progress → completed), different when it starts a
+  /// genuinely new plan — so manual-dismiss tracking + React identity survive
+  /// progress updates but reset for a new task.
+  key: string;
+  /// True once a user prompt has been sent AFTER this plan was emitted. ACP has
+  /// no "plan done/clear" signal, so this ordering fact (every prompt echoes a
+  /// `user_message_chunk` — see src/acp.rs) is how we know the plan belongs to a
+  /// finished, past exchange rather than the current one.
+  supersededByUserTurn: boolean;
+}
+
+/// The session's current plan (latest ACP `plan` update's entries) + the signals
+/// the dock needs to decide whether it's still relevant. A cheap single pass so
+/// the pinned PlanDock can read it without deriving the whole transcript. Null
+/// when there's no plan / an empty one.
+export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
   let entries: PlanEntry[] | null = null;
+  let superseded = false;
   for (const env of timeline) {
     if (env.kind === "update" && env.update.sessionUpdate === "plan") {
       entries = env.update.entries ?? [];
+      superseded = false; // a fresh plan: reset the "new turn after it" flag
+    } else if (
+      entries &&
+      env.kind === "update" &&
+      env.update.sessionUpdate === "user_message_chunk"
+    ) {
+      superseded = true; // a user prompt landed after the latest plan
     }
   }
-  return entries && entries.length > 0 ? entries : null;
+  if (!entries || entries.length === 0) return null;
+  return {
+    entries,
+    key: entries.map((e) => e.content).join(" "),
+    supersededByUserTurn: superseded,
+  };
 }
 
 function titleOfToolCall(tc: unknown): string {

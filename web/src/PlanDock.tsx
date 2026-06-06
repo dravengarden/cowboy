@@ -4,11 +4,13 @@ import {
   ButtonBase,
   Collapse,
   CircularProgress,
+  IconButton,
   LinearProgress,
   Stack,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { CheckCircle, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
+import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
@@ -25,7 +27,15 @@ function readExpanded(): boolean {
   return globalThis.localStorage?.getItem(KEY) === "1";
 }
 
-export function PlanDock({ entries }: { entries: PlanEntry[] }): React.JSX.Element {
+export function PlanDock({
+  entries,
+  onDismiss,
+}: {
+  entries: PlanEntry[];
+  /** Manually close the dock (the X). The plan stays hidden until a new/different
+   *  plan arrives — see Composer's dismissedPlanKey. */
+  onDismiss: () => void;
+}): React.JSX.Element {
   const [expanded, setExpanded] = useState(readExpanded);
   const total = entries.length;
   const done = entries.filter((e) => e.status === "completed").length;
@@ -55,51 +65,65 @@ export function PlanDock({ entries }: { entries: PlanEntry[] }): React.JSX.Eleme
         overflow: "hidden",
       }}
     >
-      {/* Header — a standard ripple ButtonBase so the whole row is one tap target
-          with Material feedback, and a min tap height that holds even when the
-          font scale shrinks the text (usability over a font-relative row height). */}
-      <ButtonBase
-        onClick={toggle}
-        aria-label={expanded ? "Collapse plan" : "Expand plan"}
-        sx={{
-          width: "100%",
-          justifyContent: "flex-start",
-          textAlign: "left",
-          px: 1,
-          py: 0.5,
-          minHeight: 40,
-          "@media (pointer: coarse)": { minHeight: 44 },
-        }}
-      >
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%", minWidth: 0 }}>
-          {expanded ? (
-            <ExpandLess fontSize="small" sx={{ color: "text.secondary" }} />
-          ) : (
-            <ExpandMore fontSize="small" sx={{ color: "text.secondary" }} />
-          )}
-          <Typography variant="overline" sx={{ lineHeight: 1.4 }}>
-            Plan
-          </Typography>
-          {!expanded && (
-            <Typography
-              variant="body2"
-              noWrap
-              sx={{ flex: 1, minWidth: 0, color: allDone ? "success.main" : "text.secondary" }}
-            >
-              {allDone ? "All steps complete" : (current?.content ?? "")}
+      {/* Header — a standard ripple ButtonBase (the toggle) beside a separate X
+          (dismiss). They're siblings, not nested, so the DOM stays valid (no
+          button-in-button). Min tap height holds even when the font scale shrinks
+          the text (usability over a font-relative row height). */}
+      <Stack direction="row" alignItems="center">
+        <ButtonBase
+          onClick={toggle}
+          aria-label={expanded ? "Collapse plan" : "Expand plan"}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            justifyContent: "flex-start",
+            textAlign: "left",
+            px: 1,
+            py: 0.5,
+            minHeight: 40,
+            "@media (pointer: coarse)": { minHeight: 44 },
+          }}
+        >
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%", minWidth: 0 }}>
+            {expanded ? (
+              <ExpandLess fontSize="small" sx={{ color: "text.secondary" }} />
+            ) : (
+              <ExpandMore fontSize="small" sx={{ color: "text.secondary" }} />
+            )}
+            <Typography variant="overline" sx={{ lineHeight: 1.4 }}>
+              Plan
             </Typography>
-          )}
-          {expanded && <Box sx={{ flex: 1 }} />}
-          {allDone && <CheckCircle fontSize="small" color="success" />}
-          <Typography
-            variant="caption"
-            color={allDone ? "success.main" : "text.secondary"}
-            sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
+            {!expanded && (
+              <Typography
+                variant="body2"
+                noWrap
+                sx={{ flex: 1, minWidth: 0, color: allDone ? "success.main" : "text.secondary" }}
+              >
+                {allDone ? "All steps complete" : (current?.content ?? "")}
+              </Typography>
+            )}
+            {expanded && <Box sx={{ flex: 1 }} />}
+            {allDone && <CheckCircle fontSize="small" color="success" />}
+            <Typography
+              variant="caption"
+              color={allDone ? "success.main" : "text.secondary"}
+              sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
+            >
+              {done}/{total}
+            </Typography>
+          </Stack>
+        </ButtonBase>
+        <Tooltip title="Dismiss plan">
+          <IconButton
+            size="small"
+            aria-label="Dismiss plan"
+            onClick={onDismiss}
+            sx={{ mx: 0.25, flexShrink: 0, color: "text.secondary" }}
           >
-            {done}/{total}
-          </Typography>
-        </Stack>
-      </ButtonBase>
+            <Close fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Stack>
       {/* Always visible (even collapsed) so progress reads at a glance. */}
       <LinearProgress
         variant="determinate"

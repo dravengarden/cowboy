@@ -155,6 +155,16 @@ export function Composer({
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
   const plan = useMemo(() => latestPlan(timelines.get(sessionId) ?? []), [timelines, sessionId]);
+  // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
+  // updates statuses, but a genuinely new plan (different steps) reappears.
+  const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
+  // Show the plan unless (a) the user dismissed this exact plan, or (b) it's
+  // fully complete AND the user has already moved on to a new turn — ACP never
+  // signals "plan done", so a finished plan would otherwise linger forever.
+  const showPlan =
+    plan !== null &&
+    plan.key !== dismissedPlanKey &&
+    !(plan.supersededByUserTurn && plan.entries.every((e) => e.status === "completed"));
   // The active session's metadata, surfaced read-only inside the options
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
   // in the always-visible sidebar, so the sheet — and this lookup — only
@@ -304,8 +314,11 @@ export function Composer({
     >
       {/* Agent plan (very top): a pinned, collapsible progress summary so the
           task's plan stays visible above the queue without scrolling. Hidden
-          when the agent hasn't produced a plan. */}
-      {plan && <PlanDock entries={plan} />}
+          when there's no plan, when dismissed, or when a finished plan has been
+          superseded by a new turn (see showPlan). */}
+      {showPlan && plan && (
+        <PlanDock entries={plan.entries} onDismiss={(): void => setDismissedPlanKey(plan.key)} />
+      )}
       {/* Queued prompts (top): while the agent is busy, messages stack here and
           drain one per turn-end. Hidden when empty. */}
       {queue.length > 0 && (
