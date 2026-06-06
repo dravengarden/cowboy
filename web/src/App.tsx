@@ -443,8 +443,9 @@ function NewSessionDialog({
     );
 }
 
-// Seconds the update bar counts down before reloading on its own.
-const UPDATE_COUNTDOWN_SECS = 3;
+// Delay before the update bar hard-reloads into the new build on its own. No
+// visible countdown — a single timer, so the bar doesn't re-render each second.
+const UPDATE_RELOAD_MS = 2000;
 
 // Full-width overlay bar that tracks the live WebSocket (see store.ts `Banner`).
 // All three states are the SAME bar — `position: fixed` keeps it on top of
@@ -458,22 +459,15 @@ const UPDATE_COUNTDOWN_SECS = 3;
 function ConnectionBanner(): React.JSX.Element | null {
     const { banner } = useStore();
     const isUpdate = banner?.kind === "update";
-    const [secs, setSecs] = useState(UPDATE_COUNTDOWN_SECS);
 
-    // Drive the update countdown (and only it). Resets whenever we're not on the
-    // update state so a later redeploy starts a fresh 3→0.
+    // Auto-reload into the new build after a short fixed delay — one timer, no
+    // per-second countdown (so the bar shows a static message and never
+    // re-renders while it waits).
     useEffect(() => {
-        if (!isUpdate) {
-            setSecs(UPDATE_COUNTDOWN_SECS);
-            return undefined;
-        }
-        if (secs < 0) {
-            applyUpdate();
-            return undefined;
-        }
-        const t = setTimeout(() => setSecs((s) => s - 1), 1000);
+        if (!isUpdate) return undefined;
+        const t = setTimeout(applyUpdate, UPDATE_RELOAD_MS);
         return (): void => clearTimeout(t);
-    }, [isUpdate, secs]);
+    }, [isUpdate]);
 
     if (!banner) return null;
 
@@ -488,7 +482,7 @@ function ConnectionBanner(): React.JSX.Element | null {
             ? "Connection lost — reconnecting…"
             : banner.kind === "reconnected"
               ? "Reconnected"
-              : `New version · reloading in ${Math.max(0, secs)}s`;
+              : "New version · reloading…";
     return (
         <Box
             role="status"
