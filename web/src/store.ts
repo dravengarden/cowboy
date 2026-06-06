@@ -205,9 +205,9 @@ function setBanner(banner: Banner | undefined): void {
   setState({ ...state, banner });
 }
 
-// The blue "update" banner's confirm action: a hard reload. index.html ships
-// `no-cache` (always revalidated) and the hashed assets are immutable, so the
-// next load pulls the new bundle cleanly. Exposed for the banner's click.
+// The update overlay's reload action (fired when its countdown elapses): a hard
+// reload. index.html ships `no-cache` (always revalidated) and the hashed assets
+// are immutable, so the next load pulls the new bundle cleanly.
 export function applyUpdate(): void {
   globalThis.location.reload();
 }

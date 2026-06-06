@@ -439,32 +439,82 @@ function NewSessionDialog({
     );
 }
 
-// Full-width banner that tracks the live WebSocket. The store raises three
-// kinds (see store.ts `Banner`): red "down" once reconnect has failed past the
-// threshold, green "reconnected" when the socket recovers (auto-dismissed), and
-// blue "update" when a post-reconnect version probe sees a new server build —
-// the update banner is clickable and reloads to pull the new bundle.
+// Seconds the update overlay counts down before reloading on its own.
+const UPDATE_COUNTDOWN_SECS = 3;
+
+// Floating overlay shown when a redeploy is detected. Unlike the status bar it
+// never participates in layout — `position: fixed` keeps it on top of everything
+// without pushing the panes down, so it never disturbs the current session. It
+// counts 3→0 and then hard-reloads into the new build by itself; there's no
+// button to click.
+function UpdateOverlay(): React.JSX.Element {
+    const [secs, setSecs] = useState(UPDATE_COUNTDOWN_SECS);
+    useEffect(() => {
+        if (secs < 0) {
+            applyUpdate();
+            return undefined;
+        }
+        const t = setTimeout(() => setSecs((s) => s - 1), 1000);
+        return (): void => clearTimeout(t);
+    }, [secs]);
+    return (
+        <Box
+            role="status"
+            aria-live="polite"
+            sx={{
+                position: "fixed",
+                left: 0,
+                right: 0,
+                // Clear the notch; floored so it still hangs off the top edge
+                // off-device.
+                top: "calc(env(safe-area-inset-top, 0px) + 12px)",
+                display: "flex",
+                justifyContent: "center",
+                // Purely informational — never eat clicks meant for the UI
+                // underneath it.
+                pointerEvents: "none",
+                zIndex: (t) => t.zIndex.tooltip + 1,
+            }}
+        >
+            <Box
+                sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    px: 2,
+                    py: 0.875,
+                    borderRadius: 999,
+                    bgcolor: "info.main",
+                    color: "info.contrastText",
+                    fontSize: "0.8125rem",
+                    fontWeight: 500,
+                    boxShadow: 6,
+                }}
+            >
+                <span>New version · reloading in {Math.max(0, secs)}s</span>
+            </Box>
+        </Box>
+    );
+}
+
+// Full-width status bar that tracks the live WebSocket (see store.ts `Banner`):
+// red "down" once reconnect has failed past the threshold, green "reconnected"
+// when the socket recovers (auto-dismissed). The blue "update" state instead
+// renders as a non-intrusive floating overlay (see UpdateOverlay) that reloads
+// on its own.
 function ConnectionBanner(): React.JSX.Element | null {
     const { banner } = useStore();
     if (!banner) return null;
-    const isUpdate = banner.kind === "update";
-    const palette =
-        banner.kind === "down"
-            ? "error"
-            : banner.kind === "reconnected"
-              ? "success"
-              : "info";
+    if (banner.kind === "update") return <UpdateOverlay />;
+    const palette = banner.kind === "down" ? "error" : "success";
     const label =
         banner.kind === "down"
             ? "Connection lost — reconnecting…"
-            : banner.kind === "reconnected"
-              ? "Reconnected"
-              : "A new version is available";
+            : "Reconnected";
     return (
         <Box
-            role={isUpdate ? "button" : "status"}
+            role="status"
             aria-live="polite"
-            onClick={isUpdate ? applyUpdate : undefined}
             sx={{
                 flexShrink: 0,
                 display: "flex",
@@ -480,7 +530,6 @@ function ConnectionBanner(): React.JSX.Element | null {
                 color: `${palette}.contrastText`,
                 fontSize: "0.8125rem",
                 fontWeight: 500,
-                cursor: isUpdate ? "pointer" : "default",
                 zIndex: (t) => t.zIndex.appBar + 1,
             }}
         >
@@ -491,22 +540,6 @@ function ConnectionBanner(): React.JSX.Element | null {
                 <CheckIcon sx={{ fontSize: 18 }} />
             )}
             <span>{label}</span>
-            {isUpdate && (
-                <Button
-                    size="small"
-                    variant="outlined"
-                    color="inherit"
-                    onClick={(e): void => {
-                        // Stop the bubble so we don't double-fire with the
-                        // bar's own onClick.
-                        e.stopPropagation();
-                        applyUpdate();
-                    }}
-                    sx={{ ml: 1, py: 0, minWidth: 0 }}
-                >
-                    Reload
-                </Button>
-            )}
         </Box>
     );
 }
