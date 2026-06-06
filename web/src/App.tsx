@@ -60,6 +60,7 @@ import {
 import {
     type NavbarPosition,
     setNavbarPosition,
+    useNavbarAtBottom,
     useNavbarPosition,
 } from "./navbarSettings";
 import { FONT_PRESETS } from "./fonts";
@@ -370,6 +371,7 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
         // id back synchronously and can focus the new session the moment it's
@@ -392,6 +394,7 @@ function NewSessionDialog({
     // all rise from the bottom on the mobile tier.
     return (
         <BottomSheet
+            forceSheet={navbarAtBottom}
             open={open}
             onClose={onClose}
             title="New session"
@@ -550,15 +553,13 @@ export function App({
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
     const mobile = useMediaQuery(theme.breakpoints.down("lg"));
-    // Navbar placement: a phone-only setting (desktop/tablet are always top).
-    // When the user picks "bottom" the AppBar moves below the transcript, just
-    // above the composer (mobile-browser bottom-bar feel). Gated on `sm` — NOT
-    // the `lg` mobile-shell tier — so it matches where BottomSheet renders as a
-    // bottom sheet (also `< sm`); on a tablet the shared sheet is a centered
-    // dialog, and a bottom navbar over centered dialogs reads inconsistently.
-    const phone = useMediaQuery(theme.breakpoints.down("sm"));
-    const navbarPos = useNavbarPosition();
-    const navbarAtBottom = phone && navbarPos === "bottom";
+    // Navbar placement: when the user picks "bottom" on the compact tier
+    // (`< lg`, tablets included) the AppBar moves below the transcript, just
+    // above the composer (mobile-browser bottom-bar feel). The modals read the
+    // same flag and force their bottom-sheet surface (see BottomSheet
+    // `forceSheet`), so a tablet's bottom navbar gets bottom-up modals too
+    // rather than centered dialogs.
+    const navbarAtBottom = useNavbarAtBottom();
     const [activeId, setActiveId] = useState<string | null>(readActiveSession);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -1077,16 +1078,16 @@ function SettingsShell({
     const vim = useVimSetting();
     const reading = useReadingSettings();
     const navbarPos = useNavbarPosition();
+    const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
-    // Navbar position is a phone-only setting: only `< sm` renders modals as
-    // bottom sheets, so the bottom-navbar (which the App also gates on `sm`) is
-    // only offered there to stay consistent. Desktop/tablet are always top.
-    const phone = useMediaQuery(theme.breakpoints.down("sm"));
+    // Navbar position is offered on the whole compact tier (`< lg`, tablets
+    // included); desktop is always top.
+    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     return (
-        <BottomSheet open={open} onClose={onClose} title="Settings">
+        <BottomSheet open={open} onClose={onClose} title="Settings" forceSheet={navbarAtBottom}>
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -1237,7 +1238,7 @@ function SettingsShell({
                         </Select>
                     </Stack>
                 </Stack>
-                {phone && (
+                {mobile && (
                     <>
                         <Divider />
                         <Stack
@@ -1330,10 +1331,13 @@ function DeleteSessionShell({
     onClose: () => void;
     onConfirm: () => void;
 }): React.JSX.Element | null {
+    // Hook before the early return (rules of hooks).
+    const navbarAtBottom = useNavbarAtBottom();
     if (!session) return null;
     const surface = originLabel(session.origin);
     return (
         <BottomSheet
+            forceSheet={navbarAtBottom}
             open
             onClose={onClose}
             title={`Delete this ${surface} session?`}
@@ -1368,6 +1372,7 @@ function RenameSessionShell({
 }): React.JSX.Element | null {
     const [value, setValue] = useState("");
     const inputRef = useRef<HTMLInputElement>(null);
+    const navbarAtBottom = useNavbarAtBottom();
     useEffect(() => {
         if (!session) return undefined;
         setValue(session.title);
@@ -1385,6 +1390,7 @@ function RenameSessionShell({
     };
     return (
         <BottomSheet
+            forceSheet={navbarAtBottom}
             open
             onClose={onClose}
             title="Rename session"

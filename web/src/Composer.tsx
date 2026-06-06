@@ -54,6 +54,7 @@ import {
   useStore,
 } from "./store";
 import { getDraft, setDraft } from "./draftStore";
+import { useNavbarAtBottom } from "./navbarSettings";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { originLabel } from "./protocol";
 import type {
@@ -1068,8 +1069,9 @@ function ComposerSheet({
   dead: boolean;
   onSelectOption: (configId: string, value: string | boolean) => void;
 }): React.JSX.Element {
+  const navbarAtBottom = useNavbarAtBottom();
   return (
-    <BottomSheet open={open} onClose={onClose}>
+    <BottomSheet open={open} onClose={onClose} forceSheet={navbarAtBottom}>
       {session && <SessionInfoSection session={session} />}
       {(loading || options.length > 0) && (
         <>
