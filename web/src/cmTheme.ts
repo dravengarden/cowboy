@@ -17,25 +17,25 @@ export function cmTheme(theme: Theme): Extension {
     'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   return EditorView.theme(
     {
-      // `max(16px, 1rem)` everywhere — and explicitly on `.cm-content` (the
-      // focused element). The 16px floor keeps iOS Safari from focus-zooming
-      // (it zooms any focused input under 16px); the `1rem` lets the composer
-      // grow with the global font-size zoom (useGlobalFontScale scales the root
-      // <html> font-size) so it scales UP with the rest of the app but never
-      // shrinks below the iOS-safe floor. A media-query split proved unreliable
-      // inside EditorView.theme, and 16px reads fine on desktop anyway.
+      // `1rem` so the composer text TRACKS the reading font-size setting exactly
+      // (useGlobalFontScale scales the root <html> font-size, so 1rem follows it
+      // both up AND down — matching the transcript prose). No `max(16px, …)`
+      // floor: the installed PWA disables focus-zoom via the viewport meta
+      // (user-scalable=no), so the iOS-safe floor isn't needed and was the reason
+      // the input ignored a sub-1.0 scale. line-height follows the reading
+      // line-height setting via the CSS var (useGlobalFontScale sets it).
       "&": {
         color: theme.palette.text.primary,
         backgroundColor: "transparent",
-        fontSize: "max(16px, 1rem)",
+        fontSize: "1rem",
       },
       ".cm-content": {
         fontFamily: fontStack,
-        fontSize: "max(16px, 1rem)",
+        fontSize: "1rem",
         // The MUI-outline shell owns the padding (see ComposerEditor).
         padding: "0",
         caretColor: accent,
-        lineHeight: "1.5",
+        lineHeight: "var(--cowboy-reading-line-height, 1.5)",
       },
       // iOS PWA repaint fix lives on the SCROLLER, not `.cm-content`. On
       // iPad/iPhone the composer's contenteditable sits inside the
@@ -54,8 +54,8 @@ export function cmTheme(theme: Theme): Extension {
       // getBoundingClientRect-based cursor/selection measurement is unaffected.
       ".cm-scroller": {
         fontFamily: fontStack,
-        fontSize: "max(16px, 1rem)",
-        lineHeight: "1.5",
+        fontSize: "1rem",
+        lineHeight: "var(--cowboy-reading-line-height, 1.5)",
         transform: "translateZ(0)",
       },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: accent },

@@ -98,11 +98,13 @@ export const ComposerTextarea = forwardRef<
       size="small"
       fullWidth
       sx={{
-        // 16px floor so iOS never focus-zooms the input; 1rem so it tracks the
-        // global font-size zoom (useGlobalFontScale). Matches cmTheme's sizing.
+        // `1rem` so the input tracks the reading font-size setting both up and
+        // down (useGlobalFontScale scales the root font-size); line-height
+        // follows the reading line-height var. No 16px floor — the installed PWA
+        // disables focus-zoom via the viewport meta. Matches cmTheme's sizing.
         "& .MuiInputBase-input": {
-          fontSize: "max(16px, 1rem)",
-          lineHeight: 1.5,
+          fontSize: "1rem",
+          lineHeight: "var(--cowboy-reading-line-height, 1.5)",
         },
       }}
     />

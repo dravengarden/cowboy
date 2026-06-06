@@ -142,19 +142,22 @@ export function setFontVariant(id: string): void {
 }
 
 /**
- * Apply the reading font scale as a GLOBAL app text zoom by scaling the root
- * <html> font-size. Everything sized in rem/em — all MUI Typography (navbar
- * title, tool cards, captions) AND the transcript prose — scales uniformly,
- * while px-based layout (MUI spacing, safe-area insets) holds. The composer
- * floors at 16px (cmTheme `max(16px, 1rem)`) so iOS never focus-zooms it but it
- * still grows when you scale up. Mount once at the app root (see main.tsx).
+ * Apply the reading settings GLOBALLY: scale the root <html> font-size (so every
+ * rem/em surface — MUI Typography, the transcript prose, AND the composer —
+ * tracks the font-size setting), and publish the reading line-height as a CSS
+ * variable. The composer (CodeMirror theme + native textarea) reads that var to
+ * match the prose leading, since neither can read the React settings store. Both
+ * now track the setting fully, up and down. px-based layout (MUI spacing,
+ * safe-area insets) holds. Mount once at the app root (see main.tsx).
  */
 export function useGlobalFontScale(): void {
-  const { fontScale } = useReadingSettings();
+  const { fontScale, lineHeight } = useReadingSettings();
   useEffect(() => {
     const root = globalThis.document?.documentElement;
-    if (root) root.style.fontSize = `${String(fontScale * 100)}%`;
-  }, [fontScale]);
+    if (!root) return;
+    root.style.fontSize = `${String(fontScale * 100)}%`;
+    root.style.setProperty("--cowboy-reading-line-height", String(lineHeight));
+  }, [fontScale, lineHeight]);
 }
 
 /**
