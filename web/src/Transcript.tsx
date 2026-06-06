@@ -383,10 +383,16 @@ function ToolCard({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            // Follow the reading-font setting like the prose does, instead of
+            // letting MUI Typography pin the theme font — otherwise picking a
+            // serif/sans reading face restyles the messages but the tool cards
+            // stay on the system font, which reads as inconsistent. Shell
+            // commands (execute) stay monospace: they're code, and a path full
+            // of slashes in a serif is worse, not better.
             fontFamily:
               item.toolKind === "execute"
                 ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-                : undefined,
+                : "var(--cowboy-reading-font, inherit)",
           }}
         >
           {item.title}
