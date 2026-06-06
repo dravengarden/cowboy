@@ -786,6 +786,11 @@ export function App({
                             provider={active.provider}
                         />
                         <Composer
+                            // Remount per session: each session owns its draft
+                            // (seeded from the per-session draft store) and a
+                            // fresh CodeMirror editor, so one session's
+                            // in-progress text never bleeds into another.
+                            key={active.id}
                             sessionId={active.id}
                             status={active.status}
                         />
