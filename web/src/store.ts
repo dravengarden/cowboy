@@ -9,6 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
+import { fireTurnComplete } from "./turnNotify";
 import type {
   ConfigOption,
   ContentBlock,
@@ -180,7 +181,17 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
 function handle(msg: Outbound): void {
   switch (msg.type) {
     case "sessions": {
-      // Just commit the list — the queue drain is now server-side, so there's no
+      // Turn-complete alert: a session flipping busy → running means its turn
+      // just ended. Fire the optional chime/vibration (no-op when the setting is
+      // off). Gate on `sessionsLoaded` so the initial snapshot — which arrives as
+      // already-`running` sessions — doesn't ding on connect.
+      if (state.sessionsLoaded) {
+        const prev = new Map(state.sessions.map((s) => [s.id, s.status]));
+        for (const s of msg.sessions) {
+          if (s.status === "running" && prev.get(s.id) === "busy") fireTurnComplete();
+        }
+      }
+      // Then commit the list — the queue drain is now server-side, so there's no
       // client-side in-flight reconciliation to do. `sessionsLoaded` latches true
       // on the first list so the UI can detect a now-gone persisted focus.
       setState({ ...state, sessions: msg.sessions, sessionsLoaded: true });

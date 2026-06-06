@@ -46,6 +46,7 @@ import {
     type Status,
 } from "./protocol";
 import { applyUpdate, notify, openSession, send, useStore } from "./store";
+import { setNotifySetting, useNotifySetting } from "./turnNotify";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
@@ -1117,6 +1118,7 @@ function SettingsShell({
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
     const vim = useVimSetting();
+    const notify = useNotifySetting();
     const reading = useReadingSettings();
     const navbarPos = useNavbarPosition();
     const navbarAtBottom = useNavbarAtBottom();
@@ -1313,6 +1315,25 @@ function SettingsShell({
                             ))}
                         </Select>
                     </Stack>
+                </Stack>
+                <Divider />
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    spacing={2}
+                >
+                    <Stack>
+                        <Typography variant="body2">Turn-complete alert</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                            Sound + vibration when an agent finishes
+                        </Typography>
+                    </Stack>
+                    <Switch
+                        checked={notify}
+                        onChange={(e): void => setNotifySetting(e.target.checked)}
+                        inputProps={{ "aria-label": "Turn-complete alert" }}
+                    />
                 </Stack>
                 {mobile && (
                     <>
