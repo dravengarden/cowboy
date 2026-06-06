@@ -41,6 +41,8 @@ import {
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
+import { PlanDock } from "./PlanDock";
+import { latestPlan } from "./derive";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
@@ -150,6 +152,9 @@ export function Composer({
   const { configOptions, drafts, queues, sessions, timelines } = useStore();
   const queue = queues.get(sessionId) ?? [];
   const draftList = drafts.get(sessionId) ?? [];
+  // The agent's current plan, pinned above the queue as a collapsible dock so
+  // task progress stays in view without scrolling the transcript. null = no plan.
+  const plan = useMemo(() => latestPlan(timelines.get(sessionId) ?? []), [timelines, sessionId]);
   // The active session's metadata, surfaced read-only inside the options
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
   // in the always-visible sidebar, so the sheet — and this lookup — only
@@ -297,6 +302,10 @@ export function Composer({
         position: "relative", // anchor for Popper portal placement
       }}
     >
+      {/* Agent plan (very top): a pinned, collapsible progress summary so the
+          task's plan stays visible above the queue without scrolling. Hidden
+          when the agent hasn't produced a plan. */}
+      {plan && <PlanDock entries={plan} />}
       {/* Queued prompts (top): while the agent is busy, messages stack here and
           drain one per turn-end. Hidden when empty. */}
       {queue.length > 0 && (

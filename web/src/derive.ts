@@ -25,7 +25,6 @@ export type RenderItem =
       /// Tool result content (text / files / diff) as the upstream sent it.
       content?: unknown;
     }
-  | { kind: "plan"; entries: PlanEntry[] }
   | {
       kind: "permission";
       requestId: string;
@@ -97,7 +96,6 @@ function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void 
 export function derive(timeline: Envelope[]): RenderItem[] {
   const items: RenderItem[] = [];
   const toolIndex = new Map<string, number>();
-  let planIndex = -1;
   const permIndex = new Map<string, number>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
@@ -161,17 +159,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             }
             break;
           }
-          case "plan": {
-            const entries = u.entries ?? [];
-            if (planIndex >= 0) {
-              const p = items[planIndex];
-              if (p && p.kind === "plan") p.entries = entries;
-            } else {
-              items.push({ kind: "plan", entries });
-              planIndex = items.length - 1;
-            }
-            break;
-          }
+          // `plan` is NOT rendered inline — it's surfaced by the pinned PlanDock
+          // above the composer (see latestPlan). It updates latest-wins anyway,
+          // so an inline card would just be a duplicate that scrolls away.
           default:
             // available_commands_update / current_mode_update: metadata, not
             // rendered in the transcript for v1.
@@ -234,6 +224,19 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   // session status. The transient "thinking, no text yet" state is covered by
   // the trailing indicator instead, so an empty thought carries nothing.
   return items.filter((it) => it.kind !== "thought" || it.text.trim() !== "");
+}
+
+/// The session's current plan (latest ACP `plan` update's entries), or null if
+/// it has none / an empty one. A cheap last-wins scan so the pinned PlanDock can
+/// read the plan without deriving the whole transcript.
+export function latestPlan(timeline: Envelope[]): PlanEntry[] | null {
+  let entries: PlanEntry[] | null = null;
+  for (const env of timeline) {
+    if (env.kind === "update" && env.update.sessionUpdate === "plan") {
+      entries = env.update.entries ?? [];
+    }
+  }
+  return entries && entries.length > 0 ? entries : null;
 }
 
 function titleOfToolCall(tc: unknown): string {

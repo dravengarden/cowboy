@@ -22,7 +22,6 @@ import {
   Chip,
   CircularProgress,
   Fab,
-  LinearProgress,
   Paper,
   Skeleton,
   Stack,
@@ -31,7 +30,6 @@ import {
   useTheme,
 } from "@mui/material";
 import {
-  CheckCircle,
   Code,
   Construction,
   ErrorOutline,
@@ -39,7 +37,6 @@ import {
   ExpandMore,
   Folder,
   Psychology,
-  RadioButtonUnchecked,
   Search,
   Terminal,
   WarningAmberRounded,
@@ -506,76 +503,9 @@ function ToolCard({
   );
 }
 
-// The agent's plan rendered as a task-completion checklist (ACP `plan` update).
-// Beyond the per-entry check, it carries a progress summary — a "done/total"
-// counter and a determinate bar — so the turn's completion is legible at a
-// glance without reading every line. Three entry states are distinguished:
-// completed (green check, struck + muted), in_progress (amber spinner, bold),
-// pending (empty circle). When every entry is done the bar + header flip to
-// success — the closest cowboy gets to a "task complete" marker.
-function PlanCard({
-  item,
-}: {
-  item: Extract<RenderItem, { kind: "plan" }>;
-}): React.JSX.Element {
-  const total = item.entries.length;
-  const done = item.entries.filter((e) => e.status === "completed").length;
-  const allDone = total > 0 && done === total;
-  const pct = total > 0 ? (done / total) * 100 : 0;
-  return (
-    <Paper variant="outlined" sx={{ p: 1.25, alignSelf: "stretch" }}>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
-        <Typography variant="overline" sx={{ lineHeight: 1.4 }}>
-          Plan
-        </Typography>
-        <Box sx={{ flex: 1 }} />
-        {allDone && <CheckCircle fontSize="small" color="success" />}
-        <Typography
-          variant="caption"
-          color={allDone ? "success.main" : "text.secondary"}
-          sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
-        >
-          {done}/{total}
-        </Typography>
-      </Stack>
-      {total > 0 && (
-        <LinearProgress
-          variant="determinate"
-          value={pct}
-          color={allDone ? "success" : "primary"}
-          sx={{ height: 6, borderRadius: 3, mb: 1 }}
-        />
-      )}
-      <Stack spacing={0.5}>
-        {item.entries.map((e, j) => {
-          const completed = e.status === "completed";
-          const inProgress = e.status === "in_progress";
-          return (
-            <Stack key={j} direction="row" spacing={1} alignItems="center">
-              {completed ? (
-                <CheckCircle fontSize="medium" color="success" />
-              ) : inProgress ? (
-                <CircularProgress size={16} thickness={5} color="warning" sx={{ mx: 0.25 }} />
-              ) : (
-                <RadioButtonUnchecked fontSize="medium" color="disabled" />
-              )}
-              <Typography
-                variant="body2"
-                color={completed ? "text.disabled" : "text.primary"}
-                sx={{
-                  fontWeight: inProgress ? 600 : 400,
-                  textDecoration: completed ? "line-through" : "none",
-                }}
-              >
-                {e.content}
-              </Typography>
-            </Stack>
-          );
-        })}
-      </Stack>
-    </Paper>
-  );
-}
+// NOTE: the agent's plan is no longer rendered inline here — it's surfaced by
+// the pinned, collapsible PlanDock above the composer (src/PlanDock.tsx), so the
+// task's progress stays in view without scrolling. See derive.ts `latestPlan`.
 
 function PermissionCard({
   item,
@@ -727,8 +657,6 @@ const ItemView = memo(function ItemView({
       );
     case "tool":
       return <ToolCard item={item} />;
-    case "plan":
-      return <PlanCard item={item} />;
     case "permission":
       return <PermissionCard item={item} />;
     case "lifecycle":
