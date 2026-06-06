@@ -28,9 +28,9 @@ import {
   AlternateEmail,
   AttachFile,
   Bolt,
-  BookmarkAddOutlined,
   ChevronRight,
   Close,
+  DraftsOutlined,
   EditOutlined,
   ExpandMore,
   InsertDriveFileOutlined,
@@ -524,7 +524,7 @@ export function Composer({
               sx={TOOLBAR_ICON_BTN}
               onClick={saveDraft}
             >
-              <BookmarkAddOutlined />
+              <DraftsOutlined />
             </IconButton>
           </Tooltip>
         )}
@@ -1106,7 +1106,7 @@ function PendingRow({
                 aria-label="move to drafts"
                 onClick={(): void => queuedToDraft(sessionId, message.id)}
               >
-                <BookmarkAddOutlined fontSize="small" />
+                <DraftsOutlined fontSize="small" />
               </IconButton>
             </Tooltip>
           </>
