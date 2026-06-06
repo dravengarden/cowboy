@@ -7,7 +7,6 @@ import {
     Chip,
     CircularProgress,
     Divider,
-    Drawer,
     IconButton,
     List,
     ListItemButton,
@@ -67,7 +66,7 @@ import {
 } from "./navbarSettings";
 import { FONT_PRESETS } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
-import { BottomSheet, ThemeModeControl } from "./_shell";
+import { BottomSheet, DetentSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
@@ -727,31 +726,22 @@ export function App({
                 }}
             >
             {mobile ? (
-                <Drawer
-                    anchor="top"
+                // The shared momentum sheet — same affordance as every other
+                // mobile sheet (Settings, etc.). Its anchor FOLLOWS the navbar:
+                // when the navbar sits at the bottom the list rises from the
+                // bottom too (mobile-browser feel), otherwise it drops from the
+                // top. DetentSheet owns the safe-area insets for its anchored
+                // edge, so the iPhone/iPad notch + rounded corners are cleared
+                // without per-anchor padding here.
+                <DetentSheet
                     open={drawerOpen}
                     onClose={(): void => setDrawerOpen(false)}
-                    slotProps={{
-                        paper: {
-                            sx: {
-                                maxHeight: "80vh",
-                                borderBottomLeftRadius: 16,
-                                borderBottomRightRadius: 16,
-                                // Slide DOWN from the top rather than in from the left: a
-                                // left-anchored drawer fought the iOS back / app-switch
-                                // edge-swipe (a swipe to scroll the list kept switching apps).
-                                // Opening is a hamburger tap, so there's no edge gesture at all.
-                                // pt clears the notch / status bar; side insets clear the
-                                // rounded corners / notch in landscape (0 off-device).
-                                pt: "max(env(safe-area-inset-top), 8px)",
-                                pl: "env(safe-area-inset-left)",
-                                pr: "env(safe-area-inset-right)",
-                            },
-                        },
-                    }}
+                    anchor={navbarAtBottom ? "bottom" : "top"}
+                    ariaLabel="Sessions"
+                    surfaceColor={theme.palette.background.default}
                 >
                     {list}
-                </Drawer>
+                </DetentSheet>
             ) : (
                 <Stack
                     sx={{
@@ -821,17 +811,20 @@ export function App({
                     sx={{
                         bgcolor: "background.default",
                         color: "text.primary",
-                        // Bottom mode (mobile, navbar-pos=bottom): flex `order`
-                        // moves the bar below the transcript, just above the
-                        // composer (which is order 2). Top mode: order 0, first
-                        // child.
-                        order: navbarAtBottom ? 1 : 0,
-                        // Clear the iPhone status bar / notch only at the top —
-                        // hosted full-bleed in the atlantis portal iframe, a top
-                        // bar would otherwise collide with the clock. At the
-                        // bottom the composer below owns the bottom safe-area
-                        // inset, so no inset here.
+                        // Bottom mode (mobile, navbar-pos=bottom): flex `order` puts
+                        // the bar at the VERY bottom — below the transcript (0) AND
+                        // the composer (1) — for a mobile-browser bottom-bar feel.
+                        // Top mode: order 0, first child.
+                        order: navbarAtBottom ? 2 : 0,
+                        // Own the safe-area inset of whichever edge the bar hugs.
+                        // Top: clear the status bar / notch. Bottom: clear the
+                        // home-indicator (pb) and, in landscape, the rounded-corner
+                        // side insets (pl/pr) so the bar never tucks under the iPhone
+                        // / iPad R角. All env() insets are 0 off-device + when hosted.
                         pt: navbarAtBottom ? 0 : "env(safe-area-inset-top, 0px)",
+                        pb: navbarAtBottom ? "env(safe-area-inset-bottom, 0px)" : 0,
+                        pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
+                        pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                     }}
                 >
                     <Toolbar
@@ -939,11 +932,11 @@ export function App({
                             // lands (vs an empty session, which is hydrated).
                             loading={!hydrated.has(active.id)}
                         />
-                        {/* order 2 in bottom mode keeps the composer below the
-                            navbar (order 1); order 0 (default DOM order) at the
-                            top. minWidth:0 so long content can't overflow the
-                            column. */}
-                        <Box sx={{ order: navbarAtBottom ? 2 : 0, minWidth: 0 }}>
+                        {/* Bottom mode: order 1 sits the composer above the
+                            navbar (order 2, the very bottom) and below the
+                            transcript (0). Top mode: order 0 (default DOM order).
+                            minWidth:0 so long content can't overflow the column. */}
+                        <Box sx={{ order: navbarAtBottom ? 1 : 0, minWidth: 0 }}>
                             <Composer
                                 // Remount per session: each session owns its draft
                                 // (seeded from the per-session draft store) and a

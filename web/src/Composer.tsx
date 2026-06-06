@@ -162,6 +162,10 @@ export function Composer({
   // following the latest message; tap while inactive scrolls to the bottom and
   // resumes following, tap while active stops following.
   const sticky = useSticky(sessionId);
+  // When the navbar sits at the bottom it owns the home-indicator safe area and
+  // renders BELOW the composer, so the composer must drop its own bottom inset
+  // (otherwise a double gap opens above the bar).
+  const navbarAtBottom = useNavbarAtBottom();
 
   const busy = status === "busy";
   const starting = status === "starting";
@@ -253,7 +257,12 @@ export function Composer({
         // into the indicator zone, which is fine for taps. Floored to 2px on
         // devices without a home bar.
         pt: { xs: 1, sm: 1.5 },
-        pb: { xs: "max(calc(env(safe-area-inset-bottom) - 20px), 2px)", sm: 1.5 },
+        // Bottom inset only when the composer is the bottom-most element. With
+        // the navbar at the bottom it sits below us and owns the home-indicator
+        // inset, so we drop to a plain gap.
+        pb: navbarAtBottom
+          ? 1
+          : { xs: "max(calc(env(safe-area-inset-bottom) - 20px), 2px)", sm: 1.5 },
         pl: { xs: "max(env(safe-area-inset-left), 20px)", sm: "max(env(safe-area-inset-left), 20px)" },
         pr: { xs: "max(env(safe-area-inset-right), 20px)", sm: "max(env(safe-area-inset-right), 20px)" },
         borderTop: 1,
