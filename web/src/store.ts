@@ -261,6 +261,23 @@ export function requestSendQueued(sessionId: string, status: Status, id: string)
   }
 }
 
+// "Force push" a queued row: interrupt the running turn and make this prompt
+// the one that runs next. Cancel is ASYNC — the daemon's turn doesn't end the
+// instant we send it, so we must NOT dispatch here: a dispatch racing the
+// still-cancelling turn would start an overlapping turn and break the inFlight
+// serialization (see the `inFlight` note above). Instead promote this to the
+// front and send Cancel; the busy → running turn-end edge then drains the front
+// item (this prompt) via the "sessions" handler. If the session can already
+// take a turn there's nothing to interrupt — fall back to a plain send.
+export function forcePushQueued(sessionId: string, status: Status, id: string): void {
+  if (canDispatch(sessionId, status)) {
+    requestSendQueued(sessionId, status, id);
+    return;
+  }
+  promoteQueued(sessionId, id);
+  send({ type: "cancel", session_id: sessionId });
+}
+
 // Edit a queued prompt in place. Clearing the text removes the entry.
 export function editQueued(sessionId: string, id: string, text: string): void {
   const trimmed = text.trimEnd();

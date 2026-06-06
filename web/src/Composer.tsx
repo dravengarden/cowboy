@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -15,6 +15,7 @@ import {
   Menu,
   MenuItem,
   Paper,
+  Popover,
   Skeleton,
   Stack,
   TextField,
@@ -26,6 +27,7 @@ import {
 import {
   AlternateEmail,
   AttachFile,
+  Bolt,
   ChevronRight,
   Close,
   EditOutlined,
@@ -34,7 +36,6 @@ import {
   Send,
   Stop,
   Tune,
-  VerticalAlignTop,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { useVimSetting } from "./vimSetting";
@@ -42,6 +43,7 @@ import { type Attachment, filesToAttachments } from "./attachments";
 import {
   clearQueue,
   editQueued,
+  forcePushQueued,
   type QueuedMessage,
   removeQueued,
   requestSendQueued,
@@ -49,6 +51,7 @@ import {
   submitPrompt,
   useStore,
 } from "./store";
+import { getDraft, setDraft } from "./draftStore";
 import { originLabel } from "./protocol";
 import type {
   AcpUpdate,
@@ -102,10 +105,23 @@ export function Composer({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
-  const [text, setText] = useState("");
+  // Draft state is seeded from the per-session draft store and persisted back to
+  // it (see the effect below). The Composer is remounted per session (key in
+  // App), so these initializers read the right session's draft on mount and a
+  // session switch never carries a draft across.
+  const [text, setText] = useState<string>(() => getDraft(sessionId).text);
   // Staged image / file attachments — previewed above the editor and sent as
   // ACP content blocks alongside the text (see attachments.ts). Cleared on send.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>(
+    () => getDraft(sessionId).attachments,
+  );
+  // Persist the in-progress draft per session so switching away and back
+  // restores it, and so it never bleeds into another session. Runs on mount too
+  // (idempotent re-write of the seed); on submit, text/attachments go empty and
+  // setDraft drops the entry.
+  useEffect(() => {
+    setDraft(sessionId, { text, attachments });
+  }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { configOptions, queues, sessions, timelines } = useStore();
@@ -606,10 +622,9 @@ function QueuedMessages({
 }: {
   sessionId: string;
   queue: QueuedMessage[];
-  /** Session status — drives Send-now (idle) vs Send-next (busy) per row. */
+  /** Session status — drives Send-now vs Force-push per row. */
   status: Status;
 }): React.JSX.Element {
-  const idle = status === "running";
   // Default expanded. Collapsed state is local + ephemeral (resets on session
   // switch / remount) — the count stays visible either way, which is the part
   // that matters at a glance.
@@ -670,8 +685,6 @@ function QueuedMessages({
               sessionId={sessionId}
               message={m}
               status={status}
-              idle={idle}
-              isFront={m.id === queue[0]?.id}
               editing={editingId === m.id}
               onEdit={(): void => setEditingId(m.id)}
               onEditDone={(): void => setEditingId(null)}
@@ -683,16 +696,17 @@ function QueuedMessages({
   );
 }
 
-// One queued prompt. Read mode shows the (clamped) text + Send / Edit / Delete.
-// Edit mode swaps in a small multiline field (Enter saves, Esc cancels). "Send"
-// dispatches immediately when idle, else promotes to the front of the queue —
-// the daemon can't run a concurrent turn, so "now" becomes "next" while busy.
+// One queued prompt. Read mode shows the (clamped) text + a primary action +
+// Edit / Delete. Edit mode swaps in a small multiline field (Enter saves, Esc
+// cancels). The primary action depends on whether the session can take a turn
+// right now: dispatchable → a plain "Send now" (sends immediately, revives a
+// dead session); busy → a warning-coloured "Force push" that interrupts the
+// running turn and runs this prompt next — gated behind a confirm popover
+// because cancelling discards the in-flight turn's progress.
 function QueuedRow({
   sessionId,
   message,
   status,
-  idle,
-  isFront,
   editing,
   onEdit,
   onEditDone,
@@ -700,17 +714,16 @@ function QueuedRow({
   sessionId: string;
   message: QueuedMessage;
   status: Status;
-  /** status === "running"; drives the Send-now vs Send-next icon + tooltip. */
-  idle: boolean;
-  isFront: boolean;
   editing: boolean;
   onEdit: () => void;
   onEditDone: () => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
-  // "Send now" is only meaningful at the front when idle; promoting the front
-  // item while busy is a no-op, so hide the action there to avoid a dead button.
-  const showSend = idle || !isFront;
+  // Confirm popover for force push (anchored to the Bolt button). Null = closed.
+  const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
+  // "running" is the idle-ready state; "exited"/"crashed" dispatch a revive.
+  // Anything else ("busy"/"starting") has an in-flight turn → force push.
+  const dispatchable = status === "running" || status === "exited" || status === "crashed";
   if (editing) {
     const save = (): void => {
       editQueued(sessionId, message.id, draft);
@@ -781,18 +794,66 @@ function QueuedRow({
         )}
       </Box>
       <Stack direction="row" sx={{ flexShrink: 0 }}>
-        {showSend && (
-          <Tooltip title={idle ? "Send now" : "Send next"}>
+        {dispatchable ? (
+          <Tooltip title="Send now">
             <IconButton
               size="small"
               color="primary"
-              aria-label={idle ? "send now" : "send next"}
+              aria-label="send now"
               onClick={(): void => requestSendQueued(sessionId, status, message.id)}
             >
-              {idle ? <Send fontSize="small" /> : <VerticalAlignTop fontSize="small" />}
+              <Send fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <Tooltip title="Force push (interrupt & send)">
+            <IconButton
+              size="small"
+              color="warning"
+              aria-label="force push"
+              onClick={(e): void => setConfirmAnchor(e.currentTarget)}
+            >
+              <Bolt fontSize="small" />
             </IconButton>
           </Tooltip>
         )}
+        <Popover
+          open={confirmAnchor !== null}
+          anchorEl={confirmAnchor}
+          onClose={(): void => setConfirmAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "right" }}
+        >
+          <Box sx={{ p: 1.5, maxWidth: 240 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Stop the current turn and send this message now? The agent's
+              in-progress work is discarded.
+            </Typography>
+            <Stack direction="row" spacing={1} justifyContent="flex-end">
+              <Button
+                size="small"
+                color="inherit"
+                onClick={(): void => setConfirmAnchor(null)}
+                sx={{ textTransform: "none" }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                color="warning"
+                startIcon={<Bolt />}
+                onClick={(): void => {
+                  forcePushQueued(sessionId, status, message.id);
+                  setConfirmAnchor(null);
+                }}
+                sx={{ textTransform: "none" }}
+              >
+                Force push
+              </Button>
+            </Stack>
+          </Box>
+        </Popover>
         <Tooltip title="Edit">
           <IconButton size="small" aria-label="edit queued message" onClick={onEdit}>
             <EditOutlined fontSize="small" />
