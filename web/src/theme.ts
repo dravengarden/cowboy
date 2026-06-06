@@ -23,10 +23,21 @@ export type Mode = ThemeChoice;
 // navbar read as one surface (status-bar-style="default" lets iOS tint the bar
 // + auto-contrast its glyphs). Must stay in sync with the palette's
 // background.default below.
+//
+// REPLACE the <meta> node rather than mutate its `content`: an iOS standalone
+// PWA latches the status-bar colour from the theme-color meta and routinely
+// IGNORES a later `setAttribute` on the same node, so a live dark→light switch
+// left the status bar stuck on the load-time (dark) colour. Removing the node
+// and appending a fresh one forces iOS to re-read it. Harmless elsewhere —
+// every other browser honours either path.
 function applyThemeColor(dark: boolean): void {
-  globalThis.document
-    .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", dark ? "#15111d" : "#f4ecf7");
+  const doc = globalThis.document;
+  if (!doc) return;
+  for (const m of doc.querySelectorAll('meta[name="theme-color"]')) m.remove();
+  const meta = doc.createElement("meta");
+  meta.setAttribute("name", "theme-color");
+  meta.setAttribute("content", dark ? "#15111d" : "#f4ecf7");
+  doc.head.appendChild(meta);
 }
 
 // Native desktop UIs size their system font per-OS: macOS renders SF at ~13px,
