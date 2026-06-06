@@ -93,11 +93,9 @@ const CLAUDE_FRAME_MS = 200;
 function ClaudeThinking(): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  // Adapt to the app's theme accent (was hardcoded Claude terracotta #D97757,
-  // which clashed with cowboy's purple in both glyph + verb shimmer). The brand
-  // mark proper still lives in ProviderIcon; this working indicator should read
-  // as part of cowboy's chrome, so it tracks the theme primary.
-  const accent = theme.palette.primary.main;
+  // Claude Code's own terracotta — this indicator is Claude's branded "working"
+  // personality (its star glyph + jargon verbs), so it keeps the brand colour.
+  const accent = "#D97757";
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
@@ -131,15 +129,13 @@ function ClaudeThinking(): React.JSX.Element {
         component="span"
         aria-hidden
         sx={{
-          // `em` (not fixed px) so the indicator scales with the transcript's
-          // reading-size setting like the prose + tool cards do.
-          width: "1em",
+          width: 14,
           textAlign: "center",
-          fontSize: "0.95em",
+          fontSize: 14,
           lineHeight: 1,
           fontWeight: 700,
           color: accent,
-          // Monospace + tabular so the spinner glyph swap doesn't shift the verb.
+          // Monospace + tabular so the glyph swap doesn't shift the verb.
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         }}
@@ -147,12 +143,8 @@ function ClaudeThinking(): React.JSX.Element {
         {glyph}
       </Box>
       <Typography
+        variant="caption"
         sx={{
-          // Follow the reading font + size so the verb is typographically
-          // continuous with the message prose, not pinned to the theme chrome
-          // font. (caption's fixed rem is dropped for an em that scales.)
-          fontFamily: "var(--cowboy-reading-font, inherit)",
-          fontSize: "0.9em",
           fontWeight: 500,
           letterSpacing: 0.2,
           background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
@@ -239,17 +231,22 @@ function toolColor(status: string): "default" | "success" | "error" | "warning" 
 }
 
 function toolIcon(kind: string): React.ReactElement {
+  // The tool-card leading icon tracks the theme accent (`color="primary"`,
+  // was the default text colour) and the reading-size setting
+  // (`fontSize="inherit"` sizes to the row's em like the title does, instead of
+  // a fixed 24px "medium") — so it adapts to both theme and font.
+  const props = { fontSize: "inherit" as const, color: "primary" as const };
   switch (kind) {
     case "read":
-      return <Folder fontSize="medium" />;
+      return <Folder {...props} />;
     case "edit":
-      return <Code fontSize="medium" />;
+      return <Code {...props} />;
     case "execute":
-      return <Terminal fontSize="medium" />;
+      return <Terminal {...props} />;
     case "search":
-      return <Search fontSize="medium" />;
+      return <Search {...props} />;
     default:
-      return <Construction fontSize="medium" />;
+      return <Construction {...props} />;
   }
 }
 
