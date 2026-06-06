@@ -110,6 +110,15 @@ export function Composer({
   // App), so these initializers read the right session's draft on mount and a
   // session switch never carries a draft across.
   const [text, setText] = useState<string>(() => getDraft(sessionId).text);
+  // CodeMirror is UNCONTROLLED: it's seeded with the session's draft once (this
+  // stable ref, captured at mount — the Composer remounts per session via the
+  // App-level key) and then OWNS its document. We deliberately never feed `text`
+  // back as the editor's `value` on every keystroke. Doing so re-applied the doc
+  // on each render, which on iOS (a) left the just-sent text on screen after
+  // clear() and (b) bounced the caret — a typed comma landing after the cursor.
+  // onChange keeps `text` in sync for send / sendable / draft; clear() empties
+  // the doc imperatively on submit.
+  const initialDraftText = useRef<string>(getDraft(sessionId).text);
   // Staged image / file attachments — previewed above the editor and sent as
   // ACP content blocks alongside the text (see attachments.ts). Cleared on send.
   const [attachments, setAttachments] = useState<Attachment[]>(
@@ -274,7 +283,8 @@ export function Composer({
           pickers into CM autocomplete. */}
       <ComposerEditor
         ref={editorRef}
-        value={text}
+        // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
+        value={initialDraftText.current}
         onChange={setText}
         onSubmit={submit}
         sessionId={sessionId}

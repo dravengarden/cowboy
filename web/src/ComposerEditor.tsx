@@ -161,6 +161,18 @@ export const ComposerEditor = forwardRef<
       const view = cmRef.current?.view;
       if (!view) return;
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      // iOS repaint nudge. A keystroke makes WebKit repaint the contenteditable,
+      // but this PROGRAMMATIC empty doesn't — so after Send the just-sent text
+      // lingers on screen even though the doc is now empty (the .cm-content
+      // compositing layer isn't re-rasterized). Toggling opacity for one frame
+      // forces a repaint of the (now empty) content. Focus-preserving and
+      // layout-neutral, so the keyboard stays up and nothing reflows. No-op cost
+      // on desktop.
+      const content = view.contentDOM;
+      content.style.opacity = "0.999";
+      requestAnimationFrame(() => {
+        content.style.opacity = "";
+      });
     },
   }));
 
