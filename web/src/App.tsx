@@ -856,8 +856,12 @@ export function App({
                 drawer toggle leads the bar; the launcher moves to the far right,
                 after Settings (the app's chosen placement on this bar). */}
                         {mobile && (
+                            // No `edge="start"`: its negative left margin pulled the
+                            // hamburger tight to the screen edge, while Settings (no
+                            // edge="end") sits at the Toolbar's normal gutter — so the
+                            // bar read lopsided. Dropping it gives the hamburger the
+                            // same gutter, symmetric with the gear on the right.
                             <IconButton
-                                edge="start"
                                 onClick={(): void => setDrawerOpen(true)}
                                 sx={{ mr: 1 }}
                             >
