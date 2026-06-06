@@ -131,6 +131,19 @@ export const ComposerEditor = forwardRef<
 
   const vimExt = useVimExtension(vim ?? false, vimApiRef);
 
+  // On touch devices the composer is pinned to the bottom edge and the on-screen
+  // keyboard overlays the layout viewport WITHOUT shrinking it. CM measures space
+  // against the layout viewport, so it sees room "below" the cursor (the area the
+  // keyboard now covers) and renders the `@`/`/` picker downward — hidden behind
+  // the keyboard. Forcing `aboveCursor` flips the picker up, where there's always
+  // room (the composer is at the bottom). Desktop keeps CM's default auto-flip.
+  const aboveCursor = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(pointer: coarse)").matches,
+    [],
+  );
+
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
     insertTrigger: (ch: string): void => {
@@ -179,6 +192,7 @@ export const ComposerEditor = forwardRef<
         ],
         activateOnTyping: true,
         icons: false,
+        aboveCursor,
       }),
       // Cmd/Ctrl+Enter sends, at highest precedence so it beats vim's and the
       // default Enter binding. Plain Enter stays a newline.
@@ -218,7 +232,7 @@ export const ComposerEditor = forwardRef<
       keymap.of([...completionKeymap, ...historyKeymap, ...defaultKeymap]),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vimExt],
+    [theme, sessionId, placeholder, vimExt, aboveCursor],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather
