@@ -1212,7 +1212,7 @@ function SettingsShell({
                                 variant="caption"
                                 color="text.secondary"
                             >
-                                Side gutter of the transcript
+                                Side gutter of the transcript + composer
                             </Typography>
                         </Stack>
                         <Select
@@ -1230,7 +1230,7 @@ function SettingsShell({
                         >
                             {PADDING_PRESETS.map((v) => (
                                 <MenuItem key={v} value={v}>
-                                    {v === 0 ? "None" : `${v}px`}
+                                    {`${v}px`}
                                 </MenuItem>
                             ))}
                         </Select>
