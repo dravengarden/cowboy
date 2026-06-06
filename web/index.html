@@ -2,9 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- maximum-scale=1 + user-scalable=no disables pinch / double-tap zoom so
+         cowboy reads as a native app, not a zoomable web page. iOS Safari
+         ignores this in a normal tab, but HONOURS it in the installed
+         standalone PWA (apple-mobile-web-app-capable, below) — which is how
+         cowboy is used. Bonus: it also kills iOS's focus-auto-zoom on inputs
+         (the editor is already 16px to avoid that; this is belt-and-braces). -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="theme-color" content="#7c3aed" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
