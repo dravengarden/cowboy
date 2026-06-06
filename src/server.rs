@@ -132,6 +132,7 @@ async fn serve_axum(
 
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/version", get(version))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/ws", any(ws_upgrade))
@@ -160,6 +161,40 @@ pub(crate) fn init_tracing() {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Response body for `GET /version`.
+#[derive(Debug, Serialize)]
+struct VersionResponse {
+    version: String,
+}
+
+/// A build identifier the SPA polls to detect a redeploy. We reuse the embedded
+/// `index.html`'s compile-time SHA256: it references the content-hashed JS/CSS
+/// bundles, so any change to the shipped UI changes this hash, while an
+/// unchanged build keeps it stable. The frontend captures it on first load and
+/// re-checks after each WS reconnect — a mismatch means the daemon was
+/// redeployed under a now-stale tab, which surfaces the "new version" banner.
+async fn version() -> Response {
+    match Assets::get("index.html") {
+        Some(f) => Json(VersionResponse {
+            version: content_hash_hex(&f.metadata.sha256_hash()),
+        })
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, "UI not built").into_response(),
+    }
+}
+
+/// Render rust-embed's compile-time SHA256 as a 32-hex-char string (first 16
+/// bytes — ample to avoid collisions across a handful of static files). Used
+/// both for the static-asset `ETag` and the `/version` build id so the two
+/// never drift.
+fn content_hash_hex(hash: &[u8; 32]) -> String {
+    format!(
+        "{:016x}{:016x}",
+        u64::from_be_bytes(hash[0..8].try_into().expect("8 bytes")),
+        u64::from_be_bytes(hash[8..16].try_into().expect("8 bytes")),
+    )
 }
 
 /// Request body for `POST /api/sessions`.
@@ -262,12 +297,12 @@ struct Assets;
 /// owns client-side routing. Missing `index.html` (UI not built) → 404.
 ///
 /// Caching: rust-embed computes a per-file SHA256 at compile time, which we use
-/// as a content ETag (stable across rebuilds when the bytes are unchanged). The
+/// as a content `ETag` (stable across rebuilds when the bytes are unchanged). The
 /// cache policy is split by whether the filename is content-addressed:
 ///   - `/assets/*` — Vite emits content-hashed names, so the bytes behind a name
 ///     never change → `immutable` with a one-year max-age, never revalidated.
 ///   - everything else (index.html, sw.js, manifest, favicon, icons) —
-///     `no-cache`: the browser may store it but MUST revalidate via the ETag on
+///     `no-cache`: the browser may store it but MUST revalidate via the `ETag` on
 ///     every use, so a redeploy is picked up immediately while unchanged files
 ///     cost only a 304. This is what stops a redeployed favicon/icon from being
 ///     pinned to a stale copy in the browser's HTTP cache.
@@ -290,14 +325,9 @@ async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
         return (StatusCode::NOT_FOUND, "UI not built").into_response();
     };
 
-    // Content ETag from rust-embed's compile-time SHA256 (first 16 bytes is
-    // ample to avoid collisions for a handful of static files).
-    let h = content.metadata.sha256_hash();
-    let etag = format!(
-        "\"{:016x}{:016x}\"",
-        u64::from_be_bytes(h[0..8].try_into().expect("8 bytes")),
-        u64::from_be_bytes(h[8..16].try_into().expect("8 bytes")),
-    );
+    // Content ETag from rust-embed's compile-time SHA256 (same hash the
+    // `/version` build id uses, so the two stay in lockstep).
+    let etag = format!("\"{}\"", content_hash_hex(&content.metadata.sha256_hash()));
 
     // Conditional request: the browser echoes our ETag in If-None-Match; if it
     // still matches, skip the body. `contains` (not strict equality) tolerates a

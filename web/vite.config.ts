@@ -107,6 +107,7 @@ export default defineConfig({
     proxy: {
       "/ws": { target: devBackend, ws: true },
       "/healthz": devBackend,
+      "/version": devBackend,
       "/api": devBackend,
     },
   },

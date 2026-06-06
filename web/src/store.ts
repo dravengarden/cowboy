@@ -27,6 +27,21 @@ export interface ErrorNotice {
   message: string;
 }
 
+/// Top-of-app connection banner. Purely client-side — NOT part of the WS
+/// protocol; the store drives it off the socket lifecycle plus a build-version
+/// probe:
+///   - "down"        — reconnect has failed RECONNECT_BANNER_THRESHOLD times in
+///                     a row; red, so the user knows the live stream is stale
+///                     while we keep retrying underneath.
+///   - "reconnected" — the socket came back after a "down" banner was shown;
+///                     green, auto-dismissed after RECONNECTED_DISMISS_MS.
+///   - "update"      — the post-reconnect version probe saw a new server build;
+///                     blue, sticky, click reloads to pull the new bundle.
+export type BannerKind = "down" | "reconnected" | "update";
+export interface Banner {
+  kind: BannerKind;
+}
+
 /// One client-side queued prompt. Zed-style: while a session's turn is in
 /// flight you stack up the next messages here instead of sending them — the
 /// daemon runs each `Prompt` as a concurrent task on a single ACP connection
@@ -51,6 +66,10 @@ export interface State {
   // session_id → ordered prompts waiting for the current turn to finish
   queues: Map<string, QueuedMessage[]>;
   lastError?: ErrorNotice;
+  // Top-of-app connection/version banner; undefined = nothing shown. Spelled
+  // `| undefined` (not bare optional) so `{ ...state, banner }` can carry an
+  // explicit undefined under exactOptionalPropertyTypes.
+  banner?: Banner | undefined;
 }
 
 let errorSeq = 0;
@@ -64,6 +83,34 @@ let state: State = {
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
+
+// --- Reconnect + version bookkeeping ----------------------------------------
+
+// Surface the red "down" banner once this many consecutive (re)connect cycles
+// have failed — a single dropped frame that recovers on the first retry stays
+// silent; only a real outage raises the banner.
+const RECONNECT_BANNER_THRESHOLD = 2;
+// Cap the exponential backoff so a long outage doesn't hammer the daemon, while
+// a brief blip still recovers within a second.
+const RECONNECT_BACKOFF_MAX_MS = 15_000;
+// How long the green "reconnected" flash lingers before auto-dismissing.
+const RECONNECTED_DISMISS_MS = 4_000;
+
+// Consecutive failed (re)connect cycles; reset to 0 on a successful open.
+let reconnectAttempts = 0;
+// Whether the current outage actually surfaced the red banner — so the eventual
+// reopen only flashes green for outages the user was told about, not for a blip
+// that never crossed the threshold.
+let outageSurfaced = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let reconnectedTimer: ReturnType<typeof setTimeout> | undefined;
+
+// The server build id this tab first loaded against. `/version` returns the
+// embedded index.html's content hash, which changes on every redeploy that
+// alters the shipped bundle and stays stable otherwise. We capture it once,
+// then re-probe after each successful reconnect: a mismatch means the daemon
+// was redeployed under a now-stale tab → raise the blue "update" banner.
+let knownVersion: string | undefined;
 
 function emit(): void {
   for (const l of listeners) l();
@@ -154,11 +201,74 @@ function handle(msg: Outbound): void {
   }
 }
 
+function setBanner(banner: Banner | undefined): void {
+  setState({ ...state, banner });
+}
+
+// The blue "update" banner's confirm action: a hard reload. index.html ships
+// `no-cache` (always revalidated) and the hashed assets are immutable, so the
+// next load pulls the new bundle cleanly. Exposed for the banner's click.
+export function applyUpdate(): void {
+  globalThis.location.reload();
+}
+
+// First thing on every (re)connect: ask the daemon for its build id. On the
+// very first probe we only record the baseline; thereafter a changed id means
+// the server was redeployed under us, so we raise the (sticky) update banner.
+// A failed probe is a no-op — we simply try again on the next reconnect.
+async function probeVersion(): Promise<void> {
+  let version: string;
+  try {
+    const res = await fetch("/version", { cache: "no-store" });
+    if (!res.ok) return;
+    ({ version } = (await res.json()) as { version: string });
+  } catch {
+    return;
+  }
+  if (knownVersion === undefined) {
+    knownVersion = version;
+    return;
+  }
+  if (version !== knownVersion) setBanner({ kind: "update" });
+}
+
+function scheduleReconnect(): void {
+  if (reconnectTimer) return; // one pending attempt at a time
+  const delay = Math.min(
+    RECONNECT_BACKOFF_MAX_MS,
+    1000 * 2 ** Math.max(0, reconnectAttempts - 1),
+  );
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    connect();
+  }, delay);
+}
+
 function connect(): void {
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws`);
   socket = ws;
-  ws.onopen = (): void => setState({ ...state, connected: true });
+  ws.onopen = (): void => {
+    const recovered = outageSurfaced;
+    reconnectAttempts = 0;
+    outageSurfaced = false;
+    // Recovered from a surfaced outage → flash green, but never stomp a sticky
+    // blue update banner (it outranks everything). The async version probe may
+    // replace the green with blue moments later.
+    let banner = state.banner;
+    if (recovered && banner?.kind !== "update") banner = { kind: "reconnected" };
+    setState({ ...state, connected: true, banner });
+    if (banner?.kind === "reconnected") {
+      if (reconnectedTimer) clearTimeout(reconnectedTimer);
+      reconnectedTimer = setTimeout(() => {
+        reconnectedTimer = undefined;
+        // Only clear if still green — don't stomp an update banner the probe
+        // raised in the meantime.
+        if (state.banner?.kind === "reconnected") setBanner(undefined);
+      }, RECONNECTED_DISMISS_MS);
+    }
+    void probeVersion();
+  };
   ws.onmessage = (e: MessageEvent<string>): void => {
     try {
       handle(JSON.parse(e.data) as Outbound);
@@ -167,9 +277,16 @@ function connect(): void {
     }
   };
   ws.onclose = (): void => {
-    setState({ ...state, connected: false });
-    // Reconnect with a fresh snapshot after a short delay.
-    setTimeout(connect, 1000);
+    reconnectAttempts += 1;
+    // Raise the red banner once retries have failed past the threshold, unless
+    // a sticky update banner is already up (that one outranks the outage).
+    let banner = state.banner;
+    if (reconnectAttempts >= RECONNECT_BANNER_THRESHOLD && banner?.kind !== "update") {
+      outageSurfaced = true;
+      banner = { kind: "down" };
+    }
+    setState({ ...state, connected: false, banner });
+    scheduleReconnect();
   };
   ws.onerror = (): void => ws.close();
 }

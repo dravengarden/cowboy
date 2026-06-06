@@ -49,7 +49,7 @@ import {
     type SessionOrigin,
     type Status,
 } from "./protocol";
-import { send, useStore } from "./store";
+import { applyUpdate, send, useStore } from "./store";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
@@ -436,6 +436,78 @@ function NewSessionDialog({
     );
 }
 
+// Full-width banner that tracks the live WebSocket. The store raises three
+// kinds (see store.ts `Banner`): red "down" once reconnect has failed past the
+// threshold, green "reconnected" when the socket recovers (auto-dismissed), and
+// blue "update" when a post-reconnect version probe sees a new server build —
+// the update banner is clickable and reloads to pull the new bundle.
+function ConnectionBanner(): React.JSX.Element | null {
+    const { banner } = useStore();
+    if (!banner) return null;
+    const isUpdate = banner.kind === "update";
+    const palette =
+        banner.kind === "down"
+            ? "error"
+            : banner.kind === "reconnected"
+              ? "success"
+              : "info";
+    const label =
+        banner.kind === "down"
+            ? "Connection lost — reconnecting…"
+            : banner.kind === "reconnected"
+              ? "Reconnected"
+              : "A new version is available";
+    return (
+        <Box
+            role={isUpdate ? "button" : "status"}
+            aria-live="polite"
+            onClick={isUpdate ? applyUpdate : undefined}
+            sx={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 1,
+                px: 2,
+                py: 0.75,
+                // Owns the notch when shown (it's the topmost element); matches
+                // the AppBar's safe-area handling for the no-banner case.
+                pt: "calc(env(safe-area-inset-top, 0px) + 6px)",
+                bgcolor: `${palette}.main`,
+                color: `${palette}.contrastText`,
+                fontSize: "0.8125rem",
+                fontWeight: 500,
+                cursor: isUpdate ? "pointer" : "default",
+                zIndex: (t) => t.zIndex.appBar + 1,
+            }}
+        >
+            {banner.kind === "down" && (
+                <CircularProgress size={14} color="inherit" thickness={5} />
+            )}
+            {banner.kind === "reconnected" && (
+                <CheckIcon sx={{ fontSize: 18 }} />
+            )}
+            <span>{label}</span>
+            {isUpdate && (
+                <Button
+                    size="small"
+                    variant="outlined"
+                    color="inherit"
+                    onClick={(e): void => {
+                        // Stop the bubble so we don't double-fire with the
+                        // bar's own onClick.
+                        e.stopPropagation();
+                        applyUpdate();
+                    }}
+                    sx={{ ml: 1, py: 0, minWidth: 0 }}
+                >
+                    Reload
+                </Button>
+            )}
+        </Box>
+    );
+}
+
 export function App({
     themeMode,
     onSetThemeMode,
@@ -599,7 +671,25 @@ export function App({
     );
 
     return (
-        <Box sx={{ display: "flex", height: "100%", width: "100%" }}>
+        <Box
+            sx={{
+                display: "flex",
+                flexDirection: "column",
+                height: "100%",
+                width: "100%",
+            }}
+        >
+            {/* Full-width connection/version banner, above the whole layout so
+                it spans both panes and pushes them down when shown. */}
+            <ConnectionBanner />
+            <Box
+                sx={{
+                    display: "flex",
+                    flex: 1,
+                    minHeight: 0,
+                    width: "100%",
+                }}
+            >
             {mobile ? (
                 <Drawer
                     anchor="top"
@@ -829,6 +919,7 @@ export function App({
                     </Box>
                 )}
             </Stack>
+            </Box>
 
             <NewSessionDialog
                 open={dialogOpen}
