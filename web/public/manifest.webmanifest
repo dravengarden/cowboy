@@ -1,6 +1,6 @@
 {
-  "name": "cowboy",
-  "short_name": "cowboy",
+  "name": "Cowboy",
+  "short_name": "Cowboy",
   "description": "Drive coding-agent CLIs from anywhere over ACP.",
   "start_url": "/",
   "scope": "/",
