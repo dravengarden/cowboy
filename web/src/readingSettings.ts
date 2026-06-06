@@ -27,7 +27,7 @@ const EVENT = "cowboy:reading-change";
 // Discrete presets — a dropdown taps cleanly on touch where a slider is fiddly
 // and a number field pops the iOS keyboard (liveview's reasoning). The scale is
 // a multiplier on the inherited reading size (1 = unchanged); padding is px.
-export const FONT_SCALE_PRESETS: number[] = [0.75, 0.8, 0.85, 0.9, 1, 1.1, 1.25];
+export const FONT_SCALE_PRESETS: number[] = [0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 1, 1.1, 1.25];
 export const PADDING_PRESETS: number[] = [8, 12, 16, 20, 24, 32, 48];
 // Line-height of the reading prose (paragraphs/lists). Headings + code keep
 // their own fixed leading; this drives the body text's line spacing.
