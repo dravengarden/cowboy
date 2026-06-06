@@ -92,14 +92,14 @@ function TranscriptSkeleton(): React.JSX.Element {
           {turn.mine ? (
             <Skeleton
               variant="rounded"
-              animation="wave"
+              animation="pulse"
               width={turn.lines[0]}
               height={34}
               sx={{ maxWidth: "75%", borderRadius: 2.5 }}
             />
           ) : (
             turn.lines.map((w, j) => (
-              <Skeleton key={j} variant="text" animation="wave" width={w} height={20} />
+              <Skeleton key={j} variant="text" animation="pulse" width={w} height={20} />
             ))
           )}
         </Stack>
