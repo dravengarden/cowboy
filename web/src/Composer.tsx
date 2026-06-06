@@ -413,7 +413,16 @@ export function Composer({
             ON. Active = primary; inactive = muted. Tap while inactive → scroll to
             bottom + follow again; tap while active → stop following. The
             Transcript owns the actual scrolling (stickyStore). */}
-        <Tooltip title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}>
+        {/* Hover-only tooltip: on touch a tap focuses the button, and the
+            focus/touch listeners would pop the "Auto-scroll: on" bubble every
+            time you toggle — noise on the most-tapped control. Disable both so
+            the tooltip is desktop-hover only; the button still toggles, and the
+            aria-label keeps it labelled for assistive tech. */}
+        <Tooltip
+          title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
+          disableFocusListener
+          disableTouchListener
+        >
           <IconButton
             aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
             color={sticky ? "primary" : "default"}
