@@ -202,18 +202,25 @@ export const ComposerTextarea = forwardRef<
           onClick={(): void => applyOption(o.apply)}
           sx={{
             px: 1.5,
-            py: 1,
+            py: 0.625,
             cursor: "pointer",
             minWidth: 0,
+            // Single line: bold-ish name + muted, ellipsized description on the
+            // SAME row, so ~twice as many options fit in the cramped space above
+            // the keyboard (command-palette density). Baseline-aligned so the
+            // smaller description sits on the name's text baseline.
+            display: "flex",
+            alignItems: "baseline",
+            gap: 1,
             "&:active": { bgcolor: "action.selected" },
             "@media (hover: hover)": { "&:hover": { bgcolor: "action.hover" } },
           }}
         >
-          <Typography variant="body2" noWrap>
+          <Typography variant="body2" noWrap sx={{ fontWeight: 500, flexShrink: 0, maxWidth: "60%" }}>
             {o.primary}
           </Typography>
           {o.secondary != null && o.secondary !== "" && (
-            <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+            <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
               {o.secondary}
             </Typography>
           )}
