@@ -535,7 +535,7 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { sessions, timelines, lastError } = useStore();
+    const { sessions, timelines, hydrated, lastError } = useStore();
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -935,6 +935,9 @@ export function App({
                             timeline={timelines.get(active.id) ?? []}
                             status={active.status}
                             provider={active.provider}
+                            // Skeleton until this session's history snapshot
+                            // lands (vs an empty session, which is hydrated).
+                            loading={!hydrated.has(active.id)}
                         />
                         {/* order 2 in bottom mode keeps the composer below the
                             navbar (order 1); order 0 (default DOM order) at the

@@ -61,6 +61,10 @@ export interface State {
   sessions: SessionMeta[];
   // session_id → seq-ordered, deduped event log
   timelines: Map<string, Envelope[]>;
+  // session_ids whose history `snapshot` has arrived. Distinguishes "history
+  // still loading" from "loaded, genuinely empty", so the transcript shows a
+  // loading skeleton only during the initial fetch — not for an empty session.
+  hydrated: Set<string>;
   // session_id → agent-advertised configOptions array (mode/model/effort)
   configOptions: Map<string, ConfigOption[]>;
   // session_id → ordered prompts waiting for the current turn to finish
@@ -78,6 +82,7 @@ let state: State = {
   connected: false,
   sessions: [],
   timelines: new Map(),
+  hydrated: new Set(),
   configOptions: new Map(),
   queues: new Map(),
 };
@@ -163,7 +168,14 @@ function handle(msg: Outbound): void {
     case "snapshot": {
       let timelines = state.timelines;
       for (const env of msg.events) timelines = applyEnvelope(timelines, env);
-      setState({ ...state, timelines });
+      // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
+      // "history loaded" signal. Reconnects re-send snapshots but the flag stays
+      // set (cached history shown, no skeleton flash). Reuse the same Set when
+      // already present so the snapshot reference stays stable.
+      const hydrated = state.hydrated.has(msg.session_id)
+        ? state.hydrated
+        : new Set(state.hydrated).add(msg.session_id);
+      setState({ ...state, timelines, hydrated });
       break;
     }
     case "event":

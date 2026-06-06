@@ -60,6 +60,55 @@ import { BottomSheet, ImageLightbox } from "./_shell";
 
 // --- Loading primitives -----------------------------------------------------
 
+// Chat-history skeleton shown while a session's snapshot is still in flight (the
+// startup blank). A handful of placeholder turns — assistant blocks read as
+// left-aligned prose lines, "mine" blocks as a right-aligned bubble — so it
+// reads as a conversation, not a form. Sizes are %/maxWidth-relative and it
+// rides inside the transcript's padded reading column, so the same markup gives
+// the right gutter + line width on iPhone, iPad and desktop with no breakpoints.
+const SKELETON_TURNS: { mine: boolean; lines: string[] }[] = [
+  { mine: false, lines: ["92%", "84%", "61%"] },
+  { mine: true, lines: ["52%"] },
+  { mine: false, lines: ["88%", "96%", "72%", "47%"] },
+  { mine: true, lines: ["38%"] },
+  { mine: false, lines: ["80%", "65%"] },
+];
+
+function TranscriptSkeleton(): React.JSX.Element {
+  return (
+    <Stack
+      spacing={3}
+      sx={{ py: 2 }}
+      aria-busy="true"
+      aria-label="Loading chat history"
+    >
+      {SKELETON_TURNS.map((turn, i) => (
+        <Stack
+          // Static placeholder list — index keys are fine (no reordering).
+          key={i}
+          spacing={0.7}
+          sx={{ alignItems: turn.mine ? "flex-end" : "stretch", width: "100%" }}
+        >
+          {turn.mine ? (
+            <Skeleton
+              variant="rounded"
+              animation="wave"
+              width={turn.lines[0]}
+              height={34}
+              sx={{ maxWidth: "75%", borderRadius: 2.5 }}
+            />
+          ) : (
+            turn.lines.map((w, j) => (
+              <Skeleton key={j} variant="text" animation="wave" width={w} height={20} />
+            ))
+          )}
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
+
 // Soft opacity breathing — used both for the in-flight tool card and the
 // Claude "thinking" spark. CSS keyframes instead of a JS animation lib so it's
 // free on bundle size and runs on the compositor (smooth on low-end phones).
@@ -705,12 +754,16 @@ export function Transcript({
   timeline,
   status,
   provider,
+  loading,
 }: {
   sessionId: string;
   timeline: Envelope[];
   status: Status;
   /** Drives the per-provider "thinking" indicator flavor (color + verbs). */
   provider: string;
+  /** True until this session's history snapshot has arrived — show a skeleton
+   *  instead of an empty column during the initial load. */
+  loading: boolean;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -950,6 +1003,9 @@ export function Transcript({
           overscrollBehavior: "contain",
         }}
       >
+        {loading && items.length === 0 ? (
+          <TranscriptSkeleton />
+        ) : (
         <Box
           sx={{
             height: totalSize,
@@ -986,6 +1042,7 @@ export function Transcript({
             );
           })}
         </Box>
+        )}
       </Box>
       {/* The "scroll to latest" affordance is now the persistent sticky toggle
           in the composer (stickyStore + Composer), not a transient Fab here. */}
