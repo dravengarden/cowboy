@@ -105,6 +105,13 @@ export const ComposerTextarea = forwardRef<
       size="small"
       fullWidth
       sx={{
+        // Keep a usable tap target even when a small font scale shrinks the
+        // text: the input box shouldn't collapse to a thin sliver. The textarea
+        // still grows from here as you type (top-aligned).
+        "& .MuiInputBase-root": {
+          minHeight: 44,
+          alignItems: "flex-start",
+        },
         // `1rem` so the input tracks the reading font-size setting both up and
         // down (useGlobalFontScale scales the root font-size); line-height
         // follows the reading line-height var. No 16px floor — the installed PWA

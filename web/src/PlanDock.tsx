@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { Box, Collapse, CircularProgress, LinearProgress, Stack, Typography } from "@mui/material";
+import {
+  Box,
+  ButtonBase,
+  Collapse,
+  CircularProgress,
+  LinearProgress,
+  Stack,
+  Typography,
+} from "@mui/material";
 import { CheckCircle, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
 
@@ -47,41 +55,51 @@ export function PlanDock({ entries }: { entries: PlanEntry[] }): React.JSX.Eleme
         overflow: "hidden",
       }}
     >
-      {/* Header row — the whole row toggles expand/collapse. */}
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
+      {/* Header — a standard ripple ButtonBase so the whole row is one tap target
+          with Material feedback, and a min tap height that holds even when the
+          font scale shrinks the text (usability over a font-relative row height). */}
+      <ButtonBase
         onClick={toggle}
-        sx={{ px: 1, py: 0.5, cursor: "pointer", userSelect: "none" }}
+        aria-label={expanded ? "Collapse plan" : "Expand plan"}
+        sx={{
+          width: "100%",
+          justifyContent: "flex-start",
+          textAlign: "left",
+          px: 1,
+          py: 0.5,
+          minHeight: 40,
+          "@media (pointer: coarse)": { minHeight: 44 },
+        }}
       >
-        {expanded ? (
-          <ExpandLess fontSize="small" sx={{ color: "text.secondary" }} />
-        ) : (
-          <ExpandMore fontSize="small" sx={{ color: "text.secondary" }} />
-        )}
-        <Typography variant="overline" sx={{ lineHeight: 1.4 }}>
-          Plan
-        </Typography>
-        {!expanded && (
-          <Typography
-            variant="body2"
-            noWrap
-            sx={{ flex: 1, minWidth: 0, color: allDone ? "success.main" : "text.secondary" }}
-          >
-            {allDone ? "All steps complete" : (current?.content ?? "")}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%", minWidth: 0 }}>
+          {expanded ? (
+            <ExpandLess fontSize="small" sx={{ color: "text.secondary" }} />
+          ) : (
+            <ExpandMore fontSize="small" sx={{ color: "text.secondary" }} />
+          )}
+          <Typography variant="overline" sx={{ lineHeight: 1.4 }}>
+            Plan
           </Typography>
-        )}
-        {expanded && <Box sx={{ flex: 1 }} />}
-        {allDone && <CheckCircle fontSize="small" color="success" />}
-        <Typography
-          variant="caption"
-          color={allDone ? "success.main" : "text.secondary"}
-          sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
-        >
-          {done}/{total}
-        </Typography>
-      </Stack>
+          {!expanded && (
+            <Typography
+              variant="body2"
+              noWrap
+              sx={{ flex: 1, minWidth: 0, color: allDone ? "success.main" : "text.secondary" }}
+            >
+              {allDone ? "All steps complete" : (current?.content ?? "")}
+            </Typography>
+          )}
+          {expanded && <Box sx={{ flex: 1 }} />}
+          {allDone && <CheckCircle fontSize="small" color="success" />}
+          <Typography
+            variant="caption"
+            color={allDone ? "success.main" : "text.secondary"}
+            sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
+          >
+            {done}/{total}
+          </Typography>
+        </Stack>
+      </ButtonBase>
       {/* Always visible (even collapsed) so progress reads at a glance. */}
       <LinearProgress
         variant="determinate"
