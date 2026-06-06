@@ -8,14 +8,15 @@
 // harmless.
 
 import { useSyncExternalStore } from "react";
-import { type Attachment, buildContentBlocks } from "./attachments";
+import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import type {
   ConfigOption,
+  ContentBlock,
   Envelope,
   Inbound,
   Outbound,
   SessionMeta,
-  Status,
+  WireQueued,
 } from "./protocol";
 
 /// One notification slot — the App's snackbar shows the latest. We monotonically
@@ -44,17 +45,19 @@ export interface Banner {
   kind: BannerKind;
 }
 
-/// One client-side queued prompt. Zed-style: while a session's turn is in
-/// flight you stack up the next messages here instead of sending them — the
-/// daemon runs each `Prompt` as a concurrent task on a single ACP connection
-/// (see src/acp.rs), so two prompts mid-turn would start two overlapping turns.
-/// The queue enforces strict serialization: enqueue while busy, drain exactly
-/// one on each turn-end. `id` is a local monotonic key for React + edit/delete.
+/// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
+/// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so
+/// every connected terminal renders the same list (these used to be client-local
+/// localStorage, which never synced across devices). The store receives the
+/// canonical lists via the `queues` broadcast and mutates them by sending
+/// commands; it never drains or serializes locally. `id` is assigned by the
+/// daemon; `attachments` are reconstructed from the wire content blocks for
+/// display / re-edit.
 export interface QueuedMessage {
   id: string;
   text: string;
-  /** Staged image / file attachments sent alongside the text as ACP content
-   *  blocks. Empty for a plain text prompt. */
+  /** Staged image / file attachments (reconstructed from the message's ACP
+   *  content blocks). Empty for a plain text prompt. */
   attachments: Attachment[];
 }
 
@@ -72,11 +75,12 @@ export interface State {
   sessionsLoaded: boolean;
   // session_id → agent-advertised configOptions array (mode/model/effort)
   configOptions: Map<string, ConfigOption[]>;
-  // session_id → ordered prompts waiting for the current turn to finish
+  // session_id → ordered prompts waiting for the current turn to finish.
+  // Server-authoritative (the `queues` broadcast); the daemon drains them.
   queues: Map<string, QueuedMessage[]>;
   // session_id → parked DRAFT messages: composed but not committed to send.
-  // Persisted to localStorage and restored across reloads (a queued message
-  // that didn't drain before a restart comes back here — see loadDrafts).
+  // Server-authoritative + persisted in postgres, so they sync across every
+  // terminal and survive a daemon restart.
   drafts: Map<string, QueuedMessage[]>;
   lastError?: ErrorNotice;
   // Top-of-app connection/version banner; undefined = nothing shown. Spelled
@@ -86,11 +90,6 @@ export interface State {
 }
 
 let errorSeq = 0;
-// Seed from the wall clock so ids stay unique ACROSS reloads — a reload restores
-// persisted drafts with their old `q<n>` ids, and a fresh `queuedSeq` from 0
-// would hand new items colliding ids. Date.now() guarantees new ids sort past
-// any restored ones.
-let queuedSeq = Date.now();
 let state: State = {
   connected: false,
   sessions: [],
@@ -98,9 +97,9 @@ let state: State = {
   hydrated: new Set(),
   sessionsLoaded: false,
   configOptions: new Map(),
+  // Both populated from the server's `queues` broadcast (on connect + on every
+  // change). Start empty; never written locally except by that broadcast.
   queues: new Map(),
-  // Seeded just below once loadDrafts + its localStorage helpers are defined
-  // (calling loadDrafts here would hit those consts in the temporal dead zone).
   drafts: new Map(),
 };
 const listeners = new Set<() => void>();
@@ -147,72 +146,27 @@ function setState(next: State): void {
   emit();
 }
 
-// --- Draft + queue persistence ----------------------------------------------
+// --- Server-synced queue + drafts -------------------------------------------
 //
-// Drafts (parked messages) and the send-queue are persisted per session so they
-// survive a reload / PWA restart. A SENT message is dropped from storage (no
-// point keeping it). On startup any persisted queue is RECONSTITUTED AS DRAFTS,
-// not re-queued: after a restart the client has lost the live turn state, so
-// surfacing queued prompts for review beats blindly auto-firing them into a
-// possibly-restarted agent. Best-effort (wrapped in try/catch) so a quota error
-// or a private-mode localStorage just degrades to in-memory.
-
-const QUEUE_KEY = "cowboy:queue:";
-const DRAFTS_KEY = "cowboy:drafts:";
-
-function writeList(key: string, list: QueuedMessage[] | undefined): void {
-  try {
-    if (list && list.length > 0) globalThis.localStorage?.setItem(key, JSON.stringify(list));
-    else globalThis.localStorage?.removeItem(key);
-  } catch {
-    /* quota / unavailable — keep the in-memory copy only */
-  }
+// The daemon is authoritative: it sends the full queue + drafts for a session in
+// a `queues` broadcast (on connect and after every change), and every mutation
+// is a command the store sends back. There is NO local persistence, drain, or
+// serialization here anymore — those moved server-side so all terminals stay in
+// sync (see src/core.rs). Build the ACP content blocks for a staged message
+// exactly as a prompt would carry them (empty ⇒ plain text).
+function contentOf(text: string, attachments: readonly Attachment[]): ContentBlock[] {
+  return buildContentBlocks(text, attachments) ?? [];
 }
 
-function readList(key: string): QueuedMessage[] {
-  try {
-    const raw = globalThis.localStorage?.getItem(key);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    return Array.isArray(parsed) ? (parsed as QueuedMessage[]) : [];
-  } catch {
-    return [];
-  }
+// Convert a server `WireQueued` (raw ACP content blocks) into the UI shape, with
+// attachments reconstructed for display / re-edit.
+function fromWire(list: WireQueued[]): QueuedMessage[] {
+  return list.map((m) => ({
+    id: m.id,
+    text: m.text,
+    attachments: blocksToAttachments(m.content),
+  }));
 }
-
-// Persist the current queue + drafts for one session (called after every
-// mutation of either). Reads the live `state`, so call it AFTER setState.
-function persistSession(sessionId: string): void {
-  writeList(`${QUEUE_KEY}${sessionId}`, state.queues.get(sessionId));
-  writeList(`${DRAFTS_KEY}${sessionId}`, state.drafts.get(sessionId));
-}
-
-// Startup: load persisted drafts and fold any persisted queue into them (queued
-// items to the FRONT — they were the more-imminent ones — preserving order),
-// then clear the persisted queue so the conversion happens exactly once.
-function loadDrafts(): Map<string, QueuedMessage[]> {
-  const drafts = new Map<string, QueuedMessage[]>();
-  const ls = globalThis.localStorage;
-  if (!ls) return drafts;
-  const sids = new Set<string>();
-  for (let i = 0; i < ls.length; i += 1) {
-    const k = ls.key(i);
-    if (k?.startsWith(DRAFTS_KEY)) sids.add(k.slice(DRAFTS_KEY.length));
-    else if (k?.startsWith(QUEUE_KEY)) sids.add(k.slice(QUEUE_KEY.length));
-  }
-  for (const sid of sids) {
-    const merged = [...readList(`${QUEUE_KEY}${sid}`), ...readList(`${DRAFTS_KEY}${sid}`)];
-    if (merged.length > 0) {
-      drafts.set(sid, merged);
-      writeList(`${DRAFTS_KEY}${sid}`, merged);
-    }
-    writeList(`${QUEUE_KEY}${sid}`, undefined); // queue consumed into drafts
-  }
-  return drafts;
-}
-
-// Seed the initial drafts now that loadDrafts + its helpers are defined. No
-// subscribers exist yet (module is still evaluating), so a direct assign is safe.
-state = { ...state, drafts: loadDrafts() };
 
 function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<string, Envelope[]> {
   const next = new Map(timelines);
@@ -226,28 +180,23 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
 function handle(msg: Outbound): void {
   switch (msg.type) {
     case "sessions": {
-      // A status broadcast is the turn-end signal: the daemon re-broadcasts the
-      // session list on every set_status (src/core.rs). First reconcile the
-      // in-flight guard against the rising edge into `running` (turn ended) and
-      // any death, commit the new list, then drain the next queued prompt for
-      // every session that's now idle and has nothing of ours still running.
-      const prevStatus = new Map<string, Status>(state.sessions.map((s) => [s.id, s.status]));
-      for (const s of msg.sessions) {
-        const prev = prevStatus.get(s.id);
-        // Clear the in-flight guard on a true turn-end (busy → running) or on
-        // death. NOT on starting → running: a revive (resuming a dead session)
-        // passes through starting → running while our dispatched prompt is
-        // still queued in the daemon, so clearing there would prematurely
-        // release the next queued prompt and overlap turns.
-        if (s.status === "running" && prev === "busy") inFlight.delete(s.id);
-        if (s.status === "exited" || s.status === "crashed") inFlight.delete(s.id);
-      }
-      // Commit sessions first, then drain off the freshly-committed state
-      // (drainQueues reads state.sessions). setState is synchronous, so the
-      // drain sees the new statuses. `sessionsLoaded` latches true on the first
-      // list so the UI can detect a now-gone persisted focus.
+      // Just commit the list — the queue drain is now server-side, so there's no
+      // client-side in-flight reconciliation to do. `sessionsLoaded` latches true
+      // on the first list so the UI can detect a now-gone persisted focus.
       setState({ ...state, sessions: msg.sessions, sessionsLoaded: true });
-      drainQueues();
+      break;
+    }
+    case "queues": {
+      // Authoritative queue + drafts for one session — replace ours wholesale.
+      const queues = new Map(state.queues);
+      const drafts = new Map(state.drafts);
+      const q = fromWire(msg.queue);
+      const d = fromWire(msg.drafts);
+      if (q.length > 0) queues.set(msg.session_id, q);
+      else queues.delete(msg.session_id);
+      if (d.length > 0) drafts.set(msg.session_id, d);
+      else drafts.delete(msg.session_id);
+      setState({ ...state, queues, drafts });
       break;
     }
     case "snapshot": {
@@ -409,164 +358,38 @@ export function openSession(id: string): void {
   send({ type: "open_session", session_id: id });
 }
 
-// --- Queued prompts ---------------------------------------------------------
+// --- Queue + draft commands -------------------------------------------------
+//
+// Every op below is a thin command sent to the daemon, which owns the state and
+// echoes the new queue/drafts back via a `queues` broadcast (so all terminals
+// update). No optimistic local mutation, no drain, no serialization here — that
+// all moved server-side. The `status` arg the UI used to thread for the
+// send-vs-queue decision is gone: the daemon decides authoritatively.
 
-// session_ids with a prompt we've dispatched whose turn-end we haven't observed
-// yet. The daemon runs each Prompt as a concurrent task on one ACP connection
-// (src/acp.rs), so a second dispatch before turn-end would start an overlapping
-// turn. This guard makes the queue strictly serial *regardless of broadcast
-// lag*: we only dispatch when a session is running AND nothing of ours is in
-// flight, and the flag is cleared on the turn-end (→running) edge or on death
-// (see the "sessions" handler). It's module state, not React state — flipping it
-// must never trigger a render, and it's purely a dispatch gate.
-const inFlight = new Set<string>();
-
-// session_id → the id of the queued message currently being edited in the UI.
-// While a message is being edited it must NOT be auto-dispatched, and because
-// the queue drains strictly front-to-back, holding that message also holds
-// everything behind it — so editing the head pauses the whole tail until the
-// edit finishes (the user's "don't send this message or the ones after it while
-// I'm editing"). Mirrored from the QueuedMessages component via setQueueEditing;
-// module state (like inFlight) so the drain can read it without routing UI state
-// through the reactive snapshot.
-const editingHold = new Map<string, string>();
-
-function nextQueuedId(): string {
-  queuedSeq += 1;
-  return `q${queuedSeq}`;
-}
-
-function canDispatch(sessionId: string, status: Status): boolean {
-  // "running" is the normal idle-ready state. "exited"/"crashed" are also
-  // dispatchable: sending to a dead session is what resumes it — the daemon
-  // revives the agent (session/load) on receiving the prompt. Without this a
-  // prompt to a dead session would sit in the queue forever (nothing would
-  // ever flip it to "running" first).
-  const resumable = status === "running" || status === "exited" || status === "crashed";
-  return resumable && !inFlight.has(sessionId);
-}
-
-// Build the WS prompt command for a turn. With attachments, send the ACP
-// `content` block array (images / embedded file resources + a trailing text
-// block); without, the legacy text-only shape the daemon wraps in one Text
-// block. See attachments.ts + src/core.rs `Inbound::Prompt`.
-function promptCommand(sessionId: string, text: string, attachments: Attachment[]): Inbound {
-  const content = buildContentBlocks(text, attachments);
-  if (content) return { type: "prompt", session_id: sessionId, content };
-  return { type: "prompt", session_id: sessionId, text };
-}
-
-function dispatchPrompt(sessionId: string, text: string, attachments: Attachment[]): void {
-  inFlight.add(sessionId);
-  send(promptCommand(sessionId, text, attachments));
-}
-
-function enqueue(sessionId: string, text: string, attachments: Attachment[]): void {
-  const next = new Map(state.queues);
-  const q = next.get(sessionId) ?? [];
-  next.set(sessionId, [...q, { id: nextQueuedId(), text, attachments }]);
-  setState({ ...state, queues: next });
-  persistSession(sessionId);
-}
-
-// Drain the front of every session's queue: dispatch the head prompt for each
-// session that can take a turn right now and whose head isn't being edited.
-// Called on every turn-end broadcast (handle "sessions") AND when an edit hold
-// is released (setQueueEditing(…, null)) — the latter because the session may
-// already be idle, with no further broadcast coming to trigger the drain.
-function drainQueues(): void {
-  let queues = state.queues;
-  const toSend: QueuedMessage[] = [];
-  const toSendIds: string[] = [];
-  for (const s of state.sessions) {
-    if (!canDispatch(s.id, s.status)) continue;
-    const q = queues.get(s.id);
-    const head = q?.[0];
-    if (!q || !head) continue;
-    // A message being edited holds itself — and, since the queue is strictly
-    // front-to-back, everything behind it — until the edit finishes.
-    if (editingHold.get(s.id) === head.id) continue;
-    if (queues === state.queues) queues = new Map(state.queues);
-    const rest = q.slice(1);
-    if (rest.length > 0) queues.set(s.id, rest);
-    else queues.delete(s.id);
-    inFlight.add(s.id); // claim the slot now so a same-tick re-broadcast can't double-send
-    toSend.push(head);
-    toSendIds.push(s.id);
-  }
-  if (queues !== state.queues) setState({ ...state, queues });
-  for (const sid of new Set(toSendIds)) persistSession(sid); // drained items leave storage
-  for (const [i, head] of toSend.entries()) {
-    const sessionId = toSendIds[i];
-    if (sessionId) send(promptCommand(sessionId, head.text, head.attachments));
-  }
-}
-
-// UI → store bridge for the edit hold. The QueuedMessages component calls this
-// with the id of the message it's editing (or null when done). Releasing the
-// hold tries a drain immediately: the turn may have ended *while* the message
-// was held, so there's no pending broadcast left to trigger the drain otherwise.
-export function setQueueEditing(sessionId: string, id: string | null): void {
-  if (id === null) {
-    if (!editingHold.delete(sessionId)) return; // nothing was held → nothing to release
-    drainQueues();
-  } else {
-    editingHold.set(sessionId, id);
-  }
-}
-
-// The single entry point the composer calls to send a user prompt. Sends
-// straight through when the session can take a turn right now; otherwise stacks
-// it on the queue to drain on the next turn-end. A prompt with at least one
-// attachment is valid even with empty text (an image speaks for itself);
-// otherwise empty text is ignored.
-export function submitPrompt(
-  sessionId: string,
-  status: Status,
-  text: string,
-  attachments: Attachment[] = [],
-): void {
+// The single entry point the composer calls to send a user prompt. The daemon
+// dispatches it immediately when idle, else queues it. A prompt with at least
+// one attachment is valid even with empty text; otherwise empty text is ignored.
+export function submitPrompt(sessionId: string, text: string, attachments: Attachment[] = []): void {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return;
-  if (canDispatch(sessionId, status)) dispatchPrompt(sessionId, trimmed, attachments);
-  else enqueue(sessionId, trimmed, attachments);
+  send({ type: "submit", session_id: sessionId, text: trimmed, content: contentOf(trimmed, attachments) });
 }
 
-// "Send now" on a queued row. If the session can take a turn this instant, send
-// it and drop it from the queue; otherwise move it to the front so it's the
-// next one drained — the daemon can't run a concurrent turn, so the honest best
-// "now" while busy is "first after this turn".
-export function requestSendQueued(sessionId: string, status: Status, id: string): void {
-  if (canDispatch(sessionId, status)) {
-    const item = state.queues.get(sessionId)?.find((m) => m.id === id);
-    if (!item) return;
-    removeQueued(sessionId, id);
-    dispatchPrompt(sessionId, item.text, item.attachments);
-  } else {
-    promoteQueued(sessionId, id);
-  }
+// "Send now" on a queued row: the daemon sends it if it can take a turn this
+// instant, otherwise moves it to the front to drain next.
+export function requestSendQueued(sessionId: string, id: string): void {
+  send({ type: "request_send_queued", session_id: sessionId, id });
 }
 
-// "Force push" a queued row: interrupt the running turn and make this prompt
-// the one that runs next. Cancel is ASYNC — the daemon's turn doesn't end the
-// instant we send it, so we must NOT dispatch here: a dispatch racing the
-// still-cancelling turn would start an overlapping turn and break the inFlight
-// serialization (see the `inFlight` note above). Instead promote this to the
-// front and send Cancel; the busy → running turn-end edge then drains the front
-// item (this prompt) via the "sessions" handler. If the session can already
-// take a turn there's nothing to interrupt — fall back to a plain send.
-export function forcePushQueued(sessionId: string, status: Status, id: string): void {
-  if (canDispatch(sessionId, status)) {
-    requestSendQueued(sessionId, status, id);
-    return;
-  }
-  promoteQueued(sessionId, id);
-  send({ type: "cancel", session_id: sessionId });
+// "Force push" a queued row: interrupt the running turn and run this prompt
+// next. The daemon promotes it and cancels the in-flight turn (or just sends it
+// if the session is already idle).
+export function forcePushQueued(sessionId: string, id: string): void {
+  send({ type: "force_push_queued", session_id: sessionId, id });
 }
 
-// Edit a queued prompt in place — text AND attachments (the queue editor reuses
-// the full ComposerEditor, so an edit can add/remove images too). Clearing both
-// removes the entry.
+// Edit a queued prompt in place — text AND attachments. Clearing both removes it
+// (handled server-side).
 export function editQueued(
   sessionId: string,
   id: string,
@@ -574,54 +397,24 @@ export function editQueued(
   attachments: Attachment[],
 ): void {
   const trimmed = text.trimEnd();
-  const q = state.queues.get(sessionId);
-  if (!q) return;
-  // Clearing BOTH the text and the attachments removes the entry; an
-  // attachment-only prompt (e.g. just a pasted screenshot) stays valid.
-  if (!trimmed.trim() && attachments.length === 0) {
-    removeQueued(sessionId, id);
-    return;
-  }
-  const next = new Map(state.queues);
-  next.set(
-    sessionId,
-    q.map((m) => (m.id === id ? { ...m, text: trimmed, attachments } : m)),
-  );
-  setState({ ...state, queues: next });
-  persistSession(sessionId);
+  send({ type: "edit_queued", session_id: sessionId, id, text: trimmed, content: contentOf(trimmed, attachments) });
 }
 
 // Drop one queued prompt.
 export function removeQueued(sessionId: string, id: string): void {
-  const q = state.queues.get(sessionId);
-  if (!q) return;
-  const filtered = q.filter((m) => m.id !== id);
-  const next = new Map(state.queues);
-  if (filtered.length > 0) next.set(sessionId, filtered);
-  else next.delete(sessionId);
-  setState({ ...state, queues: next });
-  persistSession(sessionId);
+  send({ type: "remove_queued", session_id: sessionId, id });
 }
 
 // Drop a session's whole queue (the "Clear All" header action).
 export function clearQueue(sessionId: string): void {
-  if (!state.queues.has(sessionId)) return;
-  const next = new Map(state.queues);
-  next.delete(sessionId);
-  setState({ ...state, queues: next });
-  persistSession(sessionId);
+  send({ type: "clear_queue", session_id: sessionId });
 }
 
-// Move a queued prompt to the front so it's the next one drained.
-function promoteQueued(sessionId: string, id: string): void {
-  const q = state.queues.get(sessionId);
-  if (!q || q[0]?.id === id) return; // already at front (or unknown)
-  const item = q.find((m) => m.id === id);
-  if (!item) return;
-  const next = new Map(state.queues);
-  next.set(sessionId, [item, ...q.filter((m) => m.id !== id)]);
-  setState({ ...state, queues: next });
-  persistSession(sessionId);
+// Hold (or release, with `null`) the queue head for editing — pauses the daemon
+// drain on EVERY terminal while one client edits, so the message isn't sent out
+// from under the editor.
+export function setQueueEditing(sessionId: string, id: string | null): void {
+  send({ type: "set_queue_editing", session_id: sessionId, id });
 }
 
 // --- Draft operations -------------------------------------------------------
@@ -631,11 +424,7 @@ function promoteQueued(sessionId: string, id: string): void {
 export function addDraft(sessionId: string, text: string, attachments: Attachment[]): void {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return;
-  const next = new Map(state.drafts);
-  const d = next.get(sessionId) ?? [];
-  next.set(sessionId, [...d, { id: nextQueuedId(), text: trimmed, attachments }]);
-  setState({ ...state, drafts: next });
-  persistSession(sessionId);
+  send({ type: "add_draft", session_id: sessionId, text: trimmed, content: contentOf(trimmed, attachments) });
 }
 
 // Edit a draft in place (same shape as editQueued). Clearing both fields drops it.
@@ -646,69 +435,33 @@ export function editDraft(
   attachments: Attachment[],
 ): void {
   const trimmed = text.trimEnd();
-  const d = state.drafts.get(sessionId);
-  if (!d) return;
-  if (!trimmed.trim() && attachments.length === 0) {
-    removeDraft(sessionId, id);
-    return;
-  }
-  const next = new Map(state.drafts);
-  next.set(sessionId, d.map((m) => (m.id === id ? { ...m, text: trimmed, attachments } : m)));
-  setState({ ...state, drafts: next });
-  persistSession(sessionId);
+  send({ type: "edit_draft", session_id: sessionId, id, text: trimmed, content: contentOf(trimmed, attachments) });
 }
 
 // Drop one draft.
 export function removeDraft(sessionId: string, id: string): void {
-  const d = state.drafts.get(sessionId);
-  if (!d) return;
-  const filtered = d.filter((m) => m.id !== id);
-  const next = new Map(state.drafts);
-  if (filtered.length > 0) next.set(sessionId, filtered);
-  else next.delete(sessionId);
-  setState({ ...state, drafts: next });
-  persistSession(sessionId);
+  send({ type: "remove_draft", session_id: sessionId, id });
 }
 
 // Drop a session's whole draft list ("Clear All" on the drafts panel).
 export function clearDrafts(sessionId: string): void {
-  if (!state.drafts.has(sessionId)) return;
-  const next = new Map(state.drafts);
-  next.delete(sessionId);
-  setState({ ...state, drafts: next });
-  persistSession(sessionId);
+  send({ type: "clear_drafts", session_id: sessionId });
 }
 
-// Activate a draft: send it now if the session can take a turn, otherwise queue
-// it. Removed from drafts either way (submitPrompt routes send-vs-enqueue).
-export function activateDraft(sessionId: string, status: Status, id: string): void {
-  const item = state.drafts.get(sessionId)?.find((m) => m.id === id);
-  if (!item) return;
-  removeDraft(sessionId, id);
-  submitPrompt(sessionId, status, item.text, item.attachments);
+// Activate a draft: the daemon submits it (send-or-queue) and removes it from
+// drafts.
+export function activateDraft(sessionId: string, id: string): void {
+  send({ type: "activate_draft", session_id: sessionId, id });
 }
 
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
-// Each routes through submitPrompt, so idle sessions fire the first and queue
-// the rest; busy sessions queue them all in order.
-export function activateAllDrafts(sessionId: string, status: Status): void {
-  const d = state.drafts.get(sessionId);
-  if (!d || d.length === 0) return;
-  clearDrafts(sessionId);
-  for (const m of d) submitPrompt(sessionId, status, m.text, m.attachments);
+export function activateAllDrafts(sessionId: string): void {
+  send({ type: "activate_all_drafts", session_id: sessionId });
 }
 
-// Move a queued prompt back to drafts (append). The reverse of activating a
-// draft into the queue.
+// Move a queued prompt back to drafts.
 export function queuedToDraft(sessionId: string, id: string): void {
-  const item = state.queues.get(sessionId)?.find((m) => m.id === id);
-  if (!item) return;
-  removeQueued(sessionId, id);
-  const next = new Map(state.drafts);
-  const d = next.get(sessionId) ?? [];
-  next.set(sessionId, [...d, item]);
-  setState({ ...state, drafts: next });
-  persistSession(sessionId);
+  send({ type: "queued_to_draft", session_id: sessionId, id });
 }
 
 function subscribe(listener: () => void): () => void {

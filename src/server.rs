@@ -9,6 +9,7 @@
 //! v1 has **no auth** and binds `0.0.0.0` by deliberate choice (LAN-only use);
 //! design §9 auth/pairing is a follow-up.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -29,7 +30,9 @@ use agent_client_protocol::schema::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
-use crate::core::{Hub, Inbound, Outbound, SessionOrigin, StoreWrite};
+use crate::core::{
+    DispatchReq, Hub, Inbound, Outbound, RestoredSession, SessionOrigin, Status, StoreWrite,
+};
 use crate::store::Store;
 use crate::supervisor::Supervisor;
 use tokio::sync::mpsc;
@@ -60,7 +63,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let loaded = store.load_all().await.context("loading persisted state")?;
         let restored: Vec<_> = loaded
             .into_iter()
-            .map(|ls| (ls.meta, ls.events, ls.next_seq))
+            .map(|ls| RestoredSession {
+                meta: ls.meta,
+                log: ls.events,
+                next_seq: ls.next_seq,
+                queue: ls.queue,
+                drafts: ls.drafts,
+            })
             .collect();
         let restored_count = restored.len();
         hub.restore(restored);
@@ -81,6 +90,19 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     drop(store); // We only kept it to thread the type; the writer holds it.
 
     let supervisor = Arc::new(Supervisor::new(hub.clone(), args.workspace_root.clone()));
+
+    // Background dispatcher: the Hub owns each session's send-queue but can't
+    // call the Supervisor (which holds the Hub) — that cycle is why the queue
+    // used to live client-side. The Hub now makes the drain decision under its
+    // lock and hands each ready prompt over this channel; we send it to the
+    // agent here, off the lock. Wired before any client connects.
+    let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<DispatchReq>();
+    hub.set_dispatch_tx(dispatch_tx);
+    tokio::spawn(run_dispatcher(
+        hub.clone(),
+        Arc::clone(&supervisor),
+        dispatch_rx,
+    ));
 
     tracing::info!(
         workspace = %args.workspace_root.display(),
@@ -115,12 +137,82 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
                     .await
             }
             StoreWrite::DeleteSession(id) => store.delete_session(id).await,
+            StoreWrite::UpdatePending {
+                session_id,
+                queue,
+                drafts,
+            } => store.update_pending(session_id, queue, drafts).await,
         };
         if let Err(e) = result {
             tracing::warn!(error = %e, "store writer failed an intent (intent dropped)");
         }
     }
     tracing::info!("store writer shutting down (channel closed)");
+}
+
+/// Drain the Hub→dispatcher channel: each [`DispatchReq`] is a queued prompt the
+/// Hub decided is ready to send. We forward it to the session's agent. On
+/// success, derive the auto-title from the first prompt (a no-op after the
+/// first); on failure, clear the in-flight guard (so the queue can keep
+/// draining) and surface the error to every client.
+async fn run_dispatcher(
+    hub: Hub,
+    supervisor: Arc<Supervisor>,
+    mut rx: mpsc::UnboundedReceiver<DispatchReq>,
+) {
+    while let Some(req) = rx.recv().await {
+        let DispatchReq {
+            session_id,
+            text,
+            content,
+        } = req;
+        let Some(blocks) = build_prompt_blocks(&text, &content) else {
+            tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
+            hub.clear_in_flight(&session_id);
+            continue;
+        };
+        let title = first_prompt_title(&text, &content);
+        match supervisor.send(&session_id, AgentCommand::Prompt(blocks)) {
+            Ok(()) => {
+                if let Some(t) = title {
+                    hub.auto_title(&session_id, t);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
+                hub.clear_in_flight(&session_id);
+                hub.broadcast_error(Some(session_id), format!("send failed: {e}"));
+            }
+        }
+    }
+    tracing::info!("dispatcher shutting down (channel closed)");
+}
+
+/// Build the ACP prompt blocks for a queued message: parse the stored content
+/// blocks, or fall back to a single text block. Mirrors the `Inbound::Prompt`
+/// handler's logic. Returns `None` for a genuinely empty prompt.
+fn build_prompt_blocks(text: &str, content: &[serde_json::Value]) -> Option<Vec<ContentBlock>> {
+    if content.is_empty() {
+        if text.is_empty() {
+            return None;
+        }
+        return Some(vec![ContentBlock::from(text.to_owned())]);
+    }
+    let blocks: Vec<ContentBlock> = content
+        .iter()
+        .filter_map(|v| match serde_json::from_value::<ContentBlock>(v.clone()) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                tracing::warn!(error = %e, "skipping unparseable queued content block");
+                None
+            }
+        })
+        .collect();
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks)
+    }
 }
 
 async fn serve_axum(
@@ -402,8 +494,25 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
             if send_json(
                 &mut sink,
                 &Outbound::ConfigOptions {
-                    session_id: meta.id,
+                    session_id: meta.id.clone(),
                     options,
+                },
+            )
+            .await
+            .is_err()
+            {
+                return;
+            }
+        }
+        // Replay the server-authoritative queue + drafts so a freshly-opened
+        // terminal renders the same staged messages as every other one.
+        if let Some((queue, drafts)) = state.hub.pending(&meta.id) {
+            if send_json(
+                &mut sink,
+                &Outbound::Queues {
+                    session_id: meta.id,
+                    queue,
+                    drafts,
                 },
             )
             .await
@@ -431,13 +540,19 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
+    // Edit-holds this connection set (session_id → held queued-message id). The
+    // editing hold is GLOBAL server state, so a client that disconnects mid-edit
+    // would otherwise leave the head pinned and stall the queue forever. We
+    // track what this socket held and release it on teardown.
+    let mut held: HashMap<String, String> = HashMap::new();
+
     // Inbound command loop.
     loop {
         tokio::select! {
             _ = &mut fanout => break,
             msg = stream.next() => {
                 match msg {
-                    Some(Ok(Message::Text(text))) => handle_command(&state, &text),
+                    Some(Ok(Message::Text(text))) => handle_command(&state, &text, &mut held),
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
                     // Close, transport error, or stream end: tear down.
@@ -445,6 +560,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
         }
+    }
+    // Release any edit-holds this connection still owns so the queue can drain.
+    for session_id in held.keys() {
+        state.hub.set_queue_editing(session_id, None);
     }
     fanout.abort();
 }
@@ -485,7 +604,7 @@ fn first_prompt_title(text: &str, content: &[serde_json::Value]) -> Option<Strin
 }
 
 #[allow(clippy::too_many_lines)] // one cohesive command-dispatch match
-fn handle_command(state: &AppState, text: &str) {
+fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, String>) {
     let cmd: Inbound = match serde_json::from_str(text) {
         Ok(c) => c,
         Err(e) => {
@@ -506,7 +625,21 @@ fn handle_command(state: &AppState, text: &str) {
         | Inbound::DeleteSession { session_id }
         | Inbound::RenameSession { session_id, .. }
         | Inbound::SetConfigOption { session_id, .. }
-        | Inbound::OpenSession { session_id } => Some(session_id.clone()),
+        | Inbound::OpenSession { session_id }
+        | Inbound::Submit { session_id, .. }
+        | Inbound::RemoveQueued { session_id, .. }
+        | Inbound::EditQueued { session_id, .. }
+        | Inbound::ClearQueue { session_id }
+        | Inbound::RequestSendQueued { session_id, .. }
+        | Inbound::ForcePushQueued { session_id, .. }
+        | Inbound::QueuedToDraft { session_id, .. }
+        | Inbound::SetQueueEditing { session_id, .. }
+        | Inbound::AddDraft { session_id, .. }
+        | Inbound::EditDraft { session_id, .. }
+        | Inbound::RemoveDraft { session_id, .. }
+        | Inbound::ClearDrafts { session_id }
+        | Inbound::ActivateDraft { session_id, .. }
+        | Inbound::ActivateAllDrafts { session_id } => Some(session_id.clone()),
         Inbound::NewSession { .. } => None,
     };
     let result = match cmd {
@@ -614,6 +747,103 @@ fn handle_command(state: &AppState, text: &str) {
                     Ok(())
                 }
             }
+        }
+
+        // --- Server-authoritative queue + drafts ------------------------------
+        // These mutate Hub state, which broadcasts the new queue/drafts to every
+        // terminal. They never fail in a way worth a toast, so all return Ok.
+        Inbound::Submit {
+            session_id,
+            text,
+            content,
+        } => {
+            state.hub.submit(&session_id, text, content);
+            Ok(())
+        }
+        Inbound::RemoveQueued { session_id, id } => {
+            state.hub.remove_queued(&session_id, &id);
+            Ok(())
+        }
+        Inbound::EditQueued {
+            session_id,
+            id,
+            text,
+            content,
+        } => {
+            state.hub.edit_queued(&session_id, &id, text, content);
+            Ok(())
+        }
+        Inbound::ClearQueue { session_id } => {
+            state.hub.clear_queue(&session_id);
+            Ok(())
+        }
+        Inbound::RequestSendQueued { session_id, id } => {
+            state.hub.request_send_queued(&session_id, &id);
+            Ok(())
+        }
+        Inbound::ForcePushQueued { session_id, id } => {
+            // Interrupt the running turn so the promoted prompt runs next; on an
+            // idle session there's nothing to cancel, so just send it now.
+            state.hub.request_send_queued(&session_id, &id); // promote to front either way
+            if matches!(
+                state.hub.status(&session_id),
+                Some(Status::Busy | Status::Starting)
+            ) {
+                state.supervisor.send(&session_id, AgentCommand::Cancel)
+            } else {
+                Ok(())
+            }
+        }
+        Inbound::QueuedToDraft { session_id, id } => {
+            state.hub.queued_to_draft(&session_id, &id);
+            Ok(())
+        }
+        Inbound::SetQueueEditing { session_id, id } => {
+            // Track the hold per-connection so a mid-edit disconnect releases it
+            // (the hold is global server state — see handle_ws teardown).
+            match &id {
+                Some(mid) => {
+                    held.insert(session_id.clone(), mid.clone());
+                }
+                None => {
+                    held.remove(&session_id);
+                }
+            }
+            state.hub.set_queue_editing(&session_id, id);
+            Ok(())
+        }
+        Inbound::AddDraft {
+            session_id,
+            text,
+            content,
+        } => {
+            state.hub.add_draft(&session_id, text, content);
+            Ok(())
+        }
+        Inbound::EditDraft {
+            session_id,
+            id,
+            text,
+            content,
+        } => {
+            state.hub.edit_draft(&session_id, &id, text, content);
+            Ok(())
+        }
+        Inbound::RemoveDraft { session_id, id } => {
+            state.hub.remove_draft(&session_id, &id);
+            Ok(())
+        }
+        Inbound::ClearDrafts { session_id } => {
+            state.hub.clear_drafts(&session_id);
+            Ok(())
+        }
+        Inbound::ActivateDraft { session_id, id } => {
+            state.hub.activate_draft(&session_id, &id);
+            Ok(())
+        }
+        Inbound::ActivateAllDrafts { session_id } => {
+            state.hub.activate_all_drafts(&session_id);
+            Ok(())
         }
     };
     if let Err(e) = result {

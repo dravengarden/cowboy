@@ -26,7 +26,7 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-use crate::core::{Envelope, Event, SessionMeta, SessionOrigin, Status};
+use crate::core::{Envelope, Event, QueuedMessage, SessionMeta, SessionOrigin, Status};
 
 /// All persistent state needed to rehydrate a single session after restart.
 pub struct LoadedSession {
@@ -35,6 +35,9 @@ pub struct LoadedSession {
     /// Highest `seq + 1` for this session — what Hub uses to stamp the next
     /// event in line.
     pub next_seq: u64,
+    /// Persisted send-queue + drafts (cross-terminal sync survives restart).
+    pub queue: Vec<QueuedMessage>,
+    pub drafts: Vec<QueuedMessage>,
 }
 
 #[derive(Clone)]
@@ -77,7 +80,8 @@ impl Store {
     /// If a query fails or a payload is unparseable.
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, provider, cwd, title, origin, status, agent_session_id, next_seq, created_at \
+            "SELECT id, provider, cwd, title, origin, status, agent_session_id, next_seq, \
+             queue, drafts, created_at \
              FROM sessions ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -107,10 +111,18 @@ impl Store {
                 });
             }
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);
+            // Tolerate a malformed/legacy payload by degrading to empty rather
+            // than failing the whole restore for one bad row.
+            let queue: Vec<QueuedMessage> =
+                serde_json::from_value(row.queue.clone()).unwrap_or_default();
+            let drafts: Vec<QueuedMessage> =
+                serde_json::from_value(row.drafts.clone()).unwrap_or_default();
             out.push(LoadedSession {
                 meta: row.into_meta(),
                 events,
                 next_seq,
+                queue,
+                drafts,
             });
         }
         Ok(out)
@@ -220,6 +232,31 @@ impl Store {
         Ok(())
     }
 
+    /// Persist a session's queue + drafts (whole lists, as JSONB). Called on
+    /// every staged-message mutation so the cross-terminal queue/drafts survive
+    /// a daemon restart. Whole-list overwrite (not row-level) keeps it simple;
+    /// the lists are small (a handful of pending prompts at most).
+    ///
+    /// # Errors
+    /// If serializing the lists fails or the UPDATE fails.
+    pub async fn update_pending(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+    ) -> Result<()> {
+        let queue_json = serde_json::to_value(queue).context("serialize queue")?;
+        let drafts_json = serde_json::to_value(drafts).context("serialize drafts")?;
+        sqlx::query("UPDATE sessions SET queue = $1, drafts = $2, updated_at = now() WHERE id = $3")
+            .bind(&queue_json)
+            .bind(&drafts_json)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session pending {session_id}"))?;
+        Ok(())
+    }
+
     /// Remove a session. ON DELETE CASCADE on the FK drops every row in
     /// `events` for the same id.
     ///
@@ -288,6 +325,8 @@ struct SessionRow {
     status: String,
     agent_session_id: Option<String>,
     next_seq: i64,
+    queue: serde_json::Value,
+    drafts: serde_json::Value,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
 }

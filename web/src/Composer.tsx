@@ -248,10 +248,9 @@ export function Composer({
   function submit(): void {
     if (!sendable) return;
     const trimmed = text.trimEnd();
-    // submitPrompt sends straight through when the session can take a turn now,
-    // and otherwise stacks the prompt on the queue (busy / starting / a turn of
-    // ours still in flight) — the daemon can't run a second concurrent turn.
-    submitPrompt(sessionId, status, trimmed, attachments);
+    // The daemon decides: dispatch straight through when the session can take a
+    // turn now, else stack the prompt on the (server-owned) queue.
+    submitPrompt(sessionId, trimmed, attachments);
     // Clear the CodeMirror document imperatively, not just via `value=""`: the
     // editor's 200ms typing latch defers prop-driven clears when you submit
     // right after typing, leaving the sent text lingering. See clear() in
@@ -826,7 +825,7 @@ function PendingPanel({
           <Button
             size="small"
             color="primary"
-            onClick={(): void => activateAllDrafts(sessionId, status)}
+            onClick={(): void => activateAllDrafts(sessionId)}
             sx={{ textTransform: "none", minWidth: 0, px: 0.75 }}
           >
             Send all
@@ -1033,7 +1032,7 @@ function PendingRow({
               size="small"
               color="primary"
               aria-label="send draft"
-              onClick={(): void => activateDraft(sessionId, status, message.id)}
+              onClick={(): void => activateDraft(sessionId, message.id)}
             >
               <Send fontSize="small" />
             </IconButton>
@@ -1046,7 +1045,7 @@ function PendingRow({
                   size="small"
                   color="primary"
                   aria-label="send now"
-                  onClick={(): void => requestSendQueued(sessionId, status, message.id)}
+                  onClick={(): void => requestSendQueued(sessionId, message.id)}
                 >
                   <Send fontSize="small" />
                 </IconButton>
@@ -1090,7 +1089,7 @@ function PendingRow({
                     color="warning"
                     startIcon={<Bolt />}
                     onClick={(): void => {
-                      forcePushQueued(sessionId, status, message.id);
+                      forcePushQueued(sessionId, message.id);
                       setConfirmAnchor(null);
                     }}
                     sx={{ textTransform: "none" }}

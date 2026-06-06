@@ -15,6 +15,7 @@
 //! `session/load` resume (design §7) — both land in the same follow-up.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -112,6 +113,42 @@ pub struct SessionMeta {
     pub agent_session_id: Option<String>,
 }
 
+/// One staged message — either a QUEUED prompt (waiting for the current turn to
+/// end) or a parked DRAFT. Server-authoritative so every connected terminal sees
+/// the same queue/drafts (design follow-up: these used to be client-local
+/// localStorage, which never synced across devices). `content` is the already-
+/// built ACP content-block array exactly as a `Prompt` would carry it (empty for
+/// a plain-text message); `text` is kept alongside for display / re-editing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuedMessage {
+    pub id: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub content: Vec<serde_json::Value>,
+}
+
+/// A request from the Hub to the background dispatcher task (in `crate::server`)
+/// to actually send a queued prompt to its agent. The Hub owns the queue +
+/// serialization state but cannot call the `Supervisor` (which holds the Hub),
+/// so the drain decision happens under the Hub lock and the resulting dispatch
+/// is handed off over this channel — breaking the Hub→Supervisor cycle.
+#[derive(Debug, Clone)]
+pub struct DispatchReq {
+    pub session_id: String,
+    pub text: String,
+    pub content: Vec<serde_json::Value>,
+}
+
+/// One session's full persisted state, handed to [`Hub::restore`] at startup.
+pub struct RestoredSession {
+    pub meta: SessionMeta,
+    pub log: Vec<Envelope>,
+    pub next_seq: u64,
+    pub queue: Vec<QueuedMessage>,
+    pub drafts: Vec<QueuedMessage>,
+}
+
 /// Per-session state: metadata + the seq-ordered event log.
 struct Session {
     meta: SessionMeta,
@@ -123,6 +160,22 @@ struct Session {
     /// new client on connect so the composer dropdowns populate from a fresh
     /// reload.
     config_options: Option<serde_json::Value>,
+    /// Prompts waiting for the current turn to finish, in send order. Drained
+    /// one-at-a-time on each turn-end (see `Hub::try_drain`).
+    queue: Vec<QueuedMessage>,
+    /// Parked messages the user composed but hasn't committed to send.
+    drafts: Vec<QueuedMessage>,
+    /// The queued-message id currently held open for editing, if any. A held
+    /// head pauses the whole queue drain (the user is editing "don't send this
+    /// or the ones behind it"). GLOBAL across terminals; cleared when the editing
+    /// client releases or disconnects. One hold per session (matches the
+    /// original single client-side `editingHold` model).
+    editing: Option<String>,
+    /// True while a queue-dispatched prompt of ours is in flight but the session
+    /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
+    /// so a same-tick re-drain can't double-send and overlap turns. Cleared on
+    /// the `Busy`→`Running` turn-end edge or on death (see `set_status`).
+    in_flight: bool,
 }
 
 /// A command sent by a client (Web UI, `acp-bridge`, future test harnesses)
@@ -188,6 +241,74 @@ pub enum Inbound {
     /// Lets a reopened session warm up before the user types (design §7).
     /// Handled in server.rs via [`crate::supervisor::Supervisor::ensure_alive`].
     OpenSession { session_id: String },
+
+    // --- Server-authoritative queue + drafts (synced across all terminals) ----
+    //
+    // The Web UI sends these instead of dispatching prompts itself: the daemon
+    // owns the per-session queue/drafts and the drain (next-on-turn-end), so
+    // every connected terminal sees identical state and only one turn ever runs.
+    /// Send a user turn the queue-aware way: dispatch immediately if the session
+    /// is idle and nothing is queued/in-flight, otherwise append to the queue.
+    /// (The bridge/API keep using `Prompt` for a direct, un-queued dispatch.)
+    Submit {
+        session_id: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        content: Vec<serde_json::Value>,
+    },
+    /// Drop one queued prompt.
+    RemoveQueued { session_id: String, id: String },
+    /// Edit a queued prompt in place (text + content). Empty both → removed.
+    EditQueued {
+        session_id: String,
+        id: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        content: Vec<serde_json::Value>,
+    },
+    /// Drop a session's whole queue.
+    ClearQueue { session_id: String },
+    /// "Send now": move a queued prompt to the front and drain it if the session
+    /// can take a turn this instant; otherwise it just becomes next in line.
+    RequestSendQueued { session_id: String, id: String },
+    /// "Force push": interrupt the running turn and make this prompt run next.
+    ForcePushQueued { session_id: String, id: String },
+    /// Move a queued prompt back to drafts.
+    QueuedToDraft { session_id: String, id: String },
+    /// Hold (or release, with `id: null`) the queue head for editing — pauses the
+    /// drain on every terminal while one client edits.
+    SetQueueEditing {
+        session_id: String,
+        #[serde(default)]
+        id: Option<String>,
+    },
+    /// Park the composer's content as a new draft.
+    AddDraft {
+        session_id: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        content: Vec<serde_json::Value>,
+    },
+    /// Edit a draft in place. Empty both → removed.
+    EditDraft {
+        session_id: String,
+        id: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        content: Vec<serde_json::Value>,
+    },
+    /// Drop one draft.
+    RemoveDraft { session_id: String, id: String },
+    /// Drop a session's whole draft list.
+    ClearDrafts { session_id: String },
+    /// Activate one draft: submit it (send-or-queue) and remove it from drafts.
+    ActivateDraft { session_id: String, id: String },
+    /// Activate every draft, front-to-back.
+    ActivateAllDrafts { session_id: String },
 }
 
 /// What the server pushes to a WebSocket client.
@@ -211,6 +332,14 @@ pub enum Outbound {
     ConfigOptions {
         session_id: String,
         options: serde_json::Value,
+    },
+    /// A session's queue + drafts. Sent on connect (for every session) and
+    /// whenever either list changes. Server-authoritative so every terminal
+    /// renders the same staged messages.
+    Queues {
+        session_id: String,
+        queue: Vec<QueuedMessage>,
+        drafts: Vec<QueuedMessage>,
     },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
@@ -240,6 +369,14 @@ pub enum StoreWrite {
         agent_session_id: String,
     },
     DeleteSession(String),
+    /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
+    /// messages survive a daemon restart — matching the durability the old
+    /// client-side localStorage gave them.
+    UpdatePending {
+        session_id: String,
+        queue: Vec<QueuedMessage>,
+        drafts: Vec<QueuedMessage>,
+    },
 }
 
 /// The single source of truth. Cloneable handle (`Arc` inside) shared by the
@@ -259,6 +396,16 @@ struct HubInner {
     /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
     /// only (no `--postgres-url` configured).
     store_tx: Option<mpsc::UnboundedSender<StoreWrite>>,
+    /// Hand-off to the background dispatcher task that owns the `Supervisor`.
+    /// Set once at startup via [`Hub::set_dispatch_tx`]; `None` until then (and
+    /// in tests), in which case a drain decision is computed but no prompt is
+    /// actually sent. See [`DispatchReq`].
+    dispatch_tx: Mutex<Option<mpsc::UnboundedSender<DispatchReq>>>,
+    /// Monotonic source of queued/draft message ids (`q1`, `q2`, …). Seeded from
+    /// the wall-clock-free counter; uniqueness across a daemon lifetime is all
+    /// that's required (ids are list-local keys, not persisted-across-restart
+    /// identities — restored lists keep whatever ids they were saved with).
+    next_qid: AtomicU64,
 }
 
 impl Hub {
@@ -278,8 +425,17 @@ impl Hub {
                 order: Mutex::new(Vec::new()),
                 tx,
                 store_tx,
+                dispatch_tx: Mutex::new(None),
+                next_qid: AtomicU64::new(1),
             }),
         }
+    }
+
+    /// Wire the background dispatcher's hand-off channel. Called once at startup
+    /// (in `crate::server`) after the dispatcher task is spawned, before any
+    /// client connects. Until set, drains compute but dispatch nothing.
+    pub fn set_dispatch_tx(&self, tx: mpsc::UnboundedSender<DispatchReq>) {
+        *self.inner.dispatch_tx.lock().unwrap() = Some(tx);
     }
 
     /// Populate the in-memory state from a previously-stored snapshot.
@@ -295,10 +451,17 @@ impl Hub {
     /// session` (no `agent_tx` in the supervisor). Mark them dead so the UI
     /// shows them as ended and disables the composer; resume via
     /// session/load is a future follow-up (design §7).
-    pub fn restore(&self, sessions: Vec<(SessionMeta, Vec<Envelope>, u64)>) {
+    pub fn restore(&self, sessions: Vec<RestoredSession>) {
         let mut sessions_lock = self.inner.sessions.lock().unwrap();
         let mut order = self.inner.order.lock().unwrap();
-        for (mut meta, log, next_seq) in sessions {
+        for r in sessions {
+            let RestoredSession {
+                mut meta,
+                log,
+                next_seq,
+                queue,
+                drafts,
+            } = r;
             meta.status = Status::Exited;
             let id = meta.id.clone();
             sessions_lock.insert(
@@ -308,6 +471,10 @@ impl Hub {
                     log,
                     next_seq,
                     config_options: None,
+                    queue,
+                    drafts,
+                    editing: None,
+                    in_flight: false,
                 },
             );
             order.push(id);
@@ -366,6 +533,10 @@ impl Hub {
                     log: Vec::new(),
                     next_seq: 0,
                     config_options: None,
+                    queue: Vec::new(),
+                    drafts: Vec::new(),
+                    editing: None,
+                    in_flight: false,
                 },
             );
             order.push(id);
@@ -474,6 +645,17 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            // Clear the in-flight guard on a true turn-end (Busy → Running) or on
+            // death — NOT on Starting → Running (a revive passes through that
+            // edge while our dispatched prompt is still queued downstream, so
+            // clearing there would release the next prompt early and overlap
+            // turns). Mirrors the old client-side drain edge logic.
+            let was = s.meta.status;
+            if (was == Status::Busy && status == Status::Running)
+                || matches!(status, Status::Exited | Status::Crashed)
+            {
+                s.in_flight = false;
+            }
             s.meta.status = status;
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -484,6 +666,9 @@ impl Hub {
         }
         self.push(session_id, Event::Lifecycle { status, detail });
         self.broadcast_sessions();
+        // A turn-end / death may make the session drainable — try the next
+        // queued prompt now (no-op if still busy or nothing queued).
+        self.try_drain(session_id);
     }
 
     /// Append an event to a session's log under the next `seq` and fan it out.
@@ -557,6 +742,362 @@ impl Hub {
             session_id,
             message,
         });
+    }
+
+    // --- Queue + drafts (server-authoritative, synced to every terminal) ------
+
+    /// Current status of a session, if it exists. Lets the server decide
+    /// busy-vs-idle for the force-push path without reaching into `Session`.
+    #[must_use]
+    pub fn status(&self, session_id: &str) -> Option<Status> {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|s| s.meta.status)
+    }
+
+    /// Snapshot a session's queue + drafts — used by the WS connect handler to
+    /// replay staged messages to a freshly-connected client.
+    #[must_use]
+    pub fn pending(&self, session_id: &str) -> Option<(Vec<QueuedMessage>, Vec<QueuedMessage>)> {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|s| (s.queue.clone(), s.drafts.clone()))
+    }
+
+    fn next_qid(&self) -> String {
+        format!("q{}", self.inner.next_qid.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Re-broadcast (and persist) a session's queue + drafts after any change.
+    /// Re-locks `sessions`, so callers MUST NOT hold the lock when calling.
+    fn emit_pending(&self, session_id: &str) {
+        let (queue, drafts) = {
+            let sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            (s.queue.clone(), s.drafts.clone())
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdatePending {
+                session_id: session_id.to_owned(),
+                queue: queue.clone(),
+                drafts: drafts.clone(),
+            });
+        }
+        let _ = self.inner.tx.send(Outbound::Queues {
+            session_id: session_id.to_owned(),
+            queue,
+            drafts,
+        });
+    }
+
+    fn send_dispatch(&self, req: DispatchReq) {
+        if let Some(tx) = self.inner.dispatch_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(req);
+        }
+    }
+
+    /// Whether a queued prompt can be dispatched right now: the dispatcher is
+    /// wired, the agent can take a turn (idle/ready or dead-but-resumable), and
+    /// nothing of ours is already in flight.
+    fn dispatchable(s: &Session) -> bool {
+        matches!(
+            s.meta.status,
+            Status::Running | Status::Exited | Status::Crashed
+        ) && !s.in_flight
+    }
+
+    /// Dispatch the head of a session's queue if it can take a turn and the head
+    /// isn't held for editing. Pops the head, marks in-flight, hands the prompt
+    /// to the dispatcher task, and re-broadcasts the shrunken queue. No-op
+    /// otherwise. Called after every queue mutation and on every turn-end edge.
+    fn try_drain(&self, session_id: &str) {
+        // Without a dispatcher wired we must not pop (the prompt would be lost).
+        if self.inner.dispatch_tx.lock().unwrap().is_none() {
+            return;
+        }
+        let req = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if !Self::dispatchable(s) {
+                return;
+            }
+            let Some(head) = s.queue.first() else {
+                return;
+            };
+            if s.editing.as_deref() == Some(head.id.as_str()) {
+                return; // head held for edit → whole queue pauses
+            }
+            let head = s.queue.remove(0);
+            s.in_flight = true;
+            DispatchReq {
+                session_id: session_id.to_owned(),
+                text: head.text,
+                content: head.content,
+            }
+        };
+        self.emit_pending(session_id);
+        self.send_dispatch(req);
+    }
+
+    /// Clear the in-flight guard (used by the dispatcher when a send fails) and
+    /// try the next queued prompt.
+    pub fn clear_in_flight(&self, session_id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            if let Some(s) = sessions.get_mut(session_id) {
+                s.in_flight = false;
+            }
+        }
+        self.try_drain(session_id);
+    }
+
+    /// Queue-aware send: dispatch immediately when the session is idle and
+    /// nothing is queued/in-flight; otherwise append to the queue. The single
+    /// entry point the Web composer uses (the bridge/API still use `Prompt`).
+    pub fn submit(&self, session_id: &str, text: String, content: Vec<serde_json::Value>) {
+        let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
+        let mut dispatch = None;
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if wired && Self::dispatchable(s) && s.queue.is_empty() {
+                s.in_flight = true;
+                dispatch = Some(DispatchReq {
+                    session_id: session_id.to_owned(),
+                    text,
+                    content,
+                });
+            } else {
+                let id = self.next_qid();
+                s.queue.push(QueuedMessage { id, text, content });
+            }
+        }
+        match dispatch {
+            // Dispatched straight through — never touched a list, so no flicker
+            // of the prompt appearing-then-leaving the queue.
+            Some(req) => self.send_dispatch(req),
+            None => self.emit_pending(session_id),
+        }
+    }
+
+    /// Drop one queued prompt.
+    pub fn remove_queued(&self, session_id: &str, id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.queue.retain(|m| m.id != id);
+            if s.editing.as_deref() == Some(id) {
+                s.editing = None;
+            }
+        }
+        self.emit_pending(session_id);
+        self.try_drain(session_id);
+    }
+
+    /// Edit a queued prompt in place. Empty text + content removes it.
+    pub fn edit_queued(
+        &self,
+        session_id: &str,
+        id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+    ) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if text.trim().is_empty() && content.is_empty() {
+                s.queue.retain(|m| m.id != id);
+                if s.editing.as_deref() == Some(id) {
+                    s.editing = None;
+                }
+            } else if let Some(m) = s.queue.iter_mut().find(|m| m.id == id) {
+                m.text = text;
+                m.content = content;
+            }
+        }
+        self.emit_pending(session_id);
+        self.try_drain(session_id);
+    }
+
+    /// Drop a session's whole queue.
+    pub fn clear_queue(&self, session_id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.queue.clear();
+            s.editing = None;
+        }
+        self.emit_pending(session_id);
+    }
+
+    /// Move a queued prompt to the front, then drain — dispatches it if the
+    /// session can take a turn now, otherwise it's simply next in line.
+    pub fn request_send_queued(&self, session_id: &str, id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
+                let m = s.queue.remove(pos);
+                s.queue.insert(0, m);
+            } else {
+                return;
+            }
+        }
+        self.emit_pending(session_id);
+        self.try_drain(session_id);
+    }
+
+    /// Move a queued prompt back to drafts.
+    pub fn queued_to_draft(&self, session_id: &str, id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
+                let m = s.queue.remove(pos);
+                if s.editing.as_deref() == Some(id) {
+                    s.editing = None;
+                }
+                s.drafts.push(m);
+            } else {
+                return;
+            }
+        }
+        self.emit_pending(session_id);
+        self.try_drain(session_id);
+    }
+
+    /// Hold (`Some`) or release (`None`) the queue head for editing. A held head
+    /// pauses the drain on every terminal; releasing tries the drain again.
+    pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) {
+        let released = id.is_none();
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.editing = id;
+        }
+        if released {
+            self.try_drain(session_id);
+        }
+    }
+
+    /// Park a new draft.
+    pub fn add_draft(&self, session_id: &str, text: String, content: Vec<serde_json::Value>) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let id = self.next_qid();
+            s.drafts.push(QueuedMessage { id, text, content });
+        }
+        self.emit_pending(session_id);
+    }
+
+    /// Edit a draft in place. Empty text + content removes it.
+    pub fn edit_draft(
+        &self,
+        session_id: &str,
+        id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+    ) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if text.trim().is_empty() && content.is_empty() {
+                s.drafts.retain(|m| m.id != id);
+            } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
+                m.text = text;
+                m.content = content;
+            }
+        }
+        self.emit_pending(session_id);
+    }
+
+    /// Drop one draft.
+    pub fn remove_draft(&self, session_id: &str, id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.drafts.retain(|m| m.id != id);
+        }
+        self.emit_pending(session_id);
+    }
+
+    /// Drop a session's whole draft list.
+    pub fn clear_drafts(&self, session_id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.drafts.clear();
+        }
+        self.emit_pending(session_id);
+    }
+
+    /// Activate one draft: remove it from drafts and submit it (send-or-queue).
+    pub fn activate_draft(&self, session_id: &str, id: &str) {
+        let msg = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.drafts
+                .iter()
+                .position(|m| m.id == id)
+                .map(|pos| s.drafts.remove(pos))
+        };
+        if let Some(m) = msg {
+            self.emit_pending(session_id);
+            self.submit(session_id, m.text, m.content);
+        }
+    }
+
+    /// Activate every draft, front-to-back, then clear them.
+    pub fn activate_all_drafts(&self, session_id: &str) {
+        let msgs = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            std::mem::take(&mut s.drafts)
+        };
+        if msgs.is_empty() {
+            return;
+        }
+        self.emit_pending(session_id);
+        for m in msgs {
+            self.submit(session_id, m.text, m.content);
+        }
     }
 }
 

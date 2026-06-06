@@ -228,6 +228,56 @@ export async function filesToAttachments(files: readonly File[]): Promise<Attach
     .map((r) => r.value);
 }
 
+// Derive a display name from an `attachment:///<name>` resource uri (the scheme
+// fileToAttachment mints). Falls back to a generic label for anything else.
+function nameFromUri(uri: string): string {
+  const last = /([^/]+)\/?$/.exec(uri)?.[1];
+  if (!last) return "attachment";
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+/// Reconstruct staged `Attachment`s from a queued message's ACP content blocks —
+/// the inverse of `buildContentBlocks`, for rendering / re-editing a server-synced
+/// queue or draft on a terminal that didn't compose it. Trailing `text` blocks
+/// are skipped (the prompt text is shown from the message's own `text` field);
+/// only `image` / `resource` blocks become attachments. The original block is
+/// carried back verbatim so a re-send re-emits identical content.
+export function blocksToAttachments(blocks: readonly ContentBlock[]): Attachment[] {
+  const out: Attachment[] = [];
+  for (const block of blocks) {
+    if (block.type === "image") {
+      const data = typeof block.data === "string" ? block.data : "";
+      const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/jpeg";
+      out.push({
+        id: nextId(),
+        name: "image",
+        mimeType,
+        isImage: true,
+        previewUrl: `data:${mimeType};base64,${data}`,
+        block,
+      });
+    } else if (block.type === "resource") {
+      const resource = (block.resource ?? {}) as { uri?: unknown; mimeType?: unknown };
+      const uri = typeof resource.uri === "string" ? resource.uri : "";
+      const mimeType =
+        typeof resource.mimeType === "string" ? resource.mimeType : "application/octet-stream";
+      out.push({
+        id: nextId(),
+        name: nameFromUri(uri),
+        mimeType,
+        isImage: false,
+        block,
+      });
+    }
+    // `text` blocks are the trailing prompt text — rendered from message.text.
+  }
+  return out;
+}
+
 /// Build the ACP `content` block array for a prompt: the attachment blocks
 /// first (so the agent has the visual / file context before the instruction),
 /// then a trailing text block when there's any text. Returns null when there's

@@ -105,11 +105,27 @@ export interface ConfigOption {
   }[];
 }
 
+// A staged message on the wire — a queued prompt or a draft. `content` is the
+// ACP content-block array (empty for plain text); `text` is kept for display /
+// re-edit. Mirrors src/core.rs `QueuedMessage`. The store converts this to/from
+// the UI shape (which carries reconstructed `Attachment`s instead of raw blocks).
+export interface WireQueued {
+  id: string;
+  text: string;
+  content: ContentBlock[];
+}
+
 export type Outbound =
   | { type: "sessions"; sessions: SessionMeta[] }
   | { type: "snapshot"; session_id: string; events: Envelope[] }
   | { type: "event"; envelope: Envelope }
   | { type: "config_options"; session_id: string; options: ConfigOption[] }
+  | {
+      type: "queues";
+      session_id: string;
+      queue: WireQueued[];
+      drafts: WireQueued[];
+    }
   | { type: "error"; session_id?: string; message: string };
 
 export type Inbound =
@@ -139,6 +155,37 @@ export type Inbound =
     }
   // Client opened/selected a session — revive its agent if it died with a
   // daemon restart, without sending a turn. Idempotent. See src/core.rs.
-  | { type: "open_session"; session_id: string };
+  | { type: "open_session"; session_id: string }
+  // --- Server-authoritative queue + drafts (synced across terminals) --------
+  // The Web UI sends these; the daemon owns the per-session queue/drafts and the
+  // drain, so every terminal sees identical state. (The bridge keeps using
+  // `prompt` for a direct, un-queued dispatch.) `content` is the ACP block array
+  // (empty ⇒ plain text in `text`). See src/core.rs Inbound.
+  | { type: "submit"; session_id: string; text?: string; content?: ContentBlock[] }
+  | { type: "remove_queued"; session_id: string; id: string }
+  | {
+      type: "edit_queued";
+      session_id: string;
+      id: string;
+      text?: string;
+      content?: ContentBlock[];
+    }
+  | { type: "clear_queue"; session_id: string }
+  | { type: "request_send_queued"; session_id: string; id: string }
+  | { type: "force_push_queued"; session_id: string; id: string }
+  | { type: "queued_to_draft"; session_id: string; id: string }
+  | { type: "set_queue_editing"; session_id: string; id: string | null }
+  | { type: "add_draft"; session_id: string; text?: string; content?: ContentBlock[] }
+  | {
+      type: "edit_draft";
+      session_id: string;
+      id: string;
+      text?: string;
+      content?: ContentBlock[];
+    }
+  | { type: "remove_draft"; session_id: string; id: string }
+  | { type: "clear_drafts"; session_id: string }
+  | { type: "activate_draft"; session_id: string; id: string }
+  | { type: "activate_all_drafts"; session_id: string };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;
