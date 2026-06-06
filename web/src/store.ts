@@ -25,6 +25,8 @@ export interface ErrorNotice {
   seq: number;
   sessionId?: string;
   message: string;
+  /** Snackbar severity — defaults to "error" when absent. */
+  severity?: "error" | "warning";
 }
 
 /// Top-of-app connection banner. Purely client-side — NOT part of the WS
@@ -65,6 +67,9 @@ export interface State {
   // still loading" from "loaded, genuinely empty", so the transcript shows a
   // loading skeleton only during the initial fetch — not for an empty session.
   hydrated: Set<string>;
+  // True once the first "sessions" list has arrived. Lets the UI tell "no
+  // sessions yet (still loading)" from "loaded — the persisted focus is gone".
+  sessionsLoaded: boolean;
   // session_id → agent-advertised configOptions array (mode/model/effort)
   configOptions: Map<string, ConfigOption[]>;
   // session_id → ordered prompts waiting for the current turn to finish
@@ -91,6 +96,7 @@ let state: State = {
   sessions: [],
   timelines: new Map(),
   hydrated: new Set(),
+  sessionsLoaded: false,
   configOptions: new Map(),
   queues: new Map(),
   // Seeded just below once loadDrafts + its localStorage helpers are defined
@@ -238,8 +244,9 @@ function handle(msg: Outbound): void {
       }
       // Commit sessions first, then drain off the freshly-committed state
       // (drainQueues reads state.sessions). setState is synchronous, so the
-      // drain sees the new statuses.
-      setState({ ...state, sessions: msg.sessions });
+      // drain sees the new statuses. `sessionsLoaded` latches true on the first
+      // list so the UI can detect a now-gone persisted focus.
+      setState({ ...state, sessions: msg.sessions, sessionsLoaded: true });
       drainQueues();
       break;
     }
@@ -281,6 +288,17 @@ function handle(msg: Outbound): void {
 
 function setBanner(banner: Banner | undefined): void {
   setState({ ...state, banner });
+}
+
+/**
+ * Surface a client-side notice through the same snackbar the daemon's "error"
+ * messages use. `severity` defaults to "error"; pass "warning" for recoverable
+ * conditions (e.g. a persisted focus session that no longer exists on reload).
+ */
+export function notify(message: string, severity: "error" | "warning" = "error"): void {
+  errorSeq += 1;
+  console.warn("cowboy notice:", message);
+  setState({ ...state, lastError: { seq: errorSeq, message, severity } });
 }
 
 // The update overlay's reload action (fired when its countdown elapses): a hard

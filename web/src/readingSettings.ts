@@ -33,14 +33,12 @@ export const PADDING_PRESETS: number[] = [8, 12, 16, 20, 24, 32, 48];
 // their own fixed leading; this drives the body text's line spacing.
 export const LINE_HEIGHT_PRESETS: number[] = [1.3, 1.4, 1.5, 1.6, 1.8, 2];
 
-export const FONT_SCALE_DEFAULT = 1;
-// 24px default gutter — a comfortable, breakpoint-independent side margin for
-// the reading column (one preset above the old 16px). Users can still pick any
-// PADDING_PRESETS value (down to None); this is only the unset/garbage fallback.
-export const PADDING_DEFAULT = 24;
-// 1.5 = the prose line-height the markdown body shipped with before it became
-// configurable, so an unset value reads exactly as it always did.
-export const LINE_HEIGHT_DEFAULT = 1.5;
+export const FONT_SCALE_DEFAULT = 0.85;
+// Default reading comfort: 16px side gutter, 1.8 line-height, 0.85 scale — the
+// product-chosen defaults for an unset/garbage value (a user's own picks still
+// win). Source Serif 4 is the default face (see fonts.ts DEFAULT_FONT_ID).
+export const PADDING_DEFAULT = 16;
+export const LINE_HEIGHT_DEFAULT = 1.8;
 
 export interface ReadingSettings {
   /** Multiplier applied to the transcript's reading font size (1 = unchanged). */

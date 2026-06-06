@@ -597,7 +597,23 @@ fn handle_command(state: &AppState, text: &str) {
         // Revive on open (design §7): warm the agent when the client selects
         // the session, not only on the first prompt. No-op if already alive.
         Inbound::OpenSession { session_id } => {
-            state.supervisor.ensure_alive(&session_id).map(|_| ())
+            // A client opens the focus it restored from localStorage on reload.
+            // If that session is gone (deleted while the client was away), this
+            // is NOT an error condition: the client already pops a one-shot
+            // *warning* snackbar and falls back to another session. Log a
+            // server-side warning and swallow the error so no error toast is
+            // broadcast (which would otherwise read as a hard failure).
+            match state.supervisor.ensure_alive(&session_id) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "open of unknown/gone session ignored — client will fall back",
+                    );
+                    Ok(())
+                }
+            }
         }
     };
     if let Err(e) = result {

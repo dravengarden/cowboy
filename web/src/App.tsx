@@ -45,7 +45,7 @@ import {
     type SessionOrigin,
     type Status,
 } from "./protocol";
-import { applyUpdate, openSession, send, useStore } from "./store";
+import { applyUpdate, notify, openSession, send, useStore } from "./store";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
@@ -96,7 +96,8 @@ function readSidebarWidth(): number {
 // The session the user last had focused, so a page reload (or PWA relaunch)
 // reopens it instead of snapping back to the top of the list. Just an id; if it
 // names a session that no longer exists (deleted elsewhere) the `active`
-// derivation falls back to the first session, so no validation is needed here.
+// derivation falls back to the first session AND a one-shot warning snackbar
+// fires once the session list loads (see restoredFocusRef / goneCheckedRef).
 const ACTIVE_SESSION_KEY = "cowboy:active-session";
 
 function readActiveSession(): string | null {
@@ -528,7 +529,8 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { sessions, timelines, hydrated, lastError } = useStore();
+    const { sessions, timelines, hydrated, lastError, sessionsLoaded } =
+        useStore();
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -556,6 +558,13 @@ export function App({
     // rather than centered dialogs.
     const navbarAtBottom = useNavbarAtBottom();
     const [activeId, setActiveId] = useState<string | null>(readActiveSession);
+    // The focus id we restored from localStorage at mount (PWA relaunch / reload).
+    // Held in a ref so the gone-check fires exactly once after the first session
+    // list arrives — if that session was deleted while we were away, the
+    // `active` derivation silently falls back to sessions[0], which would hide
+    // the loss; this surfaces it as a warning snackbar instead.
+    const restoredFocusRef = useRef<string | null>(readActiveSession());
+    const goneCheckedRef = useRef(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -609,6 +618,21 @@ export function App({
             globalThis.localStorage?.setItem(ACTIVE_SESSION_KEY, active.id);
         }
     }, [active]);
+
+    // Fault tolerance for a restored focus that vanished: once the first session
+    // list has arrived, if the id we persisted no longer names a live session,
+    // warn the user (the view already fell back to sessions[0]). Runs once.
+    useEffect(() => {
+        if (!sessionsLoaded || goneCheckedRef.current) return;
+        goneCheckedRef.current = true;
+        const restored = restoredFocusRef.current;
+        if (restored && !sessions.some((s) => s.id === restored)) {
+            notify(
+                "Last session is no longer available — opened another instead.",
+                "warning",
+            );
+        }
+    }, [sessionsLoaded, sessions]);
 
     // Revive-on-open (design §7): tell the daemon which session is focused so it
     // warms that agent — reviving one whose agent died with a daemon restart —
@@ -1065,7 +1089,7 @@ export function App({
                 }}
             >
                 <Alert
-                    severity="error"
+                    severity={lastError?.severity ?? "error"}
                     variant="filled"
                     onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
                     sx={{ maxWidth: 480 }}

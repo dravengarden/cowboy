@@ -124,15 +124,18 @@ export const FONT_PRESETS: FontPreset[] = [
   },
 ];
 
-export const DEFAULT_FONT_ID = "system";
+export const DEFAULT_FONT_ID = "source-serif-4";
 
-const DEFAULT_PRESET: FontPreset = FONT_PRESETS[0] ?? {
-  id: "system",
-  label: "System",
-  note: "",
-  stack: GENERIC_SANS,
-  load: () => Promise.resolve(),
-};
+// The fallback face for an unset / unknown id — the product default. Resolved
+// from DEFAULT_FONT_ID so read()'s `getFontPreset("")` lands on it.
+const DEFAULT_PRESET: FontPreset = FONT_PRESETS.find((p) => p.id === DEFAULT_FONT_ID) ??
+  FONT_PRESETS[0] ?? {
+    id: "system",
+    label: "System",
+    note: "",
+    stack: GENERIC_SANS,
+    load: () => Promise.resolve(),
+  };
 
 export function getFontPreset(id: string): FontPreset {
   return FONT_PRESETS.find((p) => p.id === id) ?? DEFAULT_PRESET;

@@ -13,10 +13,13 @@ export type NavbarPosition = "top" | "bottom";
 
 const KEY = "cowboy:navbar-pos";
 const EVENT = "cowboy:navbar-pos-change";
-const DEFAULT: NavbarPosition = "top";
+const DEFAULT: NavbarPosition = "bottom";
 
 function read(): NavbarPosition {
-  return globalThis.localStorage?.getItem(KEY) === "bottom" ? "bottom" : "top";
+  // An explicit stored "top"/"bottom" wins; an unset/garbage value falls back to
+  // DEFAULT (so the product default is honoured, not a hard-coded "top").
+  const v = globalThis.localStorage?.getItem(KEY);
+  return v === "bottom" || v === "top" ? v : DEFAULT;
 }
 
 // The snapshot is a primitive, so it's referentially stable by value — no
