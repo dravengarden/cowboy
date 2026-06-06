@@ -354,6 +354,23 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
+        {/* Sticky / auto-scroll toggle, in the left utility group. Default ON.
+            Active = primary; inactive = muted. Tap while inactive → scroll to
+            bottom + follow again; tap while active → stop following. The
+            Transcript owns the actual scrolling (stickyStore). */}
+        <Tooltip title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}>
+          <IconButton
+            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
+            color={sticky ? "primary" : "default"}
+            sx={TOOLBAR_ICON_BTN}
+            onClick={(): void =>
+              sticky
+                ? setSticky(sessionId, false)
+                : requestStickToBottom(sessionId)}
+          >
+            <VerticalAlignBottom />
+          </IconButton>
+        </Tooltip>
 
         {compact ? (
           <Tooltip title="Options">
@@ -403,25 +420,6 @@ export function Composer({
         )}
 
         <Box sx={{ flex: 1 }} />
-
-        {/* Sticky / auto-scroll toggle. Always visible (out of the scrollable
-            config-chip area), default ON. Active = primary; inactive = muted.
-            Tap while inactive → scroll to bottom + follow again; tap while
-            active → stop following. The Transcript owns the actual scrolling
-            (stickyStore). */}
-        <Tooltip title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}>
-          <IconButton
-            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
-            color={sticky ? "primary" : "default"}
-            sx={TOOLBAR_ICON_BTN}
-            onClick={(): void =>
-              sticky
-                ? setSticky(sessionId, false)
-                : requestStickToBottom(sessionId)}
-          >
-            <VerticalAlignBottom />
-          </IconButton>
-        </Tooltip>
 
         {!compact && (
           <Typography
