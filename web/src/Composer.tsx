@@ -49,6 +49,7 @@ import {
   removeQueued,
   requestSendQueued,
   send,
+  setQueueEditing,
   submitPrompt,
   useStore,
 } from "./store";
@@ -264,7 +265,12 @@ export function Composer({
           and drain one per turn-end. Sits above the editor so it reads as "what
           will be sent next". Hidden when empty. */}
       {queue.length > 0 && (
-        <QueuedMessages sessionId={sessionId} queue={queue} status={status} />
+        <QueuedMessages
+          sessionId={sessionId}
+          queue={queue}
+          status={status}
+          commands={(): AvailableCommand[] => availableCommands}
+        />
       )}
       {/* Staged attachments (image thumbnails / file chips) sit above the editor
           so they read as "what will be sent with this message". */}
@@ -354,24 +360,6 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Sticky / auto-scroll toggle, in the left utility group. Default ON.
-            Active = primary; inactive = muted. Tap while inactive → scroll to
-            bottom + follow again; tap while active → stop following. The
-            Transcript owns the actual scrolling (stickyStore). */}
-        <Tooltip title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}>
-          <IconButton
-            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
-            color={sticky ? "primary" : "default"}
-            sx={TOOLBAR_ICON_BTN}
-            onClick={(): void =>
-              sticky
-                ? setSticky(sessionId, false)
-                : requestStickToBottom(sessionId)}
-          >
-            <VerticalAlignBottom />
-          </IconButton>
-        </Tooltip>
-
         {compact ? (
           <Tooltip title="Options">
             <span>
@@ -418,6 +406,25 @@ export function Composer({
             )}
           </Stack>
         )}
+
+        {/* Sticky / auto-scroll toggle — rightmost of the left utility group,
+            sitting just before the gap that pushes Send to the far edge. Default
+            ON. Active = primary; inactive = muted. Tap while inactive → scroll to
+            bottom + follow again; tap while active → stop following. The
+            Transcript owns the actual scrolling (stickyStore). */}
+        <Tooltip title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}>
+          <IconButton
+            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
+            color={sticky ? "primary" : "default"}
+            sx={TOOLBAR_ICON_BTN}
+            onClick={(): void =>
+              sticky
+                ? setSticky(sessionId, false)
+                : requestStickToBottom(sessionId)}
+          >
+            <VerticalAlignBottom />
+          </IconButton>
+        </Tooltip>
 
         <Box sx={{ flex: 1 }} />
 
@@ -653,11 +660,14 @@ function QueuedMessages({
   sessionId,
   queue,
   status,
+  commands,
 }: {
   sessionId: string;
   queue: QueuedMessage[];
   /** Session status — drives Send-now vs Force-push per row. */
   status: Status;
+  /** Agent-advertised `/` commands, threaded into the row's ComposerEditor. */
+  commands: () => AvailableCommand[];
 }): React.JSX.Element {
   // Default expanded. Collapsed state is local + ephemeral (resets on session
   // switch / remount) — the count stays visible either way, which is the part
@@ -665,6 +675,14 @@ function QueuedMessages({
   const [collapsed, setCollapsed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const count = queue.length;
+  // Bridge the locally-edited message id to the store so the auto-drain holds
+  // that message (and everything behind it) until the edit finishes — a
+  // turn-end mid-edit must not fire the half-written prompt. Clears on unmount /
+  // session switch so a stale hold can never freeze a session's queue.
+  useEffect(() => {
+    setQueueEditing(sessionId, editingId);
+    return (): void => setQueueEditing(sessionId, null);
+  }, [sessionId, editingId]);
   return (
     <Box
       sx={{
@@ -719,6 +737,7 @@ function QueuedMessages({
               sessionId={sessionId}
               message={m}
               status={status}
+              commands={commands}
               editing={editingId === m.id}
               onEdit={(): void => setEditingId(m.id)}
               onEditDone={(): void => setEditingId(null)}
@@ -741,6 +760,7 @@ function QueuedRow({
   sessionId,
   message,
   status,
+  commands,
   editing,
   onEdit,
   onEditDone,
@@ -748,50 +768,77 @@ function QueuedRow({
   sessionId: string;
   message: QueuedMessage;
   status: Status;
+  commands: () => AvailableCommand[];
   editing: boolean;
   onEdit: () => void;
   onEditDone: () => void;
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
+  // Local attachments while editing, seeded from the queued message. The edit
+  // box is the SAME ComposerEditor as the main composer, so a queued prompt can
+  // gain/lose images here too (pasted screenshots, picked files).
+  const [editAttachments, setEditAttachments] = useState<Attachment[]>(
+    message.attachments,
+  );
+  const editorRef = useRef<ComposerEditorHandle>(null);
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
   // "running" is the idle-ready state; "exited"/"crashed" dispatch a revive.
   // Anything else ("busy"/"starting") has an in-flight turn → force push.
   const dispatchable = status === "running" || status === "exited" || status === "crashed";
+  // Focus the editor when the row enters edit mode (the old TextField used
+  // autoFocus; ComposerEditor exposes an imperative focus()).
+  useEffect(() => {
+    if (editing) editorRef.current?.focus();
+  }, [editing]);
   if (editing) {
     const save = (): void => {
-      editQueued(sessionId, message.id, draft);
+      editQueued(sessionId, message.id, draft, editAttachments);
       onEditDone();
+    };
+    const cancel = (): void => {
+      setDraft(message.text);
+      setEditAttachments(message.attachments);
+      onEditDone();
+    };
+    const addEditFiles = (files: File[]): void => {
+      if (files.length === 0) return;
+      void filesToAttachments(files).then((added) => {
+        if (added.length > 0) setEditAttachments((prev) => [...prev, ...added]);
+      });
     };
     return (
       <Paper variant="outlined" sx={{ p: 0.75 }}>
-        <TextField
-          autoFocus
-          fullWidth
-          multiline
-          size="small"
-          maxRows={6}
-          value={draft}
-          onChange={(e): void => setDraft(e.target.value)}
-          onKeyDown={(e): void => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              setDraft(message.text);
-              onEditDone();
-            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              save();
-            }
+        {editAttachments.length > 0 && (
+          <AttachmentPreviews
+            attachments={editAttachments}
+            onRemove={(id): void =>
+              setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
+          />
+        )}
+        <ComposerEditor
+          ref={editorRef}
+          // The edit box mounts fresh each time the row enters edit mode (the
+          // read-mode branch has no ComposerEditor), so this seeds the current
+          // text. Uncontrolled thereafter — onChange feeds `draft`, never back
+          // into `value` (mirrors the main composer's latch-avoidance).
+          value={message.text}
+          onChange={setDraft}
+          onSubmit={save}
+          sessionId={sessionId}
+          commands={commands}
+          placeholder="Edit queued message…"
+          onPasteFiles={addEditFiles}
+          onEscape={(): boolean => {
+            cancel();
+            return true;
           }}
         />
         <Stack direction="row" spacing={0.5} justifyContent="flex-end" sx={{ mt: 0.5 }}>
           <Button
             size="small"
             color="inherit"
-            onClick={(): void => {
-              setDraft(message.text);
-              onEditDone();
-            }}
+            onClick={cancel}
             sx={{ textTransform: "none" }}
           >
             Cancel

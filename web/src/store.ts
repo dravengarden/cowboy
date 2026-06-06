@@ -83,6 +83,10 @@ let state: State = {
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
+// The session the user currently has open. Remembered so every (re)connect can
+// re-assert it to the daemon (revive-on-open), recovering the agent after a
+// daemon restart we reconnected across. See openSession + connect's onopen.
+let openedSessionId: string | undefined;
 
 // --- Reconnect + version bookkeeping ----------------------------------------
 
@@ -136,8 +140,8 @@ function handle(msg: Outbound): void {
       // A status broadcast is the turn-end signal: the daemon re-broadcasts the
       // session list on every set_status (src/core.rs). First reconcile the
       // in-flight guard against the rising edge into `running` (turn ended) and
-      // any death, then release the next queued prompt for every session that's
-      // now idle and has nothing of ours still running.
+      // any death, commit the new list, then drain the next queued prompt for
+      // every session that's now idle and has nothing of ours still running.
       const prevStatus = new Map<string, Status>(state.sessions.map((s) => [s.id, s.status]));
       for (const s of msg.sessions) {
         const prev = prevStatus.get(s.id);
@@ -149,27 +153,11 @@ function handle(msg: Outbound): void {
         if (s.status === "running" && prev === "busy") inFlight.delete(s.id);
         if (s.status === "exited" || s.status === "crashed") inFlight.delete(s.id);
       }
-      let queues = state.queues;
-      const toSend: QueuedMessage[] = [];
-      const toSendIds: string[] = [];
-      for (const s of msg.sessions) {
-        if (!canDispatch(s.id, s.status)) continue;
-        const q = queues.get(s.id);
-        const head = q?.[0];
-        if (!q || !head) continue;
-        if (queues === state.queues) queues = new Map(state.queues);
-        const rest = q.slice(1);
-        if (rest.length > 0) queues.set(s.id, rest);
-        else queues.delete(s.id);
-        inFlight.add(s.id); // claim the slot now so a same-tick re-broadcast can't double-send
-        toSend.push(head);
-        toSendIds.push(s.id);
-      }
-      setState({ ...state, sessions: msg.sessions, queues });
-      for (const [i, head] of toSend.entries()) {
-        const sessionId = toSendIds[i];
-        if (sessionId) send(promptCommand(sessionId, head.text, head.attachments));
-      }
+      // Commit sessions first, then drain off the freshly-committed state
+      // (drainQueues reads state.sessions). setState is synchronous, so the
+      // drain sees the new statuses.
+      setState({ ...state, sessions: msg.sessions });
+      drainQueues();
       break;
     }
     case "snapshot": {
@@ -268,6 +256,12 @@ function connect(): void {
       }, RECONNECTED_DISMISS_MS);
     }
     void probeVersion();
+    // Re-assert the open session so the daemon revives its agent if it died
+    // with a restart we just reconnected across (revive-on-open, design §7).
+    // Idempotent server-side when the agent is still alive.
+    if (openedSessionId) {
+      send({ type: "open_session", session_id: openedSessionId });
+    }
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
     try {
@@ -297,6 +291,16 @@ export function send(cmd: Inbound): void {
   }
 }
 
+// Tell the daemon the user opened/selected `id` so it revives that session's
+// agent before the user types — design §7 "revive on open". Remembered so the
+// id is re-asserted on every reconnect (see connect's onopen). Cheap + a
+// server-side no-op when the agent is already alive, so it's fine to call on
+// every navigation.
+export function openSession(id: string): void {
+  openedSessionId = id;
+  send({ type: "open_session", session_id: id });
+}
+
 // --- Queued prompts ---------------------------------------------------------
 
 // session_ids with a prompt we've dispatched whose turn-end we haven't observed
@@ -308,6 +312,16 @@ export function send(cmd: Inbound): void {
 // (see the "sessions" handler). It's module state, not React state — flipping it
 // must never trigger a render, and it's purely a dispatch gate.
 const inFlight = new Set<string>();
+
+// session_id → the id of the queued message currently being edited in the UI.
+// While a message is being edited it must NOT be auto-dispatched, and because
+// the queue drains strictly front-to-back, holding that message also holds
+// everything behind it — so editing the head pauses the whole tail until the
+// edit finishes (the user's "don't send this message or the ones after it while
+// I'm editing"). Mirrored from the QueuedMessages component via setQueueEditing;
+// module state (like inFlight) so the drain can read it without routing UI state
+// through the reactive snapshot.
+const editingHold = new Map<string, string>();
 
 function nextQueuedId(): string {
   queuedSeq += 1;
@@ -344,6 +358,51 @@ function enqueue(sessionId: string, text: string, attachments: Attachment[]): vo
   const q = next.get(sessionId) ?? [];
   next.set(sessionId, [...q, { id: nextQueuedId(), text, attachments }]);
   setState({ ...state, queues: next });
+}
+
+// Drain the front of every session's queue: dispatch the head prompt for each
+// session that can take a turn right now and whose head isn't being edited.
+// Called on every turn-end broadcast (handle "sessions") AND when an edit hold
+// is released (setQueueEditing(…, null)) — the latter because the session may
+// already be idle, with no further broadcast coming to trigger the drain.
+function drainQueues(): void {
+  let queues = state.queues;
+  const toSend: QueuedMessage[] = [];
+  const toSendIds: string[] = [];
+  for (const s of state.sessions) {
+    if (!canDispatch(s.id, s.status)) continue;
+    const q = queues.get(s.id);
+    const head = q?.[0];
+    if (!q || !head) continue;
+    // A message being edited holds itself — and, since the queue is strictly
+    // front-to-back, everything behind it — until the edit finishes.
+    if (editingHold.get(s.id) === head.id) continue;
+    if (queues === state.queues) queues = new Map(state.queues);
+    const rest = q.slice(1);
+    if (rest.length > 0) queues.set(s.id, rest);
+    else queues.delete(s.id);
+    inFlight.add(s.id); // claim the slot now so a same-tick re-broadcast can't double-send
+    toSend.push(head);
+    toSendIds.push(s.id);
+  }
+  if (queues !== state.queues) setState({ ...state, queues });
+  for (const [i, head] of toSend.entries()) {
+    const sessionId = toSendIds[i];
+    if (sessionId) send(promptCommand(sessionId, head.text, head.attachments));
+  }
+}
+
+// UI → store bridge for the edit hold. The QueuedMessages component calls this
+// with the id of the message it's editing (or null when done). Releasing the
+// hold tries a drain immediately: the turn may have ended *while* the message
+// was held, so there's no pending broadcast left to trigger the drain otherwise.
+export function setQueueEditing(sessionId: string, id: string | null): void {
+  if (id === null) {
+    if (!editingHold.delete(sessionId)) return; // nothing was held → nothing to release
+    drainQueues();
+  } else {
+    editingHold.set(sessionId, id);
+  }
 }
 
 // The single entry point the composer calls to send a user prompt. Sends
@@ -395,22 +454,29 @@ export function forcePushQueued(sessionId: string, status: Status, id: string): 
   send({ type: "cancel", session_id: sessionId });
 }
 
-// Edit a queued prompt in place. Clearing the text removes the entry.
-export function editQueued(sessionId: string, id: string, text: string): void {
+// Edit a queued prompt in place — text AND attachments (the queue editor reuses
+// the full ComposerEditor, so an edit can add/remove images too). Clearing both
+// removes the entry.
+export function editQueued(
+  sessionId: string,
+  id: string,
+  text: string,
+  attachments: Attachment[],
+): void {
   const trimmed = text.trimEnd();
   const q = state.queues.get(sessionId);
   if (!q) return;
-  // Clearing the text removes the entry only when it carries no attachments —
-  // an attachment-only prompt (e.g. just a pasted screenshot) stays valid.
-  if (!trimmed.trim()) {
-    const existing = q.find((m) => m.id === id);
-    if (!existing || existing.attachments.length === 0) {
-      removeQueued(sessionId, id);
-      return;
-    }
+  // Clearing BOTH the text and the attachments removes the entry; an
+  // attachment-only prompt (e.g. just a pasted screenshot) stays valid.
+  if (!trimmed.trim() && attachments.length === 0) {
+    removeQueued(sessionId, id);
+    return;
   }
   const next = new Map(state.queues);
-  next.set(sessionId, q.map((m) => (m.id === id ? { ...m, text: trimmed } : m)));
+  next.set(
+    sessionId,
+    q.map((m) => (m.id === id ? { ...m, text: trimmed, attachments } : m)),
+  );
   setState({ ...state, queues: next });
 }
 

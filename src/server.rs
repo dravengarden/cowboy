@@ -502,7 +502,8 @@ fn handle_command(state: &AppState, text: &str) {
         | Inbound::Permission { session_id, .. }
         | Inbound::DeleteSession { session_id }
         | Inbound::RenameSession { session_id, .. }
-        | Inbound::SetConfigOption { session_id, .. } => Some(session_id.clone()),
+        | Inbound::SetConfigOption { session_id, .. }
+        | Inbound::OpenSession { session_id } => Some(session_id.clone()),
         Inbound::NewSession { .. } => None,
     };
     let result = match cmd {
@@ -590,6 +591,11 @@ fn handle_command(state: &AppState, text: &str) {
             &session_id,
             AgentCommand::SetConfigOption { config_id, value },
         ),
+        // Revive on open (design §7): warm the agent when the client selects
+        // the session, not only on the first prompt. No-op if already alive.
+        Inbound::OpenSession { session_id } => {
+            state.supervisor.ensure_alive(&session_id).map(|_| ())
+        }
     };
     if let Err(e) = result {
         tracing::warn!(error = %e, "command failed");

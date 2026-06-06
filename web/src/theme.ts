@@ -17,10 +17,12 @@ import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
 // system/light/dark vocabulary as the shared hook.
 export type Mode = ThemeChoice;
 
-// MUI AppBar color="default" resolves to grey[100]/grey[900]; mirror it onto
-// the theme-color meta so the iOS standalone status bar tracks the active
-// theme (status-bar-style="default" lets iOS tint the bar + auto-contrast its
-// glyphs).
+// Keep the iOS standalone status bar in lockstep with the navbar surface. The
+// AppBar is pinned to `background.default` (see App.tsx — `#15111d` dark /
+// `#f4ecf7` light), so the theme-color meta uses the SAME values: status bar →
+// navbar read as one surface (status-bar-style="default" lets iOS tint the bar
+// + auto-contrast its glyphs). Must stay in sync with the palette's
+// background.default below.
 function applyThemeColor(dark: boolean): void {
   globalThis.document
     .querySelector('meta[name="theme-color"]')

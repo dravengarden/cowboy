@@ -93,7 +93,11 @@ const CLAUDE_FRAME_MS = 200;
 function ClaudeThinking(): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  const accent = "#D97757";
+  // Adapt to the app's theme accent (was hardcoded Claude terracotta #D97757,
+  // which clashed with cowboy's purple in both glyph + verb shimmer). The brand
+  // mark proper still lives in ProviderIcon; this working indicator should read
+  // as part of cowboy's chrome, so it tracks the theme primary.
+  const accent = theme.palette.primary.main;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
@@ -127,13 +131,15 @@ function ClaudeThinking(): React.JSX.Element {
         component="span"
         aria-hidden
         sx={{
-          width: 14,
+          // `em` (not fixed px) so the indicator scales with the transcript's
+          // reading-size setting like the prose + tool cards do.
+          width: "1em",
           textAlign: "center",
-          fontSize: 14,
+          fontSize: "0.95em",
           lineHeight: 1,
           fontWeight: 700,
           color: accent,
-          // Monospace + tabular so the glyph swap doesn't shift the verb.
+          // Monospace + tabular so the spinner glyph swap doesn't shift the verb.
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         }}
@@ -141,8 +147,12 @@ function ClaudeThinking(): React.JSX.Element {
         {glyph}
       </Box>
       <Typography
-        variant="caption"
         sx={{
+          // Follow the reading font + size so the verb is typographically
+          // continuous with the message prose, not pinned to the theme chrome
+          // font. (caption's fixed rem is dropped for an em that scales.)
+          fontFamily: "var(--cowboy-reading-font, inherit)",
+          fontSize: "0.9em",
           fontWeight: 500,
           letterSpacing: 0.2,
           background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
@@ -383,12 +393,21 @@ function ToolCard({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            // Follow the reading-font setting like the prose does, instead of
-            // letting MUI Typography pin the theme font — otherwise picking a
-            // serif/sans reading face restyles the messages but the tool cards
-            // stay on the system font, which reads as inconsistent. Shell
-            // commands (execute) stay monospace: they're code, and a path full
-            // of slashes in a serif is worse, not better.
+            // Match the prose typography so a tool card reads as part of the same
+            // document, not as smaller UI chrome:
+            //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
+            //    does, instead of letting MUI Typography pin the theme font —
+            //    otherwise picking a serif/sans reading face restyles the messages
+            //    but the tool cards stay on the system font, which reads as
+            //    inconsistent. Shell commands (execute) stay monospace: they're
+            //    code, and a path full of slashes in a serif is worse, not better.
+            //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
+            //    the transcript's reading-size scale (the scroll container's
+            //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
+            //    the title visibly smaller than the prose and, worse, it didn't
+            //    grow when the reading size was bumped — same family but reading as
+            //    two different fonts.
+            fontSize: "inherit",
             fontFamily:
               item.toolKind === "execute"
                 ? "ui-monospace, SFMono-Regular, Menlo, monospace"
@@ -806,6 +825,13 @@ export function Transcript({
     measureElement: (el) => Math.round(el.getBoundingClientRect().height),
   });
 
+  // The measured content height. Changes on EVERY row remeasure — a new row, the
+  // last bubble growing as tokens stream into it, or a row shrinking back after
+  // react-virtual's ResizeObserver corrects an over-estimate. react-virtual
+  // re-renders on each remeasure, so reading it here gives the auto-snap effect
+  // a signal that fires on streamed growth too, not just on rowCount changes.
+  const totalSize = virtualizer.getTotalSize();
+
   // Wire user-intent listeners ONCE; they read parentRef + sessionIdRef each
   // time so the dependency on the ref's contents stays out of React's eyes.
   useEffect(() => {
@@ -868,13 +894,24 @@ export function Transcript({
     return () => cancelAnimationFrame(raf);
   }, [sessionId]);
 
-  // Auto-snap (the actual "sticky" behaviour) only on rowCount changes, ONLY if
-  // we're still stuck — new streamed content keeps the view pinned to the latest
-  // line.
+  // Auto-snap (the actual "sticky" behaviour), ONLY if we're still stuck. Keyed
+  // on `totalSize` (not just `rowCount`) so it re-pins on the two cases a row-
+  // count dep misses:
+  //   1. The last assistant bubble growing as tokens stream into the SAME row —
+  //      rowCount never changes, so a rowCount-only dep would stop following.
+  //   2. A row remeasuring SMALLER after react-virtual corrects an over-estimate
+  //      (most often the trailing-dots phantom row: ~80px estimate → ~24px real).
+  //      The earlier scroll landed using the larger size; once totalSize shrinks
+  //      a stale scrollTop sits past the content → the "gap below the bottom".
+  //      Re-pinning here clamps it away.
+  // Pin via scrollTop = scrollHeight (like the session-pin effect): with
+  // `contain: strict` the spacer height === totalSize, so this lands exactly on
+  // the true bottom regardless of react-virtual's scrollToIndex measurement lag.
   useLayoutEffect(() => {
     if (!stick.current || rowCount === 0) return;
-    virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
-  }, [rowCount, virtualizer]);
+    const el = parentRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [rowCount, totalSize]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
   // bottom and resume following. Guarded so it only fires on an actual bump
@@ -884,10 +921,9 @@ export function Transcript({
     if (scrollNonce === lastNonceRef.current) return;
     lastNonceRef.current = scrollNonce;
     stick.current = true;
-    if (rowCount > 0) {
-      virtualizer.scrollToIndex(rowCount - 1, { align: "end" });
-    }
-  }, [scrollNonce, rowCount, virtualizer]);
+    const el = parentRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [scrollNonce]);
 
   return (
     <Box sx={{ flex: 1, position: "relative", overflow: "hidden" }}>
@@ -917,7 +953,7 @@ export function Transcript({
       >
         <Box
           sx={{
-            height: virtualizer.getTotalSize(),
+            height: totalSize,
             width: "100%",
             position: "relative",
           }}

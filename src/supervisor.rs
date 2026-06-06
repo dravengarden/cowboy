@@ -184,6 +184,31 @@ impl Supervisor {
             .map_err(|_| "session ended".to_owned())
     }
 
+    /// Ensure a session has a live agent **without sending a turn** — the
+    /// "revive on open" path (design §7). Called when a client selects/opens a
+    /// session: revives one whose agent died with a daemon restart (handing it
+    /// the prior `agent_session_id` for `session/load` resume), so it's already
+    /// warming up before the user types. Idempotent and cheap: a no-op when a
+    /// sender is already registered (the steady-state case — agents outlive
+    /// client connections), so it's safe to call on every open / reconnect.
+    ///
+    /// A stale sender left by a crashed-but-not-deleted agent is NOT detected
+    /// here (we don't probe by sending); that rarer case is still recovered by
+    /// the next [`Self::send`], which drops the dead sender and revives.
+    ///
+    /// Returns `true` if it revived, `false` if the agent was already alive.
+    ///
+    /// # Errors
+    /// If the session is unknown to the Hub, its provider is no longer
+    /// registered, or the agent thread cannot be spawned.
+    pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
+        if self.senders.lock().unwrap().contains_key(session_id) {
+            return Ok(false);
+        }
+        self.revive(session_id)?;
+        Ok(true)
+    }
+
     /// Spawn an agent thread for a session that exists in the Hub but has no
     /// live sender (one restored after a restart, or whose agent crashed).
     /// Reuses the persisted provider + cwd, and hands the agent its prior

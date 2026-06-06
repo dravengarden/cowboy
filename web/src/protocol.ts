@@ -136,6 +136,9 @@ export type Inbound =
       session_id: string;
       config_id: string;
       value: string | boolean;
-    };
+    }
+  // Client opened/selected a session — revive its agent if it died with a
+  // daemon restart, without sending a turn. Idempotent. See src/core.rs.
+  | { type: "open_session"; session_id: string };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;

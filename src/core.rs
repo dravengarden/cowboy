@@ -182,6 +182,12 @@ pub enum Inbound {
         /// booleans too. Forwarded verbatim.
         value: serde_json::Value,
     },
+    /// Client opened/selected a session — revive its agent if it died with a
+    /// daemon restart, WITHOUT sending a turn. Idempotent (a no-op when the
+    /// agent is already alive), so it's safe to send on every open / reconnect.
+    /// Lets a reopened session warm up before the user types (design §7).
+    /// Handled in server.rs via [`crate::supervisor::Supervisor::ensure_alive`].
+    OpenSession { session_id: String },
 }
 
 /// What the server pushes to a WebSocket client.

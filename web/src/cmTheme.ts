@@ -33,18 +33,28 @@ export function cmTheme(theme: Theme): Extension {
         padding: "0",
         caretColor: accent,
         lineHeight: "1.5",
-        // iOS PWA repaint fix. On iPad/iPhone the composer's contenteditable
-        // sits inside the `position: fixed` body (index.html, for keyboard
-        // handling). WebKit then fails to invalidate the editable's paint rect
-        // on keystroke, so typed text stays invisible until a later edit/scroll
-        // forces a repaint (delete "reveals" it). Promoting .cm-content to its
-        // own compositing layer makes WebKit repaint it on every input.
-        // translateZ(0) is an identity transform — it doesn't shift the element,
-        // so CodeMirror's getBoundingClientRect-based cursor/selection
-        // measurement is unaffected (verified harmless on desktop).
+      },
+      // iOS PWA repaint fix lives on the SCROLLER, not `.cm-content`. On
+      // iPad/iPhone the composer's contenteditable sits inside the
+      // `position: fixed` body (index.html, for keyboard handling); WebKit then
+      // fails to invalidate the editable's paint rect on keystroke, so typed
+      // text stays invisible until a later edit/scroll forces a repaint (delete
+      // "reveals" it). A compositing layer in the subtree makes WebKit repaint
+      // on every input — BUT promoting `.cm-content` ITSELF (the contenteditable)
+      // breaks iOS's long-press text-interaction: the Copy/Paste callout +
+      // selection loupe compute rects in the layer's coordinate space and
+      // intermittently fail to attach, so long-press "often shows no paste menu".
+      // Promoting the PARENT `.cm-scroller` instead keeps the repaint fix (the
+      // editable still paints into the layer) while leaving the editable
+      // un-transformed, so WebKit's editing UI attaches normally. translateZ(0)
+      // is an identity transform (no visual shift), so CodeMirror's
+      // getBoundingClientRect-based cursor/selection measurement is unaffected.
+      ".cm-scroller": {
+        fontFamily: fontStack,
+        fontSize: "16px",
+        lineHeight: "1.5",
         transform: "translateZ(0)",
       },
-      ".cm-scroller": { fontFamily: fontStack, fontSize: "16px", lineHeight: "1.5" },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: accent },
       ".cm-placeholder": { color: theme.palette.text.disabled },
       "&.cm-focused": { outline: "none" },

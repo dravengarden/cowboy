@@ -46,7 +46,7 @@ import {
     type SessionOrigin,
     type Status,
 } from "./protocol";
-import { applyUpdate, send, useStore } from "./store";
+import { applyUpdate, openSession, send, useStore } from "./store";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
@@ -571,11 +571,15 @@ export function App({
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
     const mobile = useMediaQuery(theme.breakpoints.down("lg"));
-    // Navbar placement: a mobile-only setting (desktop is always top). When the
-    // user picks "bottom" on the compact tier the AppBar moves below the
-    // transcript, just above the composer (mobile-browser bottom-bar feel).
+    // Navbar placement: a phone-only setting (desktop/tablet are always top).
+    // When the user picks "bottom" the AppBar moves below the transcript, just
+    // above the composer (mobile-browser bottom-bar feel). Gated on `sm` — NOT
+    // the `lg` mobile-shell tier — so it matches where BottomSheet renders as a
+    // bottom sheet (also `< sm`); on a tablet the shared sheet is a centered
+    // dialog, and a bottom navbar over centered dialogs reads inconsistently.
+    const phone = useMediaQuery(theme.breakpoints.down("sm"));
     const navbarPos = useNavbarPosition();
-    const navbarAtBottom = mobile && navbarPos === "bottom";
+    const navbarAtBottom = phone && navbarPos === "bottom";
     const [activeId, setActiveId] = useState<string | null>(readActiveSession);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -630,6 +634,15 @@ export function App({
             globalThis.localStorage?.setItem(ACTIVE_SESSION_KEY, active.id);
         }
     }, [active]);
+
+    // Revive-on-open (design §7): tell the daemon which session is focused so it
+    // warms that agent — reviving one whose agent died with a daemon restart —
+    // before the user types, instead of only on the first prompt. Keyed on the
+    // id (not the meta object) so status churn doesn't re-fire it; reconnects
+    // are handled by the store re-asserting the open id on every onopen.
+    useEffect(() => {
+        if (active) openSession(active.id);
+    }, [active?.id]);
 
     function pick(id: string): void {
         setActiveId(id);
@@ -813,9 +826,19 @@ export function App({
             <Stack sx={{ flex: 1, minWidth: 0 }}>
                 <AppBar
                     position="static"
-                    color="default"
+                    // `color="transparent"` + an explicit theme surface, NOT
+                    // `color="default"`: MUI's "default" AppBar resolves to a
+                    // hardcoded grey (grey[100]/grey[900]) that ignores cowboy's
+                    // lavender palette — the bar read grey while the iOS status
+                    // bar (applyThemeColor → theme-color meta) and the app body
+                    // (background.default) were both lavender. Pin it to
+                    // `background.default` so status bar → navbar → transcript are
+                    // one continuous themed surface in light AND dark.
+                    color="transparent"
                     elevation={0}
                     sx={{
+                        bgcolor: "background.default",
+                        color: "text.primary",
                         // Bottom mode (mobile, navbar-pos=bottom): flex `order`
                         // moves the bar below the transcript, just above the
                         // composer (which is order 2). Top mode: order 0, first
@@ -1076,9 +1099,10 @@ function SettingsShell({
     const reading = useReadingSettings();
     const navbarPos = useNavbarPosition();
     const theme = useTheme();
-    // Navbar position is a mobile-only setting (same compact tier that drives
-    // the whole mobile shell); desktop is always top.
-    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
+    // Navbar position is a phone-only setting: only `< sm` renders modals as
+    // bottom sheets, so the bottom-navbar (which the App also gates on `sm`) is
+    // only offered there to stay consistent. Desktop/tablet are always top.
+    const phone = useMediaQuery(theme.breakpoints.down("sm"));
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -1224,7 +1248,7 @@ function SettingsShell({
                         </Select>
                     </Stack>
                 </Stack>
-                {mobile && (
+                {phone && (
                     <>
                         <Divider />
                         <Stack
@@ -1354,8 +1378,15 @@ function RenameSessionShell({
     onConfirm: (title: string) => void;
 }): React.JSX.Element | null {
     const [value, setValue] = useState("");
+    const inputRef = useRef<HTMLInputElement>(null);
     useEffect(() => {
-        if (session) setValue(session.title);
+        if (!session) return undefined;
+        setValue(session.title);
+        // Select-all on open so the first keystroke replaces the whole title
+        // (you're almost always retyping, not appending). rAF so it runs after
+        // the new value is painted into the input.
+        const raf = requestAnimationFrame(() => inputRef.current?.select());
+        return () => cancelAnimationFrame(raf);
     }, [session?.id, session?.title]);
     if (!session) return null;
     const trimmed = value.trim();
@@ -1382,6 +1413,7 @@ function RenameSessionShell({
             <TextField
                 autoFocus
                 fullWidth
+                inputRef={inputRef}
                 label="Title"
                 value={value}
                 onChange={(e): void => setValue(e.target.value)}
