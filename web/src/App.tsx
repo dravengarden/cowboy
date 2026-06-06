@@ -32,6 +32,8 @@ import {
     Circle,
     DeleteOutline,
     DriveFileRenameOutline,
+    ExpandLess,
+    ExpandMore,
     Menu as MenuIcon,
     MoreVert,
     Settings as SettingsIcon,
@@ -65,7 +67,7 @@ import {
     useNavbarAtBottom,
     useNavbarPosition,
 } from "./navbarSettings";
-import { FONT_PRESETS } from "./fonts";
+import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, DetentSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
@@ -1120,6 +1122,26 @@ function SettingsShell({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const reading = useReadingSettings();
+    // Font picker is collapsed by default (the 7 preview cards otherwise fill the
+    // screen); the collapsed summary still shows the current face. Resets to
+    // collapsed each time Settings opens — the desired compact default.
+    const [fontOpen, setFontOpen] = useState(false);
+    const selectedFont = getFontPreset(reading.fontVariant);
+    // Shared card style for both the collapsed summary and the expanded list.
+    const fontCardSx = (active: boolean): SxProps<Theme> => ({
+        cursor: "pointer",
+        borderRadius: 1,
+        border: 2,
+        borderColor: active ? "primary.main" : "divider",
+        px: 1.5,
+        py: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 1,
+        transition: "border-color 0.15s ease",
+        "&:hover": { borderColor: active ? "primary.main" : "text.secondary" },
+    });
     const navbarPos = useNavbarPosition();
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
@@ -1143,68 +1165,99 @@ function SettingsShell({
                         Reading
                     </Typography>
 
-                    {/* Font family — a card per preset, each previewed in its
-                        own face (the @fontsource woff2 loads lazily once
-                        selected; until then the card shows the fallback stack).
-                        Same picker shape as liveview. */}
-                    <Stack spacing={0.75}>
-                        {FONT_PRESETS.map((preset) => {
-                            const selected = reading.fontVariant === preset.id;
-                            return (
-                                <Box
-                                    key={preset.id}
-                                    onClick={(): void =>
-                                        setFontVariant(preset.id)}
-                                    sx={{
-                                        cursor: "pointer",
-                                        borderRadius: 1,
-                                        border: 2,
-                                        borderColor: selected
-                                            ? "primary.main"
-                                            : "divider",
-                                        px: 1.5,
-                                        py: 1,
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "space-between",
-                                        gap: 1,
-                                        transition: "border-color 0.15s ease",
-                                        "&:hover": {
-                                            borderColor: selected
-                                                ? "primary.main"
-                                                : "text.secondary",
-                                        },
-                                    }}
-                                >
-                                    <Box sx={{ minWidth: 0 }}>
-                                        <Typography
-                                            sx={{
-                                                fontFamily: preset.stack,
-                                                fontSize: "1.05rem",
-                                                lineHeight: 1.3,
-                                            }}
-                                            noWrap
-                                        >
-                                            {preset.label} · 阅读 Aa
-                                        </Typography>
-                                        <Typography
-                                            variant="caption"
-                                            color="text.secondary"
-                                            noWrap
-                                        >
-                                            {preset.note}
-                                        </Typography>
+                    {/* Font family — collapsible. Collapsed shows the current
+                        face previewed in itself (so the selection is always
+                        visible without the 7-card list filling the screen);
+                        expanding drops the full picker, and choosing a face
+                        auto-collapses. Each card previews its own @fontsource
+                        woff2 (loaded lazily once selected). */}
+                    {fontOpen ? (
+                        <Stack spacing={0.75}>
+                            {/* Collapse header */}
+                            <Box
+                                onClick={(): void => setFontOpen(false)}
+                                sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    cursor: "pointer",
+                                    px: 0.5,
+                                }}
+                            >
+                                <Typography variant="body2">
+                                    Reading font
+                                </Typography>
+                                <ExpandLess sx={{ color: "text.secondary" }} />
+                            </Box>
+                            {FONT_PRESETS.map((preset) => {
+                                const selected =
+                                    reading.fontVariant === preset.id;
+                                return (
+                                    <Box
+                                        key={preset.id}
+                                        onClick={(): void => {
+                                            setFontVariant(preset.id);
+                                            setFontOpen(false);
+                                        }}
+                                        sx={fontCardSx(selected)}
+                                    >
+                                        <Box sx={{ minWidth: 0 }}>
+                                            <Typography
+                                                sx={{
+                                                    fontFamily: preset.stack,
+                                                    fontSize: "1.05rem",
+                                                    lineHeight: 1.3,
+                                                }}
+                                                noWrap
+                                            >
+                                                {preset.label} · 阅读 Aa
+                                            </Typography>
+                                            <Typography
+                                                variant="caption"
+                                                color="text.secondary"
+                                                noWrap
+                                            >
+                                                {preset.note}
+                                            </Typography>
+                                        </Box>
+                                        {selected && (
+                                            <CheckIcon
+                                                fontSize="medium"
+                                                color="primary"
+                                            />
+                                        )}
                                     </Box>
-                                    {selected && (
-                                        <CheckIcon
-                                            fontSize="medium"
-                                            color="primary"
-                                        />
-                                    )}
-                                </Box>
-                            );
-                        })}
-                    </Stack>
+                                );
+                            })}
+                        </Stack>
+                    ) : (
+                        // Collapsed summary — the current face, tap to change.
+                        <Box
+                            onClick={(): void => setFontOpen(true)}
+                            aria-label="Change reading font"
+                            sx={fontCardSx(false)}
+                        >
+                            <Box sx={{ minWidth: 0 }}>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                >
+                                    Reading font
+                                </Typography>
+                                <Typography
+                                    sx={{
+                                        fontFamily: selectedFont.stack,
+                                        fontSize: "1.05rem",
+                                        lineHeight: 1.3,
+                                    }}
+                                    noWrap
+                                >
+                                    {selectedFont.label} · 阅读 Aa
+                                </Typography>
+                            </Box>
+                            <ExpandMore sx={{ color: "text.secondary" }} />
+                        </Box>
+                    )}
 
                     <Stack
                         direction="row"
