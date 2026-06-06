@@ -1282,13 +1282,6 @@ function SettingsShell({
                             )}
                             onChange={(e): void =>
                                 setFontScale(Number(e.target.value))}
-                            // The mobile Settings sheet is a non-Modal DetentSheet
-                            // at the modal z-layer + 1, so a Select dropdown (which
-                            // portals to the modal layer, 1300) opens BEHIND the
-                            // sheet and its items can't be tapped — on iPhone only,
-                            // since desktop's real MUI Dialog bumps nested menus via
-                            // the modal manager. Lift the menu above the sheet.
-                            MenuProps={{ sx: (t) => ({ zIndex: t.zIndex.modal + 2 }) }}
                             sx={{ minWidth: 104 }}
                         >
                             {FONT_SCALE_PRESETS.map((v) => (
@@ -1321,9 +1314,6 @@ function SettingsShell({
                             )}
                             onChange={(e): void =>
                                 setPadding(Number(e.target.value))}
-                            // See the Font size Select above: lift the dropdown
-                            // above the non-Modal mobile sheet so it's tappable.
-                            MenuProps={{ sx: (t) => ({ zIndex: t.zIndex.modal + 2 }) }}
                             sx={{ minWidth: 104 }}
                         >
                             {PADDING_PRESETS.map((v) => (
@@ -1356,9 +1346,6 @@ function SettingsShell({
                             )}
                             onChange={(e): void =>
                                 setLineHeight(Number(e.target.value))}
-                            // See the Font size Select above: lift the dropdown
-                            // above the non-Modal mobile sheet so it's tappable.
-                            MenuProps={{ sx: (t) => ({ zIndex: t.zIndex.modal + 2 }) }}
                             sx={{ minWidth: 104 }}
                         >
                             {LINE_HEIGHT_PRESETS.map((v) => (
@@ -1415,10 +1402,6 @@ function SettingsShell({
                                     setNavbarPosition(
                                         e.target.value as NavbarPosition,
                                     )}
-                                // See the reading Selects above: lift the dropdown
-                                // above the non-Modal mobile sheet so it's tappable
-                                // on touch (else the menu opens behind the sheet).
-                                MenuProps={{ sx: (t) => ({ zIndex: t.zIndex.modal + 2 }) }}
                                 sx={{ minWidth: 104 }}
                             >
                                 <MenuItem value="top">Top</MenuItem>
