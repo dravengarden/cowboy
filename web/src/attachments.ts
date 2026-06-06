@@ -110,12 +110,74 @@ function attachmentUri(name: string): string {
   return `attachment:///${encodeURIComponent(name)}`;
 }
 
+// One re-encoded raster: base64 (no prefix) for the wire + a `data:` URL for an
+// <img>, plus the (re-encoded) mime.
+interface Raster {
+  base64: string;
+  dataUrl: string;
+  mimeType: string;
+}
+
+// Draw a bitmap into a capped-size JPEG. The single expensive step (decoding the
+// full-resolution source) already happened in createImageBitmap; this just
+// rasters a small canvas, so it's cheap even for a 12MP source.
+function drawScaled(bmp: ImageBitmap, maxEdge: number, quality: number): Raster {
+  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("no 2d context");
+  ctx.drawImage(bmp, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL("image/jpeg", quality);
+  const comma = dataUrl.indexOf(",");
+  return { dataUrl, base64: comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl, mimeType: "image/jpeg" };
+}
+
+// Downscale a picked/pasted image to two small rasters from ONE decode. Why:
+// a phone photo is several MB; embedding it verbatim — and decoding the full
+// raster just to paint a 56px preview — is what froze the composer on pick and
+// bloated the WS frame on send. createImageBitmap decodes once off the main
+// thread; we then draw a send-size and a thumb-size JPEG from that one bitmap:
+//   - send  ≤ 1568px q0.85 — the agent payload. 1568 is Claude's vision sweet
+//            spot; anything larger is downsampled server-side, so full-res only
+//            wastes bytes + CPU.
+//   - thumb ≤ 256px  q0.7  — the composer / bubble preview.
+// Returns null when the browser can't rasterize (no canvas / decode failure);
+// the caller then falls back to embedding the original bytes verbatim.
+async function encodeImage(file: File): Promise<{ send: Raster; thumb: Raster } | null> {
+  try {
+    const bmp = await createImageBitmap(file);
+    try {
+      return { send: drawScaled(bmp, 1568, 0.85), thumb: drawScaled(bmp, 256, 0.7) };
+    } finally {
+      bmp.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /// Convert one picked / pasted file into a stageable `Attachment`. Throws (via a
 /// rejected promise) only on a FileReader error — callers should `.catch` and
 /// drop that single file rather than failing the whole batch.
 export async function fileToAttachment(file: File): Promise<Attachment> {
   const mimeType = file.type || "application/octet-stream";
   if (mimeType.startsWith("image/")) {
+    const encoded = await encodeImage(file);
+    if (encoded) {
+      return {
+        id: nextId(),
+        name: file.name || "pasted-image",
+        mimeType: encoded.send.mimeType,
+        isImage: true,
+        previewUrl: encoded.thumb.dataUrl,
+        block: { type: "image", data: encoded.send.base64, mimeType: encoded.send.mimeType },
+      };
+    }
+    // Fallback: the browser couldn't rasterize — embed the original bytes.
     const data = await readBase64(file);
     return {
       id: nextId(),
