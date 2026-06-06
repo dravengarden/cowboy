@@ -30,10 +30,10 @@ export const FONT_SCALE_PRESETS: number[] = [0.85, 0.9, 1, 1.1, 1.25, 1.4, 1.6];
 export const PADDING_PRESETS: number[] = [0, 8, 16, 24, 32, 48];
 
 export const FONT_SCALE_DEFAULT = 1;
-// 16px = the old desktop default (`px: { sm: 2 }`); a touch more than the old
-// phone default (8px), which reads better as a fixed, breakpoint-independent
-// gutter.
-export const PADDING_DEFAULT = 16;
+// 24px default gutter — a comfortable, breakpoint-independent side margin for
+// the reading column (one preset above the old 16px). Users can still pick any
+// PADDING_PRESETS value (down to None); this is only the unset/garbage fallback.
+export const PADDING_DEFAULT = 24;
 
 export interface ReadingSettings {
   /** Multiplier applied to the transcript's reading font size (1 = unchanged). */
