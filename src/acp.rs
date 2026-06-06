@@ -1,32 +1,37 @@
 //! ACP client backend.
 //!
-//! cowboy is the ACP *client* (design §2): it implements the crate's [`Client`]
-//! trait and drives each agent (the ACP *server*) over stdio. This module is
-//! the only place that touches the `agent-client-protocol` crate, so a crate
-//! bump is contained here.
+//! cowboy is the ACP *client* (design §2): it drives each agent (the ACP
+//! *server*) over stdio. This module is the only place that touches the
+//! `agent-client-protocol` crate, so a crate bump is contained here.
 //!
-//! The crate's connection is single-threaded (`?Send`, spawn-local), so each
-//! agent runs on its own OS thread inside a current-thread runtime +
-//! `LocalSet`. The agent's `Client` callbacks translate every ACP
-//! `SessionUpdate` into a normalized [`crate::core::Event`] on the shared
-//! [`Hub`]; commands flow in over a `Send` channel ([`AgentCommand`]).
+//! The crate (0.14) is built around role-typed connections
+//! ([`agent_client_protocol::Client`]/[`Agent`] markers + [`ConnectionTo`]).
+//! `connect_with` runs the handshake + command loop in `run_session`; incoming
+//! `session/update` notifications and permission requests are handled by the
+//! `on_receive_*` closures, which translate each ACP `SessionUpdate` into a
+//! normalized [`crate::core::Event`] on the shared [`Hub`]. Commands flow in
+//! over a `Send` channel ([`AgentCommand`]).
+//!
+//! Everything here is `Send`: the crate dispatches handlers and `cx.spawn`ed
+//! tasks on its own executor (driven by the `connect_with` future), and those
+//! require `Send` futures. The shared `Hub` is already `Arc`-backed; the small
+//! per-session client state ([`ClientState`]) uses `Arc` + `Mutex`/atomics.
 
-use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::{
-    Agent, CancelNotification, Client, ClientSideConnection, ContentBlock, Error, ExtRequest,
-    InitializeRequest, LoadSessionRequest, NewSessionRequest, PermissionOptionId,
-    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionModeId, SessionNotification, SetSessionModeRequest,
-    V1,
+use agent_client_protocol::schema::{
+    CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
+    LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
+    ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionId, SessionModeId, SessionNotification, SessionUpdate,
+    SetSessionModeRequest,
 };
+use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -50,94 +55,38 @@ pub enum AgentCommand {
     },
     /// Set one of the per-session config options the agent advertises
     /// (mode / model / effort / future). Forwarded to the upstream via the
-    /// ACP `session/setSessionConfigOption` extension method (see acp.rs
-    /// `agent_main` for the wire shape). The agent's authoritative response
-    /// carrying the refreshed options is pushed back into [`Hub`].
+    /// ACP `session/set_config_option` extension method. The agent's
+    /// authoritative response carrying the refreshed options is pushed back
+    /// into [`Hub`].
     SetConfigOption {
         config_id: String,
         value: serde_json::Value,
     },
 }
 
-/// Pending permission requests awaiting a client answer, keyed by request id.
-/// `Rc`/`RefCell` is sound here: the connection handler tasks and the command
-/// loop all run on the same single-threaded `LocalSet`.
-type Pending = Rc<RefCell<HashMap<String, oneshot::Sender<Option<String>>>>>;
-
-/// The client handler that fans agent updates out to all connected frontends
-/// via the [`Hub`], and bridges permission requests to client answers.
-struct CowboyClient {
+/// Per-session client state shared by the connection's handler closures and the
+/// command loop. All inhabit the crate's single executor, but the crate
+/// requires `Send`, so this is `Arc` + `Mutex`/atomics (not `Rc`/`RefCell`).
+struct ClientState {
     hub: Hub,
     session_id: String,
-    pending: Pending,
-    next_perm: Rc<Cell<u64>>,
+    /// Pending permission requests awaiting a client answer, keyed by request
+    /// id. The connection's permission handler inserts a sender; the command
+    /// loop resolves exactly one (first-response-wins).
+    pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
+    /// Monotonic counter for synthesizing permission request ids.
+    next_perm: AtomicU64,
     /// While `true`, incoming `session/update` notifications are dropped rather
     /// than pushed to the Hub. Set only around a `session/load` resume: the
     /// agent replays the whole prior conversation as updates, but cowboy's own
     /// persisted log is the source of truth and already holds that history —
     /// re-pushing it would duplicate every message. `load_session` is used
     /// purely to re-warm the agent's internal context, not to rebuild ours.
-    suppress_updates: Rc<Cell<bool>>,
-}
-
-#[async_trait::async_trait(?Send)]
-impl Client for CowboyClient {
-    async fn request_permission(
-        &self,
-        args: RequestPermissionRequest,
-    ) -> Result<RequestPermissionResponse, Error> {
-        let n = self.next_perm.get();
-        self.next_perm.set(n + 1);
-        let request_id = format!("perm-{n}");
-
-        let tool_call = serde_json::to_value(&args.tool_call).unwrap_or(serde_json::Value::Null);
-        let options = serde_json::to_value(&args.options).unwrap_or(serde_json::Value::Null);
-
-        let (tx, rx) = oneshot::channel();
-        self.pending.borrow_mut().insert(request_id.clone(), tx);
-        self.hub.push(
-            &self.session_id,
-            Event::PermissionRequest {
-                request_id,
-                tool_call,
-                options,
-            },
-        );
-
-        // Block this tool call until a client answers (first-response-wins is
-        // enforced by the command loop, which resolves exactly one sender).
-        let chosen = rx.await.unwrap_or(None);
-        let outcome = match chosen {
-            Some(option_id) => RequestPermissionOutcome::Selected {
-                option_id: PermissionOptionId(option_id.into()),
-            },
-            None => RequestPermissionOutcome::Cancelled,
-        };
-        Ok(RequestPermissionResponse {
-            outcome,
-            meta: None,
-        })
-    }
-
-    async fn session_notification(&self, args: SessionNotification) -> Result<(), Error> {
-        // During a `session/load` resume the agent replays prior turns; drop
-        // them — cowboy already has this history persisted (see field docs).
-        if self.suppress_updates.get() {
-            return Ok(());
-        }
-        // Pass the whole ACP SessionUpdate through as JSON (design §5): message
-        // / thought chunks, tool calls + updates, plan, available commands, and
-        // mode all reach the UI without per-variant re-modelling.
-        match serde_json::to_value(&args.update) {
-            Ok(update) => self.hub.push(&self.session_id, Event::Update { update }),
-            Err(e) => tracing::warn!(error = %e, "serializing session update"),
-        }
-        Ok(())
-    }
+    suppress_updates: AtomicBool,
 }
 
 /// OS-thread entry point: run one agent session to completion on a
-/// current-thread runtime + `LocalSet`. A failure marks the session crashed.
+/// current-thread runtime. A failure marks the session crashed.
 ///
 /// `resume` carries the downstream agent's own session id when this is a
 /// revive of a session whose prior agent process is gone: if the agent
@@ -161,8 +110,11 @@ pub fn run_agent(
             return;
         }
     };
-    let local = tokio::task::LocalSet::new();
-    let result = local.block_on(&rt, agent_main(spec, session_id, cwd, resume, cmd_rx, hub));
+    // The whole connection (transport, handlers, `cx.spawn`ed tasks, command
+    // loop) runs cooperatively inside the single `connect_with` future, so a
+    // plain `block_on` suffices — no `LocalSet` needed now that the crate is
+    // `Send`-based.
+    let result = rt.block_on(agent_main(spec, session_id, cwd, resume, cmd_rx, hub));
     match result {
         Ok(()) => hub.set_status(session_id, Status::Exited, None),
         Err(e) => {
@@ -172,13 +124,12 @@ pub fn run_agent(
     }
 }
 
-#[allow(clippy::too_many_lines)] // one cohesive handshake + command loop
 async fn agent_main(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
     resume: Option<String>,
-    mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
 ) -> Result<()> {
     let cwd =
@@ -197,154 +148,137 @@ async fn agent_main(
     let child_stdin = child.stdin.take().context("child stdin")?;
     let child_stdout = child.stdout.take().context("child stdout")?;
 
-    // Outgoing tee: rewrite the underscore-prefixed extension method the
-    // crate emits back to the bare protocol name the upstream actually
-    // listens for. The crate forces a `_` prefix on every `ext_method` call
-    // (protocol convention to namespace extensions), but
-    // `session/setSessionConfigOption` is a real method on
-    // claude-agent-acp ≥ 0.31, not an extension. Without this rewrite the
-    // agent answers `Method not found` and the mode/model/effort chips
-    // silently fail. Rewrite only that one method; everything else is
-    // forwarded byte-for-byte.
-    let (crate_write, mut crate_write_rx) = tokio::io::duplex(64 * 1024);
-    tokio::task::spawn_local(async move {
-        let mut reader = BufReader::new(&mut crate_write_rx);
-        let mut writer = child_stdin;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "reading crate outgoing");
-                    break;
-                }
-            }
-            let rewritten = if let Ok(mut val) =
-                serde_json::from_str::<serde_json::Value>(line.trim_end())
-            {
-                let method = val
-                    .get("method")
-                    .and_then(|m| m.as_str())
-                    .map(str::to_owned);
-                let needs_rewrite = matches!(method.as_deref(), Some("_session/set_config_option"));
-                if needs_rewrite {
-                    // Snake-case wire name per claude-agent-acp's SDK
-                    // (`AGENT_METHODS.session_set_config_option =
-                    // "session/set_config_option"`). The earlier camelCase
-                    // guess (`setSessionConfigOption`) the upstream still
-                    // 404s on; the SDK exposes the camelCase NAME on the
-                    // class but routes the snake_case METHOD over the wire.
-                    val["method"] =
-                        serde_json::Value::String("session/set_config_option".to_owned());
-                    let mut s = val.to_string();
-                    s.push('\n');
-                    Some(s)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let bytes = rewritten.as_deref().unwrap_or(line.as_str());
-            if writer.write_all(bytes.as_bytes()).await.is_err() {
-                break;
-            }
-        }
-    });
-    let outgoing = crate_write.compat_write();
+    // Connect the crate directly to the child's pipes. The 0.4-era custom
+    // stdio interceptors are gone: `config_option_update` now decodes natively
+    // (handled in the notification closure), and ext methods are sent with
+    // their wire name verbatim (no `_`-prefix mangling to undo), so there is
+    // nothing left to rewrite on either stream.
+    let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
-    // Stream interceptor: agent stdout → tee → (a) Hub for unknown variants
-    // we want to capture but the crate would refuse, (b) crate via in-process
-    // pipe. The motivating case is `sessionUpdate=config_option_update`,
-    // which claude-agent-acp 0.31 advertises mode / model / effort through;
-    // our pinned `agent-client-protocol` 0.4.7 has no decoder for that
-    // variant. By peeking each newline-delimited JSON-RPC frame ourselves
-    // before forwarding, the daemon learns about the options (and routes
-    // them to the composer) without bumping the whole protocol crate.
-    let (mut bridge_writer, bridge_reader) = tokio::io::duplex(64 * 1024);
-    let hub_for_intercept = hub.clone();
-    let session_id_for_intercept = session_id.to_owned();
-    tokio::task::spawn_local(async move {
-        let mut reader = BufReader::new(child_stdout);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break, // agent stdout EOF
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "reading agent stdout");
-                    break;
-                }
-            }
-            // Peek as JSON-RPC; on parse failure, just forward unchanged
-            // (the crate's decoder will produce its own clearer error).
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line.trim_end()) {
-                let is_session_update =
-                    val.get("method").and_then(|m| m.as_str()) == Some("session/update");
-                let update_kind = val
-                    .get("params")
-                    .and_then(|p| p.get("update"))
-                    .and_then(|u| u.get("sessionUpdate"))
-                    .and_then(|s| s.as_str());
-                if is_session_update && update_kind == Some("config_option_update") {
-                    if let Some(opts) = val
-                        .get("params")
-                        .and_then(|p| p.get("update"))
-                        .and_then(|u| u.get("configOptions"))
-                        .cloned()
-                    {
-                        let count = opts.as_array().map_or(0, Vec::len);
-                        tracing::info!(
-                            session = %session_id_for_intercept,
-                            count = count,
-                            "intercept: config_option_update"
-                        );
-                        hub_for_intercept.set_config_options(&session_id_for_intercept, opts);
-                    }
-                    // Swallow — the crate's strict decoder would log a
-                    // useless rpc error if we forwarded this notification.
-                    continue;
-                }
-            }
-            if bridge_writer.write_all(line.as_bytes()).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    let incoming = bridge_reader.compat();
-
-    let pending: Pending = Rc::new(RefCell::new(HashMap::new()));
-    let suppress_updates = Rc::new(Cell::new(false));
-    let client = CowboyClient {
+    let state = Arc::new(ClientState {
         hub: hub.clone(),
         session_id: session_id.to_owned(),
-        pending: pending.clone(),
-        next_perm: Rc::new(Cell::new(0)),
-        suppress_updates: suppress_updates.clone(),
-    };
-
-    let (conn, io_task) = ClientSideConnection::new(client, outgoing, incoming, |fut| {
-        tokio::task::spawn_local(fut);
-    });
-    let conn = Rc::new(conn);
-    tokio::task::spawn_local(async move {
-        if let Err(e) = io_task.await {
-            tracing::error!(error = %e, "acp io task ended");
-        }
+        pending: Mutex::new(HashMap::new()),
+        next_perm: AtomicU64::new(0),
+        suppress_updates: AtomicBool::new(false),
     });
 
-    let init = conn
-        .initialize(InitializeRequest {
-            protocol_version: V1,
-            client_capabilities: agent_client_protocol::ClientCapabilities::default(),
-            meta: None,
+    let notif_state = state.clone();
+    let perm_state = state.clone();
+    let main_state = state.clone();
+
+    let result = Client
+        .builder()
+        .name("cowboy")
+        .on_receive_notification(
+            async move |notif: SessionNotification,
+                        _cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                handle_session_notification(&notif_state, &notif);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async move |req: RequestPermissionRequest,
+                        responder,
+                        cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                let n = perm_state.next_perm.fetch_add(1, Ordering::Relaxed);
+                let request_id = format!("perm-{n}");
+                let tool_call =
+                    serde_json::to_value(&req.tool_call).unwrap_or(serde_json::Value::Null);
+                let options = serde_json::to_value(&req.options).unwrap_or(serde_json::Value::Null);
+
+                let (tx, rx) = oneshot::channel::<Option<String>>();
+                perm_state
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .insert(request_id.clone(), tx);
+                perm_state.hub.push(
+                    &perm_state.session_id,
+                    Event::PermissionRequest {
+                        request_id,
+                        tool_call,
+                        options,
+                    },
+                );
+
+                // Defer the actual response: blocking the dispatch loop here
+                // would stall every other incoming message (e.g. a concurrent
+                // cancel) until the user answers. The crate keeps the request
+                // open until the moved `responder` replies.
+                cx.spawn(async move {
+                    let chosen = rx.await.unwrap_or(None);
+                    let outcome = match chosen {
+                        Some(option_id) => RequestPermissionOutcome::Selected(
+                            SelectedPermissionOutcome::new(PermissionOptionId::new(option_id)),
+                        ),
+                        None => RequestPermissionOutcome::Cancelled,
+                    };
+                    responder.respond(RequestPermissionResponse::new(outcome))?;
+                    Ok(())
+                })?;
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
+            run_session(&main_state, cx, resume, cwd, cmd_rx).await
         })
-        .await
-        .context("initialize")?;
+        .await;
+
+    // Keep the child alive for the whole connection; dropping it here lets the
+    // agent see stdin EOF and exit.
+    drop(child);
+    result.map_err(|e| anyhow::anyhow!("acp connection: {e}"))
+}
+
+/// Translate one incoming agent `SessionUpdate` into a Hub event.
+///
+/// `config_option_update` is special-cased: rather than surfacing it as a
+/// generic timeline update, its `configOptions` array is pushed to the Hub's
+/// dedicated config-options channel (which hydrates the composer dropdowns).
+/// Every other variant — including the new `usage_update` — is passed through
+/// as serialized JSON (design §5), so the UI renders message / thought chunks,
+/// tool calls, plans, modes, and usage without per-variant re-modelling.
+fn handle_session_notification(state: &ClientState, notif: &SessionNotification) {
+    // During a `session/load` resume the agent replays prior turns; drop them
+    // — cowboy already has this history persisted (see field docs).
+    if state.suppress_updates.load(Ordering::SeqCst) {
+        return;
+    }
+    if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
+        match serde_json::to_value(&update.config_options) {
+            Ok(opts) => state.hub.set_config_options(&state.session_id, opts),
+            Err(e) => tracing::warn!(error = %e, "serializing config options"),
+        }
+        return;
+    }
+    match serde_json::to_value(&notif.update) {
+        Ok(update) => state.hub.push(&state.session_id, Event::Update { update }),
+        Err(e) => tracing::warn!(error = %e, "serializing session update"),
+    }
+}
+
+/// The connection's `main_fn`: run the ACP handshake, then a command loop that
+/// drives prompts/cancels/permissions/config changes until the command channel
+/// closes (the supervisor dropped the agent).
+#[allow(clippy::too_many_lines)] // one cohesive handshake + command loop
+async fn run_session(
+    state: &Arc<ClientState>,
+    cx: ConnectionTo<Agent>,
+    resume: Option<String>,
+    cwd: PathBuf,
+    mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+) -> Result<(), Error> {
+    let session_id = state.session_id.clone();
+
+    let init = cx
+        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .block_task()
+        .await?;
     let agent_can_load = init.agent_capabilities.load_session;
 
     // Establish the agent session. Resume the agent's own memory via
@@ -356,52 +290,45 @@ async fn agent_main(
     let mut acp_id: Option<SessionId> = None;
     let mut modes = None;
     if let Some(resume_id) = resume.filter(|_| agent_can_load) {
-        let load_id = SessionId(Arc::from(resume_id.as_str()));
-        suppress_updates.set(true);
-        let loaded = conn
-            .load_session(LoadSessionRequest {
-                session_id: load_id.clone(),
-                cwd: cwd.clone(),
-                mcp_servers: vec![],
-                meta: None,
-            })
+        let load_id = SessionId::new(resume_id.as_str());
+        state.suppress_updates.store(true, Ordering::SeqCst);
+        let loaded = cx
+            .send_request(LoadSessionRequest::new(load_id.clone(), cwd.clone()))
+            .block_task()
             .await;
-        suppress_updates.set(false);
+        state.suppress_updates.store(false, Ordering::SeqCst);
         match loaded {
             Ok(resp) => {
-                tracing::info!(session = session_id, acp_id = %resume_id, "session resumed via session/load");
+                tracing::info!(session = %session_id, acp_id = %resume_id, "session resumed via session/load");
                 acp_id = Some(load_id);
                 modes = resp.modes;
             }
             Err(e) => {
-                tracing::warn!(session = session_id, error = ?e, "session/load failed; starting fresh");
+                tracing::warn!(session = %session_id, error = ?e, "session/load failed; starting fresh");
             }
         }
     }
     let acp_id = if let Some(id) = acp_id {
         id
     } else {
-        let session = conn
-            .new_session(NewSessionRequest {
-                cwd: cwd.clone(),
-                mcp_servers: vec![],
-                meta: None,
-            })
-            .await
-            .context("new_session")?;
-        // Persist the agent's own id so a future revive can resume this
-        // exact conversation rather than opening a blank one.
-        hub.set_agent_session_id(session_id, session.session_id.0.to_string());
-        tracing::info!(session = session_id, acp_id = %session.session_id.0, "session created");
+        let session = cx
+            .send_request(NewSessionRequest::new(cwd.clone()))
+            .block_task()
+            .await?;
+        // Persist the agent's own id so a future revive can resume this exact
+        // conversation rather than opening a blank one.
+        state
+            .hub
+            .set_agent_session_id(&session_id, session.session_id.0.to_string());
+        tracing::info!(session = %session_id, acp_id = %session.session_id.0, "session created");
         modes = session.modes;
         session.session_id
     };
-    hub.set_status(session_id, Status::Running, None);
+    state.hub.set_status(&session_id, Status::Running, None);
 
     // Match Zed's claude-acp default UX: open at `bypassPermissions` if the
-    // upstream advertises it. This is what most users want for an agent
-    // panel — explicit permission prompts dominate the UX otherwise — and
-    // it matches the v0 spec the user is iterating against.
+    // upstream advertises it. This is what most users want for an agent panel
+    // — explicit permission prompts dominate the UX otherwise.
     if let Some(modes) = modes.as_ref() {
         let want = "bypassPermissions";
         let has = modes
@@ -409,45 +336,42 @@ async fn agent_main(
             .iter()
             .any(|m| m.id.0.as_ref() == want);
         if has && modes.current_mode_id.0.as_ref() != want {
-            let req = SetSessionModeRequest {
-                session_id: acp_id.clone(),
-                mode_id: SessionModeId(Arc::from(want)),
-                meta: None,
-            };
-            if let Err(e) = conn.set_session_mode(req).await {
-                tracing::warn!(error = ?e, "set_session_mode bypassPermissions failed");
-            } else {
-                tracing::info!(session = session_id, "mode → bypassPermissions");
-                // Also echo into the timeline so the UI mode chip is up to
-                // date without round-tripping through a session_update.
-                hub.push(
-                    session_id,
-                    Event::Update {
-                        update: serde_json::json!({
-                            "sessionUpdate": "current_mode_update",
-                            "currentModeId": want,
-                        }),
-                    },
-                );
+            let req = SetSessionModeRequest::new(acp_id.clone(), SessionModeId::new(want));
+            match cx.send_request(req).block_task().await {
+                Ok(_) => {
+                    tracing::info!(session = %session_id, "mode → bypassPermissions");
+                    // Echo into the timeline so the UI mode chip is up to date
+                    // without round-tripping through a session_update.
+                    state.hub.push(
+                        &session_id,
+                        Event::Update {
+                            update: serde_json::json!({
+                                "sessionUpdate": "current_mode_update",
+                                "currentModeId": want,
+                            }),
+                        },
+                    );
+                }
+                Err(e) => tracing::warn!(error = ?e, "set_session_mode bypassPermissions failed"),
             }
         }
     }
 
-    // Command loop. Prompts run as concurrent local tasks so Cancel and
-    // Permission answers are still processed while a turn is in flight.
+    // Command loop. Prompts and config changes run as concurrent tasks
+    // (`cx.spawn`) so Cancel and Permission answers are still processed while a
+    // turn is in flight.
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             AgentCommand::Prompt(blocks) => {
-                hub.set_status(session_id, Status::Busy, None);
+                state.hub.set_status(&session_id, Status::Busy, None);
                 // Echo each user content block into the timeline so every
-                // client (Web UI, phone, Zed via bridge) sees it — the
-                // upstream agent may not stream a user_message_chunk back.
-                // One Hub event per block so each renders as its own bubble
-                // (text + image, today; future: audio etc.).
+                // client (Web UI, phone, Zed via bridge) sees it — the upstream
+                // agent may not stream a user_message_chunk back. One Hub event
+                // per block so each renders as its own bubble.
                 for block in &blocks {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
-                    hub.push(
-                        session_id,
+                    state.hub.push(
+                        &session_id,
                         Event::Update {
                             update: serde_json::json!({
                                 "sessionUpdate": "user_message_chunk",
@@ -456,17 +380,14 @@ async fn agent_main(
                         },
                     );
                 }
-                let conn = conn.clone();
-                let hub = hub.clone();
-                let sid = session_id.to_owned();
+                let cx = cx.clone();
+                let hub = state.hub.clone();
+                let sid = session_id.clone();
                 let acp = acp_id.clone();
-                tokio::task::spawn_local(async move {
-                    let stop_reason = match conn
-                        .prompt(PromptRequest {
-                            session_id: acp,
-                            prompt: blocks,
-                            meta: None,
-                        })
+                cx.clone().spawn(async move {
+                    let stop_reason = match cx
+                        .send_request(PromptRequest::new(acp, blocks))
+                        .block_task()
                         .await
                     {
                         Ok(r) => format!("{:?}", r.stop_reason),
@@ -474,25 +395,21 @@ async fn agent_main(
                     };
                     hub.push(&sid, Event::TurnEnd { stop_reason });
                     hub.set_status(&sid, Status::Running, None);
-                });
+                    Ok(())
+                })?;
             }
             AgentCommand::Cancel => {
-                let _ = conn
-                    .cancel(CancelNotification {
-                        session_id: acp_id.clone(),
-                        meta: None,
-                    })
-                    .await;
+                let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
             }
             AgentCommand::Permission {
                 request_id,
                 option_id,
             } => {
-                if let Some(tx) = pending.borrow_mut().remove(&request_id) {
+                if let Some(tx) = state.pending.lock().unwrap().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }
-                hub.push(
-                    session_id,
+                state.hub.push(
+                    &session_id,
                     Event::PermissionResolved {
                         request_id,
                         option_id,
@@ -501,18 +418,16 @@ async fn agent_main(
             }
             AgentCommand::SetConfigOption { config_id, value } => {
                 // claude-agent-acp ≥ 0.31 handles mode / model / effort all
-                // through the same `session/setSessionConfigOption` request
-                // (extension method — not in our pinned crate). The agent
-                // acks with the refreshed `configOptions` array; pushing it
-                // back into Hub keeps the composer dropdowns in sync even
-                // when the upstream chose a different value than we asked
-                // for (e.g. `model=default` resets effort to its model's
-                // default level).
-                let conn = conn.clone();
-                let hub = hub.clone();
-                let sid = session_id.to_owned();
+                // through the same `session/set_config_option` request. The
+                // agent acks with the refreshed `configOptions` array; pushing
+                // it back into Hub keeps the composer dropdowns in sync even
+                // when the upstream chose a different value than we asked for
+                // (e.g. `model=default` resets effort to its model's default).
+                let cx = cx.clone();
+                let hub = state.hub.clone();
+                let sid = session_id.clone();
                 let acp = acp_id.clone();
-                tokio::task::spawn_local(async move {
+                cx.clone().spawn(async move {
                     let params = serde_json::json!({
                         "sessionId": acp.0,
                         "configId": config_id,
@@ -525,92 +440,36 @@ async fn agent_main(
                                 Some(sid.clone()),
                                 format!("encoding setConfigOption params: {e}"),
                             );
-                            return;
+                            return Ok(());
                         }
                     };
-                    // Method name here is what the crate sees pre-rewrite;
-                    // the outgoing tee strips the crate's `_` and lands the
-                    // snake_case wire name `session/set_config_option`.
-                    // Keeping the crate-side string consistent so the
-                    // intercept's match is exact (no regex / startswith).
-                    let req = ExtRequest {
-                        method: Arc::from("session/set_config_option"),
-                        params: params_raw,
-                    };
-                    match conn.ext_method(req).await {
-                        Ok(resp) => {
+                    let req = ClientRequest::ExtMethodRequest(ExtRequest::new(
+                        "session/set_config_option",
+                        params_raw,
+                    ));
+                    match cx.send_request(req).block_task().await {
+                        Ok(val) => {
                             // Response carries `{ configOptions: [...] }`.
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(resp.get()) {
-                                if let Some(opts) = val.get("configOptions").cloned() {
-                                    hub.set_config_options(&sid, opts);
-                                }
+                            if let Some(opts) = val.get("configOptions").cloned() {
+                                hub.set_config_options(&sid, opts);
                             }
                         }
                         Err(e) => {
                             hub.broadcast_error(Some(sid.clone()), format!("set {config_id}: {e}"));
                         }
                     }
-                });
+                    Ok(())
+                })?;
             }
         }
     }
     Ok(())
 }
 
-/// The client handler for the one-shot `try-agent` debug command: prints
-/// streamed text to stdout and auto-approves the first allow-style permission.
-struct OneshotClient;
-
-#[async_trait::async_trait(?Send)]
-impl Client for OneshotClient {
-    async fn request_permission(
-        &self,
-        args: RequestPermissionRequest,
-    ) -> Result<RequestPermissionResponse, Error> {
-        let allow = args.options.iter().find(|o| {
-            matches!(
-                o.kind,
-                PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
-            )
-        });
-        let outcome = match allow {
-            Some(opt) => {
-                tracing::info!(option = %opt.name, "auto-approving permission (try-agent)");
-                RequestPermissionOutcome::Selected {
-                    option_id: opt.id.clone(),
-                }
-            }
-            None => RequestPermissionOutcome::Cancelled,
-        };
-        Ok(RequestPermissionResponse {
-            outcome,
-            meta: None,
-        })
-    }
-
-    async fn session_notification(&self, args: SessionNotification) -> Result<(), Error> {
-        use agent_client_protocol::SessionUpdate;
-        use std::io::Write as _;
-        match args.update {
-            SessionUpdate::AgentMessageChunk { content }
-            | SessionUpdate::AgentThoughtChunk { content } => {
-                if let ContentBlock::Text(t) = content {
-                    print!("{}", t.text);
-                    let _ = std::io::stdout().flush();
-                }
-            }
-            SessionUpdate::ToolCall(tc) => eprintln!("\n[tool-call] {}", tc.title),
-            other => tracing::debug!(?other, "session update"),
-        }
-        Ok(())
-    }
-}
-
 /// Spawn `spec`'s adapter, run the full ACP handshake, send one `prompt` in a
 /// fresh session under `cwd`, and stream updates to stdout. Used by the
-/// `try-agent` debug command to verify a provider end-to-end.
-///
-/// Must run inside a `LocalSet` (the connection is `!Send`).
+/// `try-agent` debug command to verify a provider end-to-end. Auto-approves the
+/// first allow-style permission option.
 pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Result<()> {
     let cwd =
         std::path::absolute(&cwd).with_context(|| format!("resolving cwd {}", cwd.display()))?;
@@ -625,45 +484,81 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
         .spawn()
         .with_context(|| format!("spawning provider {} ({})", spec.id, spec.command))?;
 
-    let outgoing = child.stdin.take().context("child stdin")?.compat_write();
-    let incoming = child.stdout.take().context("child stdout")?.compat();
+    let child_stdin = child.stdin.take().context("child stdin")?;
+    let child_stdout = child.stdout.take().context("child stdout")?;
+    let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
-    let (conn, io_task) = ClientSideConnection::new(OneshotClient, outgoing, incoming, |fut| {
-        tokio::task::spawn_local(fut);
-    });
-    tokio::task::spawn_local(async move {
-        if let Err(e) = io_task.await {
-            tracing::error!(error = %e, "acp io task ended");
-        }
-    });
+    let result = Client
+        .builder()
+        .name("cowboy-oneshot")
+        .on_receive_notification(
+            async move |notif: SessionNotification,
+                        _cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                use std::io::Write as _;
+                match notif.update {
+                    SessionUpdate::AgentMessageChunk(chunk)
+                    | SessionUpdate::AgentThoughtChunk(chunk) => {
+                        if let ContentBlock::Text(t) = chunk.content {
+                            print!("{}", t.text);
+                            let _ = std::io::stdout().flush();
+                        }
+                    }
+                    SessionUpdate::ToolCall(tc) => eprintln!("\n[tool-call] {}", tc.title),
+                    other => tracing::debug!(?other, "session update"),
+                }
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async move |req: RequestPermissionRequest,
+                        responder,
+                        _cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                let allow = req.options.iter().find(|o| {
+                    matches!(
+                        o.kind,
+                        PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+                    )
+                });
+                let outcome = match allow {
+                    Some(opt) => {
+                        tracing::info!(option = %opt.name, "auto-approving permission (try-agent)");
+                        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                            opt.option_id.clone(),
+                        ))
+                    }
+                    None => RequestPermissionOutcome::Cancelled,
+                };
+                responder.respond(RequestPermissionResponse::new(outcome))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
+            cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                .block_task()
+                .await?;
 
-    conn.initialize(InitializeRequest {
-        protocol_version: V1,
-        client_capabilities: agent_client_protocol::ClientCapabilities::default(),
-        meta: None,
-    })
-    .await
-    .context("initialize")?;
+            let session = cx
+                .send_request(NewSessionRequest::new(cwd.clone()))
+                .block_task()
+                .await?;
+            tracing::info!(session_id = %session.session_id.0, "session created");
 
-    let session = conn
-        .new_session(NewSessionRequest {
-            cwd,
-            mcp_servers: vec![],
-            meta: None,
+            let resp = cx
+                .send_request(PromptRequest::new(
+                    session.session_id,
+                    vec![ContentBlock::from(prompt)],
+                ))
+                .block_task()
+                .await?;
+
+            println!("\n--- stop: {:?} ---", resp.stop_reason);
+            Ok(())
         })
-        .await
-        .context("new_session")?;
-    tracing::info!(session_id = %session.session_id.0, "session created");
+        .await;
 
-    let resp = conn
-        .prompt(PromptRequest {
-            session_id: session.session_id,
-            prompt: vec![ContentBlock::from(prompt)],
-            meta: None,
-        })
-        .await
-        .context("prompt")?;
-
-    println!("\n--- stop: {:?} ---", resp.stop_reason);
-    Ok(())
+    drop(child);
+    result.map_err(|e| anyhow::anyhow!("acp connection: {e}"))
 }

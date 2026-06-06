@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use agent_client_protocol::ContentBlock;
+use agent_client_protocol::schema::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
@@ -332,7 +332,10 @@ async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
     // Conditional request: the browser echoes our ETag in If-None-Match; if it
     // still matches, skip the body. `contains` (not strict equality) tolerates a
     // comma-list or a `W/` weak prefix some clients send.
-    if let Some(inm) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+    if let Some(inm) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
         if inm.contains(etag.as_str()) {
             return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
         }
