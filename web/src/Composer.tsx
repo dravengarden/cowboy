@@ -28,6 +28,7 @@ import {
   AlternateEmail,
   AttachFile,
   Bolt,
+  BookmarkAddOutlined,
   ChevronRight,
   Close,
   EditOutlined,
@@ -43,10 +44,17 @@ import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
+  activateAllDrafts,
+  activateDraft,
+  addDraft,
+  clearDrafts,
   clearQueue,
+  editDraft,
   editQueued,
   forcePushQueued,
   type QueuedMessage,
+  queuedToDraft,
+  removeDraft,
   removeQueued,
   requestSendQueued,
   send,
@@ -139,8 +147,9 @@ export function Composer({
   }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { configOptions, queues, sessions, timelines } = useStore();
+  const { configOptions, drafts, queues, sessions, timelines } = useStore();
   const queue = queues.get(sessionId) ?? [];
+  const draftList = drafts.get(sessionId) ?? [];
   // The active session's metadata, surfaced read-only inside the options
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
   // in the always-visible sidebar, so the sheet — and this lookup — only
@@ -253,6 +262,16 @@ export function Composer({
     setAttachments([]);
   }
 
+  // Park the composer's content as a draft (the Draft button) and clear the
+  // input. Drafts persist and are activated later from the Drafts panel.
+  function saveDraft(): void {
+    if (!sendable) return;
+    addDraft(sessionId, text.trimEnd(), attachments);
+    editorRef.current?.clear();
+    setText("");
+    setAttachments([]);
+  }
+
   return (
     <Box
       sx={{
@@ -279,13 +298,24 @@ export function Composer({
         position: "relative", // anchor for Popper portal placement
       }}
     >
-      {/* Zed-style queued prompts: while the agent is busy, messages stack here
-          and drain one per turn-end. Sits above the editor so it reads as "what
-          will be sent next". Hidden when empty. */}
+      {/* Queued prompts (top): while the agent is busy, messages stack here and
+          drain one per turn-end. Hidden when empty. */}
       {queue.length > 0 && (
-        <QueuedMessages
+        <PendingPanel
+          kind="queued"
           sessionId={sessionId}
-          queue={queue}
+          items={queue}
+          status={status}
+          commands={(): AvailableCommand[] => availableCommands}
+        />
+      )}
+      {/* Drafts (below the queue, above the input): parked messages the user
+          holds and activates on demand. Persisted across reloads. */}
+      {draftList.length > 0 && (
+        <PendingPanel
+          kind="draft"
+          sessionId={sessionId}
+          items={draftList}
           status={status}
           commands={(): AvailableCommand[] => availableCommands}
         />
@@ -482,6 +512,21 @@ export function Composer({
           >
             ⌘/Ctrl + Enter = {busy || starting ? "queue" : "send"}
           </Typography>
+        )}
+
+        {/* Draft: park the current message in the Drafts panel (persisted) to
+            send later, instead of sending/queuing now. Shown only when there's
+            something to save. */}
+        {sendable && (
+          <Tooltip title="Save as draft">
+            <IconButton
+              aria-label="save as draft"
+              sx={TOOLBAR_ICON_BTN}
+              onClick={saveDraft}
+            >
+              <BookmarkAddOutlined />
+            </IconButton>
+          </Tooltip>
         )}
 
         {/* Busy: the agent owns the turn, so the primary button is Stop. A
@@ -714,36 +759,41 @@ function QueuedAttachmentChips({
   );
 }
 
-// The Zed-style queue panel above the editor. A collapsible header ("N Queued
-// Messages" + Clear All) over a scroll-capped list of rows. Mirrors Zed's agent
-// panel: the queue is the staging area for prompts the busy agent can't take yet.
-function QueuedMessages({
+// The Zed-style staging panel above the editor — one component for two kinds:
+//   - "queued": prompts the busy agent can't take yet, auto-drained one per turn.
+//   - "draft":  parked messages the user holds; activated (sent/queued) on demand.
+// Collapsible header ("N Queued Messages" / "N Drafts" + Clear All, plus Send all
+// for drafts) over a scroll-capped list of rows. Drafts sit BELOW the queue and
+// above the composer (see the Composer render).
+function PendingPanel({
+  kind,
   sessionId,
-  queue,
+  items,
   status,
   commands,
 }: {
+  kind: "queued" | "draft";
   sessionId: string;
-  queue: QueuedMessage[];
-  /** Session status — drives Send-now vs Force-push per row. */
+  items: QueuedMessage[];
+  /** Session status — drives Send-now vs Force-push (queued) / Send vs Queue (draft). */
   status: Status;
-  /** Agent-advertised `/` commands, threaded into the row's ComposerEditor. */
+  /** Agent-advertised `/` commands, threaded into the row's inline editor. */
   commands: () => AvailableCommand[];
 }): React.JSX.Element {
   // Default expanded. Collapsed state is local + ephemeral (resets on session
-  // switch / remount) — the count stays visible either way, which is the part
-  // that matters at a glance.
+  // switch / remount) — the count stays visible either way.
   const [collapsed, setCollapsed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const count = queue.length;
-  // Bridge the locally-edited message id to the store so the auto-drain holds
-  // that message (and everything behind it) until the edit finishes — a
-  // turn-end mid-edit must not fire the half-written prompt. Clears on unmount /
-  // session switch so a stale hold can never freeze a session's queue.
+  const count = items.length;
+  // Bridge the locally-edited QUEUED message id to the store so the auto-drain
+  // holds that message (and everything behind it) until the edit finishes.
+  // Drafts don't drain, so they need no hold. Clears on unmount / session switch.
   useEffect(() => {
+    if (kind !== "queued") return undefined;
     setQueueEditing(sessionId, editingId);
     return (): void => setQueueEditing(sessionId, null);
-  }, [sessionId, editingId]);
+  }, [kind, sessionId, editingId]);
+  const noun = kind === "queued" ? "Queued Message" : "Draft";
   return (
     <Box
       sx={{
@@ -751,14 +801,15 @@ function QueuedMessages({
         border: 1,
         borderColor: "divider",
         borderRadius: 1,
-        bgcolor: "action.hover",
+        // Drafts read as a quieter, dashed-feeling staging area vs the live queue.
+        bgcolor: kind === "draft" ? "action.selected" : "action.hover",
         overflow: "hidden",
       }}
     >
       <Stack direction="row" alignItems="center" sx={{ pl: 0.5, pr: 0.75, py: 0.25 }}>
         <IconButton
           size="small"
-          aria-label={collapsed ? "expand queue" : "collapse queue"}
+          aria-label={collapsed ? "expand" : "collapse"}
           onClick={(): void => setCollapsed((c) => !c)}
           sx={{ flexShrink: 0 }}
         >
@@ -769,12 +820,23 @@ function QueuedMessages({
           sx={{ fontWeight: 600, flex: 1, minWidth: 0, cursor: "pointer" }}
           onClick={(): void => setCollapsed((c) => !c)}
         >
-          {count} Queued Message{count === 1 ? "" : "s"}
+          {count} {noun}{count === 1 ? "" : "s"}
         </Typography>
+        {kind === "draft" && (
+          <Button
+            size="small"
+            color="primary"
+            onClick={(): void => activateAllDrafts(sessionId, status)}
+            sx={{ textTransform: "none", minWidth: 0, px: 0.75 }}
+          >
+            Send all
+          </Button>
+        )}
         <Button
           size="small"
           color="inherit"
-          onClick={(): void => clearQueue(sessionId)}
+          onClick={(): void =>
+            kind === "queued" ? clearQueue(sessionId) : clearDrafts(sessionId)}
           sx={{ textTransform: "none", color: "text.secondary", minWidth: 0, px: 0.75 }}
         >
           Clear All
@@ -792,9 +854,10 @@ function QueuedMessages({
             overflowY: "auto",
           }}
         >
-          {queue.map((m) => (
-            <QueuedRow
+          {items.map((m) => (
+            <PendingRow
               key={m.id}
+              kind={kind}
               sessionId={sessionId}
               message={m}
               status={status}
@@ -817,7 +880,8 @@ function QueuedMessages({
 // dead session); busy → a warning-coloured "Force push" that interrupts the
 // running turn and runs this prompt next — gated behind a confirm popover
 // because cancelling discards the in-flight turn's progress.
-function QueuedRow({
+function PendingRow({
+  kind,
   sessionId,
   message,
   status,
@@ -826,6 +890,7 @@ function QueuedRow({
   onEdit,
   onEditDone,
 }: {
+  kind: "queued" | "draft";
   sessionId: string;
   message: QueuedMessage;
   status: Status;
@@ -863,7 +928,8 @@ function QueuedRow({
   }, [editing]);
   if (editing) {
     const save = (): void => {
-      editQueued(sessionId, message.id, draft, editAttachments);
+      if (kind === "draft") editDraft(sessionId, message.id, draft, editAttachments);
+      else editQueued(sessionId, message.id, draft, editAttachments);
       onEditDone();
     };
     const cancel = (): void => {
@@ -960,76 +1026,104 @@ function QueuedRow({
         )}
       </Box>
       <Stack direction="row" sx={{ flexShrink: 0 }}>
-        {dispatchable ? (
-          <Tooltip title="Send now">
+        {kind === "draft" ? (
+          // Activate: send now if the session's free, else queue it.
+          <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
             <IconButton
               size="small"
               color="primary"
-              aria-label="send now"
-              onClick={(): void => requestSendQueued(sessionId, status, message.id)}
+              aria-label="send draft"
+              onClick={(): void => activateDraft(sessionId, status, message.id)}
             >
               <Send fontSize="small" />
             </IconButton>
           </Tooltip>
         ) : (
-          <Tooltip title="Force push (interrupt & send)">
-            <IconButton
-              size="small"
-              color="warning"
-              aria-label="force push"
-              onClick={(e): void => setConfirmAnchor(e.currentTarget)}
+          <>
+            {dispatchable ? (
+              <Tooltip title="Send now">
+                <IconButton
+                  size="small"
+                  color="primary"
+                  aria-label="send now"
+                  onClick={(): void => requestSendQueued(sessionId, status, message.id)}
+                >
+                  <Send fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            ) : (
+              <Tooltip title="Force push (interrupt & send)">
+                <IconButton
+                  size="small"
+                  color="warning"
+                  aria-label="force push"
+                  onClick={(e): void => setConfirmAnchor(e.currentTarget)}
+                >
+                  <Bolt fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Popover
+              open={confirmAnchor !== null}
+              anchorEl={confirmAnchor}
+              onClose={(): void => setConfirmAnchor(null)}
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              transformOrigin={{ vertical: "top", horizontal: "right" }}
             >
-              <Bolt fontSize="small" />
-            </IconButton>
-          </Tooltip>
+              <Box sx={{ p: 1.5, maxWidth: 240 }}>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  Stop the current turn and send this message now? The agent's
+                  in-progress work is discarded.
+                </Typography>
+                <Stack direction="row" spacing={1} justifyContent="flex-end">
+                  <Button
+                    size="small"
+                    color="inherit"
+                    onClick={(): void => setConfirmAnchor(null)}
+                    sx={{ textTransform: "none" }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="warning"
+                    startIcon={<Bolt />}
+                    onClick={(): void => {
+                      forcePushQueued(sessionId, status, message.id);
+                      setConfirmAnchor(null);
+                    }}
+                    sx={{ textTransform: "none" }}
+                  >
+                    Force push
+                  </Button>
+                </Stack>
+              </Box>
+            </Popover>
+            <Tooltip title="Move to drafts">
+              <IconButton
+                size="small"
+                aria-label="move to drafts"
+                onClick={(): void => queuedToDraft(sessionId, message.id)}
+              >
+                <BookmarkAddOutlined fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </>
         )}
-        <Popover
-          open={confirmAnchor !== null}
-          anchorEl={confirmAnchor}
-          onClose={(): void => setConfirmAnchor(null)}
-          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-          transformOrigin={{ vertical: "top", horizontal: "right" }}
-        >
-          <Box sx={{ p: 1.5, maxWidth: 240 }}>
-            <Typography variant="body2" sx={{ mb: 1 }}>
-              Stop the current turn and send this message now? The agent's
-              in-progress work is discarded.
-            </Typography>
-            <Stack direction="row" spacing={1} justifyContent="flex-end">
-              <Button
-                size="small"
-                color="inherit"
-                onClick={(): void => setConfirmAnchor(null)}
-                sx={{ textTransform: "none" }}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="small"
-                variant="contained"
-                color="warning"
-                startIcon={<Bolt />}
-                onClick={(): void => {
-                  forcePushQueued(sessionId, status, message.id);
-                  setConfirmAnchor(null);
-                }}
-                sx={{ textTransform: "none" }}
-              >
-                Force push
-              </Button>
-            </Stack>
-          </Box>
-        </Popover>
         <Tooltip title="Edit">
-          <IconButton size="small" aria-label="edit queued message" onClick={onEdit}>
+          <IconButton size="small" aria-label="edit message" onClick={onEdit}>
             <EditOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="Remove">
           <IconButton
             size="small"
-            aria-label="remove queued message"
-            onClick={(): void => removeQueued(sessionId, message.id)}
+            aria-label="remove message"
+            onClick={(): void =>
+              kind === "draft"
+                ? removeDraft(sessionId, message.id)
+                : removeQueued(sessionId, message.id)}
           >
             <Close fontSize="small" />
           </IconButton>

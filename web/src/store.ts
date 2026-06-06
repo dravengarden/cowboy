@@ -69,6 +69,10 @@ export interface State {
   configOptions: Map<string, ConfigOption[]>;
   // session_id → ordered prompts waiting for the current turn to finish
   queues: Map<string, QueuedMessage[]>;
+  // session_id → parked DRAFT messages: composed but not committed to send.
+  // Persisted to localStorage and restored across reloads (a queued message
+  // that didn't drain before a restart comes back here — see loadDrafts).
+  drafts: Map<string, QueuedMessage[]>;
   lastError?: ErrorNotice;
   // Top-of-app connection/version banner; undefined = nothing shown. Spelled
   // `| undefined` (not bare optional) so `{ ...state, banner }` can carry an
@@ -77,7 +81,11 @@ export interface State {
 }
 
 let errorSeq = 0;
-let queuedSeq = 0;
+// Seed from the wall clock so ids stay unique ACROSS reloads — a reload restores
+// persisted drafts with their old `q<n>` ids, and a fresh `queuedSeq` from 0
+// would hand new items colliding ids. Date.now() guarantees new ids sort past
+// any restored ones.
+let queuedSeq = Date.now();
 let state: State = {
   connected: false,
   sessions: [],
@@ -85,6 +93,8 @@ let state: State = {
   hydrated: new Set(),
   configOptions: new Map(),
   queues: new Map(),
+  // Restore persisted drafts + recover any persisted (undrained) queue as drafts.
+  drafts: loadDrafts(),
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -128,6 +138,69 @@ function emit(): void {
 function setState(next: State): void {
   state = next;
   emit();
+}
+
+// --- Draft + queue persistence ----------------------------------------------
+//
+// Drafts (parked messages) and the send-queue are persisted per session so they
+// survive a reload / PWA restart. A SENT message is dropped from storage (no
+// point keeping it). On startup any persisted queue is RECONSTITUTED AS DRAFTS,
+// not re-queued: after a restart the client has lost the live turn state, so
+// surfacing queued prompts for review beats blindly auto-firing them into a
+// possibly-restarted agent. Best-effort (wrapped in try/catch) so a quota error
+// or a private-mode localStorage just degrades to in-memory.
+
+const QUEUE_KEY = "cowboy:queue:";
+const DRAFTS_KEY = "cowboy:drafts:";
+
+function writeList(key: string, list: QueuedMessage[] | undefined): void {
+  try {
+    if (list && list.length > 0) globalThis.localStorage?.setItem(key, JSON.stringify(list));
+    else globalThis.localStorage?.removeItem(key);
+  } catch {
+    /* quota / unavailable — keep the in-memory copy only */
+  }
+}
+
+function readList(key: string): QueuedMessage[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? (parsed as QueuedMessage[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Persist the current queue + drafts for one session (called after every
+// mutation of either). Reads the live `state`, so call it AFTER setState.
+function persistSession(sessionId: string): void {
+  writeList(`${QUEUE_KEY}${sessionId}`, state.queues.get(sessionId));
+  writeList(`${DRAFTS_KEY}${sessionId}`, state.drafts.get(sessionId));
+}
+
+// Startup: load persisted drafts and fold any persisted queue into them (queued
+// items to the FRONT — they were the more-imminent ones — preserving order),
+// then clear the persisted queue so the conversion happens exactly once.
+function loadDrafts(): Map<string, QueuedMessage[]> {
+  const drafts = new Map<string, QueuedMessage[]>();
+  const ls = globalThis.localStorage;
+  if (!ls) return drafts;
+  const sids = new Set<string>();
+  for (let i = 0; i < ls.length; i += 1) {
+    const k = ls.key(i);
+    if (k?.startsWith(DRAFTS_KEY)) sids.add(k.slice(DRAFTS_KEY.length));
+    else if (k?.startsWith(QUEUE_KEY)) sids.add(k.slice(QUEUE_KEY.length));
+  }
+  for (const sid of sids) {
+    const merged = [...readList(`${QUEUE_KEY}${sid}`), ...readList(`${DRAFTS_KEY}${sid}`)];
+    if (merged.length > 0) {
+      drafts.set(sid, merged);
+      writeList(`${DRAFTS_KEY}${sid}`, merged);
+    }
+    writeList(`${QUEUE_KEY}${sid}`, undefined); // queue consumed into drafts
+  }
+  return drafts;
 }
 
 function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<string, Envelope[]> {
@@ -370,6 +443,7 @@ function enqueue(sessionId: string, text: string, attachments: Attachment[]): vo
   const q = next.get(sessionId) ?? [];
   next.set(sessionId, [...q, { id: nextQueuedId(), text, attachments }]);
   setState({ ...state, queues: next });
+  persistSession(sessionId);
 }
 
 // Drain the front of every session's queue: dispatch the head prompt for each
@@ -398,6 +472,7 @@ function drainQueues(): void {
     toSendIds.push(s.id);
   }
   if (queues !== state.queues) setState({ ...state, queues });
+  for (const sid of new Set(toSendIds)) persistSession(sid); // drained items leave storage
   for (const [i, head] of toSend.entries()) {
     const sessionId = toSendIds[i];
     if (sessionId) send(promptCommand(sessionId, head.text, head.attachments));
@@ -490,6 +565,7 @@ export function editQueued(
     q.map((m) => (m.id === id ? { ...m, text: trimmed, attachments } : m)),
   );
   setState({ ...state, queues: next });
+  persistSession(sessionId);
 }
 
 // Drop one queued prompt.
@@ -501,6 +577,7 @@ export function removeQueued(sessionId: string, id: string): void {
   if (filtered.length > 0) next.set(sessionId, filtered);
   else next.delete(sessionId);
   setState({ ...state, queues: next });
+  persistSession(sessionId);
 }
 
 // Drop a session's whole queue (the "Clear All" header action).
@@ -509,6 +586,7 @@ export function clearQueue(sessionId: string): void {
   const next = new Map(state.queues);
   next.delete(sessionId);
   setState({ ...state, queues: next });
+  persistSession(sessionId);
 }
 
 // Move a queued prompt to the front so it's the next one drained.
@@ -520,6 +598,94 @@ function promoteQueued(sessionId: string, id: string): void {
   const next = new Map(state.queues);
   next.set(sessionId, [item, ...q.filter((m) => m.id !== id)]);
   setState({ ...state, queues: next });
+  persistSession(sessionId);
+}
+
+// --- Draft operations -------------------------------------------------------
+
+// Park the composer's content as a new draft (the "Draft" button). Empty
+// (no text, no attachments) is ignored.
+export function addDraft(sessionId: string, text: string, attachments: Attachment[]): void {
+  const trimmed = text.trimEnd();
+  if (!trimmed.trim() && attachments.length === 0) return;
+  const next = new Map(state.drafts);
+  const d = next.get(sessionId) ?? [];
+  next.set(sessionId, [...d, { id: nextQueuedId(), text: trimmed, attachments }]);
+  setState({ ...state, drafts: next });
+  persistSession(sessionId);
+}
+
+// Edit a draft in place (same shape as editQueued). Clearing both fields drops it.
+export function editDraft(
+  sessionId: string,
+  id: string,
+  text: string,
+  attachments: Attachment[],
+): void {
+  const trimmed = text.trimEnd();
+  const d = state.drafts.get(sessionId);
+  if (!d) return;
+  if (!trimmed.trim() && attachments.length === 0) {
+    removeDraft(sessionId, id);
+    return;
+  }
+  const next = new Map(state.drafts);
+  next.set(sessionId, d.map((m) => (m.id === id ? { ...m, text: trimmed, attachments } : m)));
+  setState({ ...state, drafts: next });
+  persistSession(sessionId);
+}
+
+// Drop one draft.
+export function removeDraft(sessionId: string, id: string): void {
+  const d = state.drafts.get(sessionId);
+  if (!d) return;
+  const filtered = d.filter((m) => m.id !== id);
+  const next = new Map(state.drafts);
+  if (filtered.length > 0) next.set(sessionId, filtered);
+  else next.delete(sessionId);
+  setState({ ...state, drafts: next });
+  persistSession(sessionId);
+}
+
+// Drop a session's whole draft list ("Clear All" on the drafts panel).
+export function clearDrafts(sessionId: string): void {
+  if (!state.drafts.has(sessionId)) return;
+  const next = new Map(state.drafts);
+  next.delete(sessionId);
+  setState({ ...state, drafts: next });
+  persistSession(sessionId);
+}
+
+// Activate a draft: send it now if the session can take a turn, otherwise queue
+// it. Removed from drafts either way (submitPrompt routes send-vs-enqueue).
+export function activateDraft(sessionId: string, status: Status, id: string): void {
+  const item = state.drafts.get(sessionId)?.find((m) => m.id === id);
+  if (!item) return;
+  removeDraft(sessionId, id);
+  submitPrompt(sessionId, status, item.text, item.attachments);
+}
+
+// Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
+// Each routes through submitPrompt, so idle sessions fire the first and queue
+// the rest; busy sessions queue them all in order.
+export function activateAllDrafts(sessionId: string, status: Status): void {
+  const d = state.drafts.get(sessionId);
+  if (!d || d.length === 0) return;
+  clearDrafts(sessionId);
+  for (const m of d) submitPrompt(sessionId, status, m.text, m.attachments);
+}
+
+// Move a queued prompt back to drafts (append). The reverse of activating a
+// draft into the queue.
+export function queuedToDraft(sessionId: string, id: string): void {
+  const item = state.queues.get(sessionId)?.find((m) => m.id === id);
+  if (!item) return;
+  removeQueued(sessionId, id);
+  const next = new Map(state.drafts);
+  const d = next.get(sessionId) ?? [];
+  next.set(sessionId, [...d, item]);
+  setState({ ...state, drafts: next });
+  persistSession(sessionId);
 }
 
 function subscribe(listener: () => void): () => void {
