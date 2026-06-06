@@ -50,6 +50,13 @@ export const ComposerTextarea = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => inputRef.current?.focus(),
+    focusEnd: (): void => {
+      const ta = inputRef.current;
+      if (!ta) return;
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    },
     insertTrigger: (ch: string): void => {
       const ta = inputRef.current;
       const at = ta?.selectionStart ?? value.length;

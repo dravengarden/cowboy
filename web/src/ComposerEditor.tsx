@@ -26,6 +26,10 @@ import type { AvailableCommand } from "./protocol";
 
 export interface ComposerEditorHandle {
   focus: () => void;
+  // Focus AND place the caret at the very end of the document — used when
+  // opening an existing draft/queued message for editing, so you continue from
+  // where the text left off instead of with the caret stranded at the start.
+  focusEnd: () => void;
   // Insert a trigger char (`/` or `@`) at the caret + open the picker — used by
   // the action-row buttons. Mirrors the old `appendToken` + focus behavior.
   insertTrigger: (ch: string) => void;
@@ -146,6 +150,13 @@ export const ComposerEditor = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
+    focusEnd: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const end = view.state.doc.length;
+      view.dispatch({ selection: { anchor: end } });
+      view.focus();
+    },
     insertTrigger: (ch: string): void => {
       const view = cmRef.current?.view;
       if (!view) return;

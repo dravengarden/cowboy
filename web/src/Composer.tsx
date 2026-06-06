@@ -927,7 +927,9 @@ function PendingRow({
   // inside the gesture and pops the keyboard. (@uiw's own autoFocus wouldn't
   // help: it focuses from a passive useEffect — the same late timing.)
   useLayoutEffect(() => {
-    if (editing) editorRef.current?.focus();
+    // focusEnd, not focus: opening an existing draft/queued message should put
+    // the caret at the end of its text so you continue typing, not at the start.
+    if (editing) editorRef.current?.focusEnd();
   }, [editing]);
   if (editing) {
     const save = (): void => {
