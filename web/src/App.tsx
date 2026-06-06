@@ -740,7 +740,12 @@ export function App({
                     ariaLabel="Sessions"
                     surfaceColor={theme.palette.background.default}
                 >
-                    {list}
+                    {/* Cancel DetentSheet's body side padding (px:2) for the
+                        session list so the rows span the sheet's full width —
+                        scoped here, NOT in DetentSheet, so every other sheet
+                        (Settings, …) keeps its gutter. The desktop sidebar
+                        renders `list` directly (no wrapper), so it's unaffected. */}
+                    <Box sx={{ mx: -2 }}>{list}</Box>
                 </DetentSheet>
             ) : (
                 <Stack
