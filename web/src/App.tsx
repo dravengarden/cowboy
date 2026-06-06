@@ -50,10 +50,12 @@ import { applyUpdate, openSession, send, useStore } from "./store";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
+    LINE_HEIGHT_PRESETS,
     nearestPreset,
     PADDING_PRESETS,
     setFontScale,
     setFontVariant,
+    setLineHeight,
     setPadding,
     useReadingSettings,
 } from "./readingSettings";
@@ -1233,6 +1235,41 @@ function SettingsShell({
                             {PADDING_PRESETS.map((v) => (
                                 <MenuItem key={v} value={v}>
                                     {v === 0 ? "None" : `${v}px`}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </Stack>
+                    <Stack
+                        direction="row"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        spacing={2}
+                    >
+                        <Stack>
+                            <Typography variant="body2">Line height</Typography>
+                            <Typography
+                                variant="caption"
+                                color="text.secondary"
+                            >
+                                Spacing between lines of text
+                            </Typography>
+                        </Stack>
+                        <Select
+                            size="small"
+                            value={nearestPreset(
+                                reading.lineHeight,
+                                LINE_HEIGHT_PRESETS,
+                            )}
+                            onChange={(e): void =>
+                                setLineHeight(Number(e.target.value))}
+                            // See the Font size Select above: lift the dropdown
+                            // above the non-Modal mobile sheet so it's tappable.
+                            MenuProps={{ sx: (t) => ({ zIndex: t.zIndex.modal + 2 }) }}
+                            sx={{ minWidth: 104 }}
+                        >
+                            {LINE_HEIGHT_PRESETS.map((v) => (
+                                <MenuItem key={v} value={v}>
+                                    {v.toFixed(1)}
                                 </MenuItem>
                             ))}
                         </Select>

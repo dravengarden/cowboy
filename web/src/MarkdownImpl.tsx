@@ -283,7 +283,10 @@ const MarkdownImpl = memo(function MarkdownImpl({
     h5: makeHeading("0.92em", 1.4),
     h6: makeHeading("0.85em", 1.4),
     p({ children }) {
-      return <Box sx={{ my: 0.5, lineHeight: 1.5 }}>{children}</Box>;
+      // Inherit the reading line-height set on the transcript scroll container
+      // (Settings → Reading), instead of a fixed 1.5. Default container leading
+      // is still 1.5, so unset reads unchanged.
+      return <Box sx={{ my: 0.5, lineHeight: "inherit" }}>{children}</Box>;
     },
     ul({ children }) {
       return <Box component="ul" sx={{ pl: 3, my: 0.5 }}>{children}</Box>;

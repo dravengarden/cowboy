@@ -726,7 +726,7 @@ export function Transcript({
   // keep their own monospace. A change re-renders here, and the virtualizer
   // re-measures row heights on the next pass, so live adjustments reflow
   // without a reload.
-  const { fontScale, padding } = useReadingSettings();
+  const { fontScale, padding, lineHeight } = useReadingSettings();
   // Latest unresolved tool-permission request, if any → drives the dedicated
   // PermissionSheet. `reviewClosedFor` remembers a request the user flicked the
   // sheet shut on, so it doesn't keep re-popping while still leaving the sticky
@@ -938,6 +938,11 @@ export function Transcript({
           // `em` multiplier on the reading content only (1 = unchanged). MUI
           // Typography descendants set their own rem size and so stay fixed.
           fontSize: `${fontScale}em`,
+          // Reading prose line-height. The markdown paragraph renderer inherits
+          // this (MarkdownImpl `p`); headings + code keep their own fixed
+          // leading, and MUI Typography chrome sets its own, so only body text
+          // follows. A change reflows on the virtualizer's next measure pass.
+          lineHeight,
           // Prose font-family (unset var → theme font). MUI Typography chrome
           // sets its own family and stays put; code fences are explicitly
           // monospace and are unaffected.
