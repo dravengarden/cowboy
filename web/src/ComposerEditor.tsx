@@ -192,6 +192,31 @@ export const ComposerEditor = forwardRef<
           onPasteFilesRef.current(files);
           return true;
         },
+        // iOS IME fix. The `.cm-scroller` compositing layer (translateZ(0) in
+        // cmTheme — there to force WebKit to repaint typed text inside the
+        // position:fixed body) corrupts IME marked-text rendering on iOS Safari:
+        // mid-composition the pinyin paints at the line start, IN FRONT of the
+        // already-committed characters (WebKit mis-places the composition overlay
+        // relative to the promoted layer). Drop the layer for the duration of the
+        // composition — the IME paints its own marked text while composing, so the
+        // repaint hack isn't needed then — and restore it on commit, with a
+        // one-frame opacity nudge so the just-committed glyphs repaint (the same
+        // trick clear() uses). Composition events aren't `key*`, so CM's
+        // ignoreDuringComposition lets them through to these handlers. Returning
+        // false leaves CM's own composition handling untouched.
+        compositionstart: (_event, view): boolean => {
+          view.scrollDOM.style.transform = "none";
+          return false;
+        },
+        compositionend: (_event, view): boolean => {
+          view.scrollDOM.style.transform = "";
+          const content = view.contentDOM;
+          content.style.opacity = "0.999";
+          requestAnimationFrame(() => {
+            content.style.opacity = "";
+          });
+          return false;
+        },
       }),
       history(),
       placeholderExt(placeholder ?? ""),
