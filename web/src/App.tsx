@@ -6,9 +6,6 @@ import {
     Button,
     Chip,
     CircularProgress,
-    Dialog,
-    DialogContent,
-    DialogTitle,
     Divider,
     Drawer,
     IconButton,
@@ -373,71 +370,72 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    const create = (): void => {
+        // POST (not the fire-and-forget WS `new_session`) so we get the assigned
+        // id back synchronously and can focus the new session the moment it's
+        // created.
+        void fetch("/api/sessions", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider, cwd, origin: "web" }),
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { session_id?: string } | null) => {
+                if (data?.session_id) onCreated(data.session_id);
+            })
+            .catch(() => {
+                // Network/daemon error surfaces via the WS error channel.
+            });
+        onClose();
+    };
+    // BottomSheet (not a centered Dialog) to match the rest of the modals — they
+    // all rise from the bottom on the mobile tier.
     return (
-        <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-            <DialogTitle>New session</DialogTitle>
-            <DialogContent>
-                <Stack spacing={2} sx={{ mt: 1 }}>
-                    <TextField
-                        select
-                        label="Provider"
-                        value={provider}
-                        onChange={(e): void => setProvider(e.target.value)}
-                    >
-                        {PROVIDERS.map((p) => (
-                            <MenuItem key={p} value={p}>
-                                {p}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                    <TextField
-                        select
-                        label="Working directory"
-                        value={cwd}
-                        onChange={(e): void => setCwd(e.target.value)}
-                        helperText={
-                            WORKING_DIRS.find((w) => w.value === cwd)?.help ??
-                            ""
-                        }
-                    >
-                        {WORKING_DIRS.map((w) => (
-                            <MenuItem key={w.value} value={w.value}>
-                                {w.label}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                    <Button
-                        variant="contained"
-                        onClick={(): void => {
-                            // POST (not the fire-and-forget WS `new_session`) so
-                            // we get the assigned id back synchronously and can
-                            // focus the new session the moment it's created.
-                            void fetch("/api/sessions", {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: JSON.stringify({
-                                    provider,
-                                    cwd,
-                                    origin: "web",
-                                }),
-                            })
-                                .then((r) => (r.ok ? r.json() : null))
-                                .then((data: { session_id?: string } | null) => {
-                                    if (data?.session_id)
-                                        onCreated(data.session_id);
-                                })
-                                .catch(() => {
-                                    // Network/daemon error surfaces via the WS
-                                    // error channel; nothing to do here.
-                                });
-                            onClose();
-                        }}
-                    >
+        <BottomSheet
+            open={open}
+            onClose={onClose}
+            title="New session"
+            actions={
+                <>
+                    <Button onClick={onClose} color="inherit">
+                        Cancel
+                    </Button>
+                    <Button onClick={create} variant="contained">
                         Create
                     </Button>
-                </Stack>
-            </DialogContent>
-        </Dialog>
+                </>
+            }
+        >
+            <Stack spacing={2} sx={{ mt: 1 }}>
+                <TextField
+                    select
+                    label="Provider"
+                    value={provider}
+                    onChange={(e): void => setProvider(e.target.value)}
+                >
+                    {PROVIDERS.map((p) => (
+                        <MenuItem key={p} value={p}>
+                            {p}
+                        </MenuItem>
+                    ))}
+                </TextField>
+                <TextField
+                    select
+                    label="Working directory"
+                    value={cwd}
+                    onChange={(e): void => setCwd(e.target.value)}
+                    helperText={
+                        WORKING_DIRS.find((w) => w.value === cwd)?.help ?? ""
+                    }
+                >
+                    {WORKING_DIRS.map((w) => (
+                        <MenuItem key={w.value} value={w.value}>
+                            {w.label}
+                        </MenuItem>
+                    ))}
+                </TextField>
+            </Stack>
+        </BottomSheet>
     );
 }
 
@@ -520,7 +518,7 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { connected, sessions, timelines, lastError } = useStore();
+    const { sessions, timelines, lastError } = useStore();
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -864,20 +862,23 @@ export function App({
                                             : active.title}
                                     </Typography>
                                 </Tooltip>
+                                <Tooltip title="Rename session">
+                                    <IconButton
+                                        size="small"
+                                        aria-label="rename session"
+                                        onClick={(): void =>
+                                            setPendingRename(active)}
+                                        sx={{ flexShrink: 0 }}
+                                    >
+                                        <DriveFileRenameOutline fontSize="small" />
+                                    </IconButton>
+                                </Tooltip>
                             </Stack>
                         ) : (
                             // No session: the content pane already says "No
                             // session selected", so the bar shows nothing — no
                             // redundant brand/emoji.
                             <Box sx={{ flex: 1, minWidth: 0 }} />
-                        )}
-                        {!connected && (
-                            <Chip
-                                size="small"
-                                color="error"
-                                label="offline"
-                                sx={{ mr: 1 }}
-                            />
                         )}
                         <IconButton
                             onClick={(): void => setSettingsOpen(true)}

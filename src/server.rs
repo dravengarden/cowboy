@@ -446,6 +446,42 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     fanout.abort();
 }
 
+/// Derive a short session title from the first prompt: the first non-empty
+/// line, whitespace-collapsed and truncated. Prefers the legacy `text` field;
+/// falls back to the first text block in `content` (attachment prompts carry
+/// their text there). Returns None for an attachment-only / empty prompt.
+fn first_prompt_title(text: &str, content: &[serde_json::Value]) -> Option<String> {
+    // Cap length on a char boundary so a long first line stays a label, not a
+    // paragraph.
+    const MAX: usize = 60;
+    let raw = if text.trim().is_empty() {
+        content.iter().find_map(|v| {
+            if v.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                v.get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            } else {
+                None
+            }
+        })?
+    } else {
+        text.to_owned()
+    };
+    let line = raw.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    // Append an ellipsis when the first line is cut to MAX.
+    if collapsed.chars().count() > MAX {
+        let head: String = collapsed.chars().take(MAX).collect();
+        Some(format!("{head}…"))
+    } else {
+        Some(collapsed)
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one cohesive command-dispatch match
 fn handle_command(state: &AppState, text: &str) {
     let cmd: Inbound = match serde_json::from_str(text) {
         Ok(c) => c,
@@ -479,6 +515,11 @@ fn handle_command(state: &AppState, text: &str) {
             text,
             content,
         } => {
+            // Derive an auto-title from the first prompt before text/content are
+            // consumed below. auto_title no-ops unless the title is still the
+            // cwd default, so this only "takes" on a session's first prompt and
+            // never overrides a manual rename.
+            let auto = first_prompt_title(&text, &content);
             let blocks: Vec<ContentBlock> = if content.is_empty() {
                 if text.is_empty() {
                     tracing::warn!("Prompt with neither text nor content; dropping");
@@ -501,9 +542,15 @@ fn handle_command(state: &AppState, text: &str) {
                     })
                     .collect()
             };
-            state
+            let result = state
                 .supervisor
-                .send(&session_id, AgentCommand::Prompt(blocks))
+                .send(&session_id, AgentCommand::Prompt(blocks));
+            if result.is_ok() {
+                if let Some(title) = auto {
+                    state.hub.auto_title(&session_id, title);
+                }
+            }
+            result
         }
         Inbound::Cancel { session_id } => state.supervisor.send(&session_id, AgentCommand::Cancel),
         Inbound::Permission {
