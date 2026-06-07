@@ -270,8 +270,16 @@ export function applyUpdate(): void {
 
 // First thing on every (re)connect: ask the daemon for its build id. On the
 // very first probe we only record the baseline; thereafter a changed id means
-// the server was redeployed under us, so we raise the (sticky) update banner.
-// A failed probe is a no-op — we simply try again on the next reconnect.
+// the server was redeployed under us. We AUTO-RELOAD in that case rather than
+// just showing a banner: a redeploy restarts the daemon, the PWA reconnects over
+// it, but an installed PWA keeps its OLD cached JS until a full reload — a WS
+// reconnect is not enough. The banner was routinely ignored, so every shipped
+// web change read as "no effect". Auto-reloading is safe here: the conversation
+// is server-persisted and the composer text is in the per-session draft store
+// (localStorage), so the reload restores everything. `/version` is the embedded
+// index.html content hash (stable per build), so this fires exactly once per
+// deploy and the fresh load re-baselines `knownVersion` (no reload loop). A
+// failed probe is a no-op — we retry on the next reconnect.
 async function probeVersion(): Promise<void> {
   let version: string;
   try {
@@ -285,7 +293,12 @@ async function probeVersion(): Promise<void> {
     knownVersion = version;
     return;
   }
-  if (version !== knownVersion) setBanner({ kind: "update" });
+  if (version !== knownVersion) {
+    // Brief defer so the just-arrived reconnect snapshot settles before the
+    // reload (avoids reloading mid-handshake); state persists either way.
+    setBanner({ kind: "update" });
+    globalThis.setTimeout(() => applyUpdate(), 600);
+  }
 }
 
 function scheduleReconnect(): void {
