@@ -1016,10 +1016,26 @@ export function Transcript({
   // Pin via scrollTop = scrollHeight (like the session-pin effect): with
   // `contain: strict` the spacer height === totalSize, so this lands exactly on
   // the true bottom regardless of react-virtual's scrollToIndex measurement lag.
+  const autoSnapRaf = useRef(0);
   useLayoutEffect(() => {
-    if (!stick.current || rowCount === 0) return;
+    if (!stick.current || rowCount === 0) return undefined;
     const el = parentRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    // One COALESCED next-frame re-pin: a row often remeasures in the SAME tick
+    // right after this write — most visibly the trailing "Actioning…" dots
+    // (~80px estimate → ~24px real) and a just-sent user bubble — which leaves
+    // the single write sitting a sliver short of the true bottom (the reported
+    // "after send, sometimes not scrolled all the way down"). Deferring one more
+    // pin clamps it. Coalesced via the effect cleanup, so streaming — which
+    // fires this every token — never stacks rAFs; at most one is ever in flight.
+    autoSnapRaf.current = requestAnimationFrame(() => {
+      autoSnapRaf.current = 0;
+      const e2 = parentRef.current;
+      if (stick.current && e2) e2.scrollTop = e2.scrollHeight;
+    });
+    return () => {
+      if (autoSnapRaf.current) cancelAnimationFrame(autoSnapRaf.current);
+    };
   }, [rowCount, totalSize]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
