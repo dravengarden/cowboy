@@ -128,6 +128,27 @@ export function useThemeMode(): ThemeControls {
           MuiTooltip: {
             defaultProps: { disableFocusListener: true, disableTouchListener: true },
           },
+          // A SELECTED dropdown item uses the primary theme colour as a SOLID
+          // fill, not the default faint ~12% action.selected tint (which read as
+          // barely-there — the reported "淡紫色太不明显"). The current choice is now
+          // unmistakable. Title + description inherit the contrast colour (the
+          // description a touch dimmer for hierarchy); hover / keyboard-focus
+          // deepen to primary.dark.
+          MuiMenuItem: {
+            styleOverrides: {
+              root: ({ theme: t }) => ({
+                "&.Mui-selected": {
+                  backgroundColor: t.palette.primary.main,
+                  color: t.palette.primary.contrastText,
+                  "& .MuiTypography-root": { color: "inherit" },
+                  "& .MuiTypography-caption": { opacity: 0.82 },
+                  "&:hover, &.Mui-focusVisible, &.Mui-selected:hover": {
+                    backgroundColor: t.palette.primary.dark,
+                  },
+                },
+              }),
+            },
+          },
         },
         palette: dark
           ? {
