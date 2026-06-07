@@ -6,7 +6,7 @@
 // manifest) — is network-first, so a redeploy of those shows up immediately
 // instead of being pinned to whatever the SW cached first. Bump VERSION to evict
 // the old caches on the next activation.
-const VERSION = "cowboy-v2";
+const VERSION = "cowboy-v3";
 const ASSET_CACHE = `${VERSION}-assets`;
 
 self.addEventListener("install", () => {

@@ -80,18 +80,90 @@ function persist(sessionId: string, draft: Draft | null): void {
   }
 }
 
+// ── Debounced disk writes ───────────────────────────────────────────────────
+// Typing must stay snappy. The in-memory Map is updated synchronously on every
+// keystroke (so a session switch restores instantly), but the localStorage
+// write — a JSON.stringify + synchronous setItem, heavier with attachments — is
+// debounced to fire only after a short idle. One timer flushes every dirty
+// session.
+const PERSIST_DEBOUNCE_MS = 400;
+const dirty = new Set<string>();
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+function flushPending(): void {
+  if (flushTimer !== undefined) {
+    clearTimeout(flushTimer);
+    flushTimer = undefined;
+  }
+  for (const id of dirty) persist(id, drafts.get(id) ?? null);
+  dirty.clear();
+}
+
+function schedulePersist(sessionId: string): void {
+  dirty.add(sessionId);
+  if (flushTimer !== undefined) clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushPending, PERSIST_DEBOUNCE_MS);
+}
+
+// Flush the debounced tail before the page goes away, so a reload / PWA
+// relaunch / backgrounding never drops the last few hundred ms of typing.
+// pagehide + visibility:hidden are the mobile-safe pair (beforeunload is
+// unreliable on iOS).
+if (globalThis.addEventListener) {
+  globalThis.addEventListener("pagehide", flushPending);
+  globalThis.addEventListener("visibilitychange", () => {
+    if (globalThis.document?.visibilityState === "hidden") flushPending();
+  });
+}
+
 export function getDraft(sessionId: string): Draft {
   return drafts.get(sessionId) ?? EMPTY;
 }
 
 // Store the draft, or drop the entry once it's empty so neither the map nor
-// localStorage accumulates a blank draft for every session ever focused.
+// localStorage accumulates a blank draft for every session ever focused. The
+// Map is updated synchronously; the disk write is debounced (see schedulePersist)
+// so it never sits on the typing path. An empty draft (e.g. just sent) is cleared
+// from disk immediately — a clear is cheap, and a pending write for it is cancelled.
 export function setDraft(sessionId: string, draft: Draft): void {
   if (!draft.text && draft.attachments.length === 0) {
     drafts.delete(sessionId);
+    dirty.delete(sessionId);
     persist(sessionId, null);
   } else {
     drafts.set(sessionId, draft);
-    persist(sessionId, draft);
+    schedulePersist(sessionId);
+  }
+}
+
+// Drop drafts whose session no longer exists (deleted here or on another
+// terminal). Called when an authoritative session list arrives. Fully tolerant:
+// a missing localStorage or a failed removeItem is swallowed, never thrown — a
+// gone session must never surface an error on the input path.
+export function pruneDrafts(liveSessionIds: Set<string>): void {
+  // Deleting the current key during Map iteration is safe (spec-guaranteed), so
+  // no snapshot copy is needed.
+  for (const id of drafts.keys()) {
+    if (!liveSessionIds.has(id)) {
+      drafts.delete(id);
+      dirty.delete(id);
+    }
+  }
+  const ls = globalThis.localStorage;
+  if (!ls) return;
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < ls.length; i += 1) {
+      const k = ls.key(i);
+      if (
+        k?.startsWith(KEY_PREFIX) &&
+        !liveSessionIds.has(k.slice(KEY_PREFIX.length))
+      ) {
+        stale.push(k);
+      }
+    }
+    for (const k of stale) ls.removeItem(k);
+  } catch {
+    /* tolerant — leave stale entries rather than throw */
   }
 }

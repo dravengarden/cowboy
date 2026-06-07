@@ -9,6 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
+import { pruneDrafts } from "./draftStore";
 import { fireTurnComplete } from "./turnNotify";
 import type {
   ConfigOption,
@@ -195,6 +196,10 @@ function handle(msg: Outbound): void {
       // client-side in-flight reconciliation to do. `sessionsLoaded` latches true
       // on the first list so the UI can detect a now-gone persisted focus.
       setState({ ...state, sessions: msg.sessions, sessionsLoaded: true });
+      // The list is authoritative: drop composer drafts for sessions that no
+      // longer exist (deleted here or on another terminal). Tolerant + off the
+      // input path.
+      pruneDrafts(new Set(msg.sessions.map((s) => s.id)));
       break;
     }
     case "queues": {
