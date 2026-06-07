@@ -484,40 +484,74 @@ impl Hub {
     /// starting, so for any turn that ran more than an instant the bit is
     /// durable before a restart (store.rs accepts the sub-ms crash window).
     pub fn restore(&self, sessions: Vec<RestoredSession>) {
-        let mut sessions_lock = self.inner.sessions.lock().unwrap();
-        let mut order = self.inner.order.lock().unwrap();
-        for r in sessions {
-            let RestoredSession {
-                mut meta,
-                log,
-                next_seq,
-                queue,
-                drafts,
-            } = r;
-            meta.status = match meta.status {
-                // Mid-turn when we died → the work was cut off, unfinished.
-                Status::Busy => Status::Interrupted,
-                // Already a settled dead state (incl. a prior Interrupted that
-                // was never resumed) → keep it as recorded.
-                Status::Exited | Status::Crashed | Status::Interrupted => meta.status,
-                // Alive but idle, or still spinning up → just dormant.
-                Status::Running | Status::Starting => Status::Exited,
-            };
-            let id = meta.id.clone();
-            sessions_lock.insert(
-                id.clone(),
-                Session {
-                    meta,
+        // Sessions whose turn was cut off by the restart (persisted `Busy`).
+        // Collected under the lock, marked after it's released — `push` below
+        // re-locks `sessions`, so holding the lock here would deadlock.
+        let mut interrupted: Vec<String> = Vec::new();
+        {
+            let mut sessions_lock = self.inner.sessions.lock().unwrap();
+            let mut order = self.inner.order.lock().unwrap();
+            for r in sessions {
+                let RestoredSession {
+                    mut meta,
                     log,
                     next_seq,
-                    config_options: None,
                     queue,
                     drafts,
-                    editing: None,
-                    in_flight: false,
+                } = r;
+                let was_busy = meta.status == Status::Busy;
+                meta.status = match meta.status {
+                    // Mid-turn when we died → the work was cut off, unfinished.
+                    Status::Busy => Status::Interrupted,
+                    // Already a settled dead state (incl. a prior Interrupted that
+                    // was never resumed) → keep it as recorded.
+                    Status::Exited | Status::Crashed | Status::Interrupted => meta.status,
+                    // Alive but idle, or still spinning up → just dormant.
+                    Status::Running | Status::Starting => Status::Exited,
+                };
+                let id = meta.id.clone();
+                if was_busy {
+                    interrupted.push(id.clone());
+                }
+                sessions_lock.insert(
+                    id.clone(),
+                    Session {
+                        meta,
+                        log,
+                        next_seq,
+                        config_options: None,
+                        queue,
+                        drafts,
+                        editing: None,
+                        in_flight: false,
+                    },
+                );
+                order.push(id);
+            }
+        }
+        // For each interrupted session: persist the corrected status AND append a
+        // permanent timeline marker. The live status is ephemeral — a resume
+        // overwrites it — but this Lifecycle entry stays in the log forever, so
+        // "this turn was cut off" is visible after the fact too. Idempotent across
+        // repeated restarts: the status write-back flips the persisted value off
+        // `busy`, so the next restore reads `interrupted` and adds no second marker
+        // (only a fresh `busy` → interrupt does).
+        for id in interrupted {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateStatus {
+                    session_id: id.clone(),
+                    status: Status::Interrupted,
+                });
+            }
+            self.push(
+                &id,
+                Event::Lifecycle {
+                    status: Status::Interrupted,
+                    detail: Some(
+                        "turn cut off by a cowboy restart — it never finished".to_owned(),
+                    ),
                 },
             );
-            order.push(id);
         }
     }
 

@@ -661,21 +661,30 @@ const ItemView = memo(function ItemView({
       return <ToolCard item={item} />;
     case "permission":
       return <PermissionCard item={item} />;
-    case "lifecycle":
+    case "lifecycle": {
+      // The interrupted marker (a turn cut off by a daemon restart) is a durable,
+      // amber record that stays in the log after the session resumes; crashes are
+      // red; everything else is a quiet grey note.
+      const interrupted = item.status === "interrupted";
+      const color = item.status === "crashed"
+        ? "error.main"
+        : interrupted
+          ? "warning.main"
+          : "text.secondary";
       return (
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ color: item.status === "crashed" ? "error.main" : "text.secondary" }}
-        >
-          <ErrorOutline fontSize="medium" />
-          <Typography variant="caption">
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ color }}>
+          {interrupted ? (
+            <WarningAmberRounded fontSize="medium" />
+          ) : (
+            <ErrorOutline fontSize="medium" />
+          )}
+          <Typography variant="caption" sx={{ fontWeight: interrupted ? 600 : 400 }}>
             {item.status}
             {item.detail ? `: ${item.detail}` : ""}
           </Typography>
         </Stack>
       );
+    }
   }
 });
 
