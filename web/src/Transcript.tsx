@@ -889,33 +889,23 @@ export function Transcript({
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
 
-  // Anchoring (no virtualizer; Safari has no overflow-anchor → we do it). On a
-  // prepend (or trim) the oldest seq changes; to keep the viewport visually
-  // fixed we pin a specific ROW — the one at the viewport top, captured on
-  // scroll — back to its recorded offset, re-applied across a settle window so
-  // async markdown/image layout above it can't shift the read content (and
-  // streaming below can't either, since we anchor to an element, not a delta).
-  const prevFirstSeq = useRef<number | undefined>(undefined);
-  const anchorKey = useRef<string | null>(null);
-  const anchorOffset = useRef(0);
-  // While true (a short window after a prepend), the content ResizeObserver
-  // re-pins the anchor row on EVERY size change — including the prepended page's
-  // async image/markdown layout. The RO fires before paint, so the correction
-  // lands in the same frame the growth does → no flicker (rAF would be a frame
-  // late = the visible "抖一下").
-  const anchorActive = useRef(false);
-  const anchorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const contentRef = useRef<HTMLDivElement>(null);
-  // Pin the captured top row back to its recorded offset. Stable (reads refs).
-  const reanchor = useRef((): void => {
-    const el = parentRef.current;
-    if (!el || anchorKey.current === null) return;
-    const node = el.querySelector(`[data-key="${anchorKey.current}"]`);
-    if (node instanceof HTMLElement) {
-      const cur = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
-      el.scrollTop += cur - anchorOffset.current;
-    }
-  });
+  // SCROLL MODEL: the scroll container is `flex-direction: column-reverse`, so
+  // the browser anchors the viewport FROM THE BOTTOM natively. We render rows
+  // newest-first in the DOM; column-reverse flips that to oldest-at-top,
+  // newest-at-bottom on screen. The payoff is that NO JS ever writes scrollTop
+  // to anchor:
+  //   - prepend older history → added at the flex-end (visual top), far from the
+  //     bottom anchor → the viewport doesn't move. Zero scrollTop write, so
+  //     nothing fights iOS momentum and nothing can be a frame late = no jitter.
+  //   - stream / append at the bottom while stuck → the bottom anchor (scrollTop
+  //     0) holds → follows for free.
+  //   - new message while scrolled up → added at the bottom, below the view →
+  //     doesn't move it.
+  // scrollTop is ONLY written to mean "go to the bottom" (= 0), and only when
+  // the user isn't scrolling (session open, catch-up tap, container resize) — so
+  // it never collides with an active flick. `Math.abs(scrollTop)` is the
+  // distance-from-bottom (Chrome makes scrollTop negative going up; Safari
+  // positive — abs handles both).
 
   // Wire user-intent listeners ONCE; they read parentRef + sessionIdRef each
   // time so the dependency on the ref's contents stays out of React's eyes.
@@ -932,32 +922,21 @@ export function Transcript({
       }
     };
     const onScroll = (): void => {
-      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (dist < 24 && !stick.current) {
+      // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
+      const fromBottom = Math.abs(el.scrollTop);
+      if (fromBottom < 24 && !stick.current) {
         // Manually scrolled all the way back to the bottom → re-stick + the
         // toggle reactivates (REQ-4).
         stick.current = true;
         setSticky(sessionIdRef.current, true);
       }
-      // Near the top: prefetch the next older page (2 screens early → the
-      // prepend lands before the user reaches it = imperceptible), AND capture
-      // the row currently at the viewport top as the prepend anchor so we can
-      // keep it exactly put when the page lands. `loadOlder` self-guards.
-      if (el.scrollTop < el.clientHeight * 2) {
+      // Near the top (oldest): prefetch the next older page 2 screens early so
+      // the prepend lands before the user reaches it. column-reverse keeps the
+      // viewport put when it lands (added at the visual top, away from the bottom
+      // anchor), so there's no anchor row to capture. `loadOlder` self-guards.
+      const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
+      if (fromTop < el.clientHeight * 2) {
         void loadOlder(sessionIdRef.current);
-        // Capture the row at the viewport top. Query `[data-key]` (NOT
-        // el.children — the rows live inside the content wrapper now) and pick
-        // the first whose bottom is below the viewport top.
-        const top = el.getBoundingClientRect().top;
-        anchorKey.current = null;
-        for (const c of el.querySelectorAll("[data-key]")) {
-          const r = c.getBoundingClientRect();
-          if (r.bottom > top + 1) {
-            anchorKey.current = c.getAttribute("data-key");
-            anchorOffset.current = r.top - top;
-            break;
-          }
-        }
       }
     };
     el.addEventListener("wheel", detach, { passive: true });
@@ -986,7 +965,7 @@ export function Transcript({
     const repin = (): void => {
       roRaf = 0;
       if (!stick.current) return;
-      el.scrollTop = el.scrollHeight;
+      el.scrollTop = 0; // column-reverse: 0 = bottom
       if (++roTries < 5) roRaf = requestAnimationFrame(repin);
     };
     const ro = new ResizeObserver(() => {
@@ -1005,92 +984,37 @@ export function Transcript({
     };
   }, []);
 
-  // Content ResizeObserver — the flicker-free handler for ASYNC growth, because
-  // its callback fires BEFORE paint. During the post-prepend anchor window it
-  // re-pins the captured row (so the prepended page's images/markdown laying out
-  // can't shift the read content); otherwise, while pinned, it follows the
-  // bottom (so a late image / streamed token at the bottom stays flush). A plain
-  // rAF would correct a frame late — the visible jitter.
-  useEffect(() => {
-    const content = contentRef.current;
-    const el = parentRef.current;
-    if (!content || !el) return undefined;
-    const ro = new ResizeObserver(() => {
-      if (anchorActive.current) reanchor.current();
-      else if (stick.current) el.scrollTop = el.scrollHeight;
-    });
-    ro.observe(content);
-    return () => ro.disconnect();
-  }, []);
-
   // Opening / switching a session always starts pinned to the latest message
-  // (chat default). The component isn't remounted per session, so `stick`
-  // would otherwise carry over a scrolled-up position from the previous
-  // session. We also can't rely on a single scroll: react-virtual measures
-  // rows lazily, so the first `scrollToIndex` lands short of the true bottom
-  // (estimated 80px rows are usually shorter than real ones). Re-pin via
-  // `scrollTop = scrollHeight` across a few frames so it converges to the
-  // actual bottom as heights settle.
+  // (chat default). The component isn't remounted per session, so `stick` would
+  // otherwise carry over a scrolled-up position. column-reverse already starts
+  // at the bottom (scrollTop 0), but a SWITCH from a scrolled-up prior session
+  // needs an explicit reset; a few frames cover the initial lazy image/markdown
+  // settle (0 stays pinned to the bottom as they grow).
   useLayoutEffect(() => {
     stick.current = true;
     // A (re)opened session starts pinned + following, regardless of a prior
     // detached state (REQ: default on).
     resetSticky(sessionId);
-    // The timeline prop swaps to the new session here — clear the anchor
-    // baseline so the anchor effect's next run pins to bottom (a session switch
-    // is NOT a prepend).
-    prevFirstSeq.current = undefined;
     let raf = 0;
     let tries = 0;
     const pin = (): void => {
       const el = parentRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) el.scrollTop = 0; // column-reverse: 0 = bottom
       if (++tries < 5) raf = requestAnimationFrame(pin);
     };
     raf = requestAnimationFrame(pin);
     return () => cancelAnimationFrame(raf);
   }, [sessionId]);
 
-  // ANCHOR + FOLLOW, after every timeline change. Heights are REAL (no
-  // virtualizer estimation), so these adjustments are exact:
-  //   - oldest seq CHANGED (older history prepended, or a recycle-trim) → keep
-  //     the viewport visually fixed: shift scrollTop by the exact scrollHeight
-  //     delta. (Safari has no overflow-anchor, so we anchor manually.) This is
-  //     the jitter-free pagination.
-  //   - else if still stuck → follow the bottom (append / streaming growth),
-  //     plus one coalesced next-frame re-pin so async markdown/image settle
-  //     still lands flush.
-  //   - else (a new message arrived while the user is scrolled up) → leave
-  //     scrollTop alone: content added BELOW the viewport never moves it. That
-  //     is the no-jitter-on-new-message guarantee, for free.
+  // FOLLOW after a timeline change. column-reverse makes prepend + scrolled-up
+  // append jitter-free natively (see the SCROLL MODEL note above), so the only
+  // thing left to assert is "keep following the bottom while stuck" — set
+  // scrollTop 0 (a no-op when the native bottom anchor already held it there,
+  // a safety net if it didn't). When NOT stuck we never touch scrollTop, so a
+  // prepend / new message can't move the reader's view.
   useLayoutEffect(() => {
     const el = parentRef.current;
-    if (!el) return undefined;
-    const firstSeq = timeline[0]?.seq;
-    const prepended =
-      prevFirstSeq.current !== undefined &&
-      firstSeq !== undefined &&
-      firstSeq !== prevFirstSeq.current;
-    prevFirstSeq.current = firstSeq;
-    if (prepended && anchorKey.current) {
-      // Pin the captured row NOW (sync, before paint), then OPEN the anchor
-      // window: the content ResizeObserver re-pins on each subsequent size
-      // change (async image/markdown layout of the prepended page) — before
-      // paint, so nothing ever shifts visibly. Close the window after the page
-      // has had time to settle; later growth at the bottom is the RO's
-      // stick-follow branch, not this.
-      reanchor.current();
-      anchorActive.current = true;
-      if (anchorTimer.current) clearTimeout(anchorTimer.current);
-      anchorTimer.current = setTimeout(() => {
-        anchorActive.current = false;
-      }, 1500);
-    } else if (stick.current) {
-      // Append / streaming while pinned → follow the bottom (the RO catches any
-      // async settle after this).
-      el.scrollTop = el.scrollHeight;
-    }
-    return undefined;
+    if (el && stick.current) el.scrollTop = 0;
   }, [timeline]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
@@ -1101,18 +1025,15 @@ export function Transcript({
     if (scrollNonce === lastNonceRef.current) return undefined;
     lastNonceRef.current = scrollNonce;
     stick.current = true;
-    // Converge across a few frames like the session-pin (NOT a single scroll):
-    // react-virtual measures rows lazily and markdown/images settle after paint,
-    // so one `scrollTop = scrollHeight` lands SHORT of the true bottom while a
-    // tall last bubble is still being measured — that's the "tapped the sticky
-    // toggle but it didn't reach the bottom" bug. Re-pin until scrollHeight
-    // stops growing; later async growth (an image load) is caught by the
-    // totalSize auto-snap above, now that stick is back on.
+    // Converge across a few frames (column-reverse: 0 = bottom). 0 stays pinned
+    // to the bottom as the last bubble's markdown/images settle, so this is
+    // really just "re-stick + ensure we're at 0" — the few frames cover the case
+    // where the container is mid-resize (keyboard) when the tap lands.
     let raf = 0;
     let tries = 0;
     const pin = (): void => {
       const el = parentRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) el.scrollTop = 0;
       if (++tries < 5) raf = requestAnimationFrame(pin);
     };
     raf = requestAnimationFrame(pin);
@@ -1141,6 +1062,11 @@ export function Transcript({
           minHeight: 0,
           overflowY: "auto",
           overflowX: "hidden",
+          // column-reverse → the browser anchors from the bottom. Rows are
+          // rendered newest-first below and flipped to oldest-top / newest-bottom
+          // on screen; a short transcript sits at the bottom (chat convention).
+          display: "flex",
+          flexDirection: "column-reverse",
           // User-controlled side gutter (px, breakpoint-independent like
           // liveview's reading margin); vertical padding stays responsive.
           px: `${padding}px`,
@@ -1159,36 +1085,34 @@ export function Transcript({
           overscrollBehavior: "contain",
         }}
       >
-        {/* Content wrapper: the ResizeObserver observes THIS, so any change in
-            total content height (async image/markdown layout, streamed growth)
-            is caught before paint. Always present so the observer is wired once. */}
-        <div ref={contentRef}>
         {loading && items.length === 0 ? (
           <TranscriptSkeleton />
         ) : (
-          // Direct render of the loaded window (no virtualizer). Keyed by the
+          // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
+          // oldest-at-top / newest-at-bottom on screen. The trailing dots are
+          // DOM-first → the very bottom (below the newest item). Keyed by the
           // item's STABLE key (first envelope seq) so prepending older history
-          // — which shifts every array index — doesn't re-mount/jump rows.
-          // Heights are real, so the anchor effect above can keep the viewport
-          // exactly fixed on prepend/trim.
+          // doesn't re-mount/jump rows.
           <>
-            {items.map((item, i) => (
-              <Box
-                key={item.key}
-                data-key={item.key}
-                sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
-              >
-                <ItemView item={item} streaming={working && i === lastIdx} />
-              </Box>
-            ))}
             {showTrailingDots && (
               <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
                 <ThinkingIndicator provider={provider} />
               </Box>
             )}
+            {items
+              .map((item, i) => ({ item, i }))
+              .reverse()
+              .map(({ item, i }) => (
+                <Box
+                  key={item.key}
+                  data-key={item.key}
+                  sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
+                >
+                  <ItemView item={item} streaming={working && i === lastIdx} />
+                </Box>
+              ))}
           </>
         )}
-        </div>
       </Box>
       {/* "Loading older history" — an ABSOLUTE overlay at the top (not in the
           scroll flow) so it gives feedback without adding height that would
