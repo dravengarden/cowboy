@@ -691,9 +691,17 @@ const ItemView = memo(function ItemView({
 // A persistent strip pinned at the BOTTOM of the transcript (just above the
 // composer), shown only when the session is NOT live. The timeline's lifecycle
 // entry scrolls away; this stays put, so an interrupted / crashed / dormant
-// session — or a dropped connection — is always visible. Hue matches the navbar
-// StatusDot palette (App.tsx statusColor) so the dot and the bar read as one
-// signal. Returns null in the live states (running/busy/starting).
+// session is always visible. Hue matches the navbar StatusDot palette (App.tsx
+// statusColor) so the dot and the bar read as one signal. Returns null in the
+// live states (running/busy/starting).
+//
+// Deliberately STATUS-only — it does NOT react to the WS `connected` flag. A
+// flaky link (cellular) flaps connected on/off constantly; gating the bar on it
+// would strobe a "disconnected" banner and is exactly the kind of transient
+// noise that must never distract from a working session. Connection state is
+// already surfaced — DEBOUNCED — by the app-level reconnect banner
+// (RECONNECT_BANNER_THRESHOLD in store.ts). This bar tracks only the
+// authoritative session status, which a blip never changes.
 //
 // The key signal (the user's ask): a daemon restart that caught a turn in flight
 // surfaces as `interrupted` (amber, "didn't finish"), distinct from the normal
@@ -701,21 +709,13 @@ const ItemView = memo(function ItemView({
 // glance, no percentage.
 function SessionStatusBar({
   status,
-  connected,
 }: {
   status: Status;
-  connected: boolean;
 }): React.JSX.Element | null {
-  // A dropped WS masks the per-session status (stale + the agent is
-  // unreachable), so it wins. Otherwise surface the settled dead states.
   let tone: "warning" | "error" | "neutral";
   let icon: React.JSX.Element;
   let text: string;
-  if (!connected) {
-    tone = "warning";
-    icon = <CircularProgress size={14} thickness={6} color="inherit" />;
-    text = "Disconnected — reconnecting…";
-  } else if (status === "interrupted") {
+  if (status === "interrupted") {
     tone = "warning";
     icon = <WarningAmberRounded fontSize="small" />;
     text = "Last turn was interrupted before it finished — send a message to start a new one.";
@@ -1133,7 +1133,7 @@ export function Transcript({
       {/* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */}
-      <SessionStatusBar status={status} connected={connected} />
+      <SessionStatusBar status={status} />
       {/* The "scroll to latest" affordance is now the persistent sticky toggle
           in the composer (stickyStore + Composer), not a transient Fab here. */}
       {pendingPermission && (
