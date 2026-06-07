@@ -770,21 +770,35 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         // Revive on open (design §7): warm the agent when the client selects
         // the session, not only on the first prompt. No-op if already alive.
         Inbound::OpenSession { session_id } => {
-            // A client opens the focus it restored from localStorage on reload.
-            // If that session is gone (deleted while the client was away), this
-            // is NOT an error condition: the client already pops a one-shot
-            // *warning* snackbar and falls back to another session. Log a
-            // server-side warning and swallow the error so no error toast is
-            // broadcast (which would otherwise read as a hard failure).
-            match state.supervisor.ensure_alive(&session_id) {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        error = %e,
-                        "open of unknown/gone session ignored — client will fall back",
-                    );
-                    Ok(())
+            // Do NOT revive an INTERRUPTED session on open. Reviving would flip it
+            // to Starting→Running, hiding the fact that its last turn was cut off
+            // by a restart — and a stale in-flight tool from that turn would then
+            // drive a misleading "working" spinner (the reported bug: after a
+            // deploy + reload it looked like the agent was still thinking). Left
+            // interrupted, the client shows the "last turn was interrupted — send
+            // a message to start a new one" bar and no spinner; submitting a
+            // message revives it via the drain. Exited/dormant sessions (nothing
+            // unfinished) still pre-revive on open so they're ready to type into.
+            if state.hub.status(&session_id) == Some(Status::Interrupted) {
+                Ok(())
+            } else {
+                // A client opens the focus it restored from localStorage on
+                // reload. If that session is gone (deleted while the client was
+                // away), this is NOT an error condition: the client already pops a
+                // one-shot *warning* snackbar and falls back to another session.
+                // Log a server-side warning and swallow the error so no error
+                // toast is broadcast (which would otherwise read as a hard
+                // failure).
+                match state.supervisor.ensure_alive(&session_id) {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            error = %e,
+                            "open of unknown/gone session ignored — client will fall back",
+                        );
+                        Ok(())
+                    }
                 }
             }
         }
