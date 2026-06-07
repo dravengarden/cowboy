@@ -564,7 +564,7 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { sessions, timelines, hydrated, lastError, sessionsLoaded } =
+    const { sessions, timelines, hydrated, lastError, sessionsLoaded, connected } =
         useStore();
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
@@ -1009,6 +1009,9 @@ export function App({
                             // Skeleton until this session's history snapshot
                             // lands (vs an empty session, which is hydrated).
                             loading={!hydrated.has(active.id)}
+                            // While the WS is down the "working" spinner must not
+                            // keep spinning on a stale status (daemon restart).
+                            connected={connected}
                         />
                         {/* Bottom mode: order 1 sits the composer above the
                             navbar (order 2, the very bottom) and below the

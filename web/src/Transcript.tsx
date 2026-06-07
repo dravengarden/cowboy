@@ -683,6 +683,7 @@ export function Transcript({
   status,
   provider,
   loading,
+  connected,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -692,6 +693,11 @@ export function Transcript({
   /** True until this session's history snapshot has arrived — show a skeleton
    *  instead of an empty column during the initial load. */
   loading: boolean;
+  /** Whether the WS to the daemon is up. The "working" indicator requires it:
+   *  while disconnected (e.g. a daemon restart / deploy) the last-known status is
+   *  stale and the agent is unreachable, so we must NOT keep spinning "thinking".
+   *  The connection banner communicates the disconnect instead. */
+  connected: boolean;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -741,7 +747,12 @@ export function Transcript({
         it.kind === "tool" &&
         (it.status === "pending" || it.status === "in_progress"),
     );
-  const working = busy || toolInFlight;
+  // Require a live connection: while the WS is down (daemon restart / deploy /
+  // network drop) the last-known status is stale and the agent is unreachable, so
+  // a perpetual "thinking" spinner is wrong (the reported bug — it spun for the
+  // whole restart). The connection banner conveys the disconnect instead; on
+  // reconnect the daemon re-broadcasts the real status (Exited after a restart).
+  const working = connected && (busy || toolInFlight);
   const lastIdx = items.length - 1;
   const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
   // The last item is "streaming" if the agent is working AND it's an
