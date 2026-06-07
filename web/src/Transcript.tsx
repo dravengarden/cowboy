@@ -406,10 +406,17 @@ function ToolCard({
   const running = item.status === "in_progress" || item.status === "pending";
   return (
     <Paper
-      variant="outlined"
+      elevation={0}
       sx={{
         alignSelf: "stretch",
         overflow: "hidden",
+        // Borderless: a filled `background.paper` surface (a touch lighter than
+        // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
+        // outlined border (theme `divider`) drew a faint violet line top+bottom
+        // on every collapsed card, and a tool-heavy transcript stacked them into
+        // a "ruled paper" look. The icon + status chip already mark it as a tool.
+        bgcolor: "background.paper",
+        borderRadius: 1,
         // Subtle breathing while a tool is mid-flight; nothing while
         // completed/failed (those are static states).
         animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
