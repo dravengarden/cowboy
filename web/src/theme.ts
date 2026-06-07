@@ -139,7 +139,11 @@ export function useThemeMode(): ThemeControls {
                 // The Chrome-tab-bar lavender the user pointed at: a desaturated
                 // pinkish violet that's calm on the eyes for long sessions.
                 default: "#f4ecf7",
-                paper: "#fdfbff",
+                // Paper is the ELEVATED surface (cards, dialogs, the DetentSheet):
+                // lighter than `default` so it reads as raised, but a lavender-
+                // tinted white rather than near-pure-white — a stark #fdfbff read
+                // as a harsh white box over the soft lavender page.
+                paper: "#faf6fd",
               },
               divider: "rgba(124, 58, 237, 0.18)",
               text: {
