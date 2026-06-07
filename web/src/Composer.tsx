@@ -882,6 +882,83 @@ function QueuedAttachmentChips({
 // The Zed-style staging panel above the editor — one component for two kinds:
 //   - "queued": prompts the busy agent can't take yet, auto-drained one per turn.
 //   - "draft":  parked messages the user holds; activated (sent/queued) on demand.
+
+// A header action that confirms before firing — the bulk panel actions (Clear
+// All, Send all) are one tap from wiping or dispatching the whole list, so they
+// route through a small confirm Popover (same pattern as the row's Force-push
+// confirm) instead of acting instantly.
+function ConfirmButton({
+  label,
+  message,
+  confirmLabel,
+  confirmColor,
+  color = "inherit",
+  muted = false,
+  onConfirm,
+}: {
+  label: string;
+  message: string;
+  confirmLabel: string;
+  confirmColor: "primary" | "error" | "warning";
+  color?: "inherit" | "primary";
+  muted?: boolean;
+  onConfirm: () => void;
+}): React.JSX.Element {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  return (
+    <>
+      <Button
+        size="small"
+        color={color}
+        onClick={(e): void => setAnchor(e.currentTarget)}
+        sx={{
+          textTransform: "none",
+          minWidth: 0,
+          px: 0.75,
+          ...(muted && { color: "text.secondary" }),
+        }}
+      >
+        {label}
+      </Button>
+      <Popover
+        open={anchor !== null}
+        anchorEl={anchor}
+        onClose={(): void => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+      >
+        <Box sx={{ p: 1.5, maxWidth: 240 }}>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {message}
+          </Typography>
+          <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Button
+              size="small"
+              color="inherit"
+              onClick={(): void => setAnchor(null)}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              color={confirmColor}
+              onClick={(): void => {
+                onConfirm();
+                setAnchor(null);
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              {confirmLabel}
+            </Button>
+          </Stack>
+        </Box>
+      </Popover>
+    </>
+  );
+}
+
 // Collapsible header ("N Queued Messages" / "N Drafts" + Clear All, plus Send all
 // for drafts) over a scroll-capped list of rows. Drafts sit BELOW the queue and
 // above the composer (see the Composer render).
@@ -1001,24 +1078,30 @@ function PendingPanel({
           </IconButton>
         )}
         {kind === "draft" && (
-          <Button
-            size="small"
+          <ConfirmButton
+            label="Send all"
+            message={`Send all ${String(count)} drafts to the agent?`}
+            confirmLabel="Send all"
+            confirmColor="primary"
             color="primary"
-            onClick={(): void => activateAllDrafts(sessionId)}
-            sx={{ textTransform: "none", minWidth: 0, px: 0.75 }}
-          >
-            Send all
-          </Button>
+            onConfirm={(): void => activateAllDrafts(sessionId)}
+          />
         )}
-        <Button
-          size="small"
-          color="inherit"
-          onClick={(): void =>
-            kind === "queued" ? clearQueue(sessionId) : clearDrafts(sessionId)}
-          sx={{ textTransform: "none", color: "text.secondary", minWidth: 0, px: 0.75 }}
-        >
-          Clear All
-        </Button>
+        <ConfirmButton
+          label="Clear All"
+          message={
+            kind === "queued"
+              ? `Clear all ${String(count)} queued messages?`
+              : `Clear all ${String(count)} drafts?`
+          }
+          confirmLabel="Clear all"
+          confirmColor="error"
+          muted
+          onConfirm={(): void => {
+            if (kind === "queued") clearQueue(sessionId);
+            else clearDrafts(sessionId);
+          }}
+        />
       </Stack>
       <Collapse in={!collapsed}>
         <Stack
