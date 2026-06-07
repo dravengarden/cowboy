@@ -1093,6 +1093,80 @@ function PendingPanel({
 // One queued prompt. Read mode shows the (clamped) text + a primary action +
 // Edit / Delete. Edit mode swaps in a small multiline field (Enter saves, Esc
 // cancels). The primary action depends on whether the session can take a turn
+// Plain-text preview that clamps to 2 lines, with a Show more / Show less toggle
+// at the end that appears ONLY when the text actually overflows — so a long
+// pasted draft / queued prompt stays a compact row by default but expands inline
+// (the "多行末尾要有折叠按钮，默认折叠" ask). Measured only while clamped (the
+// expanded state has no overflow to read) and re-measured on resize. The toggle
+// is a real button with a touch-sized hit target (mobile + desktop).
+function ClampedText({ text }: { text: string }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return undefined;
+    const measure = (): void => setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, expanded]);
+  return (
+    <>
+      <Box
+        ref={ref}
+        sx={{
+          typography: "body2",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          ...(expanded
+            ? {}
+            : {
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }),
+        }}
+      >
+        {text}
+      </Box>
+      {(overflowing || expanded) && (
+        <Button
+          size="small"
+          disableRipple
+          onClick={(): void => setExpanded((e) => !e)}
+          endIcon={
+            <ExpandMore
+              fontSize="small"
+              sx={{
+                transition: "transform .15s",
+                transform: expanded ? "rotate(180deg)" : "none",
+              }}
+            />
+          }
+          sx={{
+            mt: 0.25,
+            px: 0.5,
+            py: 0,
+            minWidth: 0,
+            minHeight: 28,
+            "@media (pointer: coarse)": { minHeight: 32 },
+            textTransform: "none",
+            fontSize: "0.72rem",
+            color: "text.secondary",
+            "& .MuiButton-endIcon": { ml: 0.25 },
+            "&:hover": { bgcolor: "transparent", color: "text.primary" },
+          }}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </Button>
+      )}
+    </>
+  );
+}
+
 // right now: dispatchable → a plain "Send now" (sends immediately, revives a
 // dead session); busy → a warning-coloured "Force push" that interrupts the
 // running turn and runs this prompt next — gated behind a confirm popover
@@ -1235,23 +1309,7 @@ function PendingRow({
   return (
     <Paper variant="outlined" sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        {message.text && (
-          <Typography
-            variant="body2"
-            sx={{
-              // Two-line clamp: keep rows compact so several queued prompts fit;
-              // the full text is editable via the pencil.
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-            }}
-          >
-            {message.text}
-          </Typography>
-        )}
+        {message.text && <ClampedText text={message.text} />}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
         )}
