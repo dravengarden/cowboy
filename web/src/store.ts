@@ -73,10 +73,11 @@ export interface State {
   // loading skeleton only during the initial fetch — not for an empty session.
   hydrated: Set<string>;
   // session_id → history pagination state. `reachedStart` = the loaded window
-  // already includes the very first event (nothing older to page to);
-  // `loadingOlder` = a page fetch is in flight (one at a time). The window's
-  // oldest seq is just `timelines.get(id)[0].seq` — not stored separately.
-  pagination: Map<string, { reachedStart: boolean; loadingOlder: boolean }>;
+  // already includes the very first event; `loadingOlder` = a page fetch is in
+  // flight (one at a time); `nextPage` = the next (older) seq-aligned page index
+  // to fetch, DECREMENTED each load. Tracked (not recomputed from the oldest
+  // seq) so a seq gap at a page boundary can't stall progress.
+  pagination: Map<string, { reachedStart: boolean; loadingOlder: boolean; nextPage: number }>;
   // True once the first "sessions" list has arrived. Lets the UI tell "no
   // sessions yet (still loading)" from "loaded — the persisted focus is gone".
   sessionsLoaded: boolean;
@@ -221,38 +222,32 @@ const HISTORY_PAGE = 200;
 // loaded against; until the first /version probe lands it's a harmless "0".)
 export async function loadOlder(sessionId: string): Promise<void> {
   const pg = state.pagination.get(sessionId);
-  if (!pg || pg.reachedStart || pg.loadingOlder) return;
-  const tl = state.timelines.get(sessionId) ?? [];
-  const oldestSeq = tl[0]?.seq ?? 0;
-  const setReached = (): void => setPagination(sessionId, { reachedStart: true, loadingOlder: false });
-  if (oldestSeq <= 0) {
-    setReached();
-    return;
-  }
-  const page = Math.floor((oldestSeq - 1) / HISTORY_PAGE);
-  setPagination(sessionId, { reachedStart: false, loadingOlder: true });
+  if (!pg || pg.reachedStart || pg.loadingOlder || pg.nextPage < 0) return;
+  const page = pg.nextPage;
+  setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
     const res = await fetch(
       `/api/history/${encodeURIComponent(sessionId)}/${String(page)}?v=${encodeURIComponent(knownVersion ?? "0")}`,
     );
     if (!res.ok) {
-      setPagination(sessionId, { reachedStart: false, loadingOlder: false });
+      setPagination(sessionId, { ...pg, loadingOlder: false });
       return;
     }
     const data = (await res.json()) as { events: Envelope[] };
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
-    // Reached the start once we've pulled page 0 (or the page came back with
-    // seq 0 in it). Else more pages remain.
-    const reachedStart = page === 0 || data.events.some((e) => e.seq === 0);
-    setPagination(sessionId, { reachedStart, loadingOlder: false });
+    // Always step to the next OLDER page (don't recompute from the oldest seq —
+    // a gap at a boundary would re-request the same page forever). Page 0 was
+    // the last → reached start.
+    const nextPage = page - 1;
+    setPagination(sessionId, { reachedStart: nextPage < 0, loadingOlder: false, nextPage });
   } catch {
-    setPagination(sessionId, { reachedStart: false, loadingOlder: false });
+    setPagination(sessionId, { ...pg, loadingOlder: false });
   }
 }
 
 function setPagination(
   sessionId: string,
-  value: { reachedStart: boolean; loadingOlder: boolean },
+  value: { reachedStart: boolean; loadingOlder: boolean; nextPage: number },
 ): void {
   const pagination = new Map(state.pagination);
   pagination.set(sessionId, value);
@@ -312,6 +307,11 @@ function handle(msg: Outbound): void {
         : new Map(state.pagination).set(msg.session_id, {
             reachedStart: msg.reached_start,
             loadingOlder: false,
+            // First older page = the one containing (oldestSeq − 1), so its lower
+            // part (if any) is filled before going further back.
+            nextPage: msg.events.length
+              ? Math.floor(((msg.events[0]?.seq ?? 0) - 1) / HISTORY_PAGE)
+              : -1,
           });
       setState({ ...state, timelines, hydrated, pagination });
       break;

@@ -656,11 +656,19 @@ impl Hub {
     pub fn history_page(&self, session_id: &str, page: usize) -> Option<(Vec<Envelope>, bool)> {
         let sessions = self.inner.sessions.lock().unwrap();
         sessions.get(session_id).map(|s| {
-            let len = s.log.len();
-            let lo = page.saturating_mul(HISTORY_PAGE);
-            let hi = lo.saturating_add(HISTORY_PAGE).min(len);
-            let events = if lo < len { s.log[lo..hi].to_vec() } else { Vec::new() };
-            let immutable = len >= lo.saturating_add(HISTORY_PAGE);
+            // Page k = events whose SEQ is in [k·P, (k+1)·P). Sliced by SEQ, not
+            // log index: seqs aren't always contiguous from 0 (some get assigned
+            // without landing in the log), so an index slice returns a window
+            // that doesn't line up with the client's seq-based paging and the
+            // client never advances. The log is seq-sorted → binary-search bounds.
+            let lo_seq = (page as u64).saturating_mul(HISTORY_PAGE as u64);
+            let hi_seq = lo_seq.saturating_add(HISTORY_PAGE as u64);
+            let lo = s.log.partition_point(|e| e.seq < lo_seq);
+            let hi = s.log.partition_point(|e| e.seq < hi_seq);
+            let events = s.log[lo..hi].to_vec();
+            // Complete (immutable) once an event with seq ≥ hi_seq exists —
+            // nothing more can land in this page. The latest page can still grow.
+            let immutable = hi < s.log.len();
             (events, immutable)
         })
     }
