@@ -40,11 +40,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>cowboy uses the camera so you can attach a photo to a message.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>cowboy needs photo access so you can attach images to a message.</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 </dict>
 </plist>

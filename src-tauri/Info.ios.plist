@@ -8,6 +8,12 @@
 -->
 <plist version="1.0">
 <dict>
+	<!-- Home-screen / app-switcher name. iOS prefers CFBundleDisplayName over
+	     CFBundleName; Tauri lowercases the iOS PRODUCT_NAME (→ CFBundleName
+	     "cowboy"), so this is how the capitalized "Cowboy" label is set. The
+	     macOS app name comes from tauri.conf.json productName instead. -->
+	<key>CFBundleDisplayName</key>
+	<string>Cowboy</string>
 	<!-- Shown by the OS when the web UI's <input type=file> reaches for the
 	     camera / photo library. Without them the picker is denied on a device. -->
 	<key>NSCameraUsageDescription</key>

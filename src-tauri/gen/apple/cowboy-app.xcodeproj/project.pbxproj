@@ -18,6 +18,7 @@
 		BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */; };
 		C31E6FD8B40CFF30451BE96C /* CowboyNativeTweaks.mm in Sources */ = {isa = PBXBuildFile; fileRef = AD9A232AC9291F56B68E2F5E /* CowboyNativeTweaks.mm */; };
 		C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = C58785E3DA0343C036B5FEC7 /* main.mm */; };
+		E55112D3F7545B378B1609DF /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 8C42241D817B6D2F447C1783 /* libapp.a */; };
 		E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 58C49BC7D90084DF90F056FA /* Assets.xcassets */; };
 		F23E19ECFEE6CA710C5DADDE /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 9DA85E6BB7E1D31EB4F015DF /* libapp.a */; };
 		FD0BBA22F2CB89C20F527522 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 871A9E41BDB157298E255820 /* UIKit.framework */; };
@@ -31,6 +32,7 @@
 		58C49BC7D90084DF90F056FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		871A9E41BDB157298E255820 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		8C42241D817B6D2F447C1783 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		9D968930A097E1D8CE1093C8 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		9DA85E6BB7E1D31EB4F015DF /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		A5265D1AAC0F7A5D0DC19C32 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
@@ -98,6 +100,14 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		3F008EE08ABAF9959956BB68 /* release */ = {
+			isa = PBXGroup;
+			children = (
+				8C42241D817B6D2F447C1783 /* libapp.a */,
+			);
+			path = release;
+			sourceTree = "<group>";
+		};
 		497A1423B8996EB2CC86AF47 = {
 			isa = PBXGroup;
 			children = (
@@ -152,6 +162,7 @@
 			isa = PBXGroup;
 			children = (
 				02B3E3745B949E926CCAF795 /* debug */,
+				3F008EE08ABAF9959956BB68 /* release */,
 			);
 			path = arm64;
 			sourceTree = "<group>";
@@ -172,7 +183,7 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
-		"TEMP_276716C8-E559-4EE6-97BB-71C6E8320AD4" /* x86_64 */ = {
+		"TEMP_40529538-36FD-4C33-81D5-41A12C041DA2" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -240,6 +251,7 @@
 				E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */,
 				BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */,
 				BD39776437A605B602E9620B /* assets in Resources */,
+				E55112D3F7545B378B1609DF /* libapp.a in Resources */,
 				B5C4F994CE8D8F6A0E9BC380 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -307,7 +319,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = top.thundersparrow.cowboy;
-				PRODUCT_NAME = "cowboy";
+				PRODUCT_NAME = cowboy;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -394,7 +406,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = top.thundersparrow.cowboy;
-				PRODUCT_NAME = "cowboy";
+				PRODUCT_NAME = cowboy;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
