@@ -62,21 +62,27 @@ export function nearestPreset(value: number, presets: number[]): number {
   );
 }
 
-function clampToRange(n: number, min: number, max: number, def: number): number {
+// Read a stored numeric setting, snapping a missing/garbage/out-of-range value
+// back to `def`. A MISSING key must use the default, NOT coerce to 0 — for
+// padding (min 0) `Number(localStorage.getItem(key))` of an absent key is
+// `Number(null) === 0`, which is in-range, so it would silently override the
+// default with 0 (the "first launch shows 8px in Settings but 0px gutter" bug;
+// fontScale/lineHeight escaped it only because their min bound excludes 0).
+function readNum(key: string, min: number, max: number, def: number): number {
+  const raw = globalThis.localStorage?.getItem(key);
+  if (raw === null || raw === undefined || raw === "") return def;
+  const n = Number(raw);
   return Number.isFinite(n) && n >= min && n <= max ? n : def;
 }
 
 function read(): ReadingSettings {
-  const fs = Number(globalThis.localStorage?.getItem(FONT_KEY));
-  const pad = Number(globalThis.localStorage?.getItem(PAD_KEY));
-  const lh = Number(globalThis.localStorage?.getItem(LINE_KEY));
   const variant = globalThis.localStorage?.getItem(VARIANT_KEY) ?? "";
   return {
     // Bounds are wider than the preset band so a hand-edited value is honoured
     // but a garbage/missing one snaps back to the default.
-    fontScale: clampToRange(fs, 0.5, 2, FONT_SCALE_DEFAULT),
-    padding: clampToRange(pad, 0, 96, PADDING_DEFAULT),
-    lineHeight: clampToRange(lh, 1, 2.5, LINE_HEIGHT_DEFAULT),
+    fontScale: readNum(FONT_KEY, 0.5, 2, FONT_SCALE_DEFAULT),
+    padding: readNum(PAD_KEY, 0, 96, PADDING_DEFAULT),
+    lineHeight: readNum(LINE_KEY, 1, 2.5, LINE_HEIGHT_DEFAULT),
     // Unknown/missing id resolves to the default preset.
     fontVariant: getFontPreset(variant).id,
   };
