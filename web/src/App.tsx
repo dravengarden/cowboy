@@ -267,10 +267,14 @@ function SessionList({
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
                         onClick={(): void => onPick(s.id)}
-                        // Keep the trailing kebab off the screen edge: floor a
-                        // right inset so it never hugs the rounded corner / iOS
-                        // back-swipe edge (ui.md §7), where it was easy to miss.
-                        sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
+                        // Symmetric side gutters so the leading grip + trailing
+                        // kebab circles never hug / get clipped by the screen edge
+                        // (floored at 12px, but yielding to a larger safe-area
+                        // inset on the notch side in landscape — ui.md §7).
+                        sx={{
+                            pl: "max(env(safe-area-inset-left), 12px)",
+                            pr: "max(env(safe-area-inset-right), 12px)",
+                        }}
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
                             (Apple HIG touch min) with a FIXED 24px glyph: the icon
@@ -287,7 +291,9 @@ function SessionList({
                                 width: 44,
                                 height: 44,
                                 flexShrink: 0,
-                                ml: -1,
+                                // No negative margin — the row's pl (12px) is the
+                                // gutter; a pull-left would re-clip the circle at
+                                // the screen edge.
                                 color: "text.disabled",
                             }}
                         >
@@ -805,12 +811,13 @@ export function App({
                     ariaLabel="Sessions"
                     surfaceColor={theme.palette.background.default}
                 >
-                    {/* Cancel DetentSheet's body side padding (px:2) for the
-                        session list so the rows span the sheet's full width —
-                        scoped here, NOT in DetentSheet, so every other sheet
-                        (Settings, …) keeps its gutter. The desktop sidebar
-                        renders `list` directly (no wrapper), so it's unaffected. */}
-                    <Box sx={{ mx: -2 }}>{list}</Box>
+                    {/* DetentSheet's body has no side padding, so the list spans
+                        the full width on its own — render it directly. (A former
+                        `mx: -2` here "cancelled" a px:2 the sheet no longer has,
+                        so it just bled the rows 16px PAST the viewport, clipping
+                        the grip/kebab circles at the screen edge. The row's own
+                        px gutter below insets the controls instead.) */}
+                    {list}
                 </DetentSheet>
             ) : (
                 <Stack
