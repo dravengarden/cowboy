@@ -346,6 +346,83 @@ function ChunkView({
   return <Markdown text={chunk.text} invert={invert} />;
 }
 
+// A user-message body that collapses when it's very tall — a pasted log / big
+// snippet shouldn't flood the transcript (the reported case). Community pattern
+// (Claude.ai / ChatGPT / Zed, OneReach's "show more" widget, the CSS-Tricks
+// fade-read-more): clamp to a max-height, fade the cut edge to the bubble
+// colour, and toggle Show more / Show less. The cap is measured off the NATURAL
+// content (the inner ref isn't clamped, so the clamp can never hide its own
+// toggle) and re-measured on async growth (a pasted image loading). One height
+// cap + a centered text toggle behaves identically on mobile + desktop.
+const COLLAPSED_BUBBLE_PX = 200;
+function CollapsibleUserBody({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    // Only collapse when there's a meaningful amount to hide (a hair over the
+    // cap isn't worth a toggle) — natural height must clear the cap + a buffer.
+    const measure = (): void => setOverflowing(el.offsetHeight > COLLAPSED_BUBBLE_PX + 80);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const clamp = overflowing && !expanded;
+  return (
+    <>
+      <Box sx={{ position: "relative" }}>
+        <Box sx={{ maxHeight: clamp ? COLLAPSED_BUBBLE_PX : "none", overflow: "hidden" }}>
+          <Box ref={ref}>{children}</Box>
+        </Box>
+        {clamp && (
+          <Box
+            aria-hidden
+            sx={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 44,
+              pointerEvents: "none",
+              background: (t) =>
+                `linear-gradient(to bottom, transparent, ${t.palette.primary.main})`,
+            }}
+          />
+        )}
+      </Box>
+      {overflowing && (
+        <Box sx={{ display: "flex", justifyContent: "center", mt: 0.25 }}>
+          <Button
+            size="small"
+            disableRipple
+            onClick={(): void => setExpanded((e) => !e)}
+            endIcon={expanded ? <ExpandLess /> : <ExpandMore />}
+            sx={{
+              color: "primary.contrastText",
+              textTransform: "none",
+              minWidth: 0,
+              py: 0,
+              opacity: 0.85,
+              "& .MuiButton-endIcon": { ml: 0.25 },
+              "& .MuiButton-endIcon > svg": { fontSize: 18 },
+              "&:hover": { bgcolor: "transparent", opacity: 1 },
+            }}
+          >
+            {expanded ? "Show less" : "Show more"}
+          </Button>
+        </Box>
+      )}
+    </>
+  );
+}
+
 function MessageBubble({
   role,
   chunks,
@@ -391,7 +468,7 @@ function MessageBubble({
         overflow: "hidden",
       }}
     >
-      {body}
+      <CollapsibleUserBody>{body}</CollapsibleUserBody>
     </Paper>
   );
 }
