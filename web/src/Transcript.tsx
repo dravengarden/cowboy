@@ -852,13 +852,32 @@ export function Transcript({
     // be focused first; that's fine, hits the rare desktop case.
     el.addEventListener("keydown", detach);
     // Keep pinned when the container resizes UNDER us — the on-screen keyboard
-    // opening lifts the composer (via --kb-inset) and shrinks this pane, which
-    // no doc/selection change accompanies, so the totalSize auto-snap wouldn't
-    // fire. Only re-pin while still stuck (a scrolled-up reader isn't yanked
-    // down). A programmatic scrollTop write doesn't trip `detach` (not a
-    // wheel/touch), so this can't fight the user.
+    // opening lifts the composer (via --kb-inset) and the drafts/queue panel
+    // expanding shrinks this pane, neither with a doc/selection change to trip
+    // the totalSize auto-snap. Only re-pin while still stuck (a scrolled-up
+    // reader isn't yanked down). A programmatic scrollTop write doesn't trip
+    // `detach` (not a wheel/touch), so this can't fight the user.
+    //
+    // CONVERGE across a few frames, don't write once: a resize re-renders the
+    // virtualizer's window and react-virtual re-measures the now-visible rows
+    // over the NEXT frames, so `scrollHeight` is briefly stale and a single
+    // `scrollTop = scrollHeight` lands SHORT — the "expanded drafts and the last
+    // message no longer sits at the bottom" report. This is the same lazy-measure
+    // gap the session-pin + auto-snap effects already converge across. Coalesce
+    // bursts (keyboard animation fires resize every frame) onto one loop, and
+    // restart its window on each burst so the final settled frame wins.
+    let roRaf = 0;
+    let roTries = 0;
+    const repin = (): void => {
+      roRaf = 0;
+      if (!stick.current) return;
+      el.scrollTop = el.scrollHeight;
+      if (++roTries < 5) roRaf = requestAnimationFrame(repin);
+    };
     const ro = new ResizeObserver(() => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (!stick.current) return;
+      roTries = 0; // extend the convergence window for this resize burst
+      if (roRaf === 0) roRaf = requestAnimationFrame(repin);
     });
     ro.observe(el);
     return () => {
@@ -867,6 +886,7 @@ export function Transcript({
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("keydown", detach);
       ro.disconnect();
+      if (roRaf !== 0) cancelAnimationFrame(roRaf);
     };
   }, []);
 
