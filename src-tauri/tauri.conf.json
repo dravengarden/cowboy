@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "identifier": "top.thundersparrow.cowboy",
   "build": {
-    "//": "Thin remote shell — no local frontend to build. Both dev and prod load the already-https cowboy UI served by caddy on the tailnet. A URL (not a path) for frontendDist tells Tauri to skip bundling assets and load remote.",
     "devUrl": "https://cowboy.hawk.thundersparrow.top",
     "frontendDist": "https://cowboy.hawk.thundersparrow.top"
   },
@@ -20,14 +19,12 @@
       }
     ],
     "security": {
-      "//": "csp null: let the remote cowboy UI's own response headers govern; we inject nothing. The remote origin gets NO Tauri IPC access (dangerousRemoteDomainIpcAccess is intentionally unset) — this shell only provides the native WebView.",
       "csp": null
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "//icon": "Generated on the Mac via `cargo tauri icon ../web/public/icon-512.png` into src-tauri/icons/.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

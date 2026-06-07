@@ -1,0 +1,460 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2294F498097080CF1920ED0F /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FB97B040CFF164692AD78EEE /* CoreGraphics.framework */; };
+		22F95F1869D3987C27517171 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D968930A097E1D8CE1093C8 /* WebKit.framework */; };
+		74C0DA1915B715C45832C6F8 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BF25E48DEF12AEE297EEC694 /* QuartzCore.framework */; };
+		757A55B79E0996ACA0631F20 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FD431D8C24D15C8EC67C2B99 /* Security.framework */; };
+		7AEA2D19E1742D9BECA9BECF /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C8109CDA62A5CF9CC736293B /* Metal.framework */; };
+		8C566D8658DAFBD93836797B /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDE6D31B33DE21BD50F98DCB /* MetalKit.framework */; };
+		BD39776437A605B602E9620B /* assets in Resources */ = {isa = PBXBuildFile; fileRef = A5265D1AAC0F7A5D0DC19C32 /* assets */; };
+		BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */; };
+		C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = C58785E3DA0343C036B5FEC7 /* main.mm */; };
+		E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 58C49BC7D90084DF90F056FA /* Assets.xcassets */; };
+		F23E19ECFEE6CA710C5DADDE /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 9DA85E6BB7E1D31EB4F015DF /* libapp.a */; };
+		FD0BBA22F2CB89C20F527522 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 871A9E41BDB157298E255820 /* UIKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0902CE675914417586871290 /* cowboy-app_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "cowboy-app_iOS.entitlements"; sourceTree = "<group>"; };
+		13951502312E668A1C091328 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		51AC93686CCD4E1C4B3797B0 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		58C49BC7D90084DF90F056FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		871A9E41BDB157298E255820 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		9D968930A097E1D8CE1093C8 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		9DA85E6BB7E1D31EB4F015DF /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		A5265D1AAC0F7A5D0DC19C32 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		BAD942E4021ED63459FFA77E /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		BF25E48DEF12AEE297EEC694 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		C58785E3DA0343C036B5FEC7 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		C8109CDA62A5CF9CC736293B /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		CA4B7C9835D8F8230BA4244A /* cowboy-app_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "cowboy-app_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		CDE6D31B33DE21BD50F98DCB /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		EE81F537B13A7B752B2D61C2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		FB97B040CFF164692AD78EEE /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		FD431D8C24D15C8EC67C2B99 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CE3041396AEA8772A7E75859 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F23E19ECFEE6CA710C5DADDE /* libapp.a in Frameworks */,
+				2294F498097080CF1920ED0F /* CoreGraphics.framework in Frameworks */,
+				7AEA2D19E1742D9BECA9BECF /* Metal.framework in Frameworks */,
+				8C566D8658DAFBD93836797B /* MetalKit.framework in Frameworks */,
+				74C0DA1915B715C45832C6F8 /* QuartzCore.framework in Frameworks */,
+				757A55B79E0996ACA0631F20 /* Security.framework in Frameworks */,
+				FD0BBA22F2CB89C20F527522 /* UIKit.framework in Frameworks */,
+				22F95F1869D3987C27517171 /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1023F1F753CF1ECBBE096F47 /* cowboy-app */ = {
+			isa = PBXGroup;
+			children = (
+				C58785E3DA0343C036B5FEC7 /* main.mm */,
+				5032FD1E48F49B5DF31525F3 /* bindings */,
+			);
+			path = "cowboy-app";
+			sourceTree = "<group>";
+		};
+		3E0B314616B0018E1584C188 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				FB97B040CFF164692AD78EEE /* CoreGraphics.framework */,
+				9DA85E6BB7E1D31EB4F015DF /* libapp.a */,
+				C8109CDA62A5CF9CC736293B /* Metal.framework */,
+				CDE6D31B33DE21BD50F98DCB /* MetalKit.framework */,
+				BF25E48DEF12AEE297EEC694 /* QuartzCore.framework */,
+				FD431D8C24D15C8EC67C2B99 /* Security.framework */,
+				871A9E41BDB157298E255820 /* UIKit.framework */,
+				9D968930A097E1D8CE1093C8 /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		497A1423B8996EB2CC86AF47 = {
+			isa = PBXGroup;
+			children = (
+				A5265D1AAC0F7A5D0DC19C32 /* assets */,
+				58C49BC7D90084DF90F056FA /* Assets.xcassets */,
+				5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */,
+				6515E754415AE9A5602F7F6F /* cowboy-app_iOS */,
+				FE51F16E863CEE738165189B /* Externals */,
+				FEC0935E81A9BE6B628E735B /* Sources */,
+				DE299C9162427FDD6679C64F /* src */,
+				3E0B314616B0018E1584C188 /* Frameworks */,
+				8A31536FAC34E0F66534737D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5032FD1E48F49B5DF31525F3 /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				51AC93686CCD4E1C4B3797B0 /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		6515E754415AE9A5602F7F6F /* cowboy-app_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				0902CE675914417586871290 /* cowboy-app_iOS.entitlements */,
+				EE81F537B13A7B752B2D61C2 /* Info.plist */,
+			);
+			path = "cowboy-app_iOS";
+			sourceTree = "<group>";
+		};
+		8A31536FAC34E0F66534737D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CA4B7C9835D8F8230BA4244A /* cowboy-app_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DE299C9162427FDD6679C64F /* src */ = {
+			isa = PBXGroup;
+			children = (
+				BAD942E4021ED63459FFA77E /* lib.rs */,
+				13951502312E668A1C091328 /* main.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		FE51F16E863CEE738165189B /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		FEC0935E81A9BE6B628E735B /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				1023F1F753CF1ECBBE096F47 /* cowboy-app */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		76E84EC0FE11536A174C4EAC /* cowboy-app_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F1BA67120B4CCEE9DE172A16 /* Build configuration list for PBXNativeTarget "cowboy-app_iOS" */;
+			buildPhases = (
+				435C751DFEDD986278F55015 /* Build Rust Code */,
+				C7E17A1F3D4920515B8C57EC /* Sources */,
+				D8E9608167BE1B1E5B8AE7E8 /* Resources */,
+				CE3041396AEA8772A7E75859 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "cowboy-app_iOS";
+			packageProductDependencies = (
+			);
+			productName = "cowboy-app_iOS";
+			productReference = CA4B7C9835D8F8230BA4244A /* cowboy-app_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B2D50F19694F02541E99AD45 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 52C39CBE1AE93181046F0DEE /* Build configuration list for PBXProject "cowboy-app" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 497A1423B8996EB2CC86AF47;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 8A31536FAC34E0F66534737D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				76E84EC0FE11536A174C4EAC /* cowboy-app_iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D8E9608167BE1B1E5B8AE7E8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */,
+				BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */,
+				BD39776437A605B602E9620B /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		435C751DFEDD986278F55015 /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C7E17A1F3D4920515B8C57EC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0BDD54864992D5335A4204F1 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "cowboy-app_iOS/cowboy-app_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "cowboy-app_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = top.thundersparrow.cowboy;
+				PRODUCT_NAME = "cowboy";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		5847E8C84CC5738E1E50D059 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		8BC5F29373BF98B7BFD7DE1B /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "cowboy-app_iOS/cowboy-app_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "cowboy-app_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = top.thundersparrow.cowboy;
+				PRODUCT_NAME = "cowboy";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		A9F7CE41A8C844656A6E19DF /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		52C39CBE1AE93181046F0DEE /* Build configuration list for PBXProject "cowboy-app" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A9F7CE41A8C844656A6E19DF /* debug */,
+				5847E8C84CC5738E1E50D059 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		F1BA67120B4CCEE9DE172A16 /* Build configuration list for PBXNativeTarget "cowboy-app_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0BDD54864992D5335A4204F1 /* debug */,
+				8BC5F29373BF98B7BFD7DE1B /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B2D50F19694F02541E99AD45 /* Project object */;
+}
