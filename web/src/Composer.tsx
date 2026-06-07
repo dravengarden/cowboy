@@ -37,6 +37,7 @@ import {
   InsertDriveFileOutlined,
   Send,
   Stop,
+  SwapVert,
   Tune,
   Undo,
   VerticalAlignBottom,
@@ -819,7 +820,17 @@ function PendingPanel({
   // switch / remount) — the count stays visible either way.
   const [collapsed, setCollapsed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Reorder is a low-frequency action, so the per-row drag grips are hidden by
+  // default (they'd waste ~40px on every row of a narrow phone) and revealed
+  // only in this opt-in "reorder mode" (iOS list-Edit pattern). Local + ephemeral
+  // like `collapsed`. Per-panel state → drafts and queue toggle independently.
+  const [reordering, setReordering] = useState(false);
   const count = items.length;
+  // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
+  // toggle) so a cleared/sent-down panel never sits stuck in an empty mode.
+  useEffect(() => {
+    if (count < 2 && reordering) setReordering(false);
+  }, [count, reordering]);
   // Bridge the locally-edited QUEUED message id to the store so the auto-drain
   // holds that message (and everything behind it) until the edit finishes.
   // Drafts don't drain, so they need no hold. Clears on unmount / session switch.
@@ -874,6 +885,20 @@ function PendingPanel({
         >
           {count} {noun}{count === 1 ? "" : "s"}
         </Typography>
+        {/* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
+            only shown) with 2+ rows. Primary-tinted while active. */}
+        {count >= 2 && (
+          <IconButton
+            size="small"
+            aria-label={reordering ? "done reordering" : "reorder"}
+            title={reordering ? "Done" : "Reorder"}
+            color={reordering ? "primary" : "default"}
+            onClick={(): void => setReordering((r) => !r)}
+            sx={{ flexShrink: 0 }}
+          >
+            <SwapVert fontSize="small" />
+          </IconButton>
+        )}
         {kind === "draft" && (
           <Button
             size="small"
@@ -918,11 +943,12 @@ function PendingPanel({
                 alignItems="center"
                 spacing={0.5}
               >
-                {/* Leading grip — drag to reorder; hidden while this row is being
-                    edited (the edit field owns the row then). A real IconButton so
-                    the drag area stays a fixed tap target (matching the row's
-                    other buttons) even as the glyph scales with the font. */}
-                {editingId !== m.id && (
+                {/* Leading grip — only in reorder mode (off by default so rows
+                    reclaim the width), and never on the row being edited (the edit
+                    field owns the row then). A real IconButton so the drag area
+                    stays a fixed tap target (matching the row's other buttons)
+                    even as the glyph scales with the font. */}
+                {reordering && editingId !== m.id && (
                   <IconButton
                     {...sortable.handleProps(m.id)}
                     aria-label="Drag to reorder"
