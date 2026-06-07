@@ -45,7 +45,9 @@ pub enum AgentCommand {
     /// Send a user turn. The full ACP content array is forwarded to the
     /// upstream agent verbatim — image / audio / resource blocks make it
     /// through (subject to the upstream's own capabilities), not just text.
-    Prompt(Vec<ContentBlock>),
+    /// The `Option<String>` is the originating client's cmid (chat send) used to
+    /// tag the user-message echo for optimistic reconcile; None for none.
+    Prompt(Vec<ContentBlock>, Option<String>),
     /// Cancel the current turn (ACP `session/cancel`).
     Cancel,
     /// Answer a pending permission request (`None` = cancelled / no choice).
@@ -362,15 +364,18 @@ async fn run_session(
     // turn is in flight.
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
-            AgentCommand::Prompt(blocks) => {
+            AgentCommand::Prompt(blocks, cmid) => {
                 state.hub.set_status(&session_id, Status::Busy, None);
                 // Echo each user content block into the timeline so every
                 // client (Web UI, phone, Zed via bridge) sees it — the upstream
                 // agent may not stream a user_message_chunk back. One Hub event
-                // per block so each renders as its own bubble.
-                for block in &blocks {
+                // per block so each renders as its own bubble. The FIRST echo
+                // carries the originating client's cmid so that client reconciles
+                // its optimistic chat bubble by id (the rest are untagged).
+                for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
-                    state.hub.push(
+                    let tag = if i == 0 { cmid.clone() } else { None };
+                    state.hub.push_tagged(
                         &session_id,
                         Event::Update {
                             update: serde_json::json!({
@@ -378,6 +383,7 @@ async fn run_session(
                                 "content": content,
                             }),
                         },
+                        tag,
                     );
                 }
                 let cx = cx.clone();

@@ -169,6 +169,7 @@ async fn run_dispatcher(
             session_id,
             text,
             content,
+            cmid,
         } = req;
         let Some(blocks) = build_prompt_blocks(&text, &content) else {
             tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
@@ -176,7 +177,7 @@ async fn run_dispatcher(
             continue;
         };
         let title = first_prompt_title(&text, &content);
-        match supervisor.send(&session_id, AgentCommand::Prompt(blocks)) {
+        match supervisor.send(&session_id, AgentCommand::Prompt(blocks, cmid)) {
             Ok(()) => {
                 if let Some(t) = title {
                     hub.auto_title(&session_id, t);
@@ -719,9 +720,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                     })
                     .collect()
             };
+            // Bridge/API direct prompt — no optimistic client, so no cmid.
             let result = state
                 .supervisor
-                .send(&session_id, AgentCommand::Prompt(blocks));
+                .send(&session_id, AgentCommand::Prompt(blocks, None));
             if result.is_ok() {
                 if let Some(title) = auto {
                     state.hub.auto_title(&session_id, title);

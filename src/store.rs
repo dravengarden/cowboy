@@ -108,6 +108,8 @@ impl Store {
                     session_id: id.clone(),
                     seq,
                     event,
+                    // cmid is a live-only reconcile tag, never persisted.
+                    cmid: None,
                 });
             }
             let next_seq = u64::try_from(row.next_seq).unwrap_or(0);

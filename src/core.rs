@@ -104,6 +104,11 @@ pub struct Envelope {
     pub seq: u64,
     #[serde(flatten)]
     pub event: Event,
+    /// LIVE-only echo of the originating client's cmid on the `user_message_chunk`
+    /// it dispatched, so that client reconciles its optimistic chat bubble by id.
+    /// Not persisted (transient reconcile tag) and None for everything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmid: Option<String>,
 }
 
 /// Session metadata for the list view (no event log).
@@ -158,6 +163,10 @@ pub struct DispatchReq {
     pub session_id: String,
     pub text: String,
     pub content: Vec<serde_json::Value>,
+    /// cmid of the originating submit (chat send) — carried so the agent's
+    /// user-message echo can be tagged for optimistic reconcile. None for a
+    /// drained queue item (its optimistic row already reconciled via `queues`).
+    pub cmid: Option<String>,
 }
 
 /// One session's full persisted state, handed to [`Hub::restore`] at startup.
@@ -856,6 +865,13 @@ impl Hub {
     /// Append an event to a session's log under the next `seq` and fan it out.
     /// Unknown sessions are ignored (a race with teardown).
     pub fn push(&self, session_id: &str, event: Event) {
+        self.push_tagged(session_id, event, None);
+    }
+
+    /// Like [`Self::push`] but stamps a live `cmid` on the broadcast envelope —
+    /// used to tag a dispatched prompt's user-message echo so the originating
+    /// client reconciles its optimistic bubble (see Envelope::cmid).
+    pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
         let envelope = {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -867,6 +883,7 @@ impl Hub {
                 session_id: session_id.to_owned(),
                 seq,
                 event,
+                cmid,
             };
             s.log.push(envelope.clone());
             envelope
@@ -1041,6 +1058,7 @@ impl Hub {
                 session_id: session_id.to_owned(),
                 text: head.text,
                 content: head.content,
+                cmid: head.cmid,
             }
         };
         self.emit_pending(session_id);
@@ -1096,6 +1114,7 @@ impl Hub {
                     session_id: session_id.to_owned(),
                     text,
                     content,
+                    cmid,
                 });
             } else {
                 let id = self.next_qid();
