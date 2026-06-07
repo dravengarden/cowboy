@@ -34,6 +34,7 @@ import {
   Bolt,
   ChevronRight,
   Close,
+  ContentPaste,
   DragIndicator,
   DriveFileMoveOutlined,
   EditNoteOutlined,
@@ -247,6 +248,60 @@ export function Composer({
 
   function removeAttachment(id: string): void {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  // One-tap clipboard paste. iOS forbids reading the clipboard without a user
+  // gesture (this runs inside the button's click), and the async Clipboard API
+  // needs a secure context — so the button only renders when `clipboard.read`
+  // exists (https tailnet), and native long-press Paste still covers everywhere
+  // else via the editor's onPasteFiles. When the clipboard holds BOTH an image
+  // and text we can't know which the user wants until after the (gesture-gated)
+  // read, so we then pop a small menu to choose; a single type acts directly.
+  const [pasteMenu, setPasteMenu] = useState<{
+    anchor: HTMLElement;
+    images: File[];
+    text: string;
+  } | null>(null);
+  function pasteText(t: string): void {
+    if (t) setText((prev) => prev + t);
+    editorRef.current?.focus();
+  }
+  async function readClipboardInto(anchor: HTMLElement): Promise<void> {
+    const clip = globalThis.navigator?.clipboard;
+    if (!clip?.read) return;
+    let items: ClipboardItem[];
+    try {
+      items = [...(await clip.read())];
+    } catch {
+      return; // user dismissed the iOS Paste prompt / denied access
+    }
+    const images: File[] = [];
+    let text = "";
+    for (const item of items) {
+      const imgType = item.types.find((t) => t.startsWith("image/"));
+      if (imgType) {
+        try {
+          const blob = await item.getType(imgType);
+          const ext = imgType.split("/")[1] ?? "png";
+          images.push(new File([blob], `pasted-${String(images.length + 1)}.${ext}`, { type: imgType }));
+        } catch {
+          /* unreadable item — skip */
+        }
+      } else if (item.types.includes("text/plain")) {
+        try {
+          text += await (await item.getType("text/plain")).text();
+        } catch {
+          /* skip */
+        }
+      }
+    }
+    if (images.length > 0 && text) {
+      setPasteMenu({ anchor, images, text });
+    } else if (images.length > 0) {
+      addFiles(images);
+    } else if (text) {
+      pasteText(text);
+    }
   }
 
   // Pull the agent-advertised options for this session, if known. Sorted in
@@ -494,6 +549,45 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
+        {!!globalThis.navigator?.clipboard?.read && (
+          <Tooltip title="Paste from clipboard">
+            <span>
+              <IconButton
+                aria-label="paste from clipboard"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(e): void => {
+                  const el = e.currentTarget;
+                  void readClipboardInto(el);
+                }}
+              >
+                <ContentPaste />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        <Menu
+          anchorEl={pasteMenu?.anchor ?? null}
+          open={pasteMenu !== null}
+          onClose={(): void => setPasteMenu(null)}
+        >
+          <MenuItem
+            onClick={(): void => {
+              if (pasteMenu) addFiles(pasteMenu.images);
+              setPasteMenu(null);
+            }}
+          >
+            Paste image{pasteMenu && pasteMenu.images.length > 1 ? `s (${String(pasteMenu.images.length)})` : ""}
+          </MenuItem>
+          <MenuItem
+            onClick={(): void => {
+              if (pasteMenu) pasteText(pasteMenu.text);
+              setPasteMenu(null);
+            }}
+          >
+            Paste text
+          </MenuItem>
+        </Menu>
         {compact ? (
           <Tooltip title="Options">
             <span>
