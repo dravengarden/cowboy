@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Extra iOS Info.plist keys, merged into the generated app Info.plist by Tauri.
+  Kept HERE (not in gen/apple/.../Info.plist) on purpose: `cargo tauri ios init`
+  regenerates the in-project Info.plist from a template and wipes hand edits,
+  but it MERGES this file every build, so these keys are durable.
+-->
+<plist version="1.0">
+<dict>
+	<!-- Shown by the OS when the web UI's <input type=file> reaches for the
+	     camera / photo library. Without them the picker is denied on a device. -->
+	<key>NSCameraUsageDescription</key>
+	<string>cowboy uses the camera so you can attach a photo to a message.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>cowboy needs photo access so you can attach images to a message.</string>
+	<!-- No custom crypto; skips the export-compliance prompt on every upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

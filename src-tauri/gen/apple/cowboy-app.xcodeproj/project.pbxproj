@@ -13,8 +13,10 @@
 		757A55B79E0996ACA0631F20 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FD431D8C24D15C8EC67C2B99 /* Security.framework */; };
 		7AEA2D19E1742D9BECA9BECF /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C8109CDA62A5CF9CC736293B /* Metal.framework */; };
 		8C566D8658DAFBD93836797B /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDE6D31B33DE21BD50F98DCB /* MetalKit.framework */; };
+		B5C4F994CE8D8F6A0E9BC380 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 0AFBCB201B1C1E4DE6493B51 /* libapp.a */; };
 		BD39776437A605B602E9620B /* assets in Resources */ = {isa = PBXBuildFile; fileRef = A5265D1AAC0F7A5D0DC19C32 /* assets */; };
 		BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */; };
+		C31E6FD8B40CFF30451BE96C /* CowboyNativeTweaks.mm in Sources */ = {isa = PBXBuildFile; fileRef = AD9A232AC9291F56B68E2F5E /* CowboyNativeTweaks.mm */; };
 		C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = C58785E3DA0343C036B5FEC7 /* main.mm */; };
 		E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 58C49BC7D90084DF90F056FA /* Assets.xcassets */; };
 		F23E19ECFEE6CA710C5DADDE /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 9DA85E6BB7E1D31EB4F015DF /* libapp.a */; };
@@ -23,6 +25,7 @@
 
 /* Begin PBXFileReference section */
 		0902CE675914417586871290 /* cowboy-app_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "cowboy-app_iOS.entitlements"; sourceTree = "<group>"; };
+		0AFBCB201B1C1E4DE6493B51 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		13951502312E668A1C091328 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
 		51AC93686CCD4E1C4B3797B0 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		58C49BC7D90084DF90F056FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -31,6 +34,7 @@
 		9D968930A097E1D8CE1093C8 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		9DA85E6BB7E1D31EB4F015DF /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		A5265D1AAC0F7A5D0DC19C32 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		AD9A232AC9291F56B68E2F5E /* CowboyNativeTweaks.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = CowboyNativeTweaks.mm; sourceTree = "<group>"; };
 		BAD942E4021ED63459FFA77E /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		BF25E48DEF12AEE297EEC694 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		C58785E3DA0343C036B5FEC7 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
@@ -61,9 +65,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		02B3E3745B949E926CCAF795 /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				0AFBCB201B1C1E4DE6493B51 /* libapp.a */,
+			);
+			path = debug;
+			sourceTree = "<group>";
+		};
 		1023F1F753CF1ECBBE096F47 /* cowboy-app */ = {
 			isa = PBXGroup;
 			children = (
+				AD9A232AC9291F56B68E2F5E /* CowboyNativeTweaks.mm */,
 				C58785E3DA0343C036B5FEC7 /* main.mm */,
 				5032FD1E48F49B5DF31525F3 /* bindings */,
 			);
@@ -135,9 +148,18 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
+		E930435AD5366007DED80F2D /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				02B3E3745B949E926CCAF795 /* debug */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
 		FE51F16E863CEE738165189B /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				E930435AD5366007DED80F2D /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -148,6 +170,13 @@
 				1023F1F753CF1ECBBE096F47 /* cowboy-app */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		"TEMP_276716C8-E559-4EE6-97BB-71C6E8320AD4" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -211,6 +240,7 @@
 				E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */,
 				BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */,
 				BD39776437A605B602E9620B /* assets in Resources */,
+				B5C4F994CE8D8F6A0E9BC380 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -245,6 +275,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C31E6FD8B40CFF30451BE96C /* CowboyNativeTweaks.mm in Sources */,
 				C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
