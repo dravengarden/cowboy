@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
 import type { AvailableCommand } from "./protocol";
@@ -110,6 +118,30 @@ export const ComposerTextarea = forwardRef<
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
+  // Top edge (viewport px) of the input the picker is anchored to. The picker
+  // opens UPWARD (bottom:100%), so the space above the input is its ceiling —
+  // and that space SHRINKS when the keyboard is up. We cap the popup to it (see
+  // the maxHeight calc) so its top can never overflow off-screen, clipping the
+  // first options with no way to reach them (the reported bug). Remeasured while
+  // the picker is open: on each keystroke (a multiline textarea grows, moving
+  // its top) and on visualViewport resize (keyboard open/close, rotation).
+  const [anchorTop, setAnchorTop] = useState(0);
+  const pickerOpen = Boolean(trigger) && options.length > 0;
+  useLayoutEffect(() => {
+    if (!pickerOpen) return undefined;
+    const measure = (): void => {
+      const r = inputRef.current?.getBoundingClientRect();
+      if (r) setAnchorTop(r.top);
+    };
+    measure();
+    const vv = globalThis.visualViewport;
+    vv?.addEventListener("resize", measure);
+    vv?.addEventListener("scroll", measure);
+    return () => {
+      vv?.removeEventListener("resize", measure);
+      vv?.removeEventListener("scroll", measure);
+    };
+  }, [pickerOpen, value]);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
@@ -184,7 +216,16 @@ export const ComposerTextarea = forwardRef<
         left: 0,
         right: 0,
         mb: 0.5,
-        maxHeight: "40vh",
+        // Cap to the space ABOVE the input so the popup never overflows the top
+        // of the screen and clips its first rows. `anchorTop` is the input's
+        // distance from the (visual) viewport top; minus the safe-area inset +
+        // a gap is exactly the room available. clamp keeps a usable floor and
+        // never exceeds 40vh on a tall/keyboard-less screen. overflowY:auto then
+        // makes every option reachable by scrolling within that bound.
+        maxHeight:
+          anchorTop > 0
+            ? `clamp(120px, calc(${String(anchorTop)}px - env(safe-area-inset-top, 0px) - 12px), 40vh)`
+            : "40vh",
         overflowY: "auto",
         borderRadius: 1.5,
         zIndex: 4,
