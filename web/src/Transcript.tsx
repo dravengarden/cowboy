@@ -672,14 +672,14 @@ function PermissionSheet({
               fullWidth
               variant={opt.kind.startsWith("reject") ? "outlined" : "contained"}
               color={opt.kind.startsWith("reject") ? "error" : "primary"}
-              onClick={(): void =>
+              onClick={(): void => {
                 send({
                   type: "permission",
                   session_id: sessionId,
                   request_id: item.requestId,
                   option_id: opt.optionId,
-                })
-              }
+                });
+              }}
               // Full-width, ≥48px stacked rows: the highest-stakes tap in the
               // app deserves the most reachable target on touch (ui.md §7).
               sx={{ minHeight: { xs: 48, sm: 44 }, fontSize: { xs: 16, sm: 15 } }}

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  alpha,
   Box,
   Button,
   CircularProgress,
@@ -11,6 +12,7 @@ import {
   DialogTitle,
   Divider,
   IconButton,
+  keyframes,
   List,
   ListItemButton,
   ListItemIcon,
@@ -41,6 +43,7 @@ import {
   ExpandMore,
   InsertDriveFileOutlined,
   MoreVert,
+  Refresh,
   Send,
   Stop,
   SwapVert,
@@ -60,6 +63,7 @@ import {
   addDraft,
   clearDrafts,
   clearQueue,
+  discardOptimisticDraft,
   editDraft,
   editQueued,
   forcePushQueued,
@@ -71,6 +75,7 @@ import {
   reorderDrafts,
   reorderQueue,
   requestSendQueued,
+  retryDraft,
   send,
   setQueueEditing,
   submitPrompt,
@@ -152,9 +157,12 @@ export function Composer({
   }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { configOptions, drafts, queues, sessions, timelines } = useStore();
+  const { configOptions, drafts, optimisticDrafts, queues, sessions, timelines } = useStore();
   const queue = queues.get(sessionId) ?? [];
-  const draftList = drafts.get(sessionId) ?? [];
+  // Server drafts + this device's optimistic (sending/failed) drafts appended.
+  // An optimistic row is reconciled out of the store the instant its cmid lands
+  // in the server list, so the two never duplicate here.
+  const draftList = [...(drafts.get(sessionId) ?? []), ...(optimisticDrafts.get(sessionId) ?? [])];
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
   const plan = useMemo(() => latestPlan(timelines.get(sessionId) ?? []), [timelines, sessionId]);
@@ -527,14 +535,14 @@ export function Composer({
                   key={opt.id}
                   option={opt}
                   disabled={dead}
-                  onSelect={(value): void =>
+                  onSelect={(value): void => {
                     send({
                       type: "set_config_option",
                       session_id: sessionId,
                       config_id: opt.id,
                       value,
-                    })
-                  }
+                    });
+                  }}
                 />
               ))
             )}
@@ -653,14 +661,14 @@ export function Composer({
           options={options}
           loading={showSkeleton}
           dead={dead}
-          onSelectOption={(configId, value): void =>
+          onSelectOption={(configId, value): void => {
             send({
               type: "set_config_option",
               session_id: sessionId,
               config_id: configId,
               value,
-            })
-          }
+            });
+          }}
         />
       )}
       {/* Confirm before stopping a running turn. The Stop button is destructive
@@ -882,6 +890,95 @@ function QueuedAttachmentChips({
 // The Zed-style staging panel above the editor — one component for two kinds:
 //   - "queued": prompts the busy agent can't take yet, auto-drained one per turn.
 //   - "draft":  parked messages the user holds; activated (sent/queued) on demand.
+
+// Gradient shimmer sweep — Claude "thinking" style — for an optimistic row
+// still unconfirmed past SHIMMER_DELAY_MS (see store's optimisticDrafts).
+const sweep = keyframes`to { background-position: -200% 0; }`;
+
+// An OPTIMISTIC draft row: shown the instant you stage it, before the daemon
+// confirms. `pending` (<200ms) renders like a normal row so a fast LAN/tailnet
+// send never flashes a loader; `sending` shimmers in the theme colour; `failed`
+// (WS down / timed out) turns red with retry + discard. Reconciled out of the
+// store by cmid the moment its confirmed twin arrives, so it never duplicates.
+function OptimisticDraftRow({
+  sessionId,
+  message,
+}: {
+  sessionId: string;
+  message: QueuedMessage;
+}): React.JSX.Element {
+  const failed = message.status === "failed";
+  const sending = message.status === "sending";
+  const cmid = message.cmid ?? "";
+  return (
+    <Paper
+      elevation={0}
+      sx={(t) => ({
+        p: 0.75,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 0.5,
+        bgcolor: failed ? alpha(t.palette.error.main, 0.06) : "background.paper",
+        ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
+      })}
+    >
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography
+          variant="body2"
+          sx={(t) => ({
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+            ...(sending && {
+              background: `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
+              backgroundSize: "200% 100%",
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              color: "transparent",
+              animation: `${sweep} 2s linear infinite`,
+              "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+            }),
+          })}
+        >
+          {message.text || "📎 attachment"}
+        </Typography>
+        {failed && (
+          <Typography variant="caption" sx={{ color: "error.main" }}>
+            Failed to send
+          </Typography>
+        )}
+        {message.attachments.length > 0 && (
+          <QueuedAttachmentChips attachments={message.attachments} />
+        )}
+      </Box>
+      {failed && (
+        <Stack direction="row" sx={{ flexShrink: 0 }}>
+          <Tooltip title="Retry">
+            <IconButton
+              size="small"
+              aria-label="retry send"
+              onClick={(): void => retryDraft(sessionId, cmid)}
+            >
+              <Refresh fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Discard">
+            <IconButton
+              size="small"
+              aria-label="discard draft"
+              onClick={(): void => discardOptimisticDraft(sessionId, cmid)}
+            >
+              <Close fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      )}
+    </Paper>
+  );
+}
 
 // A header action that confirms before firing — the bulk panel actions (Clear
 // All, Send all) are one tap from wiping or dispatching the whole list, so they
@@ -1118,6 +1215,9 @@ function PendingPanel({
           {sortable.order.map((id) => {
             const m = byId.get(id);
             if (!m) return null;
+            // A LOCAL optimistic draft (carries `status`) renders a lightweight
+            // row with no grip / edit / reorder — it isn't a server item yet.
+            const optimistic = m.status !== undefined;
             return (
               <Stack
                 key={m.id}
@@ -1129,10 +1229,10 @@ function PendingPanel({
               >
                 {/* Leading grip — only in reorder mode (off by default so rows
                     reclaim the width), and never on the row being edited (the edit
-                    field owns the row then). A real IconButton so the drag area
-                    stays a fixed tap target (matching the row's other buttons)
-                    even as the glyph scales with the font. */}
-                {reordering && editingId !== m.id && (
+                    field owns the row then) nor on an optimistic row. A real
+                    IconButton so the drag area stays a fixed tap target even as
+                    the glyph scales with the font. */}
+                {reordering && editingId !== m.id && !optimistic && (
                   <IconButton
                     {...sortable.handleProps(m.id)}
                     aria-label="Drag to reorder"
@@ -1142,17 +1242,21 @@ function PendingPanel({
                   </IconButton>
                 )}
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <PendingRow
-                    kind={kind}
-                    sessionId={sessionId}
-                    message={m}
-                    status={status}
-                    commands={commands}
-                    editing={editingId === m.id}
-                    onEdit={(): void => setEditingId(m.id)}
-                    onEditDone={(): void => setEditingId(null)}
-                    onMove={onMoveDraft ? (): void => onMoveDraft(m.id) : undefined}
-                  />
+                  {optimistic ? (
+                    <OptimisticDraftRow sessionId={sessionId} message={m} />
+                  ) : (
+                    <PendingRow
+                      kind={kind}
+                      sessionId={sessionId}
+                      message={m}
+                      status={status}
+                      commands={commands}
+                      editing={editingId === m.id}
+                      onEdit={(): void => setEditingId(m.id)}
+                      onEditDone={(): void => setEditingId(null)}
+                      onMove={onMoveDraft ? (): void => onMoveDraft(m.id) : undefined}
+                    />
+                  )}
                 </Box>
               </Stack>
             );

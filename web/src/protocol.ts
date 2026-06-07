@@ -121,6 +121,9 @@ export interface WireQueued {
   id: string;
   text: string;
   content: ContentBlock[];
+  /** Client message id, round-tripped so the originating client can reconcile
+   *  its optimistic row by id (never text). Absent for bridge/API-staged items. */
+  cmid?: string;
 }
 
 export type Outbound =
@@ -172,7 +175,7 @@ export type Inbound =
   // drain, so every terminal sees identical state. (The bridge keeps using
   // `prompt` for a direct, un-queued dispatch.) `content` is the ACP block array
   // (empty ⇒ plain text in `text`). See src/core.rs Inbound.
-  | { type: "submit"; session_id: string; text?: string; content?: ContentBlock[] }
+  | { type: "submit"; session_id: string; text?: string; content?: ContentBlock[]; cmid?: string }
   | { type: "remove_queued"; session_id: string; id: string }
   | {
       type: "edit_queued";
@@ -186,7 +189,7 @@ export type Inbound =
   | { type: "force_push_queued"; session_id: string; id: string }
   | { type: "queued_to_draft"; session_id: string; id: string }
   | { type: "set_queue_editing"; session_id: string; id: string | null }
-  | { type: "add_draft"; session_id: string; text?: string; content?: ContentBlock[] }
+  | { type: "add_draft"; session_id: string; text?: string; content?: ContentBlock[]; cmid?: string }
   | {
       type: "edit_draft";
       session_id: string;

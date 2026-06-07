@@ -810,8 +810,9 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             session_id,
             text,
             content,
+            cmid,
         } => {
-            state.hub.submit(&session_id, text, content);
+            state.hub.submit(&session_id, text, content, cmid);
             Ok(())
         }
         Inbound::RemoveQueued { session_id, id } => {
@@ -870,8 +871,9 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             session_id,
             text,
             content,
+            cmid,
         } => {
-            state.hub.add_draft(&session_id, text, content);
+            state.hub.add_draft(&session_id, text, content, cmid);
             Ok(())
         }
         Inbound::EditDraft {

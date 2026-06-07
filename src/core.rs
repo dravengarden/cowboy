@@ -139,6 +139,13 @@ pub struct QueuedMessage {
     pub text: String,
     #[serde(default)]
     pub content: Vec<serde_json::Value>,
+    /// Client-generated message id (uuid), round-tripped UNCHANGED so the
+    /// ORIGINATING client can reconcile its optimistic row and dedupe a retry.
+    /// Purely a per-client tag — never used for cross-terminal sync, and absent
+    /// for bridge/API sends. Lives inside the jsonb queue/drafts blob, so it
+    /// needs no schema column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmid: Option<String>,
 }
 
 /// A request from the Hub to the background dispatcher task (in `crate::server`)
@@ -269,6 +276,10 @@ pub enum Inbound {
         text: String,
         #[serde(default)]
         content: Vec<serde_json::Value>,
+        /// Optional client message id for optimistic reconcile + idempotent
+        /// retry (Phase 2 uses it for the chat/queue path). See QueuedMessage.
+        #[serde(default)]
+        cmid: Option<String>,
     },
     /// Drop one queued prompt.
     RemoveQueued { session_id: String, id: String },
@@ -304,6 +315,9 @@ pub enum Inbound {
         text: String,
         #[serde(default)]
         content: Vec<serde_json::Value>,
+        /// Client message id → optimistic draft reconcile + idempotent retry.
+        #[serde(default)]
+        cmid: Option<String>,
     },
     /// Edit a draft in place. Empty both → removed.
     EditDraft {
@@ -1054,7 +1068,13 @@ impl Hub {
     /// Queue-aware send: dispatch immediately when the session is idle and
     /// nothing is queued/in-flight; otherwise append to the queue. The single
     /// entry point the Web composer uses (the bridge/API still use `Prompt`).
-    pub fn submit(&self, session_id: &str, text: String, content: Vec<serde_json::Value>) {
+    pub fn submit(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) {
         let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
         let mut dispatch = None;
         {
@@ -1062,6 +1082,14 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            // Idempotent on cmid (a retry whose original actually landed in the
+            // queue must not double-add). The dispatch branch (chat) doesn't
+            // store a QueuedMessage, so cmid reconciliation there is Phase 2.
+            if let Some(c) = cmid.as_deref() {
+                if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
+                    return;
+                }
+            }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight = true;
                 dispatch = Some(DispatchReq {
@@ -1071,7 +1099,12 @@ impl Hub {
                 });
             } else {
                 let id = self.next_qid();
-                s.queue.push(QueuedMessage { id, text, content });
+                s.queue.push(QueuedMessage {
+                    id,
+                    text,
+                    content,
+                    cmid,
+                });
             }
         }
         match dispatch {
@@ -1197,14 +1230,33 @@ impl Hub {
     }
 
     /// Park a new draft.
-    pub fn add_draft(&self, session_id: &str, text: String, content: Vec<serde_json::Value>) {
+    pub fn add_draft(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) {
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            // Idempotent on cmid: when a send looked failed the client resends
+            // with the SAME cmid, but the original may actually have landed — so
+            // a matching cmid means "already staged", don't double-add.
+            if let Some(c) = cmid.as_deref() {
+                if s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c)) {
+                    return;
+                }
+            }
             let id = self.next_qid();
-            s.drafts.push(QueuedMessage { id, text, content });
+            s.drafts.push(QueuedMessage {
+                id,
+                text,
+                content,
+                cmid,
+            });
         }
         self.emit_pending(session_id);
     }
@@ -1304,7 +1356,9 @@ impl Hub {
         };
         if let Some(m) = msg {
             self.emit_pending(session_id);
-            self.submit(session_id, m.text, m.content);
+            // Activating a draft is a server-side move, not a fresh client
+            // optimistic send — no cmid.
+            self.submit(session_id, m.text, m.content, None);
         }
     }
 
@@ -1322,7 +1376,9 @@ impl Hub {
         }
         self.emit_pending(session_id);
         for m in msgs {
-            self.submit(session_id, m.text, m.content);
+            // Activating a draft is a server-side move, not a fresh client
+            // optimistic send — no cmid.
+            self.submit(session_id, m.text, m.content, None);
         }
     }
 

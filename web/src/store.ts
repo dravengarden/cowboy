@@ -61,6 +61,15 @@ export interface QueuedMessage {
   /** Staged image / file attachments (reconstructed from the message's ACP
    *  content blocks). Empty for a plain text prompt. */
   attachments: Attachment[];
+  /** Client message id. On a server row it's echoed back so the originating
+   *  client can match its optimistic copy by id (never text). On a LOCAL
+   *  optimistic row it's the id we minted. */
+  cmid?: string;
+  /** Set ONLY on a local optimistic row awaiting/failed daemon confirmation:
+   *  `pending` (just sent, no shimmer yet — see SHIMMER_DELAY_MS), `sending`
+   *  (still unconfirmed past the delay → gradient shimmer), `failed` (WS down /
+   *  timed out → red + retry). A confirmed server row carries no status. */
+  status?: "pending" | "sending" | "failed";
 }
 
 export interface State {
@@ -90,6 +99,11 @@ export interface State {
   // Server-authoritative + persisted in postgres, so they sync across every
   // terminal and survive a daemon restart.
   drafts: Map<string, QueuedMessage[]>;
+  // session_id → LOCAL optimistic drafts awaiting daemon confirmation (carry a
+  // `status`). Purely client-side — NOT synced, NOT persisted. Rendered AFTER
+  // the server `drafts`; reconciled away the instant their `cmid` shows up in
+  // the server list (so an optimistic row and its confirmed twin never coexist).
+  optimisticDrafts: Map<string, QueuedMessage[]>;
   lastError?: ErrorNotice;
   // Top-of-app connection/version banner; undefined = nothing shown. Spelled
   // `| undefined` (not bare optional) so `{ ...state, banner }` can carry an
@@ -110,6 +124,7 @@ let state: State = {
   // change). Start empty; never written locally except by that broadcast.
   queues: new Map(),
   drafts: new Map(),
+  optimisticDrafts: new Map(),
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -174,6 +189,9 @@ function fromWire(list: WireQueued[]): QueuedMessage[] {
     id: m.id,
     text: m.text,
     attachments: blocksToAttachments(m.content),
+    // Carried so an optimistic row can reconcile against its confirmed twin by
+    // id. `?? undefined` keeps `exactOptionalPropertyTypes` happy.
+    ...(m.cmid !== undefined && { cmid: m.cmid }),
   }));
 }
 
@@ -280,7 +298,16 @@ function handle(msg: Outbound): void {
       else queues.delete(msg.session_id);
       if (d.length > 0) drafts.set(msg.session_id, d);
       else drafts.delete(msg.session_id);
-      setState({ ...state, queues, drafts });
+      // Reconcile: an optimistic draft whose cmid now appears in the server list
+      // is CONFIRMED → drop it (the server row takes over, no duplicate). Match
+      // by cmid only, never text. Clears its pending/failed timers too.
+      const serverCmids = new Set(d.map((m) => m.cmid).filter(Boolean));
+      const optimisticDrafts = reconcileOptimistic(
+        state.optimisticDrafts,
+        msg.session_id,
+        serverCmids,
+      );
+      setState({ ...state, queues, drafts, optimisticDrafts });
       break;
     }
     case "snapshot": {
@@ -459,10 +486,99 @@ function connect(): void {
   ws.onerror = (): void => ws.close();
 }
 
-export function send(cmd: Inbound): void {
+/** Returns whether the command actually went out (socket OPEN). The optimistic
+ *  draft path uses this: a `false` means the send never left this device, so the
+ *  row goes straight to `failed` (retry from here) instead of `sending`. */
+export function send(cmd: Inbound): boolean {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(cmd));
+    return true;
   }
+  return false;
+}
+
+// --- Optimistic drafts (local, never synced) --------------------------------
+// Show a staged draft INSTANTLY; reconcile it away by cmid when the daemon's
+// `queues` broadcast echoes it back. See the `optimisticDrafts` state field.
+
+/** How long an optimistic row waits before showing the gradient shimmer. Under
+ *  this, it renders as a normal row — a fast LAN/tailnet confirm (<~100ms)
+ *  replaces it before the shimmer ever appears, so a quick send never flashes a
+ *  loader. ~100ms is the human "instant" threshold (Nielsen/RAIL); 200ms leaves
+ *  margin for jitter so the fast path is never a flicker. */
+const SHIMMER_DELAY_MS = 200;
+/** No daemon echo by here → treat the send as failed (WS dropped mid-flight). */
+const SEND_TIMEOUT_MS = 10_000;
+
+function newCmid(): string {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `c-${String(Date.now())}-${Math.random().toString(36).slice(2)}`;
+}
+
+// cmid → its pending/timeout timers, so reconcile/retry can clear them.
+const draftTimers = new Map<string, { shimmer?: ReturnType<typeof setTimeout>; fail?: ReturnType<typeof setTimeout> }>();
+function clearDraftTimers(cmid: string): void {
+  const t = draftTimers.get(cmid);
+  if (t?.shimmer) clearTimeout(t.shimmer);
+  if (t?.fail) clearTimeout(t.fail);
+  draftTimers.delete(cmid);
+}
+
+/** Mutate one optimistic draft's status in place (immutably), or drop it. */
+function patchOptimisticDraft(
+  sessionId: string,
+  cmid: string,
+  patch: ((m: QueuedMessage) => QueuedMessage) | "drop",
+): void {
+  const list = state.optimisticDrafts.get(sessionId);
+  if (!list) return;
+  const next = patch === "drop"
+    ? list.filter((m) => m.cmid !== cmid)
+    : list.map((m) => (m.cmid === cmid ? patch(m) : m));
+  const map = new Map(state.optimisticDrafts);
+  if (next.length > 0) map.set(sessionId, next);
+  else map.delete(sessionId);
+  setState({ ...state, optimisticDrafts: map });
+}
+
+/** Arm the pending→sending (shimmer) and →failed timers for a sending row. */
+function armDraftTimers(sessionId: string, cmid: string): void {
+  clearDraftTimers(cmid);
+  draftTimers.set(cmid, {
+    shimmer: setTimeout(() => {
+      patchOptimisticDraft(sessionId, cmid, (m) =>
+        m.status === "pending" ? { ...m, status: "sending" } : m);
+    }, SHIMMER_DELAY_MS),
+    fail: setTimeout(() => {
+      patchOptimisticDraft(sessionId, cmid, (m) =>
+        m.status === "failed" ? m : { ...m, status: "failed" });
+      clearDraftTimers(cmid);
+    }, SEND_TIMEOUT_MS),
+  });
+}
+
+/** Drop confirmed optimistic drafts (cmid now in the server list) + clear their
+ *  timers. Pure: returns the next map (or the same ref if nothing changed). */
+function reconcileOptimistic(
+  current: Map<string, QueuedMessage[]>,
+  sessionId: string,
+  serverCmids: Set<string | undefined>,
+): Map<string, QueuedMessage[]> {
+  const list = current.get(sessionId);
+  if (!list) return current;
+  const kept = list.filter((m) => {
+    if (m.cmid !== undefined && serverCmids.has(m.cmid)) {
+      clearDraftTimers(m.cmid);
+      return false;
+    }
+    return true;
+  });
+  if (kept.length === list.length) return current;
+  const next = new Map(current);
+  if (kept.length > 0) next.set(sessionId, kept);
+  else next.delete(sessionId);
+  return next;
 }
 
 // Tell the daemon the user opened/selected `id` so it revives that session's
@@ -541,7 +657,54 @@ export function setQueueEditing(sessionId: string, id: string | null): void {
 export function addDraft(sessionId: string, text: string, attachments: Attachment[]): void {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return;
-  send({ type: "add_draft", session_id: sessionId, text: trimmed, content: contentOf(trimmed, attachments) });
+  const cmid = newCmid();
+  // Show it INSTANTLY (optimistic), then send. WS open → `pending` (no shimmer
+  // yet, see SHIMMER_DELAY_MS); WS down → straight to `failed`.
+  const sent = send({
+    type: "add_draft",
+    session_id: sessionId,
+    text: trimmed,
+    content: contentOf(trimmed, attachments),
+    cmid,
+  });
+  const row: QueuedMessage = {
+    id: `opt-${cmid}`,
+    text: trimmed,
+    attachments,
+    cmid,
+    status: sent ? "pending" : "failed",
+  };
+  const map = new Map(state.optimisticDrafts);
+  map.set(sessionId, [...(map.get(sessionId) ?? []), row]);
+  setState({ ...state, optimisticDrafts: map });
+  if (sent) armDraftTimers(sessionId, cmid);
+}
+
+/** Retry a failed optimistic draft from THIS device (idempotent — the daemon
+ *  dedupes on the same cmid, so even if the original actually landed it won't
+ *  double-add). Back to `pending`, re-armed. */
+export function retryDraft(sessionId: string, cmid: string): void {
+  const row = state.optimisticDrafts.get(sessionId)?.find((m) => m.cmid === cmid);
+  if (!row) return;
+  const sent = send({
+    type: "add_draft",
+    session_id: sessionId,
+    text: row.text,
+    content: contentOf(row.text, row.attachments),
+    cmid,
+  });
+  patchOptimisticDraft(sessionId, cmid, (m) => ({
+    ...m,
+    status: sent ? "pending" : "failed",
+  }));
+  if (sent) armDraftTimers(sessionId, cmid);
+}
+
+/** Discard a (usually failed) optimistic draft locally — it never reached the
+ *  daemon, so there's nothing server-side to remove. */
+export function discardOptimisticDraft(sessionId: string, cmid: string): void {
+  clearDraftTimers(cmid);
+  patchOptimisticDraft(sessionId, cmid, "drop");
 }
 
 // Edit a draft in place (same shape as editQueued). Clearing both fields drops it.
