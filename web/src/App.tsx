@@ -986,14 +986,10 @@ export function App({
                             // same gutter, symmetric with the gear on the right.
                             <IconButton
                                 onClick={(): void => setDrawerOpen(true)}
-                                // Fixed 40px box on touch (matching the composer
-                                // action row's TOOLBAR_ICON_BTN). A default
-                                // IconButton sizes to its glyph, which scales with
-                                // the global font zoom — so the hamburger drifted
-                                // out of line with the slash button below it at
-                                // non-100% font sizes. A fixed box keeps both
-                                // centered glyphs at the same x at any scale.
-                                sx={{ mr: 1, "@media (pointer: coarse)": { width: 40, height: 40 } }}
+                                // Unified 44px box + fixed 24px glyph (global
+                                // MuiIconButton) keeps the hamburger aligned with
+                                // the slash button below it at any font scale.
+                                sx={{ mr: 1 }}
                             >
                                 <MenuIcon />
                             </IconButton>
@@ -1053,10 +1049,9 @@ export function App({
                             onClick={(): void => setSettingsOpen(true)}
                             aria-label="settings"
                             title="Settings"
-                            // Fixed 40px box on touch so the gear stays aligned
-                            // with the action row's send/stop button below it at
-                            // any font scale (see the hamburger note above).
-                            sx={{ "@media (pointer: coarse)": { width: 40, height: 40 } }}
+                            // Unified 44px box + 24px glyph (global MuiIconButton),
+                            // so the gear stays aligned with the action row's
+                            // send/stop button at any font scale.
                         >
                             <SettingsIcon />
                         </IconButton>

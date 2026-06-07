@@ -108,20 +108,10 @@ import { BottomSheet } from "./_shell";
 // horizontally scrollable on narrow viewports so any number of dropdowns
 // doesn't force a wrap.
 
-// Toolbar control sizing keys off POINTER TYPE, not viewport width. A desktop
-// with a narrow window is still a mouse (precise) and wants dense controls; any
-// touch device wants the ≥40px tap target (ui.md §7 "mobile never small"). The
-// old `{ xs: 40, lg: 36 }` viewport-breakpoint sizing got this wrong twice: a
-// sub-`lg` desktop window fell back to the chunky 40px touch size, and an iPad
-// in a wide (≥`lg`) layout got the cramped 36px desktop size. `pointer: coarse`
-// is the right axis — it tracks the input device, not the window. Desktop is a
-// dense 32px; coarse pointers bump every control to 40.
-const TOOLBAR_ICON_BTN = {
-  width: 32,
-  height: 32,
-  flexShrink: 0,
-  "@media (pointer: coarse)": { width: 40, height: 40 },
-} as const;
+// Toolbar icon buttons take the unified 44px box + fixed 24px glyph from the
+// global MuiIconButton theme override (same as the session-list buttons); this
+// only keeps them from shrinking in the flex toolbar row.
+const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
 const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
