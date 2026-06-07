@@ -31,7 +31,8 @@ use agent_client_protocol::schema::ContentBlock;
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::core::{
-    DispatchReq, Hub, Inbound, Outbound, RestoredSession, SessionOrigin, Status, StoreWrite,
+    DispatchReq, Envelope, Hub, Inbound, Outbound, RestoredSession, SessionOrigin, Status,
+    StoreWrite,
 };
 use crate::store::Store;
 use crate::supervisor::Supervisor;
@@ -230,6 +231,7 @@ async fn serve_axum(
         .route("/version", get(version))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
+        .route("/api/history/{id}/{page}", get(api_history))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
         // client-side routes.
@@ -382,6 +384,37 @@ async fn api_search_files(
     Json(FileSearchResponse { files }).into_response()
 }
 
+#[derive(Debug, Serialize)]
+struct HistoryResponse {
+    events: Vec<Envelope>,
+}
+
+/// One seq-aligned page of a session's history (events `[k·HISTORY_PAGE,
+/// (k+1)·HISTORY_PAGE)`). The client pages UP from the WS tail; older pages
+/// arrive here. A COMPLETE past page never changes again, so it's served
+/// `immutable` (one year) — the browser + service worker then satisfy any
+/// re-fetch (scroll back, reload, post-recycle reload) with ZERO network. The
+/// still-growing latest page is `no-store`, but the client never asks for it
+/// (it has the tail over WS). Unknown session → 404; out-of-range page → `[]`.
+async fn api_history(
+    State(state): State<Arc<AppState>>,
+    Path((session_id, page)): Path<(String, usize)>,
+) -> Response {
+    let Some((events, immutable)) = state.hub.history_page(&session_id, page) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let cache = if immutable {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    };
+    (
+        [(header::CACHE_CONTROL, cache)],
+        Json(HistoryResponse { events }),
+    )
+        .into_response()
+}
+
 /// The built web UI (Vite output), embedded at compile time. The flake builds
 /// `web/dist` with deno before the cargo build so this folder exists.
 #[derive(RustEmbed)]
@@ -476,12 +509,13 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         return;
     }
     for meta in state.hub.session_list() {
-        if let Some(events) = state.hub.snapshot(&meta.id) {
+        if let Some((events, reached_start)) = state.hub.snapshot(&meta.id) {
             if send_json(
                 &mut sink,
                 &Outbound::Snapshot {
                     session_id: meta.id.clone(),
                     events,
+                    reached_start,
                 },
             )
             .await

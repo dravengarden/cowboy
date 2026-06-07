@@ -72,6 +72,11 @@ export interface State {
   // still loading" from "loaded, genuinely empty", so the transcript shows a
   // loading skeleton only during the initial fetch — not for an empty session.
   hydrated: Set<string>;
+  // session_id → history pagination state. `reachedStart` = the loaded window
+  // already includes the very first event (nothing older to page to);
+  // `loadingOlder` = a page fetch is in flight (one at a time). The window's
+  // oldest seq is just `timelines.get(id)[0].seq` — not stored separately.
+  pagination: Map<string, { reachedStart: boolean; loadingOlder: boolean }>;
   // True once the first "sessions" list has arrived. Lets the UI tell "no
   // sessions yet (still loading)" from "loaded — the persisted focus is gone".
   sessionsLoaded: boolean;
@@ -97,6 +102,7 @@ let state: State = {
   sessions: [],
   timelines: new Map(),
   hydrated: new Set(),
+  pagination: new Map(),
   sessionsLoaded: false,
   configOptions: new Map(),
   // Both populated from the server's `queues` broadcast (on connect + on every
@@ -179,6 +185,80 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
   return next;
 }
 
+// Bulk merge a run of events (a snapshot tail or an older history page) into one
+// session's timeline: dedup by seq, keep seq-ordered, in a single pass (vs
+// applyEnvelope per event). Overlap between an unaligned tail and an aligned
+// page is harmless — the dedup drops it.
+function mergeEvents(
+  timelines: Map<string, Envelope[]>,
+  sessionId: string,
+  events: Envelope[],
+): Map<string, Envelope[]> {
+  const next = new Map(timelines);
+  const existing = next.get(sessionId) ?? [];
+  const seen = new Set(existing.map((e) => e.seq));
+  const fresh = events.filter((e) => !seen.has(e.seq));
+  if (fresh.length === 0 && existing.length > 0) return next;
+  const merged = [...existing, ...fresh].sort((a, b) => a.seq - b.seq);
+  next.set(sessionId, merged);
+  return next;
+}
+
+// History page size — MUST match the server's HISTORY_PAGE (src/core.rs). Pages
+// are seq-aligned so each has a stable, cacheable URL.
+const HISTORY_PAGE = 200;
+
+// Fetch the next OLDER page of a session's history and prepend it. Pages come
+// from the immutable HTTP route (GET /api/history/:id/:page) so a re-fetch
+// (scroll back, reload, post-recycle) is a cache hit — zero network. One fetch
+// at a time per session; no-op once the window already reaches the first event.
+//
+// VERSION-SCOPED url (`?v=<build>`): the cache is `immutable`, so without this a
+// redeploy could keep serving pages cached under the OLD build (if a future
+// version ever changes the event shape, that's stale/incompatible). Keying the
+// url on the build id means a new version's pages are fresh fetches, while
+// reloads of the SAME build stay cache hits. (`knownVersion` is the id the tab
+// loaded against; until the first /version probe lands it's a harmless "0".)
+export async function loadOlder(sessionId: string): Promise<void> {
+  const pg = state.pagination.get(sessionId);
+  if (!pg || pg.reachedStart || pg.loadingOlder) return;
+  const tl = state.timelines.get(sessionId) ?? [];
+  const oldestSeq = tl[0]?.seq ?? 0;
+  const setReached = (): void => setPagination(sessionId, { reachedStart: true, loadingOlder: false });
+  if (oldestSeq <= 0) {
+    setReached();
+    return;
+  }
+  const page = Math.floor((oldestSeq - 1) / HISTORY_PAGE);
+  setPagination(sessionId, { reachedStart: false, loadingOlder: true });
+  try {
+    const res = await fetch(
+      `/api/history/${encodeURIComponent(sessionId)}/${String(page)}?v=${encodeURIComponent(knownVersion ?? "0")}`,
+    );
+    if (!res.ok) {
+      setPagination(sessionId, { reachedStart: false, loadingOlder: false });
+      return;
+    }
+    const data = (await res.json()) as { events: Envelope[] };
+    setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
+    // Reached the start once we've pulled page 0 (or the page came back with
+    // seq 0 in it). Else more pages remain.
+    const reachedStart = page === 0 || data.events.some((e) => e.seq === 0);
+    setPagination(sessionId, { reachedStart, loadingOlder: false });
+  } catch {
+    setPagination(sessionId, { reachedStart: false, loadingOlder: false });
+  }
+}
+
+function setPagination(
+  sessionId: string,
+  value: { reachedStart: boolean; loadingOlder: boolean },
+): void {
+  const pagination = new Map(state.pagination);
+  pagination.set(sessionId, value);
+  setState({ ...state, pagination });
+}
+
 function handle(msg: Outbound): void {
   switch (msg.type) {
     case "sessions": {
@@ -216,8 +296,7 @@ function handle(msg: Outbound): void {
       break;
     }
     case "snapshot": {
-      let timelines = state.timelines;
-      for (const env of msg.events) timelines = applyEnvelope(timelines, env);
+      const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
       // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
       // "history loaded" signal. Reconnects re-send snapshots but the flag stays
       // set (cached history shown, no skeleton flash). Reuse the same Set when
@@ -225,7 +304,16 @@ function handle(msg: Outbound): void {
       const hydrated = state.hydrated.has(msg.session_id)
         ? state.hydrated
         : new Set(state.hydrated).add(msg.session_id);
-      setState({ ...state, timelines, hydrated });
+      // Seed pagination on the FIRST snapshot only — a reconnect re-sends the
+      // tail, but if we'd already paged older history in we must keep that
+      // window's `reachedStart`, not reset it to the tail's.
+      const pagination = state.pagination.has(msg.session_id)
+        ? state.pagination
+        : new Map(state.pagination).set(msg.session_id, {
+            reachedStart: msg.reached_start,
+            loadingOlder: false,
+          });
+      setState({ ...state, timelines, hydrated, pagination });
       break;
     }
     case "event":

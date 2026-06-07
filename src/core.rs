@@ -21,6 +21,13 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+/// How many recent events a fresh client gets over WS (the live tail). Older
+/// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
+pub const SNAPSHOT_TAIL: usize = 200;
+/// Fixed history page size (events) for the HTTP `/api/history` route. Fixed +
+/// seq-aligned so each page has a STABLE url → safe to cache `immutable`.
+pub const HISTORY_PAGE: usize = 200;
+
 /// Who opened a session. Used by the UI to render an `origin` badge and
 /// (eventually) to decide which sessions belong to which client surface.
 /// `Web` = a browser/phone clicked "New session" on cowboy's own UI.
@@ -347,10 +354,15 @@ pub enum Inbound {
 pub enum Outbound {
     /// Full session list (sent on connect and whenever it changes).
     Sessions { sessions: Vec<SessionMeta> },
-    /// Replay of one session's whole log (sent on connect, after `Sessions`).
+    /// Replay of one session's RECENT log tail (sent on connect, after
+    /// `Sessions`). Capped to the last [`SNAPSHOT_TAIL`] events so a long
+    /// session doesn't ship its whole history on every connect; older pages are
+    /// fetched on demand via `LoadHistory` → `History`. `reached_start` is true
+    /// when these events ARE the whole log (nothing older to page to).
     Snapshot {
         session_id: String,
         events: Vec<Envelope>,
+        reached_start: bool,
     },
     /// A single live event.
     Event { envelope: Envelope },
@@ -619,11 +631,38 @@ impl Hub {
             .collect()
     }
 
-    /// Full event log for one session (for a fresh client's snapshot).
+    /// Recent log TAIL for a fresh client (last [`SNAPSHOT_TAIL`] events) plus
+    /// `reached_start` = whether the tail IS the whole log. Older pages are
+    /// fetched on demand over HTTP (`history_page`), not shipped here — a long
+    /// session must not re-send its entire history on every connect/reconnect.
     #[must_use]
-    pub fn snapshot(&self, session_id: &str) -> Option<Vec<Envelope>> {
+    pub fn snapshot(&self, session_id: &str) -> Option<(Vec<Envelope>, bool)> {
         let sessions = self.inner.sessions.lock().unwrap();
-        sessions.get(session_id).map(|s| s.log.clone())
+        sessions.get(session_id).map(|s| {
+            let len = s.log.len();
+            let start = len.saturating_sub(SNAPSHOT_TAIL);
+            (s.log[start..].to_vec(), start == 0)
+        })
+    }
+
+    /// One fixed-size, seq-aligned page of history for the HTTP history route:
+    /// page `k` is events with seq in `[k·HISTORY_PAGE, (k+1)·HISTORY_PAGE)`.
+    /// Since seqs are contiguous from 0, that's a direct index slice. Returns the
+    /// events plus `immutable` = whether the page can never change again (the
+    /// NEXT page has started, so nothing more will land in this one) — the HTTP
+    /// handler turns that into a long-lived `Cache-Control: immutable`. An
+    /// out-of-range page yields an empty slice.
+    #[must_use]
+    pub fn history_page(&self, session_id: &str, page: usize) -> Option<(Vec<Envelope>, bool)> {
+        let sessions = self.inner.sessions.lock().unwrap();
+        sessions.get(session_id).map(|s| {
+            let len = s.log.len();
+            let lo = page.saturating_mul(HISTORY_PAGE);
+            let hi = lo.saturating_add(HISTORY_PAGE).min(len);
+            let events = if lo < len { s.log[lo..hi].to_vec() } else { Vec::new() };
+            let immutable = len >= lo.saturating_add(HISTORY_PAGE);
+            (events, immutable)
+        })
     }
 
     /// Register a new session in `Starting` state and broadcast the new list.

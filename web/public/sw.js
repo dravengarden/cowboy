@@ -6,8 +6,14 @@
 // manifest) — is network-first, so a redeploy of those shows up immediately
 // instead of being pinned to whatever the SW cached first. Bump VERSION to evict
 // the old caches on the next activation.
-const VERSION = "cowboy-v3";
+const VERSION = "cowboy-v4";
 const ASSET_CACHE = `${VERSION}-assets`;
+// Immutable history pages (GET /api/history/:id/:page?v=<build>). Their content
+// can never change (append-only log), and the `?v=` build token makes a new
+// deploy use fresh urls — so cache-first is safe and a re-fetch (scroll back,
+// reload, post-recycle) is zero-network. Version-prefixed so the activate
+// cleanup evicts it on a SW update too.
+const HISTORY_CACHE = `${VERSION}-history`;
 
 self.addEventListener("install", () => {
   void self.skipWaiting();
@@ -40,6 +46,27 @@ self.addEventListener("fetch", (event) => {
           if (resp.ok && resp.type === "basic") {
             const copy = resp.clone();
             void caches.open(ASSET_CACHE).then((c) => c.put(request, copy));
+          }
+          return resp;
+        });
+      }),
+    );
+    return;
+  }
+
+  // Immutable history pages: cache-first (see HISTORY_CACHE). The `?v=` build
+  // token guarantees a redeployed/format-changed page is a fresh url, so a
+  // cached hit is never stale for the running version.
+  if (url.pathname.startsWith("/api/history/")) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((resp) => {
+          // Only cache the immutable (complete) pages — the server marks the
+          // still-growing latest page `no-store`, which we must not pin.
+          if (resp.ok && resp.type === "basic" && resp.headers.get("cache-control")?.includes("immutable")) {
+            const copy = resp.clone();
+            void caches.open(HISTORY_CACHE).then((c) => c.put(request, copy));
           }
           return resp;
         });

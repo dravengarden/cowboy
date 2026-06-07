@@ -11,7 +11,11 @@ export type ContentChunk =
   | { type: "text"; text: string }
   | { type: "image"; src: string; alt?: string };
 
-export type RenderItem =
+// Every item carries a STABLE `key` — the seq of the envelope that first
+// created it (coalesced message/thought items keep their first chunk's seq).
+// The transcript keys rows by this so prepending older history (which shifts
+// every array index) doesn't re-mount/jump the visible rows; index keys can't.
+export type RenderItem = { key: string } & (
   | { kind: "message"; role: "assistant" | "user"; chunks: ContentChunk[] }
   | { kind: "thought"; text: string }
   | {
@@ -33,7 +37,8 @@ export type RenderItem =
       resolved: boolean;
       chosen: string | null;
     }
-  | { kind: "lifecycle"; status: Status; detail: string | null };
+  | { kind: "lifecycle"; status: Status; detail: string | null }
+);
 
 /// Convert an ACP content block into a renderable chunk (or null if we don't
 /// support that type yet).
@@ -117,7 +122,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (cursor?.kind === "message" && cursor.role === role && last?.kind === "message") {
               pushChunk(last, chunk);
             } else {
-              items.push({ kind: "message", role, chunks: [chunk] });
+              items.push({ kind: "message", role, chunks: [chunk], key: String(env.seq) });
               cursor = { kind: "message", role };
             }
             break;
@@ -128,7 +133,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (cursor?.kind === "thought" && last?.kind === "thought") {
               last.text += text;
             } else {
-              items.push({ kind: "thought", text });
+              items.push({ kind: "thought", text, key: String(env.seq) });
               cursor = { kind: "thought", role: "assistant" };
             }
             break;
@@ -137,6 +142,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             const id = u.toolCallId ?? "";
             items.push({
               kind: "tool",
+              key: String(env.seq),
               id,
               title: u.title ?? id,
               toolKind: u.kind ?? "other",
@@ -172,6 +178,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
       case "permission_request": {
         items.push({
           kind: "permission",
+          key: String(env.seq),
           requestId: env.request_id,
           title: titleOfToolCall(env.tool_call),
           options: env.options,
@@ -194,7 +201,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         // Only surface notable transitions (crash/exit); running/busy show in
         // the header.
         if (env.status === "crashed" || env.status === "exited") {
-          items.push({ kind: "lifecycle", status: env.status, detail: env.detail });
+          items.push({ kind: "lifecycle", status: env.status, detail: env.detail, key: String(env.seq) });
         }
         break;
       }

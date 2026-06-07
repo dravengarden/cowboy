@@ -43,12 +43,11 @@ import {
   Terminal,
   WarningAmberRounded,
 } from "@mui/icons-material";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
-import { send } from "./store";
+import { loadOlder, send, useStore } from "./store";
 import { useReadingSettings } from "./readingSettings";
 import {
   resetSticky,
@@ -857,11 +856,10 @@ export function Transcript({
   // sending a prompt and the first chunk landing, or after a tool call
   // completes while waiting for the model to start text again).
   const showTrailingDots = working && !lastIsStreamingAssistant;
-  // The virtualizer's row count includes a phantom "dots" row at the end
-  // when we're showing it. Keeping it as a virtualized row (rather than a
-  // sibling) means scroll-stickiness Just Works.
-  const rowCount = items.length + (showTrailingDots ? 1 : 0);
   const parentRef = useRef<HTMLDivElement>(null);
+  // History pagination state for this session (from the store): drives the
+  // "loading older…" indicator at the top + the reached-start cutoff.
+  const paging = useStore().pagination.get(sessionId);
   // "stick-to-bottom" UX, done properly this time:
   //
   // Previous bug: we listened to `onScroll` to decide if the user "wanted"
@@ -891,24 +889,13 @@ export function Transcript({
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
 
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 80,
-    overscan: 6,
-    // Round to whole pixels: a raw fractional getBoundingClientRect height
-    // re-measures to a hair-different value on each pass (80.33 → 80.34 …),
-    // and each change nudges every following row's offset — visible as a
-    // shimmy when scrolling up through measured rows.
-    measureElement: (el) => Math.round(el.getBoundingClientRect().height),
-  });
-
-  // The measured content height. Changes on EVERY row remeasure — a new row, the
-  // last bubble growing as tokens stream into it, or a row shrinking back after
-  // react-virtual's ResizeObserver corrects an over-estimate. react-virtual
-  // re-renders on each remeasure, so reading it here gives the auto-snap effect
-  // a signal that fires on streamed growth too, not just on rowCount changes.
-  const totalSize = virtualizer.getTotalSize();
+  // Anchoring refs (no virtualizer): the transcript renders the loaded window
+  // directly, so heights are always REAL (no estimation). To keep the viewport
+  // visually fixed when history is prepended at the top — or trimmed — we track
+  // the oldest loaded seq + the last scrollHeight, and shift scrollTop by the
+  // exact delta (Safari has no `overflow-anchor`). See the anchor effect below.
+  const prevFirstSeq = useRef<number | undefined>(undefined);
+  const prevScrollHeight = useRef(0);
 
   // Wire user-intent listeners ONCE; they read parentRef + sessionIdRef each
   // time so the dependency on the ref's contents stays out of React's eyes.
@@ -926,13 +913,23 @@ export function Transcript({
     };
     const onScroll = (): void => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const atBottom = dist < 24;
-      if (atBottom && !stick.current) {
+      if (dist < 24 && !stick.current) {
         // Manually scrolled all the way back to the bottom → re-stick + the
         // toggle reactivates (REQ-4).
         stick.current = true;
         setSticky(sessionIdRef.current, true);
       }
+      // Prefetch older history ~2 screens BEFORE the top, so the prepend (which
+      // anchors the viewport, jitter-free) lands before the user reaches it —
+      // pagination is imperceptible. `loadOlder` self-guards (in-flight /
+      // reached-start), so firing it on every near-top scroll is cheap.
+      if (el.scrollTop < el.clientHeight * 2) {
+        void loadOlder(sessionIdRef.current);
+      }
+      // Keep the anchor baseline fresh while the user scrolls (prepends happen
+      // mid-scroll), so the next prepend's scrollHeight delta measures only the
+      // prepended run, not unrelated growth that landed since the last render.
+      prevScrollHeight.current = el.scrollHeight;
     };
     el.addEventListener("wheel", detach, { passive: true });
     el.addEventListener("touchstart", detach, { passive: true });
@@ -992,6 +989,10 @@ export function Transcript({
     // A (re)opened session starts pinned + following, regardless of a prior
     // detached state (REQ: default on).
     resetSticky(sessionId);
+    // The timeline prop swaps to the new session here — clear the anchor
+    // baseline so the anchor effect's next run pins to bottom (a session switch
+    // is NOT a prepend).
+    prevFirstSeq.current = undefined;
     let raf = 0;
     let tries = 0;
     const pin = (): void => {
@@ -1003,40 +1004,44 @@ export function Transcript({
     return () => cancelAnimationFrame(raf);
   }, [sessionId]);
 
-  // Auto-snap (the actual "sticky" behaviour), ONLY if we're still stuck. Keyed
-  // on `totalSize` (not just `rowCount`) so it re-pins on the two cases a row-
-  // count dep misses:
-  //   1. The last assistant bubble growing as tokens stream into the SAME row —
-  //      rowCount never changes, so a rowCount-only dep would stop following.
-  //   2. A row remeasuring SMALLER after react-virtual corrects an over-estimate
-  //      (most often the trailing-dots phantom row: ~80px estimate → ~24px real).
-  //      The earlier scroll landed using the larger size; once totalSize shrinks
-  //      a stale scrollTop sits past the content → the "gap below the bottom".
-  //      Re-pinning here clamps it away.
-  // Pin via scrollTop = scrollHeight (like the session-pin effect): with
-  // `contain: strict` the spacer height === totalSize, so this lands exactly on
-  // the true bottom regardless of react-virtual's scrollToIndex measurement lag.
+  // ANCHOR + FOLLOW, after every timeline change. Heights are REAL (no
+  // virtualizer estimation), so these adjustments are exact:
+  //   - oldest seq CHANGED (older history prepended, or a recycle-trim) → keep
+  //     the viewport visually fixed: shift scrollTop by the exact scrollHeight
+  //     delta. (Safari has no overflow-anchor, so we anchor manually.) This is
+  //     the jitter-free pagination.
+  //   - else if still stuck → follow the bottom (append / streaming growth),
+  //     plus one coalesced next-frame re-pin so async markdown/image settle
+  //     still lands flush.
+  //   - else (a new message arrived while the user is scrolled up) → leave
+  //     scrollTop alone: content added BELOW the viewport never moves it. That
+  //     is the no-jitter-on-new-message guarantee, for free.
   const autoSnapRaf = useRef(0);
   useLayoutEffect(() => {
-    if (!stick.current || rowCount === 0) return undefined;
     const el = parentRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    // One COALESCED next-frame re-pin: a row often remeasures in the SAME tick
-    // right after this write — most visibly the trailing "Actioning…" dots
-    // (~80px estimate → ~24px real) and a just-sent user bubble — which leaves
-    // the single write sitting a sliver short of the true bottom (the reported
-    // "after send, sometimes not scrolled all the way down"). Deferring one more
-    // pin clamps it. Coalesced via the effect cleanup, so streaming — which
-    // fires this every token — never stacks rAFs; at most one is ever in flight.
-    autoSnapRaf.current = requestAnimationFrame(() => {
-      autoSnapRaf.current = 0;
-      const e2 = parentRef.current;
-      if (stick.current && e2) e2.scrollTop = e2.scrollHeight;
-    });
+    if (!el) return undefined;
+    const firstSeq = timeline[0]?.seq;
+    const grew = el.scrollHeight - prevScrollHeight.current;
+    if (
+      prevFirstSeq.current !== undefined &&
+      firstSeq !== undefined &&
+      firstSeq !== prevFirstSeq.current
+    ) {
+      el.scrollTop += grew;
+    } else if (stick.current) {
+      el.scrollTop = el.scrollHeight;
+      autoSnapRaf.current = requestAnimationFrame(() => {
+        autoSnapRaf.current = 0;
+        const e2 = parentRef.current;
+        if (stick.current && e2) e2.scrollTop = e2.scrollHeight;
+      });
+    }
+    prevFirstSeq.current = firstSeq;
+    prevScrollHeight.current = el.scrollHeight;
     return () => {
       if (autoSnapRaf.current) cancelAnimationFrame(autoSnapRaf.current);
     };
-  }, [rowCount, totalSize]);
+  }, [timeline]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
   // bottom and resume following. Guarded so it only fires on an actual bump
@@ -1093,13 +1098,12 @@ export function Transcript({
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text
-          // follows. A change reflows on the virtualizer's next measure pass.
+          // follows.
           lineHeight,
           // Prose font-family (unset var → theme font). MUI Typography chrome
           // sets its own family and stays put; code fences are explicitly
           // monospace and are unaffected.
           fontFamily: "var(--cowboy-reading-font, inherit)",
-          contain: "strict",
           // Hide focus ring; we keep tabIndex for keyboard scroll capture.
           outline: "none",
           overscrollBehavior: "contain",
@@ -1108,44 +1112,42 @@ export function Transcript({
         {loading && items.length === 0 ? (
           <TranscriptSkeleton />
         ) : (
-        <Box
-          sx={{
-            height: totalSize,
-            width: "100%",
-            position: "relative",
-          }}
-        >
-          {virtualizer.getVirtualItems().map((vi) => {
-            const isTrailingDots = showTrailingDots && vi.index === items.length;
-            const item = isTrailingDots ? undefined : items[vi.index];
-            const streaming = working && vi.index === lastIdx;
-            return (
-              <Box
-                key={vi.key}
-                data-index={vi.index}
-                ref={virtualizer.measureElement}
-                sx={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${vi.start}px)`,
-                  py: 0.625,
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                {isTrailingDots ? (
-                  <ThinkingIndicator provider={provider} />
-                ) : item ? (
-                  <ItemView item={item} streaming={streaming} />
-                ) : null}
+          // Direct render of the loaded window (no virtualizer). Keyed by the
+          // item's STABLE key (first envelope seq) so prepending older history
+          // — which shifts every array index — doesn't re-mount/jump rows.
+          // Heights are real, so the anchor effect above can keep the viewport
+          // exactly fixed on prepend/trim.
+          <>
+            {items.map((item, i) => (
+              <Box key={item.key} sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
+                <ItemView item={item} streaming={working && i === lastIdx} />
               </Box>
-            );
-          })}
-        </Box>
+            ))}
+            {showTrailingDots && (
+              <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
+                <ThinkingIndicator provider={provider} />
+              </Box>
+            )}
+          </>
         )}
       </Box>
+      {/* "Loading older history" — an ABSOLUTE overlay at the top (not in the
+          scroll flow) so it gives feedback without adding height that would
+          shift the viewport. Rarely seen thanks to the 2-screen prefetch. */}
+      {paging?.loadingOlder && (
+        <Box
+          sx={{
+            position: "absolute",
+            top: 8,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 2,
+            display: "flex",
+          }}
+        >
+          <CircularProgress size={16} thickness={5} sx={{ color: "text.disabled" }} />
+        </Box>
+      )}
       {/* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */}
