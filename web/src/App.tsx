@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
     Alert,
+    alpha,
     AppBar,
     Box,
     Button,
@@ -876,6 +877,8 @@ export function App({
                 sx={{
                     flex: 1,
                     minWidth: 0,
+                    // Anchor the bottom-mode glass status-bar strip (below).
+                    position: "relative",
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -885,6 +888,33 @@ export function App({
                     pb: "var(--kb-inset, 0px)",
                 }}
             >
+                {/* Bottom-navbar mode leaves the TOP bare — the transcript runs
+                    under the iOS status bar (time/signal/battery), which clashed
+                    with the content. A frosted-glass strip over the safe-area-top
+                    fixes it the iOS way: the status bar sits on blur, and content
+                    scrolls UNDER it (the transcript's matching top inset clears it
+                    at rest, so the glass only shows while scrolling). Height is
+                    `env(safe-area-inset-top)` → 0 (invisible) off-device / on a
+                    no-notch screen / when hosted, so it costs nothing there.
+                    `pointer-events:none` so taps + scroll pass straight through.
+                    Top mode doesn't need it — the AppBar already owns that edge. */}
+                {navbarAtBottom && (
+                    <Box
+                        aria-hidden
+                        sx={{
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            height: "env(safe-area-inset-top, 0px)",
+                            zIndex: (t) => t.zIndex.appBar,
+                            pointerEvents: "none",
+                            bgcolor: (t) => alpha(t.palette.background.default, 0.55),
+                            backdropFilter: "blur(20px)",
+                            WebkitBackdropFilter: "blur(20px)",
+                        }}
+                    />
+                )}
                 <AppBar
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT
@@ -1042,6 +1072,10 @@ export function App({
                             // While the WS is down the "working" spinner must not
                             // keep spinning on a stale status (daemon restart).
                             connected={connected}
+                            // Bottom-navbar mode: reserve the status-bar inset at
+                            // the transcript's top so content clears the glass
+                            // strip at rest (top mode: the AppBar owns that edge).
+                            topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : undefined}
                         />
                         {/* Bottom mode: order 1 sits the composer above the
                             navbar (order 2, the very bottom) and below the

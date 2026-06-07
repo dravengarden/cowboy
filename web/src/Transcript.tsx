@@ -778,6 +778,7 @@ export function Transcript({
   provider,
   loading,
   connected,
+  topInset,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -792,6 +793,9 @@ export function Transcript({
    *  stale and the agent is unreachable, so we must NOT keep spinning "thinking".
    *  The connection banner communicates the disconnect instead. */
   connected: boolean;
+  /** Extra top padding for the scroll content (a CSS length), so content clears
+   *  the bottom-mode glass status-bar strip at rest. Undefined = none. */
+  topInset?: string | undefined;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -1078,6 +1082,11 @@ export function Transcript({
           // liveview's reading margin); vertical padding stays responsive.
           px: `${padding}px`,
           py: { xs: 1, sm: 1.5 },
+          // Bottom-navbar mode: clear the glass status-bar strip (env safe-area
+          // top) at rest. column-reverse → padding-top is the visual top (oldest
+          // side); content still scrolls UNDER the strip mid-scroll. Overrides
+          // the `py` top only when an inset is supplied.
+          ...(topInset && { pt: `calc(${topInset} + 8px)` }),
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text
