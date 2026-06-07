@@ -38,6 +38,7 @@ import {
   Send,
   Stop,
   Tune,
+  Undo,
   VerticalAlignBottom,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
@@ -1182,13 +1183,13 @@ function PendingRow({
                 </Stack>
               </Box>
             </Popover>
-            <Tooltip title="Move to drafts">
+            <Tooltip title="Return to drafts">
               <IconButton
                 size="small"
-                aria-label="move to drafts"
+                aria-label="return to drafts"
                 onClick={(): void => queuedToDraft(sessionId, message.id)}
               >
-                <EditNoteOutlined fontSize="small" />
+                <Undo fontSize="small" />
               </IconButton>
             </Tooltip>
           </>
