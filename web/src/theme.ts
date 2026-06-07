@@ -132,10 +132,13 @@ export function useThemeMode(): ThemeControls {
         palette: dark
           ? {
               mode: "dark",
+              // Refined Radix-Violet family (less neon than Tailwind violet): a
+              // soft light step for the dark-mode bubble, violet-9 (#6E56CF) the
+              // deep step.
               primary: {
-                main: "#a78bfa", // violet-400
-                light: "#c4b5fd",
-                dark: "#7c3aed",
+                main: "#9E8CFC",
+                light: "#C9BCFF",
+                dark: "#6E56CF",
                 contrastText: "#1c1428",
               },
               secondary: { main: "#f0abfc" }, // fuchsia-300 for accents
@@ -143,22 +146,26 @@ export function useThemeMode(): ThemeControls {
                 default: "#15111d", // deep purple-black
                 paper: "#1f1a2c",
               },
-              divider: "rgba(167, 139, 250, 0.18)",
+              divider: "rgba(158, 140, 252, 0.18)",
               text: {
                 primary: "#ede9fe",
                 secondary: "#a899c4",
               },
               action: {
-                hover: "rgba(167, 139, 250, 0.10)",
-                selected: "rgba(167, 139, 250, 0.18)",
+                hover: "rgba(158, 140, 252, 0.10)",
+                selected: "rgba(158, 140, 252, 0.18)",
               },
             }
           : {
               mode: "light",
+              // Radix Violet 9 (#6E56CF): the refined, slightly blue-shifted
+              // accent — softer than Tailwind violet-600's neon while still dark
+              // enough to carry white bubble/button text (Radix pairs violet-9
+              // with white). 10/8 give the pressed + lighter steps.
               primary: {
-                main: "#7c3aed", // violet-600 — the "send" / user-bubble tone
-                light: "#a78bfa",
-                dark: "#6d28d9",
+                main: "#6E56CF", // the "send" / user-bubble tone
+                light: "#8B79E0",
+                dark: "#5B4BC4",
                 contrastText: "#ffffff",
               },
               secondary: { main: "#c026d3" }, // fuchsia accent
@@ -172,14 +179,14 @@ export function useThemeMode(): ThemeControls {
                 // as a harsh white box over the soft lavender page.
                 paper: "#faf6fd",
               },
-              divider: "rgba(124, 58, 237, 0.18)",
+              divider: "rgba(110, 86, 207, 0.18)",
               text: {
                 primary: "#1c1428",
                 secondary: "#6b5e80",
               },
               action: {
-                hover: "rgba(124, 58, 237, 0.06)",
-                selected: "rgba(124, 58, 237, 0.12)",
+                hover: "rgba(110, 86, 207, 0.06)",
+                selected: "rgba(110, 86, 207, 0.12)",
               },
             },
         shape: { borderRadius: 10 },
