@@ -12,7 +12,13 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#7c3aed" />
+    <!-- Per-scheme so the FIRST paint (before React's applyThemeColor runs)
+         already latches the status-bar colour that matches the OS scheme — the
+         app's actual background (#f4ecf7 light / #15111d dark), NOT the primary
+         violet. After mount, theme.ts owns it (incl. a manual light/dark
+         override + re-assert on resume). -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4ecf7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15111d" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Cowboy" />

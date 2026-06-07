@@ -76,6 +76,22 @@ export function useThemeMode(): ThemeControls {
   const dark = resolved === "dark";
   useEffect(() => {
     applyThemeColor(dark);
+    // An iOS standalone PWA latches the status-bar colour and IGNORES later
+    // updates across a background→resume: leave the app in dark, switch away,
+    // come back, and the bar is stuck on a stale (light) colour over a dark app
+    // (the reported "top doesn't match the theme" bug). Re-assert whenever we
+    // become visible again and on bfcache restore, so the bar always re-reads
+    // the current mode. (Mirrors liveview's useTheme.)
+    const reassert = (): void => applyThemeColor(dark);
+    const onVisible = (): void => {
+      if (globalThis.document?.visibilityState === "visible") reassert();
+    };
+    globalThis.addEventListener("visibilitychange", onVisible);
+    globalThis.addEventListener("pageshow", reassert);
+    return () => {
+      globalThis.removeEventListener("visibilitychange", onVisible);
+      globalThis.removeEventListener("pageshow", reassert);
+    };
   }, [dark]);
 
   const theme = useMemo(
