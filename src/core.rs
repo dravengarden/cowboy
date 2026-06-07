@@ -315,6 +315,14 @@ pub enum Inbound {
     ActivateDraft { session_id: String, id: String },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },
+    /// Move a draft to another session's drafts (the "parked it in the wrong
+    /// session" fix). The whole message — text + attachments — relocates to the
+    /// END of `to_session`'s drafts. `session_id` is the SOURCE.
+    MoveDraft {
+        session_id: String,
+        id: String,
+        to_session: String,
+    },
 
     // --- Reorder (drag-to-arrange, server-authoritative + synced) -------------
     /// Reorder the session list to match `order` (a full list of session ids;
@@ -1148,6 +1156,40 @@ impl Hub {
             s.drafts.retain(|m| m.id != id);
         }
         self.emit_pending(session_id);
+    }
+
+    /// Move a draft out of `from`'s draft list and onto the END of `to`'s. The
+    /// "parked in the wrong session" fix. No-op if `from == to`, either session
+    /// is unknown, or the id isn't a draft of `from`. Crucially, the draft is
+    /// pulled out ONLY when `to` exists, so a bad destination can never drop the
+    /// message. Both sessions are persisted + broadcast.
+    pub fn move_draft(&self, from: &str, id: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            // Take the draft out of `from`, but only if `to` exists to receive it.
+            let Some(msg) = (if sessions.contains_key(to) {
+                sessions.get_mut(from).and_then(|s| {
+                    s.drafts
+                        .iter()
+                        .position(|m| m.id == id)
+                        .map(|pos| s.drafts.remove(pos))
+                })
+            } else {
+                None
+            }) else {
+                return;
+            };
+            // `to` existed at the top of this lock and we still hold it, so this
+            // can't miss; the `if let` just avoids an unwrap.
+            if let Some(dst) = sessions.get_mut(to) {
+                dst.drafts.push(msg);
+            }
+        }
+        self.emit_pending(from);
+        self.emit_pending(to);
     }
 
     /// Drop a session's whole draft list.

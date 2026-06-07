@@ -12,11 +12,15 @@ import {
   Divider,
   IconButton,
   List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
   Menu,
   MenuItem,
   Paper,
   Popover,
   Skeleton,
+  Snackbar,
   Stack,
   TextField,
   Tooltip,
@@ -31,10 +35,12 @@ import {
   ChevronRight,
   Close,
   DragIndicator,
+  DriveFileMoveOutlined,
   EditNoteOutlined,
   EditOutlined,
   ExpandMore,
   InsertDriveFileOutlined,
+  MoreVert,
   Send,
   Stop,
   SwapVert,
@@ -57,6 +63,7 @@ import {
   editDraft,
   editQueued,
   forcePushQueued,
+  moveDraft,
   type QueuedMessage,
   queuedToDraft,
   removeDraft,
@@ -189,6 +196,16 @@ export function Composer({
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
   const [cancelOpen, setCancelOpen] = useState(false);
+  // "Move draft to another session" (the parked-in-the-wrong-session fix). Owned
+  // HERE, not in the drafts panel, so the undo snackbar survives the panel
+  // unmounting when the LAST draft leaves this session. `moveSrcId` = the draft
+  // whose destination picker is open; `moveUndo` backs the post-move snackbar so
+  // a mis-tapped destination is one tap to reverse.
+  const [moveSrcId, setMoveSrcId] = useState<string | null>(null);
+  const [moveUndo, setMoveUndo] = useState<
+    { id: string; toId: string; toTitle: string } | null
+  >(null);
+  const otherSessions = sessions.filter((s) => s.id !== sessionId);
   // "Stick to bottom" (auto-scroll) state for this session — owned by the
   // Transcript's scroll engine, surfaced here as a persistent toggle. Active =
   // following the latest message; tap while inactive scrolls to the bottom and
@@ -360,6 +377,10 @@ export function Composer({
           items={draftList}
           status={status}
           commands={(): AvailableCommand[] => availableCommands}
+          // Only offer "move" when there's somewhere to move to.
+          onMoveDraft={
+            otherSessions.length > 0 ? (id: string): void => setMoveSrcId(id) : undefined
+          }
         />
       )}
       {/* Staged attachments (image thumbnails / file chips) sit above the editor
@@ -691,6 +712,59 @@ export function Composer({
           </Button>
         </DialogActions>
       </Dialog>
+      {/* Move-draft destination picker + undo snackbar. Owned here (not in the
+          drafts panel) so the snackbar survives when moving the LAST draft
+          unmounts that panel. */}
+      <BottomSheet
+        open={moveSrcId !== null}
+        onClose={(): void => setMoveSrcId(null)}
+        title="Move draft to…"
+      >
+        <List sx={{ pb: 1 }}>
+          {otherSessions.map((s) => (
+            <ListItemButton
+              key={s.id}
+              onClick={(): void => {
+                if (moveSrcId !== null) {
+                  moveDraft(sessionId, moveSrcId, s.id);
+                  setMoveUndo({ id: moveSrcId, toId: s.id, toTitle: s.title });
+                }
+                setMoveSrcId(null);
+              }}
+            >
+              <ListItemText
+                primary={s.title}
+                secondary={s.cwd}
+                secondaryTypographyProps={{ noWrap: true }}
+              />
+            </ListItemButton>
+          ))}
+        </List>
+      </BottomSheet>
+      <Snackbar
+        open={moveUndo !== null}
+        autoHideDuration={6000}
+        onClose={(_e, reason): void => {
+          // Keep it up until autohide / Undo — a stray tap (clickaway) shouldn't
+          // snatch the Undo away before the user can reach it.
+          if (reason !== "clickaway") setMoveUndo(null);
+        }}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        message={moveUndo ? `Moved to ${moveUndo.toTitle}` : ""}
+        action={
+          <Button
+            color="primary"
+            size="small"
+            onClick={(): void => {
+              if (moveUndo) moveDraft(moveUndo.toId, moveUndo.id, sessionId);
+              setMoveUndo(null);
+            }}
+            sx={{ textTransform: "none" }}
+          >
+            Undo
+          </Button>
+        }
+      />
     </Box>
   );
 }
@@ -827,6 +901,7 @@ function PendingPanel({
   items,
   status,
   commands,
+  onMoveDraft,
 }: {
   kind: "queued" | "draft";
   sessionId: string;
@@ -835,6 +910,10 @@ function PendingPanel({
   status: Status;
   /** Agent-advertised `/` commands, threaded into the row's inline editor. */
   commands: () => AvailableCommand[];
+  /** Open the "move to another session" picker for a draft (draft kind only).
+      Owned by the Composer so it survives this panel unmounting when the last
+      draft leaves. Absent → the row's kebab omits the Move action. */
+  onMoveDraft?: ((id: string) => void) | undefined;
 }): React.JSX.Element {
   // Default expanded. Collapsed state is local + ephemeral (resets on session
   // switch / remount) — the count stays visible either way.
@@ -987,6 +1066,7 @@ function PendingPanel({
                     editing={editingId === m.id}
                     onEdit={(): void => setEditingId(m.id)}
                     onEditDone={(): void => setEditingId(null)}
+                    onMove={onMoveDraft ? (): void => onMoveDraft(m.id) : undefined}
                   />
                 </Box>
               </Stack>
@@ -1014,6 +1094,7 @@ function PendingRow({
   editing,
   onEdit,
   onEditDone,
+  onMove,
 }: {
   kind: "queued" | "draft";
   sessionId: string;
@@ -1023,8 +1104,13 @@ function PendingRow({
   editing: boolean;
   onEdit: () => void;
   onEditDone: () => void;
+  /** Open the move-to-another-session picker for this row (draft kind only). */
+  onMove?: (() => void) | undefined;
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
+  // Per-row kebab (⋮) anchor — holds the draft's secondary actions (Edit / Move
+  // / Remove) so the row shows only Send inline and stays uncluttered.
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   // Local attachments while editing, seeded from the queued message. The edit
   // box is the SAME ComposerEditor as the main composer, so a queued prompt can
   // gain/lose images here too (pasted screenshots, picked files).
@@ -1160,17 +1246,73 @@ function PendingRow({
       </Box>
       <Stack direction="row" sx={{ flexShrink: 0 }}>
         {kind === "draft" ? (
-          // Activate: send now if the session's free, else queue it.
-          <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
-            <IconButton
-              size="small"
-              color="primary"
-              aria-label="send draft"
-              onClick={(): void => activateDraft(sessionId, message.id)}
+          <>
+            {/* Activate: send now if the session's free, else queue it. */}
+            <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
+              <IconButton
+                size="small"
+                color="primary"
+                aria-label="send draft"
+                onClick={(): void => activateDraft(sessionId, message.id)}
+              >
+                <Send fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {/* Secondary actions live in a kebab so Send is the only inline
+                control — keeps the row uncluttered (matching the hidden-by-
+                default reorder grip), and is where "Move to another session"
+                lives without adding an always-on icon. */}
+            <Tooltip title="More">
+              <IconButton
+                size="small"
+                aria-label="draft actions"
+                onClick={(e): void => setMenuAnchor(e.currentTarget)}
+              >
+                <MoreVert fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Menu
+              anchorEl={menuAnchor}
+              open={menuAnchor !== null}
+              onClose={(): void => setMenuAnchor(null)}
             >
-              <Send fontSize="small" />
-            </IconButton>
-          </Tooltip>
+              <MenuItem
+                onClick={(): void => {
+                  setMenuAnchor(null);
+                  onEdit();
+                }}
+              >
+                <ListItemIcon>
+                  <EditOutlined fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>Edit</ListItemText>
+              </MenuItem>
+              {onMove && (
+                <MenuItem
+                  onClick={(): void => {
+                    setMenuAnchor(null);
+                    onMove();
+                  }}
+                >
+                  <ListItemIcon>
+                    <DriveFileMoveOutlined fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText>Move to another session…</ListItemText>
+                </MenuItem>
+              )}
+              <MenuItem
+                onClick={(): void => {
+                  setMenuAnchor(null);
+                  removeDraft(sessionId, message.id);
+                }}
+              >
+                <ListItemIcon>
+                  <Close fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>Remove</ListItemText>
+              </MenuItem>
+            </Menu>
+          </>
         ) : (
           <>
             {dispatchable ? (
@@ -1242,25 +1384,22 @@ function PendingRow({
                 <Undo fontSize="small" />
               </IconButton>
             </Tooltip>
+            <Tooltip title="Edit">
+              <IconButton size="small" aria-label="edit message" onClick={onEdit}>
+                <EditOutlined fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Remove">
+              <IconButton
+                size="small"
+                aria-label="remove message"
+                onClick={(): void => removeQueued(sessionId, message.id)}
+              >
+                <Close fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </>
         )}
-        <Tooltip title="Edit">
-          <IconButton size="small" aria-label="edit message" onClick={onEdit}>
-            <EditOutlined fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Remove">
-          <IconButton
-            size="small"
-            aria-label="remove message"
-            onClick={(): void =>
-              kind === "draft"
-                ? removeDraft(sessionId, message.id)
-                : removeQueued(sessionId, message.id)}
-          >
-            <Close fontSize="small" />
-          </IconButton>
-        </Tooltip>
       </Stack>
     </Paper>
   );

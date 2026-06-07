@@ -195,6 +195,8 @@ export type Inbound =
   | { type: "clear_drafts"; session_id: string }
   | { type: "activate_draft"; session_id: string; id: string }
   | { type: "activate_all_drafts"; session_id: string }
+  // Move a draft to another session's drafts (the "wrong session" fix).
+  | { type: "move_draft"; session_id: string; id: string; to_session: string }
   // Drag-to-arrange (server-authoritative, synced). `order` is the full list of
   // ids in the new order; omitted ids keep their relative order at the end.
   | { type: "reorder_sessions"; order: string[] }

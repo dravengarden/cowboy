@@ -493,6 +493,13 @@ export function queuedToDraft(sessionId: string, id: string): void {
   send({ type: "queued_to_draft", session_id: sessionId, id });
 }
 
+// Move a draft to another session's drafts (the "parked it in the wrong
+// session" fix). Server-authoritative: the daemon relocates the whole message
+// and broadcasts both sessions' panels, so every terminal stays in sync.
+export function moveDraft(fromSession: string, id: string, toSession: string): void {
+  send({ type: "move_draft", session_id: fromSession, id, to_session: toSession });
+}
+
 // --- Reorder (drag) ---------------------------------------------------------
 // Server-authoritative: send the full new id order; the daemon reorders + echoes
 // the list back (sessions / queues broadcast) so every terminal stays in sync.

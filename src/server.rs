@@ -643,6 +643,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::ClearDrafts { session_id }
         | Inbound::ActivateDraft { session_id, .. }
         | Inbound::ActivateAllDrafts { session_id }
+        | Inbound::MoveDraft { session_id, .. }
         | Inbound::ReorderQueue { session_id, .. }
         | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
         Inbound::NewSession { .. } | Inbound::ReorderSessions { .. } => None,
@@ -848,6 +849,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         }
         Inbound::ActivateAllDrafts { session_id } => {
             state.hub.activate_all_drafts(&session_id);
+            Ok(())
+        }
+        Inbound::MoveDraft {
+            session_id,
+            id,
+            to_session,
+        } => {
+            state.hub.move_draft(&session_id, &id, &to_session);
             Ok(())
         }
         Inbound::ReorderSessions { order } => {
