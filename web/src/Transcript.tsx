@@ -898,7 +898,24 @@ export function Transcript({
   const prevFirstSeq = useRef<number | undefined>(undefined);
   const anchorKey = useRef<string | null>(null);
   const anchorOffset = useRef(0);
-  const anchorRaf = useRef(0);
+  // While true (a short window after a prepend), the content ResizeObserver
+  // re-pins the anchor row on EVERY size change — including the prepended page's
+  // async image/markdown layout. The RO fires before paint, so the correction
+  // lands in the same frame the growth does → no flicker (rAF would be a frame
+  // late = the visible "抖一下").
+  const anchorActive = useRef(false);
+  const anchorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Pin the captured top row back to its recorded offset. Stable (reads refs).
+  const reanchor = useRef((): void => {
+    const el = parentRef.current;
+    if (!el || anchorKey.current === null) return;
+    const node = el.querySelector(`[data-key="${anchorKey.current}"]`);
+    if (node instanceof HTMLElement) {
+      const cur = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      el.scrollTop += cur - anchorOffset.current;
+    }
+  });
 
   // Wire user-intent listeners ONCE; they read parentRef + sessionIdRef each
   // time so the dependency on the ref's contents stays out of React's eyes.
@@ -985,6 +1002,24 @@ export function Transcript({
     };
   }, []);
 
+  // Content ResizeObserver — the flicker-free handler for ASYNC growth, because
+  // its callback fires BEFORE paint. During the post-prepend anchor window it
+  // re-pins the captured row (so the prepended page's images/markdown laying out
+  // can't shift the read content); otherwise, while pinned, it follows the
+  // bottom (so a late image / streamed token at the bottom stays flush). A plain
+  // rAF would correct a frame late — the visible jitter.
+  useEffect(() => {
+    const content = contentRef.current;
+    const el = parentRef.current;
+    if (!content || !el) return undefined;
+    const ro = new ResizeObserver(() => {
+      if (anchorActive.current) reanchor.current();
+      else if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, []);
+
   // Opening / switching a session always starts pinned to the latest message
   // (chat default). The component isn't remounted per session, so `stick`
   // would otherwise carry over a scrolled-up position from the previous
@@ -1025,7 +1060,6 @@ export function Transcript({
   //   - else (a new message arrived while the user is scrolled up) → leave
   //     scrollTop alone: content added BELOW the viewport never moves it. That
   //     is the no-jitter-on-new-message guarantee, for free.
-  const autoSnapRaf = useRef(0);
   useLayoutEffect(() => {
     const el = parentRef.current;
     if (!el) return undefined;
@@ -1036,41 +1070,24 @@ export function Transcript({
       firstSeq !== prevFirstSeq.current;
     prevFirstSeq.current = firstSeq;
     if (prepended && anchorKey.current) {
-      // Element-anchor: keep the row that was at the viewport top (captured on
-      // scroll) pinned to its recorded offset. Re-applied across a settle window
-      // because the prepended markdown/images keep laying out for a few frames —
-      // anchoring to the ELEMENT means growth above OR below can't move it.
-      const reanchor = (): void => {
-        const e2 = parentRef.current;
-        if (!e2 || anchorKey.current === null) return;
-        const node = e2.querySelector(`[data-key="${anchorKey.current}"]`);
-        if (node instanceof HTMLElement) {
-          const cur = node.getBoundingClientRect().top - e2.getBoundingClientRect().top;
-          e2.scrollTop += cur - anchorOffset.current;
-        }
-      };
-      reanchor();
-      if (anchorRaf.current) cancelAnimationFrame(anchorRaf.current);
-      let tries = 0;
-      const settle = (): void => {
-        reanchor();
-        anchorRaf.current = ++tries < 12 ? requestAnimationFrame(settle) : 0;
-      };
-      anchorRaf.current = requestAnimationFrame(settle);
+      // Pin the captured row NOW (sync, before paint), then OPEN the anchor
+      // window: the content ResizeObserver re-pins on each subsequent size
+      // change (async image/markdown layout of the prepended page) — before
+      // paint, so nothing ever shifts visibly. Close the window after the page
+      // has had time to settle; later growth at the bottom is the RO's
+      // stick-follow branch, not this.
+      reanchor.current();
+      anchorActive.current = true;
+      if (anchorTimer.current) clearTimeout(anchorTimer.current);
+      anchorTimer.current = setTimeout(() => {
+        anchorActive.current = false;
+      }, 1500);
     } else if (stick.current) {
-      // Append / streaming while pinned → follow the bottom, with one coalesced
-      // re-pin for async settle so a streamed/sent bottom lands flush.
+      // Append / streaming while pinned → follow the bottom (the RO catches any
+      // async settle after this).
       el.scrollTop = el.scrollHeight;
-      if (autoSnapRaf.current) cancelAnimationFrame(autoSnapRaf.current);
-      autoSnapRaf.current = requestAnimationFrame(() => {
-        autoSnapRaf.current = 0;
-        const e2 = parentRef.current;
-        if (stick.current && e2) e2.scrollTop = e2.scrollHeight;
-      });
     }
-    return () => {
-      if (autoSnapRaf.current) cancelAnimationFrame(autoSnapRaf.current);
-    };
+    return undefined;
   }, [timeline]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
@@ -1139,6 +1156,10 @@ export function Transcript({
           overscrollBehavior: "contain",
         }}
       >
+        {/* Content wrapper: the ResizeObserver observes THIS, so any change in
+            total content height (async image/markdown layout, streamed growth)
+            is caught before paint. Always present so the observer is wired once. */}
+        <div ref={contentRef}>
         {loading && items.length === 0 ? (
           <TranscriptSkeleton />
         ) : (
@@ -1164,6 +1185,7 @@ export function Transcript({
             )}
           </>
         )}
+        </div>
       </Box>
       {/* "Loading older history" — an ABSOLUTE overlay at the top (not in the
           scroll flow) so it gives feedback without adding height that would
