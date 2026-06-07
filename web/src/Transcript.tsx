@@ -1000,6 +1000,12 @@ export function Transcript({
   useEffect(() => {
     const el = parentRef.current;
     if (!el) return undefined;
+    // True while a finger is down on the transcript. A scroll-up gesture begins
+    // NEAR the bottom, so the very first scroll events still read `fromBottom <
+    // 24` — which would re-stick the moment after `touchstart` detached, leaving
+    // the toggle stuck "active" all the way up (the reported bug). Gate the
+    // re-stick on this so it only fires once the gesture SETTLES at the bottom.
+    let touching = false;
     const detach = (): void => {
       if (stick.current) {
         stick.current = false;
@@ -1009,12 +1015,19 @@ export function Transcript({
         setSticky(sessionIdRef.current, false);
       }
     };
+    const onTouchStart = (): void => {
+      touching = true;
+      detach();
+    };
+    const onTouchEnd = (): void => {
+      touching = false;
+    };
     const onScroll = (): void => {
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
-      if (fromBottom < 24 && !stick.current) {
-        // Manually scrolled all the way back to the bottom → re-stick + the
-        // toggle reactivates (REQ-4).
+      if (fromBottom < 24 && !stick.current && !touching) {
+        // Settled back at the bottom (finger up) → re-stick + the toggle
+        // reactivates (REQ-4).
         stick.current = true;
         setSticky(sessionIdRef.current, true);
       }
@@ -1028,7 +1041,9 @@ export function Transcript({
       }
     };
     el.addEventListener("wheel", detach, { passive: true });
-    el.addEventListener("touchstart", detach, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
@@ -1064,7 +1079,9 @@ export function Transcript({
     ro.observe(el);
     return () => {
       el.removeEventListener("wheel", detach);
-      el.removeEventListener("touchstart", detach);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("keydown", detach);
       ro.disconnect();
