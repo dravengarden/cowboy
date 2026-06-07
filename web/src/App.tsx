@@ -272,23 +272,26 @@ function SessionList({
                         // back-swipe edge (ui.md §7), where it was easy to miss.
                         sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
                     >
-                        {/* Leading grip — drag to reorder. A real IconButton so
-                            the drag/tap area stays a fixed 40px (matching the
-                            trailing kebab) even as the glyph scales with the
-                            font. stopPropagation in handleProps keeps a row tap
-                            (select) and the sheet's drag separate from a reorder. */}
+                        {/* Leading grip — drag to reorder. A real 44px IconButton
+                            (Apple HIG touch min) with a FIXED 24px glyph: the icon
+                            is otherwise rem-based, so the reading font-scale (e.g.
+                            85% → root 13.6px) shrank it to ~16px and the affordance
+                            read as tiny. Pin it in px so this touch target stays
+                            standard-MUI-sized regardless of reading prefs.
+                            stopPropagation in handleProps keeps a row tap (select)
+                            and the sheet's drag separate from a reorder. */}
                         <IconButton
                             {...sortable.handleProps(s.id)}
                             aria-label="Drag to reorder"
                             sx={{
-                                width: 40,
-                                height: 40,
+                                width: 44,
+                                height: 44,
                                 flexShrink: 0,
                                 ml: -1,
                                 color: "text.disabled",
                             }}
                         >
-                            <DragIndicator fontSize="small" />
+                            <DragIndicator sx={{ fontSize: 24 }} />
                         </IconButton>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
@@ -338,13 +341,15 @@ function SessionList({
                                 e.stopPropagation();
                                 setMenuAnchor({ row: s, el: e.currentTarget });
                             }}
-                            // Full-size (≥40px) tap target with a real 24px
-                            // glyph. Was size="small" + fontSize="inherit"
-                            // (tiny) and edge="end" (negative margin pulling it
-                            // flush to the edge) — mis-tap-prone on touch.
-                            sx={{ ml: 0.5, width: 40, height: 40, flexShrink: 0 }}
+                            // 44px tap target (Apple HIG min) with a FIXED 24px
+                            // glyph. The icon is rem-based, so the reading
+                            // font-scale (85% → root 13.6px) shrank it to ~19px;
+                            // pin it in px so it stays standard-MUI-sized. (Was
+                            // size="small" + edge="end" — tiny + edge-flush, mis-
+                            // tap-prone on touch.)
+                            sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0 }}
                         >
-                            <MoreVert />
+                            <MoreVert sx={{ fontSize: 24 }} />
                         </IconButton>
                     </ListItemButton>
                     );
