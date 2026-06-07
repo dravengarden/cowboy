@@ -63,7 +63,7 @@ import {
   addDraft,
   clearDrafts,
   clearQueue,
-  discardOptimisticDraft,
+  discardOptimistic,
   editDraft,
   editQueued,
   forcePushQueued,
@@ -75,7 +75,7 @@ import {
   reorderDrafts,
   reorderQueue,
   requestSendQueued,
-  retryDraft,
+  retryOptimistic,
   send,
   setQueueEditing,
   submitPrompt,
@@ -157,11 +157,12 @@ export function Composer({
   }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { configOptions, drafts, optimisticDrafts, queues, sessions, timelines } = useStore();
-  const queue = queues.get(sessionId) ?? [];
-  // Server drafts + this device's optimistic (sending/failed) drafts appended.
-  // An optimistic row is reconciled out of the store the instant its cmid lands
-  // in the server list, so the two never duplicate here.
+  const { configOptions, drafts, optimisticDrafts, optimisticQueue, queues, sessions, timelines } =
+    useStore();
+  // Server rows + this device's optimistic (sending/failed) rows appended. An
+  // optimistic row is reconciled out of the store the instant its cmid lands
+  // server-side, so the two never duplicate here.
+  const queue = [...(queues.get(sessionId) ?? []), ...(optimisticQueue.get(sessionId) ?? [])];
   const draftList = [...(drafts.get(sessionId) ?? []), ...(optimisticDrafts.get(sessionId) ?? [])];
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
@@ -901,9 +902,11 @@ const sweep = keyframes`to { background-position: -200% 0; }`;
 // (WS down / timed out) turns red with retry + discard. Reconciled out of the
 // store by cmid the moment its confirmed twin arrives, so it never duplicates.
 function OptimisticDraftRow({
+  kind,
   sessionId,
   message,
 }: {
+  kind: "drafts" | "queue";
   sessionId: string;
   message: QueuedMessage;
 }): React.JSX.Element {
@@ -960,7 +963,7 @@ function OptimisticDraftRow({
             <IconButton
               size="small"
               aria-label="retry send"
-              onClick={(): void => retryDraft(sessionId, cmid)}
+              onClick={(): void => retryOptimistic(kind, sessionId, cmid)}
             >
               <Refresh fontSize="small" />
             </IconButton>
@@ -968,8 +971,8 @@ function OptimisticDraftRow({
           <Tooltip title="Discard">
             <IconButton
               size="small"
-              aria-label="discard draft"
-              onClick={(): void => discardOptimisticDraft(sessionId, cmid)}
+              aria-label="discard"
+              onClick={(): void => discardOptimistic(kind, sessionId, cmid)}
             >
               <Close fontSize="small" />
             </IconButton>
@@ -1243,7 +1246,11 @@ function PendingPanel({
                 )}
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {optimistic ? (
-                    <OptimisticDraftRow sessionId={sessionId} message={m} />
+                    <OptimisticDraftRow
+                      kind={kind === "queued" ? "queue" : "drafts"}
+                      sessionId={sessionId}
+                      message={m}
+                    />
                   ) : (
                     <PendingRow
                       kind={kind}

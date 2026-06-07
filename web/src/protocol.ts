@@ -93,7 +93,7 @@ export type Event =
   | { kind: "lifecycle"; status: Status; detail: string | null }
   | { kind: "turn_end"; stop_reason: string };
 
-export type Envelope = { session_id: string; seq: number } & Event;
+export type Envelope = { session_id: string; seq: number; cmid?: string } & Event;
 
 // A single ACP config option the agent advertises for a session. Shape is
 // stable across mode / model / effort because claude-agent-acp routes them

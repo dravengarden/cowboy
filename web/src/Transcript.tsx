@@ -22,9 +22,11 @@ import {
   Chip,
   CircularProgress,
   Fab,
+  IconButton,
   Paper,
   Skeleton,
   Stack,
+  Tooltip,
   Typography,
   keyframes,
   useTheme,
@@ -32,6 +34,7 @@ import {
 import { alpha } from "@mui/material/styles";
 import {
   Bedtime,
+  Close,
   Code,
   Construction,
   ErrorOutline,
@@ -39,6 +42,7 @@ import {
   ExpandMore,
   Folder,
   Psychology,
+  Refresh,
   Search,
   Terminal,
   WarningAmberRounded,
@@ -47,7 +51,14 @@ import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
-import { loadOlder, send, useStore } from "./store";
+import {
+  discardOptimistic,
+  loadOlder,
+  type QueuedMessage,
+  retryOptimistic,
+  send,
+  useStore,
+} from "./store";
 import { useReadingSettings } from "./readingSettings";
 import {
   resetSticky,
@@ -420,6 +431,83 @@ function CollapsibleUserBody({
         </Box>
       )}
     </>
+  );
+}
+
+// An OPTIMISTIC user bubble — shown the instant you hit send (chat), before the
+// daemon's user-echo confirms it. Mirrors the real user bubble (right-aligned,
+// primary fill). `pending` (<200ms) looks normal so a fast send never flashes;
+// `sending` runs a light sweep across the bubble (the gradient "扫光"; a theme-
+// colour text shimmer would vanish on the purple fill, so the sweep is a white
+// highlight instead); `failed` → red edge + Failed + retry / discard. Reconciled
+// out by cmid the moment the echo Envelope lands (same bubble, seamless).
+function OptimisticUserBubble({
+  sessionId,
+  message,
+}: {
+  sessionId: string;
+  message: QueuedMessage;
+}): React.JSX.Element {
+  const failed = message.status === "failed";
+  const sending = message.status === "sending";
+  const cmid = message.cmid ?? "";
+  return (
+    <Stack alignItems="flex-end" spacing={0.25} sx={{ alignSelf: "stretch", maxWidth: "100%" }}>
+      <Paper
+        variant="outlined"
+        sx={{
+          position: "relative",
+          p: { xs: 1, sm: 1.25 },
+          maxWidth: { xs: "88%", sm: "78%" },
+          bgcolor: "primary.main",
+          color: "primary.contrastText",
+          overflow: "hidden",
+          ...(failed && { borderColor: "error.main" }),
+        }}
+      >
+        <Markdown text={message.text || "📎 attachment"} invert />
+        {sending && (
+          <Box
+            aria-hidden
+            sx={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              background:
+                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.22) 50%, transparent 100%)",
+              backgroundSize: "200% 100%",
+              animation: `${shimmer} 1.6s linear infinite`,
+              "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+            }}
+          />
+        )}
+      </Paper>
+      {failed && (
+        <Stack direction="row" spacing={0.25} alignItems="center">
+          <Typography variant="caption" sx={{ color: "error.main" }}>
+            Failed to send
+          </Typography>
+          <Tooltip title="Retry">
+            <IconButton
+              size="small"
+              aria-label="retry send"
+              onClick={(): void => retryOptimistic("messages", sessionId, cmid)}
+            >
+              <Refresh fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Discard">
+            <IconButton
+              size="small"
+              aria-label="discard message"
+              onClick={(): void => discardOptimistic("messages", sessionId, cmid)}
+            >
+              <Close fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      )}
+    </Stack>
   );
 }
 
@@ -947,7 +1035,12 @@ export function Transcript({
   const parentRef = useRef<HTMLDivElement>(null);
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
-  const paging = useStore().pagination.get(sessionId);
+  const store = useStore();
+  const paging = store.pagination.get(sessionId);
+  // This device's optimistic chat sends awaiting the daemon echo — rendered as
+  // user bubbles below the latest real item (newest at the very bottom), dropped
+  // by cmid the moment the echo lands. Empty in the common (confirmed) case.
+  const optimisticMsgs = store.optimisticMessages.get(sessionId) ?? [];
   // "stick-to-bottom" UX, done properly this time:
   //
   // Previous bug: we listened to `onScroll` to decide if the user "wanted"
@@ -1209,6 +1302,19 @@ export function Transcript({
                 <ThinkingIndicator provider={provider} />
               </Box>
             )}
+            {/* Optimistic chat bubbles: newest-first in the DOM (column-reverse →
+                they sit just above the latest real item / below the dots). */}
+            {optimisticMsgs
+              .slice()
+              .reverse()
+              .map((om) => (
+                <Box
+                  key={`opt-${om.cmid ?? om.id}`}
+                  sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
+                >
+                  <OptimisticUserBubble sessionId={sessionId} message={om} />
+                </Box>
+              ))}
             {items
               .map((item, i) => ({ item, i }))
               .reverse()
