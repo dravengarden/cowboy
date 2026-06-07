@@ -810,7 +810,8 @@ export function Transcript({
   const permissionOpen =
     pendingPermission !== undefined && pendingReqId !== reviewClosedFor;
   const busy = status === "busy";
-  const dead = status === "exited" || status === "crashed";
+  const dead =
+    status === "exited" || status === "crashed" || status === "interrupted";
   // "Working" is broader than the raw `busy` status: a tool call still in flight
   // means the agent is mid-work even when the session status momentarily reads
   // "running". The daemon flips status → running the instant a turn's prompt()

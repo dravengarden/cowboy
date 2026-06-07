@@ -203,10 +203,25 @@ export function Composer({
   // at the safe-area inset so a small padding can't tuck the action-row buttons
   // under the landscape notch / rounded corner.
   const { padding } = useReadingSettings();
+  // The action row is CHROME: its edge buttons must line up with the bottom
+  // navbar (hamburger ↔ slash on the left, gear ↔ send on the right), so they
+  // must NOT drift with the reading `padding` the way the input + transcript
+  // prose do (the reported bug — every padding change re-broke the alignment).
+  // The navbar icons sit at the MUI Toolbar gutter (16px xs / 24px sm) + the
+  // safe-area inset. The composer body is already inset by `padding`, so on the
+  // action row we cancel exactly that and re-apply the navbar gutter — pinning it
+  // to the navbar at every padding value (margin = target − current).
+  const navGutterMx = (side: "left" | "right"): { xs: string; sm: string } => ({
+    xs: `calc(env(safe-area-inset-${side}, 0px) + 16px - max(env(safe-area-inset-${side}, 0px), ${String(padding)}px))`,
+    sm: `calc(env(safe-area-inset-${side}, 0px) + 24px - max(env(safe-area-inset-${side}, 0px), ${String(padding)}px))`,
+  });
 
   const busy = status === "busy";
   const starting = status === "starting";
-  const dead = status === "exited" || status === "crashed";
+  // Interrupted is a dead/resumable state too (a turn cut off by a daemon
+  // restart) — the composer treats it like exited/crashed: "send to resume".
+  const dead =
+    status === "exited" || status === "crashed" || status === "interrupted";
   // A dead session is still sendable: sending resumes it (the daemon revives
   // the agent via session/load — see supervisor.rs). Matches Zed, where a
   // thread is never permanently unusable just because its agent process ended.
@@ -420,7 +435,12 @@ export function Composer({
           the left, then the agent config (inline chips on desktop, the bottom
           sheet on touch), then the send button. Buttons are 40px on touch so
           the side safe-area floor keeps them off the iPhone corner radius. */}
-      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.75, ...TOOLBAR_MIN_H }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={0.5}
+        sx={{ mt: 0.75, ml: navGutterMx("left"), mr: navGutterMx("right"), ...TOOLBAR_MIN_H }}
+      >
         <Tooltip title="Slash command / skill">
           <span>
             <IconButton
@@ -1014,9 +1034,13 @@ function PendingRow({
   const editorRef = useRef<ComposerEditorHandle>(null);
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
-  // "running" is the idle-ready state; "exited"/"crashed" dispatch a revive.
-  // Anything else ("busy"/"starting") has an in-flight turn → force push.
-  const dispatchable = status === "running" || status === "exited" || status === "crashed";
+  // "running" is the idle-ready state; "exited"/"crashed"/"interrupted" dispatch
+  // a revive. Anything else ("busy"/"starting") has an in-flight turn → force push.
+  const dispatchable =
+    status === "running" ||
+    status === "exited" ||
+    status === "crashed" ||
+    status === "interrupted";
   // Touch → native textarea (correct IME); desktop → CodeMirror.
   const touchInput = useTouchComposer();
   // Focus the editor when the row enters edit mode. useLayoutEffect, NOT
