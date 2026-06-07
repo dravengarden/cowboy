@@ -227,7 +227,15 @@ CLI flags `--data-dir` / `--config` override for dev (omega convention).
 
 Reuse omega's frontend stack; **single web build**, embedded in the cowboy
 binary (omega pattern, via `rust-embed`). "PC" and "phone" are the **same app at
-different widths**, not separate builds — no desktop/Tauri app.
+different widths**, not separate builds.
+
+> **Update (2026-06): a Tauri shell was added** (`src-tauri/`). The web build is
+> still the single source of truth; the Tauri app is a **thin native WKWebView**
+> that loads the already-https remote UI (`https://cowboy.hawk.thundersparrow.top`,
+> caddy on the tailnet) — it bundles no frontend and embeds no backend. Its sole
+> reason to exist is the native shell: a pure-web PWA cannot fix the iOS keyboard
+> accessory bar or the file-picker-collapses-keyboard limits; a WKWebView wrapper
+> can. See `src-tauri/README.md`.
 
 - **Stack:** React 19, MUI 7 + Emotion, TanStack Router, TanStack Query, Vite 7,
   TypeScript (strictest), built with Deno, linted with oxlint.

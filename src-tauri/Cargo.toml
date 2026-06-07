@@ -1,0 +1,30 @@
+# cowboy native shell (Tauri 2).
+#
+# This is a THIN remote WebView wrapper, not a second copy of the backend.
+# cowboy's real server (axum + ACP bridge + agent supervisor) only ever runs on
+# hawk — an iPhone can't spawn coding agents. The whole point of this crate is to
+# get a NATIVE WKWebView (iOS) / WKWebView (macOS) around the already-https
+# cowboy UI (https://cowboy.hawk.thundersparrow.top, behind caddy on the
+# tailnet), because a pure-web PWA can't fix the iOS keyboard accessory bar or
+# the file-picker-collapses-keyboard limits — only a native shell can.
+#
+# Separate crate with its own Cargo.lock; the repo-root `cowboy` package and the
+# Nix flake build are untouched (flake builds the root package only).
+[package]
+name = "cowboy-app"
+version = "0.1.0"
+description = "cowboy native shell — WKWebView around the hawk cowboy UI"
+edition = "2021"
+
+# Mobile (iOS/Android) links the app as a shared/static lib loaded by the
+# platform entry point; desktop uses the rlib + the main.rs binary. All three
+# crate-types are required for `tauri ios`/`android` to build.
+[lib]
+name = "cowboy_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
