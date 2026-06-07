@@ -2,7 +2,15 @@
 // inbound commands parsed in src/server.rs. The ACP pass-through `update`
 // payloads are typed loosely; their discriminant is `sessionUpdate`.
 
-export type Status = "starting" | "running" | "busy" | "exited" | "crashed";
+export type Status =
+  | "starting"
+  | "running"
+  | "busy"
+  | "exited"
+  | "crashed"
+  // Restored from a daemon restart that happened mid-turn — the last turn never
+  // finished (src/core.rs Hub::restore). A dead/resumable state like exited.
+  | "interrupted";
 
 // Which surface opened the session — for the sidebar badge.
 // Mirrors src/core.rs `SessionOrigin`. Older daemons that predate this field

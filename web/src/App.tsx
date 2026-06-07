@@ -117,6 +117,9 @@ function readActiveSession(): string | null {
 //   blue  (info)          — starting:  process spinning up, not ready yet (spinner).
 //   grey  (text.disabled) — dormant:   exited cleanly + resumable — "asleep, wakes
 //                                       on resume". Deliberately NOT a warning hue.
+//   amber (warning)       — interrupted: a turn was cut off by a daemon restart —
+//                                       unfinished, needs attention. Amber (not the
+//                                       crashed red) reads as "incomplete", not "dead".
 //   red   (error)         — crashed:   died abnormally, can't reply.
 function statusColor(s: Status): string {
     switch (s) {
@@ -127,6 +130,8 @@ function statusColor(s: Status): string {
             return "info.main";
         case "exited":
             return "text.disabled";
+        case "interrupted":
+            return "warning.main";
         case "crashed":
             return "error.main";
     }
@@ -144,6 +149,8 @@ function statusLabel(s: Status): string {
             return "Starting…";
         case "exited":
             return "Dormant";
+        case "interrupted":
+            return "Interrupted";
         case "crashed":
             return "Crashed";
     }

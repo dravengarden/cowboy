@@ -323,6 +323,7 @@ fn status_to_str(s: Status) -> &'static str {
         Status::Busy => "busy",
         Status::Exited => "exited",
         Status::Crashed => "crashed",
+        Status::Interrupted => "interrupted",
     }
 }
 
@@ -332,6 +333,7 @@ fn status_from_str(s: &str) -> Status {
         "busy" => Status::Busy,
         "exited" => Status::Exited,
         "crashed" => Status::Crashed,
+        "interrupted" => Status::Interrupted,
         _ => Status::Starting,
     }
 }

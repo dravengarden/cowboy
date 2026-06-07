@@ -29,7 +29,9 @@ import {
   keyframes,
   useTheme,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
+  Bedtime,
   Code,
   Construction,
   ErrorOutline,
@@ -677,6 +679,83 @@ const ItemView = memo(function ItemView({
   }
 });
 
+// A persistent strip pinned at the BOTTOM of the transcript (just above the
+// composer), shown only when the session is NOT live. The timeline's lifecycle
+// entry scrolls away; this stays put, so an interrupted / crashed / dormant
+// session — or a dropped connection — is always visible. Hue matches the navbar
+// StatusDot palette (App.tsx statusColor) so the dot and the bar read as one
+// signal. Returns null in the live states (running/busy/starting).
+//
+// The key signal (the user's ask): a daemon restart that caught a turn in flight
+// surfaces as `interrupted` (amber, "didn't finish"), distinct from the normal
+// `exited` dormant (grey, "completed, asleep") — completed vs interrupted at a
+// glance, no percentage.
+function SessionStatusBar({
+  status,
+  connected,
+}: {
+  status: Status;
+  connected: boolean;
+}): React.JSX.Element | null {
+  // A dropped WS masks the per-session status (stale + the agent is
+  // unreachable), so it wins. Otherwise surface the settled dead states.
+  let tone: "warning" | "error" | "neutral";
+  let icon: React.JSX.Element;
+  let text: string;
+  if (!connected) {
+    tone = "warning";
+    icon = <CircularProgress size={14} thickness={6} color="inherit" />;
+    text = "Disconnected — reconnecting…";
+  } else if (status === "interrupted") {
+    tone = "warning";
+    icon = <WarningAmberRounded fontSize="small" />;
+    text = "Last turn was interrupted before it finished — send a message to start a new one.";
+  } else if (status === "crashed") {
+    tone = "error";
+    icon = <ErrorOutline fontSize="small" />;
+    text = "Agent stopped unexpectedly — send a message to restart it.";
+  } else if (status === "exited") {
+    tone = "neutral";
+    icon = <Bedtime fontSize="small" />;
+    text = "Session is dormant — send a message to wake it.";
+  } else {
+    return null; // running / busy / starting → live
+  }
+  return (
+    <Stack
+      role="status"
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      sx={(theme) => {
+        const main =
+          tone === "error"
+            ? theme.palette.error.main
+            : tone === "warning"
+              ? theme.palette.warning.main
+              : theme.palette.text.disabled;
+        return {
+          flexShrink: 0,
+          px: 1.5,
+          py: 0.75,
+          borderTop: 1,
+          borderColor: alpha(main, 0.4),
+          bgcolor: alpha(main, tone === "neutral" ? 0.08 : 0.14),
+          color: tone === "neutral" ? theme.palette.text.secondary : main,
+        };
+      }}
+    >
+      <Box sx={{ display: "flex", flexShrink: 0 }}>{icon}</Box>
+      <Typography
+        variant="caption"
+        sx={{ fontWeight: 600, minWidth: 0, lineHeight: 1.3 }}
+      >
+        {text}
+      </Typography>
+    </Stack>
+  );
+}
+
 export function Transcript({
   sessionId,
   timeline,
@@ -960,12 +1039,25 @@ export function Transcript({
   }, [scrollNonce]);
 
   return (
-    <Box sx={{ flex: 1, position: "relative", overflow: "hidden" }}>
+    <Box
+      sx={{
+        flex: 1,
+        position: "relative",
+        overflow: "hidden",
+        // Column so the status bar can sit at the bottom IN FLOW (pushing the
+        // scroll area up, never overlapping the last message). The permission
+        // Fab/sheet stay absolutely positioned, unaffected.
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
       <Box
         ref={parentRef}
         tabIndex={0}
         sx={{
-          height: "100%",
+          flex: 1,
+          minHeight: 0,
           overflowY: "auto",
           overflowX: "hidden",
           // User-controlled side gutter (px, breakpoint-independent like
@@ -1028,6 +1120,10 @@ export function Transcript({
         </Box>
         )}
       </Box>
+      {/* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
+          In-flow (flexShrink:0) so it sits below the scroll area, above the
+          composer — never covering the last message. */}
+      <SessionStatusBar status={status} connected={connected} />
       {/* The "scroll to latest" affordance is now the persistent sticky toggle
           in the composer (stickyStore + Composer), not a transient Fab here. */}
       {pendingPermission && (

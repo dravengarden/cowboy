@@ -50,6 +50,12 @@ pub enum Status {
     Exited,
     /// Agent crashed / the ACP connection failed.
     Crashed,
+    /// A turn was in flight when the daemon went down (detected at restore from a
+    /// persisted `Busy`). The agent subprocess is gone — like `Exited`/`Crashed`
+    /// this is a settled, resumable-via-new-turn state — but it carries the extra
+    /// fact that the last turn never finished, so the UI can say so instead of
+    /// showing a plain "dormant". Only ever set by [`Hub::restore`].
+    Interrupted,
 }
 
 /// A normalized session event fanned out to clients.
@@ -462,14 +468,21 @@ impl Hub {
     /// `Sessions` broadcast on first connect already includes everything.
     /// Skips the write-behind side: these rows are already in the DB.
     ///
-    /// **Restored sessions are forced to [`Status::Exited`].** The agent
-    /// subprocess does not come back across a daemon restart — the postgres
-    /// state is metadata + history only, not a live ACP connection. Letting
-    /// a restored row keep its persisted `Running`/`Busy` status creates the
-    /// trap of a UI that looks alive but rejects every prompt with `unknown
-    /// session` (no `agent_tx` in the supervisor). Mark them dead so the UI
-    /// shows them as ended and disables the composer; resume via
-    /// session/load is a future follow-up (design §7).
+    /// **Restored sessions are forced to a dead state.** The agent subprocess
+    /// does not come back across a daemon restart — the postgres state is
+    /// metadata + history only, not a live ACP connection. Letting a restored
+    /// row keep its persisted `Running`/`Busy` status creates the trap of a UI
+    /// that looks alive but rejects every prompt with `unknown session` (no
+    /// `agent_tx` in the supervisor). So every restored session is dead +
+    /// disabled; resume via session/load is a future follow-up (design §7).
+    ///
+    /// But the persisted status still tells us WHAT it was doing when we died,
+    /// and we keep that one bit: a session that was `Busy` (a turn in flight)
+    /// becomes [`Status::Interrupted`] — "your last turn never finished" — while
+    /// an idle/alive one just becomes `Exited` (dormant, nothing unfinished).
+    /// The write-behind store applies the `Busy` write within ms of a turn
+    /// starting, so for any turn that ran more than an instant the bit is
+    /// durable before a restart (store.rs accepts the sub-ms crash window).
     pub fn restore(&self, sessions: Vec<RestoredSession>) {
         let mut sessions_lock = self.inner.sessions.lock().unwrap();
         let mut order = self.inner.order.lock().unwrap();
@@ -481,7 +494,15 @@ impl Hub {
                 queue,
                 drafts,
             } = r;
-            meta.status = Status::Exited;
+            meta.status = match meta.status {
+                // Mid-turn when we died → the work was cut off, unfinished.
+                Status::Busy => Status::Interrupted,
+                // Already a settled dead state (incl. a prior Interrupted that
+                // was never resumed) → keep it as recorded.
+                Status::Exited | Status::Crashed | Status::Interrupted => meta.status,
+                // Alive but idle, or still spinning up → just dormant.
+                Status::Running | Status::Starting => Status::Exited,
+            };
             let id = meta.id.clone();
             sessions_lock.insert(
                 id.clone(),
@@ -671,7 +692,7 @@ impl Hub {
             // turns). Mirrors the old client-side drain edge logic.
             let was = s.meta.status;
             if (was == Status::Busy && status == Status::Running)
-                || matches!(status, Status::Exited | Status::Crashed)
+                || matches!(status, Status::Exited | Status::Crashed | Status::Interrupted)
             {
                 s.in_flight = false;
             }
@@ -841,7 +862,7 @@ impl Hub {
         let can = if allow_revive {
             matches!(
                 s.meta.status,
-                Status::Running | Status::Exited | Status::Crashed
+                Status::Running | Status::Exited | Status::Crashed | Status::Interrupted
             )
         } else {
             s.meta.status == Status::Running
