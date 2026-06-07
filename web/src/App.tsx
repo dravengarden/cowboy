@@ -909,9 +909,12 @@ export function App({
                             height: "env(safe-area-inset-top, 0px)",
                             zIndex: (t) => t.zIndex.appBar,
                             pointerEvents: "none",
-                            bgcolor: (t) => alpha(t.palette.background.default, 0.55),
-                            backdropFilter: "blur(20px)",
-                            WebkitBackdropFilter: "blur(20px)",
+                            // More see-through frosted glass: a light tint (0.32)
+                            // lets the content show through, while a stronger blur
+                            // keeps the status bar legible over it.
+                            bgcolor: (t) => alpha(t.palette.background.default, 0.32),
+                            backdropFilter: "blur(24px)",
+                            WebkitBackdropFilter: "blur(24px)",
                         }}
                     />
                 )}
