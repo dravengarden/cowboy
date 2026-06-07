@@ -1,7 +1,9 @@
 import { useSyncExternalStore } from "react";
 
-// "Turn complete" alert: a short chime (+ a vibration on devices that support
-// it) when an agent finishes a turn. Toggleable in Settings, DEFAULT ON. The
+// Attention alert: a short chime (+ a vibration on devices that support it)
+// when an agent needs the user — a finished turn (done) or a permission request
+// (confirm). NOT fired for any other event. Toggleable in Settings, DEFAULT ON.
+// The
 // setting is persisted in localStorage and reactive across the app (the Settings
 // switch writes it; the store reads it before firing) — same useSyncExternalStore
 // pattern as vimSetting.
@@ -134,10 +136,12 @@ function playChime(): void {
 }
 
 /**
- * Fire the turn-complete alert if enabled: play the chime and, where supported,
- * a short vibration. Called from the store on a session's busy→running edge.
+ * Fire the attention alert if enabled: play the chime and, where supported, a
+ * short vibration. Called from the store ONLY for the two events that need the
+ * user — a finished turn (done) and a permission request (needs confirmation) —
+ * never for mid-turn churn.
  */
-export function fireTurnComplete(): void {
+export function fireAlert(): void {
   if (!getNotifySetting()) return;
   playChime();
   // Android only; iOS has no web Vibration API (silent no-op there).

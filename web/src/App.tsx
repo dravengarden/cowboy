@@ -1463,9 +1463,9 @@ function SettingsShell({
                     spacing={2}
                 >
                     <Stack>
-                        <Typography variant="body2">Turn-complete alert</Typography>
+                        <Typography variant="body2">Attention alert</Typography>
                         <Typography variant="caption" color="text.secondary">
-                            Sound + vibration when an agent finishes
+                            Sound + vibration when an agent finishes or needs you
                         </Typography>
                     </Stack>
                     <Switch

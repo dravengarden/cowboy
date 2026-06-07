@@ -10,7 +10,7 @@
 import { useSyncExternalStore } from "react";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
-import { fireTurnComplete } from "./turnNotify";
+import { fireAlert } from "./turnNotify";
 import type {
   ConfigOption,
   ContentBlock,
@@ -257,17 +257,10 @@ function setPagination(
 function handle(msg: Outbound): void {
   switch (msg.type) {
     case "sessions": {
-      // Turn-complete alert: a session flipping busy → running means its turn
-      // just ended. Fire the optional chime/vibration (no-op when the setting is
-      // off). Gate on `sessionsLoaded` so the initial snapshot — which arrives as
-      // already-`running` sessions — doesn't ding on connect.
-      if (state.sessionsLoaded) {
-        const prev = new Map(state.sessions.map((s) => [s.id, s.status]));
-        for (const s of msg.sessions) {
-          if (s.status === "running" && prev.get(s.id) === "busy") fireTurnComplete();
-        }
-      }
-      // Then commit the list — the queue drain is now server-side, so there's no
+      // No alert here: a status flip (busy → running) fired on mid-turn churn and
+      // missed permission pauses. The chime/vibration is now driven precisely by
+      // the `turn_end` + `permission_request` events in `case "event"` below.
+      // Commit the list — the queue drain is now server-side, so there's no
       // client-side in-flight reconciliation to do. `sessionsLoaded` latches true
       // on the first list so the UI can detect a now-gone persisted focus.
       setState({ ...state, sessions: msg.sessions, sessionsLoaded: true });
@@ -316,9 +309,16 @@ function handle(msg: Outbound): void {
       setState({ ...state, timelines, hydrated, pagination });
       break;
     }
-    case "event":
-      setState({ ...state, timelines: applyEnvelope(state.timelines, msg.envelope) });
+    case "event": {
+      const env = msg.envelope;
+      // Attention alert — ONLY the two events that actually need the user: a
+      // finished turn (done) and a permission request (confirm). These are LIVE
+      // events; snapshot/history replays go through `case "snapshot"`, so past
+      // turns never re-ding. `fireAlert` no-ops when the setting is off.
+      if (env.kind === "turn_end" || env.kind === "permission_request") fireAlert();
+      setState({ ...state, timelines: applyEnvelope(state.timelines, env) });
       break;
+    }
     case "config_options": {
       const next = new Map(state.configOptions);
       next.set(msg.session_id, msg.options);
