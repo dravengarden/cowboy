@@ -14,7 +14,7 @@
 //! process lifetime). `SQLite` persistence is deferred together with restart
 //! `session/load` resume (design §7) — both land in the same follow-up.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -492,10 +492,33 @@ impl Hub {
     /// starting, so for any turn that ran more than an instant the bit is
     /// durable before a restart (store.rs accepts the sub-ms crash window).
     pub fn restore(&self, sessions: Vec<RestoredSession>) {
+        // Seed the qid counter PAST every restored id. The counter (`next_qid`)
+        // is in-memory and resets to 1 on each daemon restart, so without this a
+        // draft/queued message created after a restart reuses q1, q2, … and
+        // collides with a pre-restart one — duplicate ids, which the client keys
+        // rows by, so a "3 Drafts" header renders only 2 distinct rows. Done
+        // before the loop so the dedup below can mint fresh ids past the max.
+        let mut max_qid = 0u64;
+        for r in &sessions {
+            for m in r.queue.iter().chain(r.drafts.iter()) {
+                if let Some(n) = m.id.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
+                    max_qid = max_qid.max(n);
+                }
+            }
+        }
+        self.inner.next_qid.store(max_qid + 1, Ordering::Relaxed);
+
         // Sessions whose turn was cut off by the restart (persisted `Busy`).
         // Collected under the lock, marked after it's released — `push` below
         // re-locks `sessions`, so holding the lock here would deadlock.
         let mut interrupted: Vec<String> = Vec::new();
+        // Sessions whose ids we HEALED (re-id'd a duplicate) → persist after.
+        let mut reid_dirty: Vec<String> = Vec::new();
+        // Ids already seen across ALL sessions — ids must be globally unique so a
+        // later cross-session move can't collide. The first occurrence keeps its
+        // id; a duplicate (corruption from the old counter-reset bug) gets a fresh
+        // one past `max_qid`.
+        let mut seen: HashSet<String> = HashSet::new();
         {
             let mut sessions_lock = self.inner.sessions.lock().unwrap();
             let mut order = self.inner.order.lock().unwrap();
@@ -504,9 +527,17 @@ impl Hub {
                     mut meta,
                     log,
                     next_seq,
-                    queue,
-                    drafts,
+                    mut queue,
+                    mut drafts,
                 } = r;
+                let mut healed = false;
+                for m in queue.iter_mut().chain(drafts.iter_mut()) {
+                    if !seen.insert(m.id.clone()) {
+                        m.id = self.next_qid();
+                        seen.insert(m.id.clone());
+                        healed = true;
+                    }
+                }
                 let was_busy = meta.status == Status::Busy;
                 meta.status = match meta.status {
                     // Mid-turn when we died → the work was cut off, unfinished.
@@ -520,6 +551,9 @@ impl Hub {
                 let id = meta.id.clone();
                 if was_busy {
                     interrupted.push(id.clone());
+                }
+                if healed {
+                    reid_dirty.push(id.clone());
                 }
                 sessions_lock.insert(
                     id.clone(),
@@ -560,6 +594,11 @@ impl Hub {
                     ),
                 },
             );
+        }
+        // Persist any session whose duplicate ids we healed, so the corrected
+        // (unique-id) lists reach the DB + every client.
+        for id in reid_dirty {
+            self.emit_pending(&id);
         }
     }
 
