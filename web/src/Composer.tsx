@@ -915,9 +915,21 @@ function PendingPanel({
       draft leaves. Absent → the row's kebab omits the Move action. */
   onMoveDraft?: ((id: string) => void) | undefined;
 }): React.JSX.Element {
-  // Default expanded. Collapsed state is local + ephemeral (resets on session
-  // switch / remount) — the count stays visible either way.
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed state is an APP-LEVEL (per-device) UI pref, NOT service state: it
+  // persists in localStorage per panel kind so it survives reloads + session
+  // switches, but is never synced across terminals (mirrors PlanDock's
+  // `cowboy:plan-expanded`). Default expanded; the count stays visible either way.
+  const collapseKey = `cowboy:${kind}-collapsed`;
+  const [collapsed, setCollapsed] = useState(
+    () => globalThis.localStorage?.getItem(collapseKey) === "1",
+  );
+  const toggleCollapsed = (): void => {
+    setCollapsed((c) => {
+      const next = !c;
+      globalThis.localStorage?.setItem(collapseKey, next ? "1" : "0");
+      return next;
+    });
+  };
   const [editingId, setEditingId] = useState<string | null>(null);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by
   // default (they'd waste ~40px on every row of a narrow phone) and revealed
@@ -972,7 +984,7 @@ function PendingPanel({
         <IconButton
           size="small"
           aria-label={collapsed ? "expand" : "collapse"}
-          onClick={(): void => setCollapsed((c) => !c)}
+          onClick={toggleCollapsed}
           sx={{ flexShrink: 0 }}
         >
           {collapsed ? <ChevronRight fontSize="small" /> : <ExpandMore fontSize="small" />}
@@ -980,7 +992,7 @@ function PendingPanel({
         <Typography
           variant="caption"
           sx={{ fontWeight: 600, flex: 1, minWidth: 0, cursor: "pointer" }}
-          onClick={(): void => setCollapsed((c) => !c)}
+          onClick={toggleCollapsed}
         >
           {count} {noun}{count === 1 ? "" : "s"}
         </Typography>
