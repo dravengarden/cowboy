@@ -909,12 +909,13 @@ export function App({
                             height: "env(safe-area-inset-top, 0px)",
                             zIndex: (t) => t.zIndex.appBar,
                             pointerEvents: "none",
-                            // More see-through frosted glass: a light tint (0.32)
-                            // lets the content show through, while a stronger blur
-                            // keeps the status bar legible over it.
-                            bgcolor: (t) => alpha(t.palette.background.default, 0.32),
-                            backdropFilter: "blur(24px)",
-                            WebkitBackdropFilter: "blur(24px)",
+                            // Frosted / matte glass (磨砂): a milkier tint (0.5)
+                            // diffuses the content rather than showing it clearly,
+                            // and `saturate` adds the iOS-material vibrancy that
+                            // reads as real frosted glass — not just a clear pane.
+                            bgcolor: (t) => alpha(t.palette.background.default, 0.5),
+                            backdropFilter: "blur(24px) saturate(180%)",
+                            WebkitBackdropFilter: "blur(24px) saturate(180%)",
                         }}
                     />
                 )}
