@@ -101,6 +101,17 @@ export function useThemeMode(): ThemeControls {
           MuiIconButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { width: 40, height: 40 } } } },
           MuiButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40 } } } },
           MuiToggleButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 } } } },
+          // Tooltips are a DESKTOP-HOVER affordance only. On a touch screen MUI
+          // fires them on tap-focus AND long-press, and they LINGER — tapping any
+          // icon button focuses it and pops a bubble that's hard to dismiss (the
+          // reported stuck "Rename session" tooltip). Disable the focus + touch
+          // triggers globally so a tooltip shows on hover (desktop) and NEVER on
+          // touch. Every control carries an `aria-label`, so no information is
+          // lost on touch / for assistive tech. (Same trick the auto-scroll toggle
+          // applied per-instance, made the default so every tooltip inherits it.)
+          MuiTooltip: {
+            defaultProps: { disableFocusListener: true, disableTouchListener: true },
+          },
         },
         palette: dark
           ? {
