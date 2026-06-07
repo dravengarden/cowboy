@@ -170,9 +170,9 @@ function CodeBlock({
           width: 34,
           height: 34,
           borderRadius: 1,
-          // Stay compact in the code corner — opt out of the global 44/24 icon
-          // button size (this is in-content chrome, not a toolbar control).
-          "& .MuiSvgIcon-root": { fontSize: 16 },
+          // Stay compact in the code corner — opt out of the global 44px icon
+          // button size; a 1rem glyph still scales with the reading font.
+          "& .MuiSvgIcon-root": { fontSize: "1rem" },
           color: copied
             ? "success.main"
             : dark

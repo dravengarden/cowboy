@@ -114,18 +114,19 @@ export function useThemeMode(): ThemeControls {
           // Touch ergonomics (ui.md §7): on a coarse pointer no interactive
           // control drops below the ~40px tap-target floor, even when size="small"
           // is asked for desktop density — "mobile never small". Desktop keeps it.
-          // Unify EVERY icon button to the large session-list size (44px) with a
-          // FIXED 24px glyph — consistent tap targets, and the glyph no longer
-          // shrinks with the reading font scale (icons are otherwise rem-based,
-          // so at 85% they read tiny). An instance that needs a different size
-          // sets width/height (+ its own `& .MuiSvgIcon-root` rule) via sx, which
-          // wins (e.g. the compact code-block copy button).
+          // Unify every icon button to the large session-list TAP TARGET (44px),
+          // while the GLYPH stays 1.5rem (MUI "medium") so it scales WITH the
+          // reading font like the rest of the UI — a big box, a font-tracking
+          // glyph. `1.5rem` also normalises the icons that asked for `small`
+          // (1.25rem) up to one size, and the text "/" skills glyph (1.375rem) is
+          // tuned to match it. An instance can override size + its own
+          // `& .MuiSvgIcon-root` rule via sx (e.g. the compact copy button).
           MuiIconButton: {
             styleOverrides: {
               root: {
                 width: 44,
                 height: 44,
-                "& .MuiSvgIcon-root": { fontSize: 24 },
+                "& .MuiSvgIcon-root": { fontSize: "1.5rem" },
               },
             },
           },
