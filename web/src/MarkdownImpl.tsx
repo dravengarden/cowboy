@@ -10,8 +10,9 @@
 // Heavy stuff (Prism, language defs) is dynamic-imported by RSH on first
 // use so the initial page load stays light.
 
-import { memo, type ReactNode, useMemo, useState } from "react";
-import { Box, Link, useTheme } from "@mui/material";
+import { memo, type ReactNode, useCallback, useMemo, useState } from "react";
+import { Box, IconButton, Link, useTheme } from "@mui/material";
+import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ImageLightbox } from "./_shell";
@@ -71,6 +72,129 @@ function parseImages(md: string): { src: string; alt: string }[] {
   return out;
 }
 
+// Copy to the clipboard, with a legacy fallback. The async Clipboard API needs
+// a SECURE context: it's present over the https tailnet (what phones/desktop
+// actually use) but ABSENT over the plain http LAN IP (the dev bridge), so the
+// hidden-textarea execCommand path keeps copy working there too. Returns success.
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (globalThis.navigator?.clipboard?.writeText) {
+      await globalThis.navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // secure-context denial / not-focused → fall through to the legacy path
+  }
+  try {
+    const doc = globalThis.document;
+    const ta = doc.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    doc.body.appendChild(ta);
+    ta.select();
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- only non-secure-context copy path
+    const ok = doc.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+// A fenced code block + a top-right copy button. The button sits ABSOLUTELY in
+// the (non-scrolling) wrapper, so it stays pinned to the visible top-right even
+// as the code scrolls sideways. UX for both surfaces: a comfortable 34px hit
+// target (desktop clickability), always visible on touch (`hover: none`), faint
+// -until-hover on a mouse so it doesn't clutter the code. Tapping copies and
+// flips to a success check for ~1.5s.
+function CodeBlock({
+  code,
+  lang,
+  codeTheme,
+  dark,
+}: {
+  code: string;
+  lang: string;
+  codeTheme: typeof oneDark;
+  dark: boolean;
+}): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(() => {
+    void copyText(code).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      globalThis.setTimeout(() => setCopied(false), 1500);
+    });
+  }, [code]);
+  return (
+    <Box
+      sx={{
+        my: 1,
+        maxWidth: "100%",
+        position: "relative",
+        // Mouse: reveal the button on block hover (keeps the code clean).
+        "&:hover .cowboy-copy-btn": { opacity: 1 },
+        // `wrapLongLines={false}` keeps lines intact; the pre scrolls sideways
+        // (touch momentum) instead of overflowing the bubble.
+        "& pre": {
+          borderRadius: 1,
+          fontSize: "0.8em",
+          overflowX: "auto",
+          maxWidth: "100%",
+          WebkitOverflowScrolling: "touch",
+        },
+      }}
+    >
+      <SyntaxHighlighter
+        language={lang || "text"}
+        style={codeTheme}
+        // overflowX on the inline customStyle (highest specificity) so it wins
+        // over the prism theme's own pre style — the long-line scroll must not
+        // depend on the emotion class losing/winning the cascade.
+        customStyle={{ margin: 0, padding: 12, overflowX: "auto", maxWidth: "100%" }}
+        wrapLongLines={false}
+        PreTag="pre"
+      >
+        {code}
+      </SyntaxHighlighter>
+      <IconButton
+        className="cowboy-copy-btn"
+        onClick={onCopy}
+        aria-label={copied ? "Copied" : "Copy code"}
+        size="small"
+        sx={{
+          position: "absolute",
+          top: 6,
+          right: 6,
+          width: 34,
+          height: 34,
+          borderRadius: 1,
+          color: copied
+            ? "success.main"
+            : dark
+              ? "rgba(255,255,255,0.85)"
+              : "rgba(0,0,0,0.6)",
+          bgcolor: dark ? "rgba(40,44,52,0.72)" : "rgba(255,255,255,0.8)",
+          backdropFilter: "blur(3px)",
+          border: 1,
+          borderColor: "divider",
+          // Mouse: faint until the block is hovered (the &:hover rule above
+          // raises it to 1). Touch (no hover): always visible.
+          opacity: 0.42,
+          "@media (hover: none)": { opacity: 0.9 },
+          transition: "opacity .15s, background-color .15s",
+          "&:hover": {
+            bgcolor: dark ? "rgba(40,44,52,0.95)" : "rgba(255,255,255,0.97)",
+          },
+        }}
+      >
+        {copied ? <Check sx={{ fontSize: 17 }} /> : <ContentCopy sx={{ fontSize: 16 }} />}
+      </IconButton>
+    </Box>
+  );
+}
+
 // Build a heading component renderer at a given em size + line-height. Kept at
 // module scope so the `components` map below stays declarative; `mt`/`mb` are
 // uniform so consecutive headings/paragraphs keep an even rhythm.
@@ -113,7 +237,8 @@ const MarkdownImpl = memo(function MarkdownImpl({
   invert?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
-  const codeTheme = theme.palette.mode === "dark" || invert ? oneDark : oneLight;
+  const dark = theme.palette.mode === "dark" || invert;
+  const codeTheme = dark ? oneDark : oneLight;
 
   // Images render as capped thumbnails in the bubble; tapping opens the shared
   // fullscreen lightbox. Gallery = this message's images (per-message scope), so
@@ -176,36 +301,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
         );
       }
       const lang = className?.replace("language-", "") ?? "";
-      return (
-        <Box
-          sx={{
-            my: 1,
-            maxWidth: "100%",
-            // `wrapLongLines={false}` keeps lines intact; the pre scrolls
-            // sideways (touch momentum) instead of overflowing the bubble.
-            "& pre": {
-              borderRadius: 1,
-              fontSize: "0.8em",
-              overflowX: "auto",
-              maxWidth: "100%",
-              WebkitOverflowScrolling: "touch",
-            },
-          }}
-        >
-          <SyntaxHighlighter
-            language={lang || "text"}
-            style={codeTheme}
-            // overflowX on the inline customStyle (highest specificity) so it
-            // wins over the prism theme's own pre style — the long-line scroll
-            // must not depend on the emotion class losing/winning the cascade.
-            customStyle={{ margin: 0, padding: 12, overflowX: "auto", maxWidth: "100%" }}
-            wrapLongLines={false}
-            PreTag="pre"
-          >
-            {text}
-          </SyntaxHighlighter>
-        </Box>
-      );
+      return <CodeBlock code={text} lang={lang} codeTheme={codeTheme} dark={dark} />;
     },
     // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
     // above already renders its own scrollable container (the highlighter's
