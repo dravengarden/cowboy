@@ -945,9 +945,12 @@ export function Transcript({
       // keep it exactly put when the page lands. `loadOlder` self-guards.
       if (el.scrollTop < el.clientHeight * 2) {
         void loadOlder(sessionIdRef.current);
+        // Capture the row at the viewport top. Query `[data-key]` (NOT
+        // el.children — the rows live inside the content wrapper now) and pick
+        // the first whose bottom is below the viewport top.
         const top = el.getBoundingClientRect().top;
         anchorKey.current = null;
-        for (const c of el.children) {
+        for (const c of el.querySelectorAll("[data-key]")) {
           const r = c.getBoundingClientRect();
           if (r.bottom > top + 1) {
             anchorKey.current = c.getAttribute("data-key");
