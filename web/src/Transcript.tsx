@@ -889,13 +889,16 @@ export function Transcript({
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
 
-  // Anchoring refs (no virtualizer): the transcript renders the loaded window
-  // directly, so heights are always REAL (no estimation). To keep the viewport
-  // visually fixed when history is prepended at the top — or trimmed — we track
-  // the oldest loaded seq + the last scrollHeight, and shift scrollTop by the
-  // exact delta (Safari has no `overflow-anchor`). See the anchor effect below.
+  // Anchoring (no virtualizer; Safari has no overflow-anchor → we do it). On a
+  // prepend (or trim) the oldest seq changes; to keep the viewport visually
+  // fixed we pin a specific ROW — the one at the viewport top, captured on
+  // scroll — back to its recorded offset, re-applied across a settle window so
+  // async markdown/image layout above it can't shift the read content (and
+  // streaming below can't either, since we anchor to an element, not a delta).
   const prevFirstSeq = useRef<number | undefined>(undefined);
-  const prevScrollHeight = useRef(0);
+  const anchorKey = useRef<string | null>(null);
+  const anchorOffset = useRef(0);
+  const anchorRaf = useRef(0);
 
   // Wire user-intent listeners ONCE; they read parentRef + sessionIdRef each
   // time so the dependency on the ref's contents stays out of React's eyes.
@@ -919,17 +922,23 @@ export function Transcript({
         stick.current = true;
         setSticky(sessionIdRef.current, true);
       }
-      // Prefetch older history ~2 screens BEFORE the top, so the prepend (which
-      // anchors the viewport, jitter-free) lands before the user reaches it —
-      // pagination is imperceptible. `loadOlder` self-guards (in-flight /
-      // reached-start), so firing it on every near-top scroll is cheap.
+      // Near the top: prefetch the next older page (2 screens early → the
+      // prepend lands before the user reaches it = imperceptible), AND capture
+      // the row currently at the viewport top as the prepend anchor so we can
+      // keep it exactly put when the page lands. `loadOlder` self-guards.
       if (el.scrollTop < el.clientHeight * 2) {
         void loadOlder(sessionIdRef.current);
+        const top = el.getBoundingClientRect().top;
+        anchorKey.current = null;
+        for (const c of el.children) {
+          const r = c.getBoundingClientRect();
+          if (r.bottom > top + 1) {
+            anchorKey.current = c.getAttribute("data-key");
+            anchorOffset.current = r.top - top;
+            break;
+          }
+        }
       }
-      // Keep the anchor baseline fresh while the user scrolls (prepends happen
-      // mid-scroll), so the next prepend's scrollHeight delta measures only the
-      // prepended run, not unrelated growth that landed since the last render.
-      prevScrollHeight.current = el.scrollHeight;
     };
     el.addEventListener("wheel", detach, { passive: true });
     el.addEventListener("touchstart", detach, { passive: true });
@@ -1021,23 +1030,44 @@ export function Transcript({
     const el = parentRef.current;
     if (!el) return undefined;
     const firstSeq = timeline[0]?.seq;
-    const grew = el.scrollHeight - prevScrollHeight.current;
-    if (
+    const prepended =
       prevFirstSeq.current !== undefined &&
       firstSeq !== undefined &&
-      firstSeq !== prevFirstSeq.current
-    ) {
-      el.scrollTop += grew;
+      firstSeq !== prevFirstSeq.current;
+    prevFirstSeq.current = firstSeq;
+    if (prepended && anchorKey.current) {
+      // Element-anchor: keep the row that was at the viewport top (captured on
+      // scroll) pinned to its recorded offset. Re-applied across a settle window
+      // because the prepended markdown/images keep laying out for a few frames —
+      // anchoring to the ELEMENT means growth above OR below can't move it.
+      const reanchor = (): void => {
+        const e2 = parentRef.current;
+        if (!e2 || anchorKey.current === null) return;
+        const node = e2.querySelector(`[data-key="${anchorKey.current}"]`);
+        if (node instanceof HTMLElement) {
+          const cur = node.getBoundingClientRect().top - e2.getBoundingClientRect().top;
+          e2.scrollTop += cur - anchorOffset.current;
+        }
+      };
+      reanchor();
+      if (anchorRaf.current) cancelAnimationFrame(anchorRaf.current);
+      let tries = 0;
+      const settle = (): void => {
+        reanchor();
+        anchorRaf.current = ++tries < 12 ? requestAnimationFrame(settle) : 0;
+      };
+      anchorRaf.current = requestAnimationFrame(settle);
     } else if (stick.current) {
+      // Append / streaming while pinned → follow the bottom, with one coalesced
+      // re-pin for async settle so a streamed/sent bottom lands flush.
       el.scrollTop = el.scrollHeight;
+      if (autoSnapRaf.current) cancelAnimationFrame(autoSnapRaf.current);
       autoSnapRaf.current = requestAnimationFrame(() => {
         autoSnapRaf.current = 0;
         const e2 = parentRef.current;
         if (stick.current && e2) e2.scrollTop = e2.scrollHeight;
       });
     }
-    prevFirstSeq.current = firstSeq;
-    prevScrollHeight.current = el.scrollHeight;
     return () => {
       if (autoSnapRaf.current) cancelAnimationFrame(autoSnapRaf.current);
     };
@@ -1119,7 +1149,11 @@ export function Transcript({
           // exactly fixed on prepend/trim.
           <>
             {items.map((item, i) => (
-              <Box key={item.key} sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
+              <Box
+                key={item.key}
+                data-key={item.key}
+                sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
+              >
                 <ItemView item={item} streaming={working && i === lastIdx} />
               </Box>
             ))}
