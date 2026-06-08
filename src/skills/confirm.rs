@@ -25,22 +25,30 @@ pub struct JudgeOutcome {
 
 /// The stable system prefix — instructions + few-shot. Kept FIRST + constant so
 /// DeepSeek's prefix cache hits across turns; only the per-turn text varies.
-const SYSTEM_PROMPT: &str = r#"你是一个「turn 结束」分类器。每次给你 coding agent 刚刚说完、停下来交还给用户的最后一段话，你要判断两件事，并且只输出一个 JSON 对象（不要解释、不要代码块）：
+const SYSTEM_PROMPT: &str = r#"你是一个「coding agent 回合结束」分类器。输入是 agent 刚说完、停下来把控制权交还给用户的最后一段话（可能中文也可能英文）。只输出一个 JSON（不要解释、不要 markdown）：
 {"awaiting_user": <bool>, "done": <bool>, "confidence": <0..1>, "reason": "<简短>"}
 
-判定规则：
-- awaiting_user：agent 是否在向用户提问、请求确认、给出选项让用户选、或表示需要用户输入/决定才能继续。即使是间接询问、或只在结尾问一句，也算 true。拿不准时偏向 true。
-- done：agent 是否已经完成了当前的任务/交付物（值得通知用户「完成了」）。纯过程汇报、还在继续干活、或只是问问题，则为 false。
-- 两者可以同时为 true，例如「A 做完了，要不要继续做 B?」。
-- confidence 只是参考，不影响判定。
+按 agent 的真实意图判断，不要只看表面措辞、有没有问号、或客套话。
 
-示例：
-输入：「我把登录接口改好了，你看下还要不要加测试？」→ {"awaiting_user": true, "done": true, "confidence": 0.9, "reason": "完成并提问"}
-输入：「全部完成，已通过所有测试。」→ {"awaiting_user": false, "done": true, "confidence": 0.95, "reason": "完成无提问"}
-输入：「你想用方案 A 还是方案 B?」→ {"awaiting_user": true, "done": false, "confidence": 0.97, "reason": "二选一提问"}
-输入：「正在重构模块，稍后继续。」→ {"awaiting_user": false, "done": false, "confidence": 0.8, "reason": "过程汇报"}
-输入：「需要我帮你把它部署上线吗？」→ {"awaiting_user": true, "done": false, "confidence": 0.9, "reason": "征求是否继续"}
-输入：「Done. Let me know if you want anything else.」→ {"awaiting_user": false, "done": true, "confidence": 0.85, "reason": "完成+礼貌结尾，非实质提问"}"#;
+awaiting_user —— agent 是否在「等用户回应之后才能继续」：
+- true：明确提问、让用户在选项间挑一个、请求确认某个有风险/不可逆的操作、或表示缺少信息或需要用户拍板才能往下做。
+- false：只是陈述、汇报进度、说明自己做了什么、宣布完成；以及不影响继续的客套结尾（如「有需要再说」「还有别的吗」「希望有帮助」）——这些并不是在等你回应。
+- 真正拿不准、但确实像在征求用户拍板时 → 偏 true（漏掉一个真问题，比偶尔多问一次代价更大）。
+
+done —— 当前交付的任务/产物是否已经完成（值得提示「完成了」）：
+- true：明确说做完了 / 跑通了 / 已提交。
+- false：还在中途、只是过程汇报、或仅仅在提问。
+- 两者可同时为 true（例：「X 做完了，要不要接着做 Y？」）。
+
+示例（覆盖各种角落，看意图而非措辞）：
+「你想用方案 A 还是 B?」→ {"awaiting_user": true, "done": false}
+「需要我帮你部署上线吗?」→ {"awaiting_user": true, "done": false}
+「这步不可逆，确认要删旧文件吗?」→ {"awaiting_user": true, "done": false}
+「全部完成，测试通过，已提交。」→ {"awaiting_user": false, "done": true}
+「搞定，有需要随时说。」→ {"awaiting_user": false, "done": true}
+「登录接口改好了，要不要顺便加测试?」→ {"awaiting_user": true, "done": true}
+「我先跑一下测试看看结果。」→ {"awaiting_user": false, "done": false}
+「All set — pushed. Let me know if anything else.」→ {"awaiting_user": false, "done": true}"#;
 
 /// The skill's inspectable metadata (Info UI).
 #[must_use]

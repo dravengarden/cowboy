@@ -156,12 +156,7 @@ export function TurnStatusOverlay({
               backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.46 : 0.54),
               backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
               WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
-              boxShadow: (t) =>
-                [
-                  `0 8px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
-                  `inset 0 1px 0 ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.2 : 0.5)}`,
-                  `inset 0 0 0 1px ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.07 : 0.22)}`,
-                ].join(", "),
+              boxShadow: (t) => `0 8px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
               fontSize: 11,
               maxHeight: 280,
               overflow: "auto",
@@ -204,20 +199,16 @@ export function TurnStatusOverlay({
             backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.34 : 0.4),
             backgroundImage: (t) => {
               const tint = alpha(tone(t).main, t.palette.mode === "dark" ? 0.16 : 0.2);
-              const glow = alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.26 : 0.5);
-              return [
-                `radial-gradient(140% 120% at 50% -25%, ${glow}, transparent 55%)`,
-                `linear-gradient(0deg, ${tint}, ${tint})`,
-              ].join(", ");
+              return `linear-gradient(0deg, ${tint}, ${tint})`;
             },
-            backdropFilter: "blur(40px) saturate(180%) brightness(1.08)",
-            WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.08)",
+            backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+            WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+            // No white edge lines (read as cheap). Just a float shadow + a soft dark
+            // inner shadow at the bottom for glass thickness.
             boxShadow: (t) =>
               [
-                `0 10px 30px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.2)}`,
-                `inset 0 1px 0 ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.32 : 0.7)}`,
-                `inset 0 -9px 14px -8px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.14)}`,
-                `inset 0 0 0 1px ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.1 : 0.3)}`,
+                `0 10px 30px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
+                `inset 0 -9px 14px -8px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.4 : 0.12)}`,
               ].join(", "),
           }}
         >
