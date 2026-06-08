@@ -1331,22 +1331,22 @@ export function Transcript({
           display: "flex",
           flexDirection: "column-reverse",
           // User-controlled side gutter (px, breakpoint-independent like
-          // liveview's reading margin); vertical padding stays responsive.
+          // liveview's reading margin).
           px: `${padding}px`,
-          py: { xs: 1, sm: 1.5 },
-          // Bottom-navbar mode: clear the glass status-bar strip (env safe-area
-          // top) at rest. column-reverse → padding-top is the visual top (oldest
-          // side); content still scrolls UNDER the strip mid-scroll. Overrides
-          // the `py` top only when an inset is supplied.
-          ...(topInset && { pt: `calc(${topInset} + 8px)` }),
-          // Mirror for the floating bottom glass (composer + navbar): reserve its
-          // height at the bottom so the newest message clears it at rest, while
-          // content still scrolls UNDER the glass. column-reverse → pb is the
-          // visual bottom (newest side); changing it only reflows the scroll
-          // RANGE, never the container height, so the panel can grow (drafts
-          // expand) with no transcript reflow — the native bottom anchor keeps
-          // the newest message pinned just above the growing panel.
-          ...(bottomInset && { pb: `calc(${bottomInset} + 8px)` }),
+          // Vertical padding as EXPLICIT pt/pb — never the `py` shorthand. `py`
+          // emits its OWN padding-bottom rule AFTER pt/pb in the emitted stylesheet
+          // (same specificity → later rule wins), so it silently overrode the
+          // bottomInset pb: the reserved space collapsed to 8px and the floating
+          // panel covered the newest messages (the long-standing "padding 不自适应 /
+          // 看不到最新消息" bug — the inset was computed right, just clobbered here).
+          // Setting pt/pb directly, each falling back to the responsive gutter when
+          // there's no inset, removes the conflict. column-reverse → pt is the visual
+          // top (oldest, clears the status strip), pb the visual bottom (newest,
+          // clears the bottom glass); content still scrolls UNDER both mid-scroll,
+          // and growing pb only reflows the scroll RANGE (no container reflow), so
+          // the panel can grow (drafts expand) with the newest pinned just above it.
+          pt: topInset ? `calc(${topInset} + 8px)` : { xs: 1, sm: 1.5 },
+          pb: bottomInset ? `calc(${bottomInset} + 8px)` : { xs: 1, sm: 1.5 },
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text
