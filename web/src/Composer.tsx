@@ -356,19 +356,22 @@ export function Composer({
           : { xs: "max(calc(env(safe-area-inset-bottom) - 20px), 2px)", sm: 1.5 },
         pl: `max(env(safe-area-inset-left), ${padding}px)`,
         pr: `max(env(safe-area-inset-right), ${padding}px)`,
-        borderTop: 1,
         borderColor: "divider",
-        // Frosted glass (磨砂玻璃), matching the top status strip: translucent
-        // tint + blur + saturate so it reads as iOS material, and — once the
-        // transcript runs UNDER it (floating model below) — the content scrolling
-        // behind it diffuses through the blur. Lower alpha than the old solid
-        // `background.paper` for the glassy look; the up-shadow + top hairline
-        // give the "floating above the scroll" depth. Tuned per theme so controls
-        // stay legible over arbitrary scrolling content (incl. a code block).
-        bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.6 : 0.64),
-        backdropFilter: "blur(24px) saturate(180%)",
-        WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        boxShadow: (t) => `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
+        // Bottom mode: TRANSPARENT. The composer + navbar share ONE frosted slab
+        // rendered behind them (see App.tsx); the composer therefore adds no own
+        // tint / backdrop-filter / up-shadow / top border — doing so would double
+        // the blur and redraw the very seam we removed. Top mode: the composer IS
+        // the bottom glass (nothing scrolls under it), so it keeps the full frosted
+        // recipe — milkier tint + heavy blur + saturate + top hairline + up-shadow.
+        ...(navbarAtBottom
+          ? { bgcolor: "transparent", borderTop: 0 }
+          : {
+              borderTop: 1,
+              bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.72 : 0.76),
+              backdropFilter: "blur(30px) saturate(200%)",
+              WebkitBackdropFilter: "blur(30px) saturate(200%)",
+              boxShadow: (t) => `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
+            }),
         position: "relative", // anchor for Popper portal placement
       }}
     >

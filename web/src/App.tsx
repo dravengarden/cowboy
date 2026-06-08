@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     Alert,
     alpha,
@@ -640,35 +640,60 @@ export function App({
     // RANGE tracks the panel with NO column reflow (column-reverse keeps the
     // newest pinned just above the growing panel).
     const columnRef = useRef<HTMLDivElement>(null);
-    const appBarRef = useRef<HTMLDivElement>(null);
-    const composerRef = useRef<HTMLDivElement>(null);
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
-    // the composer, the latter INCLUDING an expanded queue/drafts panel — as CSS
-    // vars so the transcript always reserves exactly that much bottom space (its
-    // `bottomInset`). Deliberately NOT gated on the scroll/sticky state: the
-    // reservation must stay accurate at all times so the newest message, or a
-    // freshly-expanded queue/drafts box, can NEVER hide behind the glass. (A stale,
-    // too-small reservation — frozen because a new message landing at the bottom
-    // had knocked sticky momentarily false — is exactly the bug this replaced.)
-    // Reserving the space is orthogonal to auto-scroll: whether to chase the bottom
-    // on new content stays the Transcript's FOLLOW decision, so an always-accurate
-    // inset does not auto-scroll a reader who has scrolled up. column-reverse keeps
-    // the newest pinned just above the panel, so growing the reservation at rest
-    // simply lifts the newest clear of the glass with no content reflow.
-    useEffect(() => {
+    // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
+    // vars on the column so the transcript reserves exactly that much bottom space
+    // (its `bottomInset`) AND the single frosted slab behind the panel is sized to
+    // it; keep both accurate as the panel grows/shrinks.
+    //
+    // Driven by CALLBACK refs + ONE persistent ResizeObserver, NOT a mount-time
+    // effect. Why: the composer mounts only once the session list arrives and
+    // `active` flips non-null, which happens WITHOUT activeId changing (activeId is
+    // restored from localStorage at first render). A `[navbarAtBottom, activeId]`-
+    // keyed effect therefore ran while the composer was still unmounted — wrote
+    // --composer-h: 0px, observed a null element, and never re-fired — so the panel
+    // permanently covered the newest messages (the "看不到 / 没有动态适应" bug).
+    // Callback refs observe each element the instant it actually mounts and
+    // re-measure, so the reservation is right from first paint and tracks resizes.
+    //
+    // Deliberately NOT gated on scroll/sticky state: the reservation must stay
+    // accurate at all times so the newest message can never hide behind the glass.
+    // Reserving the space is orthogonal to auto-scroll (that stays the Transcript's
+    // FOLLOW decision); column-reverse keeps the newest pinned just above the panel,
+    // so an accurate inset just lifts it clear with no content reflow.
+    const roRef = useRef<ResizeObserver | null>(null);
+    const appBarElRef = useRef<HTMLElement | null>(null);
+    const composerElRef = useRef<HTMLElement | null>(null);
+    const measureGlass = useCallback((): void => {
         const col = columnRef.current;
-        if (!col || !navbarAtBottom) return undefined;
-        const write = (): void => {
-            col.style.setProperty("--navbar-h", `${appBarRef.current?.offsetHeight ?? 0}px`);
-            col.style.setProperty("--composer-h", `${composerRef.current?.offsetHeight ?? 0}px`);
-        };
-        write();
-        const ro = new ResizeObserver(write);
-        if (appBarRef.current) ro.observe(appBarRef.current);
-        if (composerRef.current) ro.observe(composerRef.current);
-        return (): void => ro.disconnect();
-    }, [navbarAtBottom, activeId]);
+        if (!col) return;
+        col.style.setProperty("--navbar-h", `${appBarElRef.current?.offsetHeight ?? 0}px`);
+        col.style.setProperty("--composer-h", `${composerElRef.current?.offsetHeight ?? 0}px`);
+    }, []);
+    const observeGlass = useCallback(
+        (slot: "appbar" | "composer", el: HTMLElement | null): void => {
+            roRef.current ??= new ResizeObserver((): void => measureGlass());
+            const ro = roRef.current;
+            const prev = slot === "appbar" ? appBarElRef.current : composerElRef.current;
+            if (prev) ro.unobserve(prev);
+            if (slot === "appbar") appBarElRef.current = el;
+            else composerElRef.current = el;
+            if (el) ro.observe(el);
+            measureGlass();
+        },
+        [measureGlass],
+    );
+    const appBarRef = useCallback(
+        (el: HTMLDivElement | null): void => observeGlass("appbar", el),
+        [observeGlass],
+    );
+    const composerRef = useCallback(
+        (el: HTMLDivElement | null): void => observeGlass("composer", el),
+        [observeGlass],
+    );
+    // Disconnect the shared observer on unmount.
+    useEffect(() => (): void => roRef.current?.disconnect(), []);
     // The focus id we restored from localStorage at mount (PWA relaunch / reload).
     // Held in a ref so the gone-check fires exactly once after the first session
     // list arrives — if that session was deleted while we were away, the
@@ -972,13 +997,48 @@ export function App({
                             height: "env(safe-area-inset-top, 0px)",
                             zIndex: (t) => t.zIndex.appBar,
                             pointerEvents: "none",
-                            // Frosted / matte glass (磨砂): a milkier tint (0.5)
+                            // Frosted / matte glass (磨砂): a milkier tint (0.62)
                             // diffuses the content rather than showing it clearly,
-                            // and `saturate` adds the iOS-material vibrancy that
-                            // reads as real frosted glass — not just a clear pane.
-                            bgcolor: (t) => alpha(t.palette.background.default, 0.5),
-                            backdropFilter: "blur(24px) saturate(180%)",
-                            WebkitBackdropFilter: "blur(24px) saturate(180%)",
+                            // and the heavier blur + `saturate` add the iOS-material
+                            // vibrancy that reads as thick frosted glass — not a
+                            // clear pane. Matches the bottom slab's recipe.
+                            bgcolor: (t) => alpha(t.palette.background.default, 0.62),
+                            backdropFilter: "blur(30px) saturate(200%)",
+                            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+                        }}
+                    />
+                )}
+                {/* ONE frosted-glass slab behind BOTH the composer and the navbar,
+                    so they read as a single piece of glass — not two stacked panes
+                    with a seam. Its height is exactly the measured panel height
+                    (--composer-h + --navbar-h, the same vars the transcript reserves),
+                    pinned to the bottom (above the keyboard inset). The composer +
+                    navbar above it are made transparent (no own backdrop-filter), so
+                    there's ONE blur context and no dividing line. zIndex 1 sits it
+                    over the absolute transcript (0) and under the panel content (2);
+                    pointer-events:none so taps fall through to that content. */}
+                {navbarAtBottom && (
+                    <Box
+                        aria-hidden
+                        sx={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: "var(--kb-inset, 0px)",
+                            height: "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))",
+                            zIndex: 1,
+                            pointerEvents: "none",
+                            // Milkier than a clear pane + heavy blur + saturate → thick
+                            // iOS frosted material; content scrolling under it diffuses
+                            // (not shows) through the blur. Up-shadow + top hairline give
+                            // the "floating above the scroll" depth, now on the slab.
+                            bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.72 : 0.76),
+                            backdropFilter: "blur(30px) saturate(200%)",
+                            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+                            borderTop: 1,
+                            borderColor: "divider",
+                            boxShadow: (t) =>
+                                `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
                         }}
                     />
                 )}
@@ -996,23 +1056,13 @@ export function App({
                     color="transparent"
                     elevation={0}
                     sx={{
-                        // Bottom mode: frosted glass (磨砂), same recipe as the
-                        // composer + top strip, so navbar → composer read as one
-                        // floating glass slab over the scroll. Top mode keeps the
-                        // solid themed surface (it's the leading edge, nothing
-                        // scrolls behind it).
+                        // Bottom mode: TRANSPARENT — the single frosted slab behind it
+                        // (above) provides the glass, so the navbar + composer share ONE
+                        // blur context with no seam. Just lift the content above the slab
+                        // (zIndex 2 > slab's 1 > transcript's 0). Top mode keeps the solid
+                        // themed surface (leading edge, nothing scrolls behind it).
                         ...(navbarAtBottom
-                            ? {
-                                  bgcolor: (t) =>
-                                      alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.6 : 0.64),
-                                  backdropFilter: "blur(24px) saturate(180%)",
-                                  WebkitBackdropFilter: "blur(24px) saturate(180%)",
-                                  // Float above the absolute full-height transcript
-                                  // layer (zIndex 0): positioned + zIndex so the
-                                  // navbar glass paints over the scrolling content.
-                                  position: "relative",
-                                  zIndex: 1,
-                              }
+                            ? { bgcolor: "transparent", position: "relative", zIndex: 2 }
                             : { bgcolor: "background.default" }),
                         color: "text.primary",
                         // Bottom mode (mobile, navbar-pos=bottom): flex `order` puts
@@ -1038,10 +1088,12 @@ export function App({
                     <Toolbar
                         variant="dense"
                         sx={{
-                            // Separator faces the transcript: bottom border at the
-                            // top, top border when the bar sits at the bottom.
+                            // Top mode: bottom border faces the transcript. Bottom
+                            // mode: NO border — the navbar shares one continuous frosted
+                            // slab with the composer above it, so a divider here would be
+                            // the very seam we removed.
                             borderBottom: navbarAtBottom ? 0 : 1,
-                            borderTop: navbarAtBottom ? 1 : 0,
+                            borderTop: 0,
                             borderColor: "divider",
                             // Narrow installed PWA: the sidebar has collapsed to a
                             // drawer, so this bar is full-width and the macOS window
@@ -1194,7 +1246,9 @@ export function App({
                             sx={{
                                 order: navbarAtBottom ? 1 : 0,
                                 minWidth: 0,
-                                ...(navbarAtBottom && { position: "relative", zIndex: 1 }),
+                                // Lift the composer content above the single frosted slab
+                                // (zIndex 1) — it's transparent now, the slab is the glass.
+                                ...(navbarAtBottom && { position: "relative", zIndex: 2 }),
                             }}
                         >
                             <Composer
