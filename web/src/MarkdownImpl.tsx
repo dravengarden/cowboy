@@ -167,32 +167,51 @@ function CodeBlock({
           position: "absolute",
           top: 6,
           right: 6,
-          width: 34,
-          height: 34,
-          borderRadius: 1,
-          // Stay compact in the code corner — opt out of the global 44px icon
-          // button size; a 1rem glyph still scales with the reading font.
+          height: 32,
+          minWidth: 32,
+          // Resting: a compact frosted square (opt out of the global 44px icon
+          // button). On success it MORPHS into a labelled green pill — an
+          // icon-only swap is too easy to miss; "Copied" is unmistakable. The
+          // padding/gap animate the morph; right-anchored so it grows leftward
+          // over the code for the ~1.5s it's shown, never shifting layout.
+          px: copied ? 0.9 : 0,
+          gap: copied ? 0.5 : 0,
+          borderRadius: 1.5,
+          fontSize: "0.72rem",
+          fontWeight: 600,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
           "& .MuiSvgIcon-root": { fontSize: "1rem" },
           color: copied
             ? "success.main"
             : dark
-              ? "rgba(255,255,255,0.85)"
-              : "rgba(0,0,0,0.6)",
-          bgcolor: dark ? "rgba(40,44,52,0.72)" : "rgba(255,255,255,0.8)",
-          backdropFilter: "blur(3px)",
+              ? "rgba(255,255,255,0.82)"
+              : "rgba(0,0,0,0.55)",
+          bgcolor: copied
+            ? dark
+              ? "rgba(63,185,80,0.18)"
+              : "rgba(46,160,67,0.12)"
+            : dark
+              ? "rgba(40,44,52,0.7)"
+              : "rgba(255,255,255,0.82)",
+          backdropFilter: "blur(4px)",
           border: 1,
-          borderColor: "divider",
-          // Mouse: faint until the block is hovered (the &:hover rule above
-          // raises it to 1). Touch (no hover): always visible.
-          opacity: 0.42,
-          "@media (hover: none)": { opacity: 0.9 },
-          transition: "opacity .15s, background-color .15s",
-          "&:hover": {
-            bgcolor: dark ? "rgba(40,44,52,0.95)" : "rgba(255,255,255,0.97)",
-          },
+          borderColor: copied ? "success.main" : "divider",
+          // Mouse: faint until the block is hovered (the wrapper's &:hover rule
+          // raises it). Touch (no hover): clearly visible. Copied: full opacity.
+          opacity: copied ? 1 : 0.5,
+          "@media (hover: none)": { opacity: copied ? 1 : 0.9 },
+          transition:
+            "opacity .15s, background-color .18s, color .18s, border-color .18s, padding .18s, gap .18s",
+          ...(!copied && {
+            "&:hover": {
+              bgcolor: dark ? "rgba(40,44,52,0.95)" : "rgba(255,255,255,0.98)",
+            },
+          }),
         }}
       >
-        {copied ? <Check sx={{ fontSize: 17 }} /> : <ContentCopy sx={{ fontSize: 16 }} />}
+        {copied ? <Check sx={{ fontSize: 16 }} /> : <ContentCopy sx={{ fontSize: 15 }} />}
+        {copied && <Box component="span">Copied</Box>}
       </IconButton>
     </Box>
   );
