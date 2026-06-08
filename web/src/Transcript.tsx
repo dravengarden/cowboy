@@ -929,9 +929,9 @@ const ItemView = memo(function ItemView({
 // flaky link (cellular) flaps connected on/off constantly; gating the bar on it
 // would strobe a "disconnected" banner and is exactly the kind of transient
 // noise that must never distract from a working session. Connection state is
-// already surfaced — DEBOUNCED — by the app-level reconnect banner
-// (RECONNECT_BANNER_THRESHOLD in store.ts). This bar tracks only the
-// authoritative session status, which a blip never changes.
+// already surfaced — DEBOUNCED — by the app-level reconnect banner (the shared
+// connection store's reconnectBannerThreshold; see store.ts `conn`). This bar
+// tracks only the authoritative session status, which a blip never changes.
 //
 // The key signal (the user's ask): a daemon restart that caught a turn in flight
 // surfaces as `interrupted` (amber, "didn't finish"), distinct from the normal

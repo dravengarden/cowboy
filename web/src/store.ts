@@ -8,6 +8,7 @@
 // harmless.
 
 import { useSyncExternalStore } from "react";
+import { createConnectionStore } from "./_shell";
 import {
   type ArgsOf,
   type ClientSnapshot,
@@ -41,20 +42,14 @@ export interface ErrorNotice {
   severity?: "error" | "warning";
 }
 
-/// Top-of-app connection banner. Purely client-side — NOT part of the WS
-/// protocol; the store drives it off the socket lifecycle plus a build-version
-/// probe:
-///   - "down"        — reconnect has failed RECONNECT_BANNER_THRESHOLD times in
-///                     a row; red, so the user knows the live stream is stale
-///                     while we keep retrying underneath.
-///   - "reconnected" — the socket came back after a "down" banner was shown;
-///                     green, auto-dismissed after RECONNECTED_DISMISS_MS.
-///   - "update"      — the post-reconnect version probe saw a new server build;
-///                     blue, sticky, click reloads to pull the new bundle.
-export type BannerKind = "down" | "reconnected" | "update";
-export interface Banner {
-  kind: BannerKind;
-}
+/// Top-of-app connection / version banner — now the shared @shared-utils/ui
+/// instance (see ./_shell connection-banner.tsx). cowboy adopts liveview's
+/// canonical behavior: red "down" past the threshold, green "reconnected" flash,
+/// blue "update" that counts 3→0 and clears caches + reloads on its own. The
+/// store reports socket open/close into `conn` and reads back the backoff delay;
+/// the banner state lives entirely in `conn` (App renders <ConnectionBanner>).
+/// `versionUrl: "/version"` is cowboy's build-id endpoint.
+export const conn = createConnectionStore({ versionUrl: "/version" });
 
 /// One staged message — a queued prompt or a draft. SERVER-AUTHORITATIVE: the
 /// daemon owns the per-session queue/drafts and the drain (next-on-turn-end), so
@@ -115,10 +110,6 @@ export interface State {
   // lives in the per-session queue sync clients (see `qClient`), not here.
   optimisticMessages: Map<string, QueuedMessage[]>;
   lastError?: ErrorNotice;
-  // Top-of-app connection/version banner; undefined = nothing shown. Spelled
-  // `| undefined` (not bare optional) so `{ ...state, banner }` can carry an
-  // explicit undefined under exactOptionalPropertyTypes.
-  banner?: Banner | undefined;
   // session_id → title from the "title" sync state (@shared-utils/sync). Source
   // of title truth on the client: overlaid onto SessionMeta.title by
   // `deriveSessions`, so an optimistic rename shows instantly and every terminal
@@ -155,33 +146,12 @@ let socket: WebSocket | undefined;
 // daemon restart we reconnected across. See openSession + connect's onopen.
 let openedSessionId: string | undefined;
 
-// --- Reconnect + version bookkeeping ----------------------------------------
-
-// Surface the red "down" banner once this many consecutive (re)connect cycles
-// have failed — a single dropped frame that recovers on the first retry stays
-// silent; only a real outage raises the banner.
-const RECONNECT_BANNER_THRESHOLD = 2;
-// Cap the exponential backoff so a long outage doesn't hammer the daemon, while
-// a brief blip still recovers within a second.
-const RECONNECT_BACKOFF_MAX_MS = 15_000;
-// How long the green "reconnected" flash lingers before auto-dismissing.
-const RECONNECTED_DISMISS_MS = 4_000;
-
-// Consecutive failed (re)connect cycles; reset to 0 on a successful open.
-let reconnectAttempts = 0;
-// Whether the current outage actually surfaced the red banner — so the eventual
-// reopen only flashes green for outages the user was told about, not for a blip
-// that never crossed the threshold.
-let outageSurfaced = false;
+// --- Reconnect bookkeeping --------------------------------------------------
+// The banner + version-probe + outage/reconnect-flash policy now live in `conn`
+// (the shared @shared-utils/ui connection store). The store just reports socket
+// open/close into it and reads back the backoff delay. The only reconnect state
+// kept here is the single pending-attempt timer.
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-let reconnectedTimer: ReturnType<typeof setTimeout> | undefined;
-
-// The server build id this tab first loaded against. `/version` returns the
-// embedded index.html's content hash, which changes on every redeploy that
-// alters the shipped bundle and stays stable otherwise. We capture it once,
-// then re-probe after each successful reconnect: a mismatch means the daemon
-// was redeployed under a now-stale tab → raise the blue "update" banner.
-let knownVersion: string | undefined;
 
 function emit(): void {
   for (const l of listeners) l();
@@ -258,7 +228,7 @@ const HISTORY_PAGE = 200;
 // redeploy could keep serving pages cached under the OLD build (if a future
 // version ever changes the event shape, that's stale/incompatible). Keying the
 // url on the build id means a new version's pages are fresh fetches, while
-// reloads of the SAME build stay cache hits. (`knownVersion` is the id the tab
+// reloads of the SAME build stay cache hits. (`conn.version()` is the id the tab
 // loaded against; until the first /version probe lands it's a harmless "0".)
 export async function loadOlder(sessionId: string): Promise<void> {
   const pg = state.pagination.get(sessionId);
@@ -267,7 +237,7 @@ export async function loadOlder(sessionId: string): Promise<void> {
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
     const res = await fetch(
-      `/api/history/${encodeURIComponent(sessionId)}/${String(page)}?v=${encodeURIComponent(knownVersion ?? "0")}`,
+      `/api/history/${encodeURIComponent(sessionId)}/${String(page)}?v=${encodeURIComponent(conn.version() ?? "0")}`,
     );
     if (!res.ok) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
@@ -413,10 +383,6 @@ function handle(msg: Outbound): void {
   }
 }
 
-function setBanner(banner: Banner | undefined): void {
-  setState({ ...state, banner });
-}
-
 /**
  * Surface a client-side notice through the same snackbar the daemon's "error"
  * messages use. `severity` defaults to "error"; pass "warning" for recoverable
@@ -428,52 +394,10 @@ export function notify(message: string, severity: "error" | "warning" = "error")
   setState({ ...state, lastError: { seq: errorSeq, message, severity } });
 }
 
-// The update overlay's reload action (fired when its countdown elapses): a hard
-// reload. index.html ships `no-cache` (always revalidated) and the hashed assets
-// are immutable, so the next load pulls the new bundle cleanly.
-export function applyUpdate(): void {
-  globalThis.location.reload();
-}
-
-// First thing on every (re)connect: ask the daemon for its build id. On the
-// very first probe we only record the baseline; thereafter a changed id means
-// the server was redeployed under us. We AUTO-RELOAD in that case rather than
-// just showing a banner: a redeploy restarts the daemon, the PWA reconnects over
-// it, but an installed PWA keeps its OLD cached JS until a full reload — a WS
-// reconnect is not enough. The banner was routinely ignored, so every shipped
-// web change read as "no effect". Auto-reloading is safe here: the conversation
-// is server-persisted and the composer text is in the per-session draft store
-// (localStorage), so the reload restores everything. `/version` is the embedded
-// index.html content hash (stable per build), so this fires exactly once per
-// deploy and the fresh load re-baselines `knownVersion` (no reload loop). A
-// failed probe is a no-op — we retry on the next reconnect.
-async function probeVersion(): Promise<void> {
-  let version: string;
-  try {
-    const res = await fetch("/version", { cache: "no-store" });
-    if (!res.ok) return;
-    ({ version } = (await res.json()) as { version: string });
-  } catch {
-    return;
-  }
-  if (knownVersion === undefined) {
-    knownVersion = version;
-    return;
-  }
-  if (version !== knownVersion) {
-    // Brief defer so the just-arrived reconnect snapshot settles before the
-    // reload (avoids reloading mid-handshake); state persists either way.
-    setBanner({ kind: "update" });
-    globalThis.setTimeout(() => applyUpdate(), 600);
-  }
-}
-
-function scheduleReconnect(): void {
-  if (reconnectTimer) return; // one pending attempt at a time
-  const delay = Math.min(
-    RECONNECT_BACKOFF_MAX_MS,
-    1000 * 2 ** Math.max(0, reconnectAttempts - 1),
-  );
+// Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
+// computed off the consecutive-failure count). One pending attempt at a time.
+function scheduleReconnect(delay: number): void {
+  if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
     connect();
@@ -510,25 +434,10 @@ function openSocket(): void {
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws`);
   socket = ws;
   ws.onopen = (): void => {
-    const recovered = outageSurfaced;
-    reconnectAttempts = 0;
-    outageSurfaced = false;
-    // Recovered from a surfaced outage → flash green, but never stomp a sticky
-    // blue update banner (it outranks everything). The async version probe may
-    // replace the green with blue moments later.
-    let banner = state.banner;
-    if (recovered && banner?.kind !== "update") banner = { kind: "reconnected" };
-    setState({ ...state, connected: true, banner });
-    if (banner?.kind === "reconnected") {
-      if (reconnectedTimer) clearTimeout(reconnectedTimer);
-      reconnectedTimer = setTimeout(() => {
-        reconnectedTimer = undefined;
-        // Only clear if still green — don't stomp an update banner the probe
-        // raised in the meantime.
-        if (state.banner?.kind === "reconnected") setBanner(undefined);
-      }, RECONNECTED_DISMISS_MS);
-    }
-    void probeVersion();
+    setState({ ...state, connected: true });
+    // Clears the failure count, flashes green if an outage was surfaced, and
+    // probes /version for a redeploy (banner state lives in `conn`).
+    conn.connectionReady();
     // Re-assert the open session so the daemon revives its agent if it died
     // with a restart we just reconnected across (revive-on-open, design §7).
     // Idempotent server-side when the agent is still alive.
@@ -551,16 +460,10 @@ function openSocket(): void {
     }
   };
   ws.onclose = (): void => {
-    reconnectAttempts += 1;
-    // Raise the red banner once retries have failed past the threshold, unless
-    // a sticky update banner is already up (that one outranks the outage).
-    let banner = state.banner;
-    if (reconnectAttempts >= RECONNECT_BANNER_THRESHOLD && banner?.kind !== "update") {
-      outageSurfaced = true;
-      banner = { kind: "down" };
-    }
-    setState({ ...state, connected: false, banner });
-    scheduleReconnect();
+    setState({ ...state, connected: false });
+    // Raises the red banner past the failure threshold and hands back the
+    // exponential-backoff delay to wait before retrying (banner lives in `conn`).
+    scheduleReconnect(conn.connectionLost());
   };
   ws.onerror = (): void => ws.close();
 }

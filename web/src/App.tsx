@@ -53,9 +53,9 @@ import {
     type Status,
 } from "./protocol";
 import {
-    applyUpdate,
     AUTO_RESUME_DEFAULT_KEY,
     AUTO_RESUME_TEMPLATE_KEY,
+    conn,
     DEFAULT_CONTINUATION_TEMPLATE,
     notify,
     openSession,
@@ -88,7 +88,7 @@ import {
 } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
-import { BottomSheet, DetentSheet, ThemeModeControl } from "./_shell";
+import { BottomSheet, ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
@@ -596,84 +596,6 @@ function NewSessionDialog({
     );
 }
 
-// Delay before the update bar hard-reloads into the new build on its own. No
-// visible countdown — a single timer, so the bar doesn't re-render each second.
-const UPDATE_RELOAD_MS = 2000;
-
-// Full-width overlay bar that tracks the live WebSocket (see store.ts `Banner`).
-// All three states are the SAME bar — `position: fixed` keeps it on top of
-// everything and out of the layout flow, so it never pushes the panes down or
-// disturbs the current session (`pointer-events: none` also lets clicks fall
-// through to the chrome it floats over):
-//   - red "down"          — reconnect has failed past the threshold (spinner);
-//   - green "reconnected"  — recovery, auto-dismissed (check);
-//   - blue "update"        — a redeploy was detected; counts 3→0 and then
-//                            hard-reloads into the new build on its own.
-function ConnectionBanner(): React.JSX.Element | null {
-    const { banner } = useStore();
-    const isUpdate = banner?.kind === "update";
-
-    // Auto-reload into the new build after a short fixed delay — one timer, no
-    // per-second countdown (so the bar shows a static message and never
-    // re-renders while it waits).
-    useEffect(() => {
-        if (!isUpdate) return undefined;
-        const t = setTimeout(applyUpdate, UPDATE_RELOAD_MS);
-        return (): void => clearTimeout(t);
-    }, [isUpdate]);
-
-    if (!banner) return null;
-
-    const palette =
-        banner.kind === "down"
-            ? "error"
-            : banner.kind === "reconnected"
-              ? "success"
-              : "info";
-    const label =
-        banner.kind === "down"
-            ? "Connection lost — reconnecting…"
-            : banner.kind === "reconnected"
-              ? "Reconnected"
-              : "New version · reloading…";
-    return (
-        <Box
-            role="status"
-            aria-live="polite"
-            sx={{
-                position: "fixed",
-                top: 0,
-                left: 0,
-                right: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 1,
-                px: 2,
-                py: 0.75,
-                // Owns the notch when shown (it's the topmost element).
-                pt: "calc(env(safe-area-inset-top, 0px) + 6px)",
-                bgcolor: `${palette}.main`,
-                color: `${palette}.contrastText`,
-                fontSize: "0.8125rem",
-                fontWeight: 500,
-                // Purely informational — never eat clicks meant for the UI
-                // underneath it.
-                pointerEvents: "none",
-                zIndex: (t) => t.zIndex.tooltip + 1,
-            }}
-        >
-            {banner.kind === "down" && (
-                <CircularProgress size={14} color="inherit" thickness={5} />
-            )}
-            {banner.kind === "reconnected" && (
-                <CheckIcon sx={{ fontSize: 18 }} />
-            )}
-            <span>{label}</span>
-        </Box>
-    );
-}
-
 export function App({
     themeMode,
     onSetThemeMode,
@@ -923,8 +845,10 @@ export function App({
             }}
         >
             {/* Full-width connection/version banner, above the whole layout so
-                it spans both panes and pushes them down when shown. */}
-            <ConnectionBanner />
+                it spans both panes and pushes them down when shown. Shared
+                @shared-utils/ui visual (liveview's 3s-countdown + cache-clearing
+                reload), bound to cowboy's connection store. */}
+            <ConnectionBanner store={conn} />
             <Box
                 sx={{
                     display: "flex",
