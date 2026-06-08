@@ -27,8 +27,8 @@ import {
 // Static model list for now — Step 18 makes this a data-driven `ModelSource`
 // (optionally fetched from the provider's /models). Ids are data, not control flow.
 const DEEPSEEK_MODELS = [
-  { id: "deepseek-v4-flash", label: "V4 Flash — fast & cheap (default)" },
-  { id: "deepseek-v4-pro", label: "V4 Pro — thinking" },
+  { id: "deepseek-v4-pro", label: "V4 Pro — thinking, most accurate (default)" },
+  { id: "deepseek-v4-flash", label: "V4 Flash — fast & cheap" },
 ];
 
 function formatBytes(n: number): string {
@@ -104,7 +104,7 @@ function StorageInfoSection(): React.JSX.Element {
 export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => void }): React.JSX.Element {
   const configs = useInferenceConfig();
   const ds = configs.find((c) => c.provider === "deepseek");
-  const model = ds?.model || "deepseek-v4-flash";
+  const model = ds?.model || "deepseek-v4-pro"; // matches Rust DEFAULT_MODEL
   const keySet = ds?.key_set ?? false;
   const [keyInput, setKeyInput] = useState("");
   const probe = useLastProbe();

@@ -25,10 +25,10 @@ pub struct JudgeOutcome {
 
 /// The stable system prefix — instructions + few-shot. Kept FIRST + constant so
 /// DeepSeek's prefix cache hits across turns; only the per-turn text varies.
-const SYSTEM_PROMPT: &str = r#"你是一个「coding agent 回合结束」分类器。输入是 agent 刚说完、停下来把控制权交还给用户的最后一段话（可能中文也可能英文）。只输出一个 JSON（不要解释、不要 markdown）：
+const SYSTEM_PROMPT: &str = r#"你是一个「coding agent 回合结束」分类器。输入是 agent 刚说完、停下来把控制权交还给用户的最后一段话（可能中文也可能英文，可能很长、有多段）。判断完后，最后只输出这一行 JSON，不要任何其它文字、不要 markdown：
 {"awaiting_user": <bool>, "done": <bool>, "confidence": <0..1>, "reason": "<简短>"}
 
-按 agent 的真实意图判断，不要只看表面措辞、有没有问号、或客套话。
+按 agent 的真实意图判断，不要只看表面措辞、有没有问号、或客套话。话很长时，看它整体上现在是否真的需要你回应才能继续。
 
 awaiting_user —— agent 是否在「等用户回应之后才能继续」：
 - true：明确提问、让用户在选项间挑一个、请求确认某个有风险/不可逆的操作、或表示缺少信息或需要用户拍板才能往下做。
@@ -116,7 +116,9 @@ pub async fn classify(
         return Ok(JudgeOutcome { verdict: v, layer: "L1", raw_output, usage: None });
     }
     let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(final_text.to_owned())];
-    let resp = inference.complete(CompleteRequest::json_judge(messages, 128)).await?;
+    // No forced JSON mode (thinking models reject it) + generous tokens so a
+    // thinking model has room to reason before the short JSON.
+    let resp = inference.complete(CompleteRequest::judge(messages, 512)).await?;
     let verdict = parse_verdict(&resp.text)?;
     Ok(JudgeOutcome { verdict, layer: "L2", raw_output: resp.text, usage: Some(resp.usage) })
 }

@@ -53,6 +53,13 @@ pub struct CompleteRequest {
 }
 
 impl CompleteRequest {
+    /// A deterministic judge call WITHOUT forced JSON mode — thinking models
+    /// (deepseek-v4-pro) commonly reject `response_format=json_object`, so we
+    /// instruct JSON-only in the prompt and parse tolerantly instead.
+    pub fn judge(messages: Vec<Message>, max_tokens: u32) -> Self {
+        Self { messages, json: false, temperature: 0.0, max_tokens }
+    }
+
     /// A deterministic, JSON-mode request sized for a short classifier verdict.
     pub fn json_judge(messages: Vec<Message>, max_tokens: u32) -> Self {
         Self { messages, json: true, temperature: 0.0, max_tokens }

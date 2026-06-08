@@ -19,7 +19,7 @@ const API_BASE: &str = "https://api.deepseek.com";
 /// Default model — the cheap, fast non-thinking model, right for a short
 /// classifier. NOT hardcoded into control flow: it's the default of a stored,
 /// UI-selectable value (see `model_list` / Step 18).
-pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
+pub const DEFAULT_MODEL: &str = "deepseek-v4-pro";
 
 /// A configured DeepSeek client (one per stored config).
 pub struct DeepSeek {
@@ -38,8 +38,8 @@ impl DeepSeek {
     /// `/models` fetch can replace this later; ids stay data, never control flow.
     pub fn model_list() -> Vec<(String, String)> {
         vec![
-            (DEFAULT_MODEL.to_owned(), "V4 Flash — fast & cheap (default)".to_owned()),
-            ("deepseek-v4-pro".to_owned(), "V4 Pro — thinking".to_owned()),
+            (DEFAULT_MODEL.to_owned(), "V4 Pro — thinking, most accurate (default)".to_owned()),
+            ("deepseek-v4-flash".to_owned(), "V4 Flash — fast & cheap".to_owned()),
         ]
     }
 
