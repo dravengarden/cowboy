@@ -87,6 +87,7 @@ import {
     useNavbarPosition,
 } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
+import { useSticky } from "./stickyStore";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, DetentSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
@@ -721,12 +722,25 @@ export function App({
     const appBarRef = useRef<HTMLDivElement>(null);
     const composerRef = useRef<HTMLDivElement>(null);
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
+    // Whether the transcript is pinned to the bottom (following). Held in a ref so
+    // the ResizeObserver below can read it without re-subscribing.
+    const sticky = useSticky(activeId ?? "");
+    const stickyRef = useRef(sticky);
+    stickyRef.current = sticky;
     useEffect(() => {
         const col = columnRef.current;
         if (!col || !navbarAtBottom) return undefined;
-        const measure = (): void => {
+        const write = (): void => {
             col.style.setProperty("--navbar-h", `${appBarRef.current?.offsetHeight ?? 0}px`);
             col.style.setProperty("--composer-h", `${composerRef.current?.offsetHeight ?? 0}px`);
+        };
+        const measure = (): void => {
+            // ONLY reshape the transcript's reserved bottom space while pinned to
+            // the bottom. Changing a column-reverse container's padding while the
+            // reader is scrolled UP jolts their view (the documented jitter) — and
+            // the exact panel height only matters at the bottom anyway. Scrolled
+            // up → freeze; flushed on re-stick by the effect below.
+            if (stickyRef.current) write();
         };
         measure();
         const ro = new ResizeObserver(measure);
@@ -734,6 +748,15 @@ export function App({
         if (composerRef.current) ro.observe(composerRef.current);
         return (): void => ro.disconnect();
     }, [navbarAtBottom, activeId]);
+    // Flush the reserved space the instant the reader returns to the bottom, so
+    // any panel-height change that happened while they were scrolled up is applied
+    // exactly when it starts to matter (newest message clearing the glass).
+    useEffect(() => {
+        const col = columnRef.current;
+        if (!col || !navbarAtBottom || !sticky) return;
+        col.style.setProperty("--navbar-h", `${appBarRef.current?.offsetHeight ?? 0}px`);
+        col.style.setProperty("--composer-h", `${composerRef.current?.offsetHeight ?? 0}px`);
+    }, [sticky, navbarAtBottom]);
     // The focus id we restored from localStorage at mount (PWA relaunch / reload).
     // Held in a ref so the gone-check fires exactly once after the first session
     // list arrives — if that session was deleted while we were away, the
