@@ -13,6 +13,7 @@ import {
     ListItemButton,
     ListItemIcon,
     ListItemText,
+    ListSubheader,
     Menu,
     MenuItem,
     Select,
@@ -29,6 +30,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    Autorenew,
     Check as CheckIcon,
     Circle,
     DeleteOutline,
@@ -40,6 +42,7 @@ import {
     Menu as MenuIcon,
     MoreVert,
     Settings as SettingsIcon,
+    SyncDisabled,
 } from "@mui/icons-material";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
@@ -50,7 +53,20 @@ import {
     type SessionOrigin,
     type Status,
 } from "./protocol";
-import { applyUpdate, notify, openSession, renameSession, reorderSessions, send, useStore } from "./store";
+import {
+    applyUpdate,
+    AUTO_RESUME_DEFAULT_KEY,
+    AUTO_RESUME_TEMPLATE_KEY,
+    DEFAULT_CONTINUATION_TEMPLATE,
+    notify,
+    openSession,
+    renameSession,
+    reorderSessions,
+    send,
+    setSessionAutoResume,
+    setSetting,
+    useStore,
+} from "./store";
 import { useSortable } from "./useSortable";
 import { setNotifySetting, useNotifySetting } from "./turnNotify";
 import { setVimSetting, useVimSetting } from "./vimSetting";
@@ -207,6 +223,50 @@ function StatusDot({
     );
 }
 
+// Auto-resume indicator (tasks/active/session-auto-resume). Marks the EXCEPTION,
+// not the norm: a session whose override differs from the global default
+// (force-on → ↻ accent, force-off → ↻ with slash). An inherited session shows
+// nothing — the global default speaks for the norm. When a session is actually
+// mid-resume (Interrupted + effective-on), the same glyph spins, so one icon
+// carries both "capability marker" and "resuming now". Orthogonal to StatusDot
+// (which says what the session IS now); this says what happens after a restart.
+function AutoResumeBadge({
+    meta,
+    defaultOn,
+}: {
+    meta: SessionMeta;
+    defaultOn: boolean;
+}): React.JSX.Element | null {
+    const override = meta.auto_resume ?? null;
+    const effective = override ?? defaultOn;
+    const isException = override !== null;
+    const resuming = meta.status === "interrupted" && effective;
+    if (!isException && !resuming) return null;
+    const off = override === false;
+    const Icon = off ? SyncDisabled : Autorenew;
+    const color = resuming ? "warning.main" : off ? "text.disabled" : "info.main";
+    const tip = off
+        ? "自动续写:已为此会话关闭"
+        : resuming
+          ? "自动续写:正在续写中断的回合…"
+          : "自动续写:已为此会话开启";
+    return (
+        <Tooltip title={tip} enterDelay={300}>
+            <Icon
+                sx={{
+                    fontSize: 14,
+                    flexShrink: 0,
+                    color,
+                    ...(resuming && {
+                        animation: "cowboy-spin 1.2s linear infinite",
+                        "@keyframes cowboy-spin": { to: { transform: "rotate(360deg)" } },
+                    }),
+                }}
+            />
+        </Tooltip>
+    );
+}
+
 function originColor(
     o: SessionOrigin | undefined,
 ): "primary" | "secondary" | "default" {
@@ -228,6 +288,7 @@ function SessionList({
     onRequestDelete,
     onRequestInfo,
     onRequestRename,
+    autoResumeDefault,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -236,6 +297,7 @@ function SessionList({
     onRequestDelete: (s: SessionMeta) => void;
     onRequestInfo: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
+    autoResumeDefault: boolean;
 }): React.JSX.Element {
     // Per-row kebab Menu anchor + target. Standard Material list-row
     // pattern: trailing IconButton with MoreVert opens a Menu containing
@@ -338,6 +400,7 @@ function SessionList({
                                             "& .MuiChip-label": { px: 0.75 },
                                         }}
                                     />
+                                    <AutoResumeBadge meta={s} defaultOn={autoResumeDefault} />
                                 </Stack>
                             }
                             secondary={s.cwd}
@@ -406,6 +469,35 @@ function SessionList({
                     </ListItemIcon>
                     <ListItemText primary="Rename" />
                 </MenuItem>
+                <Divider />
+                <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
+                    自动续写
+                </ListSubheader>
+                {(
+                    [
+                        { v: null, label: `跟随默认 (${autoResumeDefault ? "开" : "关"})` },
+                        { v: true, label: "开启" },
+                        { v: false, label: "关闭" },
+                    ] as const
+                ).map((opt) => {
+                    const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
+                    return (
+                        <MenuItem
+                            key={String(opt.v)}
+                            selected={current}
+                            onClick={(): void => {
+                                if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v);
+                                setMenuAnchor(null);
+                            }}
+                        >
+                            <ListItemIcon>
+                                {current ? <CheckIcon fontSize="medium" /> : null}
+                            </ListItemIcon>
+                            <ListItemText primary={opt.label} />
+                        </MenuItem>
+                    );
+                })}
+                <Divider />
                 <MenuItem
                     onClick={(): void => {
                         if (menuAnchor) onRequestDelete(menuAnchor.row);
@@ -601,8 +693,9 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { sessions, timelines, hydrated, lastError, sessionsLoaded, connected } =
+    const { sessions, timelines, hydrated, lastError, sessionsLoaded, connected, settings } =
         useStore();
+    const autoResumeDefaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -758,6 +851,7 @@ export function App({
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
             onRequestRename={(s): void => setPendingRename(s)}
+            autoResumeDefault={autoResumeDefaultOn}
         />
     );
 
@@ -1223,6 +1317,125 @@ export function App({
 // mobile, centred Dialog on desktop) so it looks/behaves identically to every
 // other app's settings + the portal's launcher. Content is the shared
 // ThemeModeControl + a small About blurb.
+// Sample values for the continuation-template live preview, so the preview works
+// even with no real interruption on hand (the "示例数据" source).
+const AUTO_RESUME_SAMPLE: Record<string, string> = {
+    partial: "好的,我来重构鉴权模块。先抽出 token 校验:\n\n```ts\nexport function verifyToken(",
+    prompt: "重构 auth 模块,把 token 校验抽成独立函数",
+    cwd: "/home/draven/proj",
+};
+function interpolateTemplate(template: string, vars: Record<string, string>): string {
+    // Mirror src/core.rs render_template: replace {{var}}; unknown vars stay
+    // verbatim (so a typo is visible in the preview, not silently dropped).
+    return template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
+}
+
+// Global auto-resume settings (tasks/active/session-auto-resume): the default
+// toggle + a collapsed continuation-template editor with a live interpolated
+// preview. Server-authoritative (reads `state.settings`, writes via setSetting).
+function AutoResumeSettings(): React.JSX.Element {
+    const { settings } = useStore();
+    const defaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
+    const saved =
+        typeof settings[AUTO_RESUME_TEMPLATE_KEY] === "string"
+            ? (settings[AUTO_RESUME_TEMPLATE_KEY] as string)
+            : DEFAULT_CONTINUATION_TEMPLATE;
+    const [editorOpen, setEditorOpen] = useState(false);
+    const [draft, setDraft] = useState(saved);
+    const dirty = draft !== saved;
+    const preview = interpolateTemplate(draft, AUTO_RESUME_SAMPLE);
+    return (
+        <Stack spacing={1}>
+            <Typography variant="overline" color="text.secondary">
+                中断回合
+            </Typography>
+            <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                spacing={2}
+            >
+                <Stack sx={{ minWidth: 0 }}>
+                    <Typography variant="body2">自动续写中断的回合</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                        重启后,被打断的回合会带着已产出的内容自动接着跑。可能重复已执行的副作用 ——
+                        仅在任务可安全重试时开启。
+                    </Typography>
+                </Stack>
+                <Switch
+                    checked={defaultOn}
+                    onChange={(e): void => setSetting(AUTO_RESUME_DEFAULT_KEY, e.target.checked)}
+                    inputProps={{ "aria-label": "自动续写中断的回合" }}
+                />
+            </Stack>
+            <Button
+                size="small"
+                color="inherit"
+                onClick={(): void => setEditorOpen((v) => !v)}
+                startIcon={editorOpen ? <ExpandLess /> : <ExpandMore />}
+                sx={{ alignSelf: "flex-start", textTransform: "none", color: "text.secondary" }}
+            >
+                自定义续写消息
+            </Button>
+            {editorOpen && (
+                <Stack spacing={1}>
+                    <Typography variant="caption" color="text.secondary">
+                        可用变量:{"{{partial}}"} 已产出内容 · {"{{prompt}}"} 原始指令 ·{" "}
+                        {"{{cwd}}"} 工作目录
+                    </Typography>
+                    <TextField
+                        multiline
+                        minRows={4}
+                        maxRows={10}
+                        fullWidth
+                        value={draft}
+                        onChange={(e): void => setDraft(e.target.value)}
+                        slotProps={{ input: { sx: { fontSize: 13, fontFamily: "monospace" } } }}
+                    />
+                    <Stack direction="row" spacing={1}>
+                        <Button
+                            size="small"
+                            variant="contained"
+                            disabled={!dirty}
+                            onClick={(): void => setSetting(AUTO_RESUME_TEMPLATE_KEY, draft)}
+                        >
+                            保存
+                        </Button>
+                        <Button
+                            size="small"
+                            color="inherit"
+                            onClick={(): void => {
+                                setDraft(DEFAULT_CONTINUATION_TEMPLATE);
+                                setSetting(AUTO_RESUME_TEMPLATE_KEY, DEFAULT_CONTINUATION_TEMPLATE);
+                            }}
+                        >
+                            重置为默认
+                        </Button>
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary">
+                        预览(示例数据)
+                    </Typography>
+                    <Box
+                        sx={{
+                            p: 1,
+                            borderRadius: 1,
+                            border: 1,
+                            borderColor: "divider",
+                            bgcolor: "action.hover",
+                            fontSize: 13,
+                            whiteSpace: "pre-wrap",
+                            maxHeight: 200,
+                            overflowY: "auto",
+                        }}
+                    >
+                        {preview}
+                    </Box>
+                </Stack>
+            )}
+        </Stack>
+    );
+}
+
 function SettingsShell({
     open,
     onClose,
@@ -1555,6 +1768,8 @@ function SettingsShell({
                         </Stack>
                     </>
                 )}
+                <Divider />
+                <AutoResumeSettings />
                 <Divider />
                 <Stack spacing={1}>
                     <Typography variant="overline" color="text.secondary">
