@@ -16,7 +16,7 @@ import {
   type ReplicatedStore,
   snapshotPatch,
 } from "./_sync/mod.ts";
-import { idbPersistence } from "./_sync-idb/mod.ts";
+import { idbListKeys, idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
 import { fireAlert } from "./turnNotify";
@@ -488,6 +488,7 @@ function connect(): void {
     // suspenders so one rejection can't skip openSocket().
     try {
       await Promise.all([...syncClients.values()].map((e) => e.hydrate()));
+      await hydrateCachedQueues();
     } catch (err) {
       console.warn("sync hydrate failed", err);
     }
@@ -752,10 +753,30 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       onChange: (): void => {
         commitQueue(sessionId);
       },
+      // Durable outbox: cache {base, pending} per session. On reload we enumerate
+      // these keys and hydrate each qClient BEFORE the socket opens (see
+      // connect()), so a staged/queued message painted instantly survives the
+      // reload and re-sends; the per-session `queue_resync` (force) that follows
+      // is the authority that corrects any stale cached base.
+      local: idbPersistence<ClientSnapshot<QValue>>(`cowboy:sync:queue:${sessionId}`),
     });
     qClients.set(sessionId, c);
   }
   return c;
+}
+
+/** Eager-restore every per-session queue durable outbox cached in IndexedDB,
+ *  BEFORE the socket opens (called from connect's pre-open hydrate). Enumerating
+ *  the keys is what makes this correct: the qClients are created lazily during
+ *  patch handling, so without enumerating we couldn't know which sessions to
+ *  hydrate ahead of the resync. Each hydrate restores {base, pending} + renders
+ *  via onChange; the queue_resync (force) on connect then corrects stale base. */
+async function hydrateCachedQueues(): Promise<void> {
+  const prefix = "cowboy:sync:queue:";
+  const keys = await idbListKeys();
+  await Promise.all(
+    keys.filter((k) => k.startsWith(prefix)).map((k) => qClient(k.slice(prefix.length)).hydrate()),
+  );
 }
 
 /** Render queue + drafts for one session: the sync client's view (server base +
