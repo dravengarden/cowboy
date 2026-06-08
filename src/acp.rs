@@ -372,19 +372,26 @@ async fn run_session(
                 // per block so each renders as its own bubble. The FIRST echo
                 // carries the originating client's cmid so that client reconciles
                 // its optimistic chat bubble by id (the rest are untagged).
+                // A daemon-originated auto-resume continuation (cmid "__cont__…")
+                // is flagged on the echo (persisted in the payload) so the UI
+                // renders it as a distinct "↻ resumed turn" note — it isn't
+                // something the user typed, so it must never look like a user
+                // bubble (e.g. an empty-result continuation re-issues the prompt
+                // verbatim, which would otherwise read as a duplicate).
+                let auto_resumed = cmid
+                    .as_deref()
+                    .is_some_and(|c| c.starts_with(crate::core::AUTO_CONTINUE_PREFIX));
                 for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
                     let tag = if i == 0 { cmid.clone() } else { None };
-                    state.hub.push_tagged(
-                        &session_id,
-                        Event::Update {
-                            update: serde_json::json!({
-                                "sessionUpdate": "user_message_chunk",
-                                "content": content,
-                            }),
-                        },
-                        tag,
-                    );
+                    let mut update = serde_json::json!({
+                        "sessionUpdate": "user_message_chunk",
+                        "content": content,
+                    });
+                    if auto_resumed {
+                        update["autoResumed"] = serde_json::Value::Bool(true);
+                    }
+                    state.hub.push_tagged(&session_id, Event::Update { update }, tag);
                 }
                 let cx = cx.clone();
                 let hub = state.hub.clone();

@@ -120,8 +120,9 @@ const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
 /// cmid prefix tagging an auto-enqueued continuation, so it's deduped (never
 /// stacked) and recognizable. (The cmid isn't persisted across restart — it only
 /// guards stacking WITHIN the queue at enqueue time, which is where the pile-up
-/// risk is.)
-const AUTO_CONTINUE_PREFIX: &str = "__cont__";
+/// risk is.) Also read in `acp.rs` to flag the echo as `autoResumed` so the UI
+/// renders it as a continuation note rather than a user bubble.
+pub(crate) const AUTO_CONTINUE_PREFIX: &str = "__cont__";
 /// Built-in continuation template used when the operator hasn't customized one.
 /// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
 /// one source of truth the revived agent's own store lacks. The "don't redo"

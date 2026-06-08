@@ -16,7 +16,7 @@ export type ContentChunk =
 // The transcript keys rows by this so prepending older history (which shifts
 // every array index) doesn't re-mount/jump the visible rows; index keys can't.
 export type RenderItem = { key: string } & (
-  | { kind: "message"; role: "assistant" | "user"; chunks: ContentChunk[] }
+  | { kind: "message"; role: "assistant" | "user"; chunks: ContentChunk[]; autoResumed?: boolean }
   | { kind: "thought"; text: string }
   | {
       kind: "tool";
@@ -122,7 +122,11 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (cursor?.kind === "message" && cursor.role === role && last?.kind === "message") {
               pushChunk(last, chunk);
             } else {
-              items.push({ kind: "message", role, chunks: [chunk], key: String(env.seq) });
+              // An auto-resume continuation echo carries `autoResumed` (set by the
+              // daemon, src/acp.rs) so the UI marks it as a resumed turn rather
+              // than letting it read as a user message the human typed.
+              const autoResumed = u["autoResumed"] === true;
+              items.push({ kind: "message", role, chunks: [chunk], key: String(env.seq), autoResumed });
               cursor = { kind: "message", role };
             }
             break;

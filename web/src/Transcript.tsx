@@ -515,23 +515,67 @@ function MessageBubble({
   role,
   chunks,
   streaming,
+  autoResumed,
 }: {
   role: "assistant" | "user";
   chunks: ContentChunk[];
   /** When true, append a blinking caret after the last text chunk to signal
    *  the model is still producing. */
   streaming?: boolean;
+  /** This "user" turn is a daemon-issued auto-resume continuation, not something
+   *  the human typed — render it as a distinct system note, never a user bubble
+   *  (an empty-result continuation re-issues the prompt verbatim, which would
+   *  otherwise read as a duplicate). */
+  autoResumed?: boolean;
 }): React.JSX.Element {
   const mine = role === "user";
   const lastChunkIdx = chunks.length - 1;
   const body = chunks.map((c, i) => (
     <Box key={i} sx={{ position: "relative" }}>
-      <ChunkView chunk={c} invert={mine} />
+      <ChunkView chunk={c} invert={mine && !autoResumed} />
       {streaming && i === lastChunkIdx && c.type === "text" && (
         <StreamingCaret />
       )}
     </Box>
   ));
+  // Auto-resume continuation: a centered, muted "↻ Auto-resumed" note with the
+  // re-sent prompt below it — visually distinct from BOTH a user bubble (right,
+  // primary) and an assistant reply (flush), so it never reads as a message the
+  // human sent.
+  if (mine && autoResumed) {
+    return (
+      <Box
+        sx={{
+          alignSelf: "center",
+          maxWidth: { xs: "92%", sm: "80%" },
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 0.5,
+          py: 0.5,
+        }}
+      >
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          ↻ Auto-resumed the interrupted turn
+        </Typography>
+        <Box
+          sx={{
+            width: "100%",
+            px: 1.25,
+            py: 0.75,
+            borderRadius: 1.5,
+            border: 1,
+            borderColor: "divider",
+            bgcolor: "action.hover",
+            color: "text.secondary",
+            fontSize: 13,
+          }}
+        >
+          {body}
+        </Box>
+      </Box>
+    );
+  }
   // Assistant replies render flush in the page (Zed-style): no border, no card
   // background, just markdown flowing inline. The per-item `py` in the
   // virtualizer row is the only separator between consecutive replies. Only the
@@ -806,6 +850,7 @@ const ItemView = memo(function ItemView({
           role={item.role}
           chunks={item.chunks}
           streaming={!!streaming && item.role === "assistant"}
+          autoResumed={item.autoResumed === true}
         />
       );
     case "thought":
