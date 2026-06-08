@@ -30,7 +30,6 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
-    Autorenew,
     Check as CheckIcon,
     Circle,
     DeleteOutline,
@@ -41,8 +40,9 @@ import {
     InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
+    PlayCircle,
+    PlayDisabled,
     Settings as SettingsIcon,
-    SyncDisabled,
 } from "@mui/icons-material";
 import { Composer } from "./Composer";
 import { Transcript } from "./Transcript";
@@ -242,27 +242,25 @@ function AutoResumeBadge({
     const isException = override !== null;
     const resuming = meta.status === "interrupted" && effective;
     if (!isException && !resuming) return null;
+    // Actively continuing → a spinner reads as "working on it" better than a
+    // spinning play glyph would.
+    if (resuming) {
+        return (
+            <Tooltip title="Auto-resume: continuing the interrupted turn…" enterDelay={300}>
+                <CircularProgress
+                    size={13}
+                    thickness={6}
+                    sx={{ flexShrink: 0, color: "warning.main" }}
+                />
+            </Tooltip>
+        );
+    }
     const off = override === false;
-    const Icon = off ? SyncDisabled : Autorenew;
-    const color = resuming ? "warning.main" : off ? "text.disabled" : "info.main";
-    const tip = off
-        ? "自动续写:已为此会话关闭"
-        : resuming
-          ? "自动续写:正在续写中断的回合…"
-          : "自动续写:已为此会话开启";
+    const Icon = off ? PlayDisabled : PlayCircle;
+    const tip = off ? "Auto-resume: off for this session" : "Auto-resume: on for this session";
     return (
         <Tooltip title={tip} enterDelay={300}>
-            <Icon
-                sx={{
-                    fontSize: 14,
-                    flexShrink: 0,
-                    color,
-                    ...(resuming && {
-                        animation: "cowboy-spin 1.2s linear infinite",
-                        "@keyframes cowboy-spin": { to: { transform: "rotate(360deg)" } },
-                    }),
-                }}
-            />
+            <Icon sx={{ fontSize: 16, flexShrink: 0, color: off ? "text.disabled" : "info.main" }} />
         </Tooltip>
     );
 }
@@ -471,13 +469,13 @@ function SessionList({
                 </MenuItem>
                 <Divider />
                 <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
-                    自动续写
+                    Auto-resume
                 </ListSubheader>
                 {(
                     [
-                        { v: null, label: `跟随默认 (${autoResumeDefault ? "开" : "关"})` },
-                        { v: true, label: "开启" },
-                        { v: false, label: "关闭" },
+                        { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})` },
+                        { v: true, label: "On" },
+                        { v: false, label: "Off" },
                     ] as const
                 ).map((opt) => {
                     const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
@@ -1347,7 +1345,7 @@ function AutoResumeSettings(): React.JSX.Element {
     return (
         <Stack spacing={1}>
             <Typography variant="overline" color="text.secondary">
-                中断回合
+                Interrupted turns
             </Typography>
             <Stack
                 direction="row"
@@ -1356,16 +1354,17 @@ function AutoResumeSettings(): React.JSX.Element {
                 spacing={2}
             >
                 <Stack sx={{ minWidth: 0 }}>
-                    <Typography variant="body2">自动续写中断的回合</Typography>
+                    <Typography variant="body2">Auto-resume interrupted turns</Typography>
                     <Typography variant="caption" color="text.secondary">
-                        重启后,被打断的回合会带着已产出的内容自动接着跑。可能重复已执行的副作用 ——
-                        仅在任务可安全重试时开启。
+                        After a restart, an interrupted turn auto-continues with what it already
+                        produced. May repeat side effects it already ran — enable only for tasks
+                        that are safe to retry.
                     </Typography>
                 </Stack>
                 <Switch
                     checked={defaultOn}
                     onChange={(e): void => setSetting(AUTO_RESUME_DEFAULT_KEY, e.target.checked)}
-                    inputProps={{ "aria-label": "自动续写中断的回合" }}
+                    inputProps={{ "aria-label": "Auto-resume interrupted turns" }}
                 />
             </Stack>
             <Button
@@ -1375,13 +1374,13 @@ function AutoResumeSettings(): React.JSX.Element {
                 startIcon={editorOpen ? <ExpandLess /> : <ExpandMore />}
                 sx={{ alignSelf: "flex-start", textTransform: "none", color: "text.secondary" }}
             >
-                自定义续写消息
+                Customize continuation message
             </Button>
             {editorOpen && (
                 <Stack spacing={1}>
                     <Typography variant="caption" color="text.secondary">
-                        可用变量:{"{{partial}}"} 已产出内容 · {"{{prompt}}"} 原始指令 ·{" "}
-                        {"{{cwd}}"} 工作目录
+                        Variables: {"{{partial}}"} produced so far · {"{{prompt}}"} original
+                        prompt · {"{{cwd}}"} working directory
                     </Typography>
                     <TextField
                         multiline
@@ -1399,7 +1398,7 @@ function AutoResumeSettings(): React.JSX.Element {
                             disabled={!dirty}
                             onClick={(): void => setSetting(AUTO_RESUME_TEMPLATE_KEY, draft)}
                         >
-                            保存
+                            Save
                         </Button>
                         <Button
                             size="small"
@@ -1409,11 +1408,11 @@ function AutoResumeSettings(): React.JSX.Element {
                                 setSetting(AUTO_RESUME_TEMPLATE_KEY, DEFAULT_CONTINUATION_TEMPLATE);
                             }}
                         >
-                            重置为默认
+                            Reset to default
                         </Button>
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
-                        预览(示例数据)
+                        Preview (sample data)
                     </Typography>
                     <Box
                         sx={{
