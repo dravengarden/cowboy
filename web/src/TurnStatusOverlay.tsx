@@ -123,6 +123,9 @@ export function TurnStatusOverlay({
       ? { label: "Send", onClick: () => requestSendQueued(sessionId, queue[0]?.id ?? "") }
       : { label: "Set key", onClick: onConfigure };
   }
+  // Symmetric padding (centred text) when there's no trailing control; otherwise
+  // tighten the right so the button sits in.
+  const hasTrailing = showExpand || action !== undefined;
 
   return (
     <Box
@@ -147,13 +150,18 @@ export function TurnStatusOverlay({
               width: "100%",
               maxWidth: 460,
               p: 1.25,
-              borderRadius: 2,
-              // The raw-data panel carries denser text → a touch more base than the
-              // pill (still no border, same heavy frost).
-              backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.6 : 0.66),
-              backdropFilter: "blur(44px) saturate(200%)",
-              WebkitBackdropFilter: "blur(44px) saturate(200%)",
-              boxShadow: (t) => `0 6px 22px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.2)}`,
+              borderRadius: 2.5,
+              // Same liquid-glass material as the pill, a touch more base since the
+              // raw text is denser. Glass edge via inset highlights, no hard border.
+              backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.46 : 0.54),
+              backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+              WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+              boxShadow: (t) =>
+                [
+                  `0 8px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
+                  `inset 0 1px 0 ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.2 : 0.5)}`,
+                  `inset 0 0 0 1px ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.07 : 0.22)}`,
+                ].join(", "),
               fontSize: 11,
               maxHeight: 280,
               overflow: "auto",
@@ -182,18 +190,27 @@ export function TurnStatusOverlay({
           sx={{
             cursor: "text",
             maxWidth: "100%",
-            pl: 1.75,
-            pr: 0.5,
+            ...(hasTrailing ? { pl: 2, pr: 0.5 } : { px: 2 }),
             py: 0.5,
+            minHeight: 34,
             borderRadius: 999,
-            // No border. MORE transparent than the navbar but a STRONGER frost — a
-            // heavy blur turns the transcript behind into an unreadable wash, so a
-            // thin tinted base stays legible at high transparency (the iOS look).
-            backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.5 : 0.56),
-            backgroundImage: (t) => `linear-gradient(0deg, ${alpha(tone(t).main, 0.18)}, ${alpha(tone(t).main, 0.18)})`,
-            backdropFilter: "blur(44px) saturate(200%)",
-            WebkitBackdropFilter: "blur(44px) saturate(200%)",
-            boxShadow: (t) => `0 6px 22px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.2)}`,
+            // iOS "liquid glass": very translucent + a heavy blur so the backdrop
+            // LENSES through, a saturate+brightness lift for the vibrancy, and the
+            // glass EDGE drawn with inset shadows (a top specular highlight + a
+            // hairline white rim) rather than a hard border — then a soft drop
+            // shadow floats it. Legibility comes from the blur destroying the text
+            // behind, not from opacity.
+            backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.34 : 0.4),
+            backgroundImage: (t) =>
+              `linear-gradient(0deg, ${alpha(tone(t).main, t.palette.mode === "dark" ? 0.16 : 0.2)}, ${alpha(tone(t).main, t.palette.mode === "dark" ? 0.16 : 0.2)})`,
+            backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+            WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+            boxShadow: (t) =>
+              [
+                `0 8px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
+                `inset 0 1px 0 ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.22 : 0.55)}`,
+                `inset 0 0 0 1px ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.08 : 0.25)}`,
+              ].join(", "),
           }}
         >
           <Typography variant="body2" sx={{ fontWeight: 600, color: (t) => tone(t).main, whiteSpace: "nowrap" }}>
