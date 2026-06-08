@@ -94,6 +94,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
 import { Sheet } from "./Sheet";
 import { InfoSheet } from "./InfoSheet";
+import { ConfirmSendModal } from "./ConfirmSendModal";
 import { type Notice, Notices } from "./Notices";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
@@ -1379,6 +1380,7 @@ export function App({
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
             <InfoSheet open={infoOpen} onClose={(): void => setInfoOpen(false)} />
+            <ConfirmSendModal />
             <SettingsShell
                 open={settingsOpen}
                 onClose={(): void => setSettingsOpen(false)}

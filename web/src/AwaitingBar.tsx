@@ -1,23 +1,25 @@
-import { Box, Button, IconButton, Stack, Typography, alpha, keyframes } from "@mui/material";
+import { Box, IconButton, Stack, Typography, alpha, keyframes } from "@mui/material";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
-import { clearQueue, dismissAwaiting } from "./store";
+import ArrowUpwardRoundedIcon from "@mui/icons-material/ArrowUpwardRounded";
+import { dismissAwaiting } from "./store";
 
-// A calm, breathing glow so the bar reads as "gently waiting on you" rather than
-// an alarm (the Attention-alert handles urgency). Subtle enough to live above the
-// composer without nagging.
-const breathe = keyframes`
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
-  50%      { box-shadow: 0 0 0 3px var(--awaiting-glow); }
+// A slow, subtle hand-wave on the emoji only — reads as "gently waiting" without
+// the heavy breathing-border of the old full-width bar.
+const wave = keyframes`
+  0%, 60%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(14deg); }
+  40% { transform: rotate(-8deg); }
 `;
 
-// The "agent is waiting for your reply" widget (design §I). Shows whenever the
-// confirm-detect skill judged the last turn as awaiting the user — EVEN with an
-// empty queue. Tapping the body focuses the composer to type a reply. When the
-// queue is held it surfaces "· N held" + Send-now / Clear; the × dismisses the
-// hold entirely ("the agent wasn't really asking" → the queue drains).
+// The "agent is waiting for your reply" widget (design §I), as a compact FLOATING
+// overlay pill above the composer — it hovers over the transcript instead of a
+// full-width bar that pushes layout. Shows whenever confirm-detect judged the last
+// turn as awaiting the user (even with an empty queue). Sending a reply clears the
+// hold server-side, so this vanishes on its own; the × is the "wasn't a question"
+// escape (drains the held queue). When the queue is held it gains a Send-now.
 //
-// Queued rows remain individually editable in the panel above, so the bar
-// intentionally omits a per-row Edit control (it would duplicate that surface).
+// Self-positioning: rendered as the first child of the composer's (relative) box;
+// the wrapper is pointer-events:none so transcript scroll passes through the gaps.
 export function AwaitingBar({
   sessionId,
   queueLen,
@@ -30,68 +32,86 @@ export function AwaitingBar({
   const held = queueLen > 0;
   return (
     <Box
-      role="status"
-      onClick={onFocusComposer}
       sx={{
-        // Sits on the composer's existing frosted slab — just a tinted pill, no
-        // extra blur (would double-frost the seam).
-        cursor: "text",
-        borderRadius: 2.5,
-        px: 1.5,
-        py: 1,
-        mb: 1,
-        border: (t) => `1px solid ${alpha(t.palette.primary.main, 0.35)}`,
-        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.14 : 0.08),
-        "--awaiting-glow": (t) => alpha(t.palette.primary.main, 0.18),
-        animation: `${breathe} 3.2s ease-in-out infinite`,
-        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: "100%",
+        display: "flex",
+        justifyContent: "center",
+        px: 2,
+        pb: 1,
+        pointerEvents: "none",
+        zIndex: 3,
       }}
     >
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Box component="span" sx={{ fontSize: "1.05rem", lineHeight: 1 }} aria-hidden>
+      <Stack
+        role="status"
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        onClick={onFocusComposer}
+        sx={{
+          pointerEvents: "auto",
+          cursor: "text",
+          maxWidth: "100%",
+          pl: 1.5,
+          pr: 0.5,
+          py: 0.5,
+          borderRadius: 999,
+          // Frosted, on its own — floats over the transcript, so it carries the
+          // blur itself (unlike the in-slab AwaitingBar before).
+          bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.22 : 0.12),
+          backdropFilter: "blur(24px) saturate(180%)",
+          WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          border: (t) => `1px solid ${alpha(t.palette.primary.main, 0.3)}`,
+          boxShadow: (t) =>
+            `0 6px 20px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.18)}`,
+        }}
+      >
+        <Box
+          component="span"
+          aria-hidden
+          sx={{
+            fontSize: "1rem",
+            lineHeight: 1,
+            transformOrigin: "70% 80%",
+            animation: `${wave} 2.6s ease-in-out infinite`,
+            "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+          }}
+        >
           🙋
         </Box>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600, color: "primary.main", lineHeight: 1.3 }}>
-            Agent is waiting for your reply
-          </Typography>
-          {held && (
-            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.3 }}>
-              {queueLen} queued message{queueLen > 1 ? "s" : ""} held — won&apos;t auto-send
-            </Typography>
-          )}
-        </Box>
-        {held && (
-          <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }} onClick={(e): void => e.stopPropagation()}>
-            <Button
-              size="small"
-              variant="contained"
-              disableElevation
-              onClick={(): void => dismissAwaiting(sessionId)}
-              sx={{ textTransform: "none", minWidth: 0, px: 1.25 }}
-            >
-              Send now
-            </Button>
-            <Button
-              size="small"
-              color="inherit"
-              onClick={(): void => clearQueue(sessionId)}
-              sx={{ textTransform: "none", minWidth: 0, px: 1, color: "text.secondary" }}
-            >
-              Clear
-            </Button>
-          </Stack>
-        )}
+        <Typography
+          variant="body2"
+          sx={{ fontWeight: 600, color: "primary.main", whiteSpace: "nowrap" }}
+        >
+          Waiting for your reply{held ? ` · ${queueLen} held` : ""}
+        </Typography>
+        {/* One adaptive action. Held → a primary "send the held queue now"; empty
+            → a plain dismiss. Both clear the hold (releasing the queue if any) —
+            kept as one button so they don't read as two ways to do the same thing.
+            (Replying in the composer also clears it, server-side.) */}
         <IconButton
           size="small"
-          aria-label="Dismiss — the agent wasn't asking"
+          aria-label={held ? "Send the held queue now" : "Dismiss — the agent wasn't asking"}
           onClick={(e): void => {
             e.stopPropagation();
             dismissAwaiting(sessionId);
           }}
-          sx={{ flexShrink: 0, color: "text.secondary" }}
+          sx={
+            held
+              ? {
+                  color: "primary.contrastText",
+                  bgcolor: "primary.main",
+                  "&:hover": { bgcolor: "primary.dark" },
+                  width: 28,
+                  height: 28,
+                }
+              : { color: "text.secondary", width: 28, height: 28 }
+          }
         >
-          <CloseRoundedIcon fontSize="small" />
+          {held ? <ArrowUpwardRoundedIcon sx={{ fontSize: 18 }} /> : <CloseRoundedIcon sx={{ fontSize: 18 }} />}
         </IconButton>
       </Stack>
     </Box>

@@ -139,6 +139,10 @@ export interface State {
   skills: SkillView[];
   // Last dev-probe result (Info sheet "Test"), or undefined.
   lastProbe: ProbeResult | undefined;
+  // A manual "send now" awaiting user confirmation because the judge can't run
+  // (no key). The modal it drives lets the user send anyway (the LLM-call
+  // fallback). `undefined` = no pending confirmation.
+  confirmSend: { sessionId: string; id: string } | undefined;
 }
 
 let errorSeq = 0;
@@ -160,6 +164,7 @@ let state: State = {
   inferenceConfig: [],
   skills: [],
   lastProbe: undefined,
+  confirmSend: undefined,
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -1108,10 +1113,42 @@ export function forcePrompt(sessionId: string, text: string, attachments: Attach
   }
 }
 
+// Sessions where the user chose "don't ask again" for the no-judge send confirm.
+const sendConfirmSuppressed = new Set<string>();
+
+function judgeKeySet(): boolean {
+  return state.inferenceConfig.some((c) => c.provider === "deepseek" && c.key_set);
+}
+
 // "Send now" on a queued row: the daemon sends it if it can take a turn this
-// instant, otherwise moves it to the front to drain next.
+// instant, otherwise moves it to the front to drain next. When the judge can't
+// run (no key) we can't tell if the agent is waiting, so confirm first — the
+// always-available manual fallback, with eyes open. The daemon drain bypasses the
+// no-key hold for this explicit send.
 export function requestSendQueued(sessionId: string, id: string): void {
+  if (!judgeKeySet() && !sendConfirmSuppressed.has(sessionId)) {
+    setState({ ...state, confirmSend: { sessionId, id } });
+    return;
+  }
   send({ type: "request_send_queued", session_id: sessionId, id });
+}
+
+/** The pending no-judge send awaiting confirmation (drives the modal). */
+export function usePendingSend(): { sessionId: string; id: string } | undefined {
+  return useStore().confirmSend;
+}
+
+/** Confirm the pending manual send; `dontAskAgain` suppresses it for the session. */
+export function confirmPendingSend(dontAskAgain: boolean): void {
+  const p = state.confirmSend;
+  if (!p) return;
+  if (dontAskAgain) sendConfirmSuppressed.add(p.sessionId);
+  send({ type: "request_send_queued", session_id: p.sessionId, id: p.id });
+  setState({ ...state, confirmSend: undefined });
+}
+
+export function cancelPendingSend(): void {
+  setState({ ...state, confirmSend: undefined });
 }
 
 // "Force push" a queued row: interrupt the running turn and run this prompt

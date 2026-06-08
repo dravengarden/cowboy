@@ -1940,15 +1940,21 @@ impl Hub {
     /// isn't held for editing. Pops the head, marks in-flight, hands the prompt
     /// to the dispatcher task, and re-broadcasts the shrunken queue. No-op
     /// otherwise. `allow_revive` is forwarded to [`Self::ready`].
-    fn drain_head(&self, session_id: &str, allow_revive: bool) {
+    fn drain_head(&self, session_id: &str, allow_revive: bool, manual: bool) {
         // Without a dispatcher wired we must not pop (the prompt would be lost).
         if self.inner.dispatch_tx.lock().unwrap().is_none() {
             return;
         }
-        // No inference key → we can't judge whether the agent is asking the user,
-        // so never auto-drain (§J). The warning widget nudges configuring a key.
-        if !self.confirm_key_present() {
-            return;
+        // The two LLM-gated holds below apply ONLY to the automatic drain. A manual
+        // send (an explicit "send this now") is the user-triggered fallback that
+        // must ALWAYS get through — even with no judge key or while the agent is
+        // judged "awaiting" — so the queue can never be permanently trapped.
+        if !manual {
+            // No inference key → we can't judge whether the agent is asking the
+            // user, so never AUTO-drain (§J). The user can still send manually.
+            if !self.confirm_key_present() {
+                return;
+            }
         }
         let req = {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -1959,8 +1965,9 @@ impl Hub {
                 return;
             }
             // The agent's last turn was judged "awaiting the user" → hold the whole
-            // queue so the next message isn't auto-sent as a wrong answer.
-            if s.meta.awaiting_user {
+            // queue so the next message isn't auto-sent as a wrong answer. A manual
+            // send overrides this (the user chose to send anyway).
+            if !manual && s.meta.awaiting_user {
                 return;
             }
             let Some(head) = s.queue.first() else {
@@ -1985,7 +1992,7 @@ impl Hub {
     /// The AUTO-drain: only fires into an alive idle agent (never revives a dead
     /// one). Called after every queue mutation and on every status change.
     fn try_drain(&self, session_id: &str) {
-        self.drain_head(session_id, false);
+        self.drain_head(session_id, false, false);
     }
 
     /// Clear the in-flight guard (used by the dispatcher when a send fails) and
@@ -2012,6 +2019,7 @@ impl Hub {
     ) {
         let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
         let mut dispatch = None;
+        let mut cleared_awaiting = false;
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -2024,6 +2032,13 @@ impl Hub {
                 if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
                     return;
                 }
+            }
+            // The user is actively sending → they've engaged with whatever the
+            // agent asked, so the "awaiting your reply" state is resolved. Clear it
+            // now so the widget vanishes immediately (the next turn re-judges).
+            if s.meta.awaiting_user {
+                s.meta.awaiting_user = false;
+                cleared_awaiting = true;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight = true;
@@ -2042,6 +2057,9 @@ impl Hub {
                     cmid,
                 });
             }
+        }
+        if cleared_awaiting {
+            self.broadcast_sessions();
         }
         match dispatch {
             // Dispatched straight through — never touched a list, so no flicker
@@ -2068,6 +2086,7 @@ impl Hub {
         let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
         let mut dispatch = None;
         let mut interrupt = false;
+        let mut cleared_awaiting = false;
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -2077,6 +2096,11 @@ impl Hub {
                 if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
                     return false;
                 }
+            }
+            // Explicit send → the "awaiting your reply" state is resolved; clear it.
+            if s.meta.awaiting_user {
+                s.meta.awaiting_user = false;
+                cleared_awaiting = true;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 // Idle + nothing queued → straight dispatch, identical to submit.
@@ -2089,6 +2113,9 @@ impl Hub {
                 s.queue.insert(0, QueuedMessage { id, text, content, cmid });
                 interrupt = true;
             }
+        }
+        if cleared_awaiting {
+            self.broadcast_sessions();
         }
         match dispatch {
             Some(req) => self.send_dispatch(req),
@@ -2171,7 +2198,9 @@ impl Hub {
             }
         }
         self.emit_pending(session_id);
-        self.drain_head(session_id, true);
+        // Explicit user "send now" → manual drain, bypassing the no-key / awaiting
+        // holds (the always-available fallback when the judge can't run).
+        self.drain_head(session_id, true, true);
     }
 
     /// Move a queued prompt back to drafts.
