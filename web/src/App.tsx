@@ -87,7 +87,6 @@ import {
     useNavbarPosition,
 } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
-import { useSticky } from "./stickyStore";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, DetentSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
@@ -722,11 +721,19 @@ export function App({
     const appBarRef = useRef<HTMLDivElement>(null);
     const composerRef = useRef<HTMLDivElement>(null);
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
-    // Whether the transcript is pinned to the bottom (following). Held in a ref so
-    // the ResizeObserver below can read it without re-subscribing.
-    const sticky = useSticky(activeId ?? "");
-    const stickyRef = useRef(sticky);
-    stickyRef.current = sticky;
+    // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
+    // the composer, the latter INCLUDING an expanded queue/drafts panel — as CSS
+    // vars so the transcript always reserves exactly that much bottom space (its
+    // `bottomInset`). Deliberately NOT gated on the scroll/sticky state: the
+    // reservation must stay accurate at all times so the newest message, or a
+    // freshly-expanded queue/drafts box, can NEVER hide behind the glass. (A stale,
+    // too-small reservation — frozen because a new message landing at the bottom
+    // had knocked sticky momentarily false — is exactly the bug this replaced.)
+    // Reserving the space is orthogonal to auto-scroll: whether to chase the bottom
+    // on new content stays the Transcript's FOLLOW decision, so an always-accurate
+    // inset does not auto-scroll a reader who has scrolled up. column-reverse keeps
+    // the newest pinned just above the panel, so growing the reservation at rest
+    // simply lifts the newest clear of the glass with no content reflow.
     useEffect(() => {
         const col = columnRef.current;
         if (!col || !navbarAtBottom) return undefined;
@@ -734,29 +741,12 @@ export function App({
             col.style.setProperty("--navbar-h", `${appBarRef.current?.offsetHeight ?? 0}px`);
             col.style.setProperty("--composer-h", `${composerRef.current?.offsetHeight ?? 0}px`);
         };
-        const measure = (): void => {
-            // ONLY reshape the transcript's reserved bottom space while pinned to
-            // the bottom. Changing a column-reverse container's padding while the
-            // reader is scrolled UP jolts their view (the documented jitter) — and
-            // the exact panel height only matters at the bottom anyway. Scrolled
-            // up → freeze; flushed on re-stick by the effect below.
-            if (stickyRef.current) write();
-        };
-        measure();
-        const ro = new ResizeObserver(measure);
+        write();
+        const ro = new ResizeObserver(write);
         if (appBarRef.current) ro.observe(appBarRef.current);
         if (composerRef.current) ro.observe(composerRef.current);
         return (): void => ro.disconnect();
     }, [navbarAtBottom, activeId]);
-    // Flush the reserved space the instant the reader returns to the bottom, so
-    // any panel-height change that happened while they were scrolled up is applied
-    // exactly when it starts to matter (newest message clearing the glass).
-    useEffect(() => {
-        const col = columnRef.current;
-        if (!col || !navbarAtBottom || !sticky) return;
-        col.style.setProperty("--navbar-h", `${appBarRef.current?.offsetHeight ?? 0}px`);
-        col.style.setProperty("--composer-h", `${composerRef.current?.offsetHeight ?? 0}px`);
-    }, [sticky, navbarAtBottom]);
     // The focus id we restored from localStorage at mount (PWA relaunch / reload).
     // Held in a ref so the gone-check fires exactly once after the first session
     // list arrives — if that session was deleted while we were away, the

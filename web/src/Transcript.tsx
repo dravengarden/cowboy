@@ -538,19 +538,20 @@ function MessageBubble({
       )}
     </Box>
   ));
-  // Auto-resume continuation: a centered, muted "↻ Auto-resumed" note with the
-  // re-sent prompt below it — visually distinct from BOTH a user bubble (right,
-  // primary) and an assistant reply (flush), so it never reads as a message the
-  // human sent.
+  // Auto-resume continuation: a right-aligned, muted "↻ Auto-resumed" note with
+  // the re-sent prompt below it. It sits on the right (the "my side" rail, since
+  // the daemon issues it on the human's behalf) but stays a muted, bordered note
+  // — never the primary-filled user bubble — so it never reads as something the
+  // human actually typed.
   if (mine && autoResumed) {
     return (
       <Box
         sx={{
-          alignSelf: "center",
+          alignSelf: "flex-end",
           maxWidth: { xs: "92%", sm: "80%" },
           display: "flex",
           flexDirection: "column",
-          alignItems: "center",
+          alignItems: "flex-end",
           gap: 0.5,
           py: 0.5,
         }}
