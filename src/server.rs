@@ -75,14 +75,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             })
             .collect();
         let restored_count = restored.len();
-        hub.restore(restored);
         // Seed the global settings (auto-resume default + continuation template)
-        // from the table so they're authoritative in-memory before any client
-        // connects.
+        // BEFORE restore, so restore can compute each session's effective
+        // auto-resume (override ?? default) and enqueue a continuation for the
+        // opted-in interrupted ones.
         match store.load_settings().await {
             Ok(entries) => hub.load_settings(entries),
             Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
         }
+        hub.restore(restored);
         tracing::info!(
             postgres = url,
             restored = restored_count,
@@ -897,7 +898,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // a message to start a new one" bar and no spinner; submitting a
             // message revives it via the drain. Exited/dormant sessions (nothing
             // unfinished) still pre-revive on open so they're ready to type into.
-            if state.hub.status(&session_id) == Some(Status::Interrupted) {
+            if state.hub.status(&session_id) == Some(Status::Interrupted)
+                && !state.hub.effective_auto_resume(&session_id)
+            {
+                // Interrupted + NOT opted into auto-resume → leave it for manual
+                // recovery (the "last turn was interrupted" bar; submitting
+                // revives it). An auto-resume session falls through to
+                // ensure_alive: restore already enqueued the continuation, so
+                // reviving here drains it the moment the session is opened.
                 Ok(())
             } else {
                 // A client opens the focus it restored from localStorage on

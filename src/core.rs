@@ -111,6 +111,65 @@ pub struct Envelope {
     pub cmid: Option<String>,
 }
 
+// --- Auto-resume interrupted turns (tasks/active/session-auto-resume) ---------
+
+/// Settings key: the global default for auto-resuming interrupted turns (bool).
+const AUTO_RESUME_DEFAULT_KEY: &str = "session.autoResume.default";
+/// Settings key: the continuation-message template (string with `{{var}}` holes).
+const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
+/// Built-in continuation template used when the operator hasn't customized one.
+/// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
+/// one source of truth the revived agent's own store lacks. The "don't redo"
+/// line is the best-effort idempotency guard.
+const DEFAULT_CONTINUATION_TEMPLATE: &str = "你上一次的回复在完成前被中断了。以下是你已经产出的内容:\n\n{{partial}}\n\n请从中断处接着完成,不要重做已经完成的步骤。";
+
+/// Render a `{{var}}` template by literal substitution. Unknown vars are left
+/// verbatim (the UI flags them); a var absent from the map is simply not
+/// replaced.
+fn render_template(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut out = template.to_owned();
+    for (k, v) in vars {
+        out = out.replace(&format!("{{{{{k}}}}}"), v);
+    }
+    out
+}
+
+/// Extract `(user_prompt, assistant_partial)` for the LAST turn in a session's
+/// log — the turn cut off by a restart. Walks to the last `user_message_chunk`
+/// group (the prompt) and concatenates the `agent_message_chunk` text after it
+/// (the partial output, since a cut-off turn has no `TurnEnd`). Text blocks only;
+/// degrades to empty strings.
+fn last_turn_texts(log: &[Envelope]) -> (String, String) {
+    let chunk = |env: &Envelope| -> Option<(String, String)> {
+        if let Event::Update { update } = &env.event {
+            let kind = update.get("sessionUpdate").and_then(serde_json::Value::as_str)?;
+            let text = update
+                .get("content")
+                .and_then(|c| c.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            return Some((kind.to_owned(), text.to_owned()));
+        }
+        None
+    };
+    let last_user = log.iter().rposition(|env| {
+        matches!(chunk(env), Some((ref k, _)) if k == "user_message_chunk")
+    });
+    let Some(start) = last_user else {
+        return (String::new(), String::new());
+    };
+    let mut prompt = String::new();
+    let mut partial = String::new();
+    for env in &log[start..] {
+        match chunk(env) {
+            Some((k, t)) if k == "user_message_chunk" => prompt.push_str(&t),
+            Some((k, t)) if k == "agent_message_chunk" => partial.push_str(&t),
+            _ => {}
+        }
+    }
+    (prompt, partial)
+}
+
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -736,6 +795,14 @@ impl Hub {
                     ),
                 },
             );
+            // Auto-resume (opted in, globally or per-session): enqueue a
+            // continuation built from the cut-off turn's partial output. It stays
+            // queued behind the `Interrupted` marker and auto-drains the instant
+            // the agent revives (on open / reconnect), so the user finds the turn
+            // already continuing instead of having to retype.
+            if self.effective_auto_resume(&id) {
+                self.enqueue_continuation(&id);
+            }
         }
         // Persist any session whose duplicate ids we healed, so the corrected
         // (unique-id) lists reach the DB + every client.
@@ -959,6 +1026,74 @@ impl Hub {
         for (k, v) in entries {
             s.insert(k, v);
         }
+    }
+
+    /// The global default for auto-resuming interrupted turns (off when unset).
+    #[must_use]
+    pub fn auto_resume_default(&self) -> bool {
+        self.inner
+            .settings
+            .lock()
+            .unwrap()
+            .get(AUTO_RESUME_DEFAULT_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Effective auto-resume for a session: its override, else the global
+    /// default. `false` for an unknown session.
+    #[must_use]
+    pub fn effective_auto_resume(&self, session_id: &str) -> bool {
+        let over = self
+            .inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|s| s.meta.auto_resume);
+        match over {
+            Some(Some(v)) => v,                       // explicit per-session override
+            Some(None) => self.auto_resume_default(), // inherit
+            None => false,                            // unknown session
+        }
+    }
+
+    /// The continuation-message template (the customizable string with `{{var}}`
+    /// holes), falling back to the built-in default.
+    fn continuation_template(&self) -> String {
+        self.inner
+            .settings
+            .lock()
+            .unwrap()
+            .get(AUTO_RESUME_TEMPLATE_KEY)
+            .and_then(|v| v.as_str())
+            .map_or_else(|| DEFAULT_CONTINUATION_TEMPLATE.to_owned(), str::to_owned)
+    }
+
+    /// Build the continuation prompt for an interrupted turn (template rendered
+    /// with the turn's partial output / original prompt / cwd) and ENQUEUE it, so
+    /// it auto-drains the moment the agent revives (via `session/load`). No-op if
+    /// the last turn left nothing to continue. The continuation is a fresh turn
+    /// carrying cowboy's partial output (the agent's own store is unreliable after
+    /// a mid-turn crash); the template tells it to continue, not redo.
+    fn enqueue_continuation(&self, session_id: &str) {
+        let (prompt, partial, cwd) = {
+            let sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            let (prompt, partial) = last_turn_texts(&s.log);
+            (prompt, partial, s.meta.cwd.clone())
+        };
+        if prompt.is_empty() && partial.is_empty() {
+            return; // nothing was captured for the cut-off turn
+        }
+        let text = render_template(
+            &self.continuation_template(),
+            &[("partial", &partial), ("prompt", &prompt), ("cwd", &cwd)],
+        );
+        // No cmid: this is daemon-originated, not an optimistic client row.
+        self.submit(session_id, text, Vec::new(), None);
     }
 
     // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------
