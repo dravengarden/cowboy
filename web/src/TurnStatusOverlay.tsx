@@ -191,25 +191,33 @@ export function TurnStatusOverlay({
             cursor: "text",
             maxWidth: "100%",
             ...(hasTrailing ? { pl: 2, pr: 0.5 } : { px: 2 }),
-            py: 0.5,
-            minHeight: 34,
+            pt: 0.75,
+            pb: 1,
+            minHeight: 38,
             borderRadius: 999,
-            // iOS "liquid glass": very translucent + a heavy blur so the backdrop
-            // LENSES through, a saturate+brightness lift for the vibrancy, and the
-            // glass EDGE drawn with inset shadows (a top specular highlight + a
-            // hairline white rim) rather than a hard border — then a soft drop
-            // shadow floats it. Legibility comes from the blur destroying the text
-            // behind, not from opacity.
+            // iOS "liquid glass" — true backdrop refraction needs an SVG
+            // displacement filter that iOS Safari won't run, so we fake the LENS
+            // depth with layered light: a heavy blur+saturate+brightness for the
+            // vibrancy, a top specular glow (the glass catching light), a bright
+            // hairline rim, and a bottom inner shadow for glass THICKNESS — then a
+            // soft drop shadow floats it. Legibility is from the blur, not opacity.
             backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.34 : 0.4),
-            backgroundImage: (t) =>
-              `linear-gradient(0deg, ${alpha(tone(t).main, t.palette.mode === "dark" ? 0.16 : 0.2)}, ${alpha(tone(t).main, t.palette.mode === "dark" ? 0.16 : 0.2)})`,
-            backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
-            WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
+            backgroundImage: (t) => {
+              const tint = alpha(tone(t).main, t.palette.mode === "dark" ? 0.16 : 0.2);
+              const glow = alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.26 : 0.5);
+              return [
+                `radial-gradient(140% 120% at 50% -25%, ${glow}, transparent 55%)`,
+                `linear-gradient(0deg, ${tint}, ${tint})`,
+              ].join(", ");
+            },
+            backdropFilter: "blur(40px) saturate(180%) brightness(1.08)",
+            WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.08)",
             boxShadow: (t) =>
               [
-                `0 8px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.18)}`,
-                `inset 0 1px 0 ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.22 : 0.55)}`,
-                `inset 0 0 0 1px ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.08 : 0.25)}`,
+                `0 10px 30px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.2)}`,
+                `inset 0 1px 0 ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.32 : 0.7)}`,
+                `inset 0 -9px 14px -8px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.14)}`,
+                `inset 0 0 0 1px ${alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.1 : 0.3)}`,
               ].join(", "),
           }}
         >
