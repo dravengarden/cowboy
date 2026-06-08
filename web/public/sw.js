@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes, which is what triggers the
 // auto-reload onto the fresh bundle.
-const VERSION = "cowboy-v30";
+const VERSION = "cowboy-v31";
 const ASSET_CACHE = `${VERSION}-assets`;
 // Immutable history pages (GET /api/history/:id/:page?v=<build>). Their content
 // can never change (append-only log), and the `?v=` build token makes a new
@@ -26,8 +26,21 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k)));
+      const stale = keys.filter((k) => !k.startsWith(VERSION));
+      await Promise.all(stale.map((k) => caches.delete(k)));
       await self.clients.claim();
+      // THE redeploy-reaches-the-PWA fix. An installed iOS PWA restores its old
+      // page on reopen and never re-navigates, so a network-first SW alone can't
+      // refresh it — but the browser DOES re-check sw.js on launch, installs a new
+      // worker, and runs THIS. When this activation is an UPDATE (a prior VERSION's
+      // caches existed, so it's not a first install), force every open window to
+      // re-navigate onto the fresh bundle — no manual reload, no cooperation from
+      // the (old) page code needed. Single reload: the reloaded page registers the
+      // same worker, no new activation, no loop.
+      if (stale.length > 0) {
+        const wins = await self.clients.matchAll({ type: "window" });
+        await Promise.all(wins.map((c) => c.navigate(c.url).catch(() => {})));
+      }
     })(),
   );
 });
