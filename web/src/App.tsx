@@ -38,7 +38,6 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ExpandMore,
-    FlashOff,
     InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
@@ -223,13 +222,12 @@ function StatusDot({
     );
 }
 
-// Auto-resume indicator (tasks/active/session-auto-resume). Marks the EXCEPTION,
-// not the norm: a session whose override differs from the global default
-// (force-on → ↻ accent, force-off → ↻ with slash). An inherited session shows
-// nothing — the global default speaks for the norm. When a session is actually
-// mid-resume (Interrupted + effective-on), the same glyph spins, so one icon
-// carries both "capability marker" and "resuming now". Orthogonal to StatusDot
-// (which says what the session IS now); this says what happens after a restart.
+// Auto-resume indicator (tasks/active/session-auto-resume). Shown whenever the
+// session's EFFECTIVE auto-resume is on — override if set, else the global
+// default — so turning the global default on marks every inherited session too.
+// Effective-off (incl. an explicit opt-out) shows nothing. While a session is
+// actually mid-resume (Interrupted + on), a spinner replaces the glyph. Orthogonal
+// to StatusDot (what the session IS now); this says what happens after a restart.
 function AutoResumeBadge({
     meta,
     defaultOn,
@@ -237,14 +235,9 @@ function AutoResumeBadge({
     meta: SessionMeta;
     defaultOn: boolean;
 }): React.JSX.Element | null {
-    const override = meta.auto_resume ?? null;
-    const effective = override ?? defaultOn;
-    const isException = override !== null;
-    const resuming = meta.status === "interrupted" && effective;
-    if (!isException && !resuming) return null;
-    // Actively continuing → a spinner reads as "working on it" better than a
-    // spinning play glyph would.
-    if (resuming) {
+    const effective = (meta.auto_resume ?? null) ?? defaultOn;
+    if (!effective) return null;
+    if (meta.status === "interrupted") {
         return (
             <Tooltip title="Auto-resume: continuing the interrupted turn…" enterDelay={300}>
                 <CircularProgress
@@ -255,12 +248,9 @@ function AutoResumeBadge({
             </Tooltip>
         );
     }
-    const off = override === false;
-    const Icon = off ? FlashOff : Bolt;
-    const tip = off ? "Auto-resume: off for this session" : "Auto-resume: on for this session";
     return (
-        <Tooltip title={tip} enterDelay={300}>
-            <Icon sx={{ fontSize: 16, flexShrink: 0, color: off ? "text.disabled" : "info.main" }} />
+        <Tooltip title="Auto-resume on" enterDelay={300}>
+            <Bolt sx={{ fontSize: 16, flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );
 }
