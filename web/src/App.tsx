@@ -1567,7 +1567,7 @@ function SettingsShell({
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     return (
-        <Sheet open={open} onClose={onClose} title="Settings" forceSheet={navbarAtBottom}>
+        <Sheet open={open} onClose={onClose} title="Settings" forceSheet={navbarAtBottom} cover>
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 

@@ -125,7 +125,7 @@ export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => voi
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="Info">
+    <Sheet open={open} onClose={onClose} title="Info" cover>
       <Stack spacing={2.5} sx={{ mt: 1 }}>
         <Box>
           <Typography variant="overline" color="text.secondary">
