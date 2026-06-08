@@ -27,6 +27,7 @@ import type {
   Envelope,
   Inbound,
   InferenceProviderView,
+  JudgeResult,
   Outbound,
   SessionMeta,
   SkillView,
@@ -137,6 +138,9 @@ export interface State {
   inferenceConfig: InferenceProviderView[];
   // The static skill registry (prompt + extract) from the `skills` broadcast.
   skills: SkillView[];
+  // Latest confirm-detect judge result per session (drives the overlay's raw-data
+  // expand). Keyed by session id.
+  judgeResults: Record<string, JudgeResult>;
   // Last dev-probe result (Info sheet "Test"), or undefined.
   lastProbe: ProbeResult | undefined;
   // A manual "send now" awaiting user confirmation because the judge can't run
@@ -163,6 +167,7 @@ let state: State = {
   settings: {},
   inferenceConfig: [],
   skills: [],
+  judgeResults: {},
   lastProbe: undefined,
   confirmSend: undefined,
 };
@@ -402,6 +407,10 @@ function handle(msg: Outbound): void {
     }
     case "skills": {
       setState({ ...state, skills: msg.skills });
+      break;
+    }
+    case "judge_result": {
+      setState({ ...state, judgeResults: { ...state.judgeResults, [msg.judge.session_id]: msg.judge } });
       break;
     }
     case "inference_probe_result": {
@@ -1186,6 +1195,21 @@ export function clearQueue(sessionId: string): void {
 // a round-trip (mirrors `setSessionAutoResume`).
 export function dismissAwaiting(sessionId: string): void {
   send({ type: "set_awaiting", session_id: sessionId, awaiting: false });
+}
+
+/** The latest confirm-detect judge result for a session (overlay raw-data expand). */
+export function useJudgeResult(sessionId: string): JudgeResult | undefined {
+  return useStore().judgeResults[sessionId];
+}
+
+/** Overlay "Resume": continue an interrupted turn. */
+export function resumeTurn(sessionId: string): void {
+  send({ type: "resume_turn", session_id: sessionId });
+}
+
+/** Overlay "Retry": re-run the last prompt of an errored/crashed turn. */
+export function retryTurn(sessionId: string): void {
+  send({ type: "retry_turn", session_id: sessionId });
 }
 
 // Hold (or release, with `null`) the queue head for editing — pauses the daemon

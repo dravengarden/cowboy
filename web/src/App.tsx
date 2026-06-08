@@ -65,7 +65,6 @@ import {
     send,
     setSessionAutoResume,
     setSetting,
-    useInferenceConfig,
     useStore,
 } from "./store";
 import { useSortable } from "./useSortable";
@@ -95,7 +94,6 @@ import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
 import { Sheet } from "./Sheet";
 import { InfoSheet } from "./InfoSheet";
 import { ConfirmSendModal } from "./ConfirmSendModal";
-import { type Notice, Notices } from "./Notices";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
@@ -718,25 +716,8 @@ export function App({
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
-    // Top-of-content notices (design §J). The no-inference-key warning: without a
-    // judge key the daemon holds the queue on EVERY turn (it can't tell a question
-    // from a finished turn), so surface a calm MUI warning + a Configure shortcut
-    // to the Info sheet. Auto-clears the moment a key is set (the broadcast flips
-    // `key_set`). Future notices push more entries onto this list.
-    const inferenceConfig = useInferenceConfig();
-    const hasJudgeKey = inferenceConfig.some((c) => c.provider === "deepseek" && c.key_set);
-    const notices: Notice[] = hasJudgeKey
-        ? []
-        : [
-              {
-                  id: "no-inference-key",
-                  severity: "warning",
-                  message:
-                      "No API key set — the queue is held on every turn. Add a key so the agent's questions are detected and only real answers are sent.",
-                  actionLabel: "Configure",
-                  onAction: (): void => setInfoOpen(true),
-              },
-          ];
+    // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
+    // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
     // old fluid clamp) so the divider can set it directly; `resizing` drives
     // the handle's active highlight and a body-wide drag cursor / no-select.
@@ -1249,7 +1230,6 @@ export function App({
                                     : { display: "contents" }
                             }
                         >
-                            <Notices notices={notices} />
                             <Transcript
                                 sessionId={active.id}
                                 timeline={timelines.get(active.id) ?? []}
@@ -1303,6 +1283,7 @@ export function App({
                                 key={active.id}
                                 sessionId={active.id}
                                 status={active.status}
+                                onOpenInfo={(): void => setInfoOpen(true)}
                             />
                         </Box>
                     </>

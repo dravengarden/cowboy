@@ -219,6 +219,12 @@ pub struct SessionMeta {
     /// false and the next turn re-judges — never restore a stale hold.
     #[serde(default)]
     pub awaiting_user: bool,
+    /// True when the confirm-detect skill judged the agent's last turn as having
+    /// COMPLETED the task (drives the green "Task complete" overlay + a future
+    /// notification). Transient, never persisted; re-judged each turn and cleared
+    /// when the user sends or a new turn starts.
+    #[serde(default)]
+    pub done: bool,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -370,6 +376,14 @@ pub enum Inbound {
     SetAwaiting {
         session_id: String,
         awaiting: bool,
+    },
+    /// Overlay action: resume an interrupted turn (inject the continuation + run).
+    ResumeTurn {
+        session_id: String,
+    },
+    /// Overlay action: retry an errored/crashed turn (re-run the last prompt).
+    RetryTurn {
+        session_id: String,
     },
     /// Set one global setting (`session.autoResume.default` flag /
     /// `session.autoResume.template` string). Persisted + broadcast to every
@@ -609,6 +623,27 @@ pub enum Outbound {
     /// Static — sent once on connect.
     Skills {
         skills: Vec<SkillView>,
+    },
+    /// The confirm-detect judge's full result for a turn — the verdict PLUS the
+    /// observability detail the overlay's "raw data" expand shows. Sent after each
+    /// judge; the client keeps the latest per session. NOT persisted.
+    JudgeResult {
+        session_id: String,
+        /// "L1" (deterministic stop-reason) or "L2" (the DeepSeek judge).
+        layer: String,
+        awaiting_user: bool,
+        done: bool,
+        confidence: f32,
+        reason: String,
+        /// The model id (L2) or empty (L1).
+        model: String,
+        /// What the judge looked at — the agent's final text.
+        input: String,
+        /// The model's raw output (L2) or the L1 reason.
+        output: String,
+        cache_hit: u32,
+        cache_miss: u32,
+        latency_ms: u64,
     },
     /// Result of an [`Inbound::InferenceProbe`] — surfaced in the Info sheet.
     InferenceProbeResult {
@@ -1039,6 +1074,7 @@ impl Hub {
             agent_session_id: None,
             auto_resume: None, // inherit the global default until overridden
             awaiting_user: false,
+            done: false,
         };
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -1294,6 +1330,7 @@ impl Hub {
             }
             let resume = s.meta.awaiting_user && !v.awaiting_user;
             s.meta.awaiting_user = v.awaiting_user;
+            s.meta.done = v.done;
             resume
         };
         self.broadcast_sessions();
@@ -1333,6 +1370,20 @@ impl Hub {
                 final_text: &final_text,
             })
         {
+            self.broadcast(Outbound::JudgeResult {
+                session_id: session_id.to_owned(),
+                layer: "L1".to_owned(),
+                awaiting_user: v.awaiting_user,
+                done: v.done,
+                confidence: v.confidence,
+                reason: v.reason.clone(),
+                model: String::new(),
+                input: final_text.clone(),
+                output: v.reason.clone(),
+                cache_hit: 0,
+                cache_miss: 0,
+                latency_ms: 0,
+            });
             self.apply_verdict(session_id, seq, &v);
             return;
         }
@@ -1353,19 +1404,33 @@ impl Hub {
         let hub = self.clone();
         let sid = session_id.to_owned();
         tokio::spawn(async move {
-            let ds = crate::inference::deepseek::DeepSeek::new(key, model);
+            let ds = crate::inference::deepseek::DeepSeek::new(key, model.clone());
+            let started = std::time::Instant::now();
             match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text).await
             {
-                Ok(v) => {
+                Ok(o) => {
+                    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let (hit, miss) = o.usage.as_ref().map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
                     tracing::info!(
-                        session = %sid,
-                        awaiting = v.awaiting_user,
-                        done = v.done,
-                        confidence = v.confidence,
-                        reason = %v.reason,
+                        session = %sid, awaiting = o.verdict.awaiting_user, done = o.verdict.done,
+                        confidence = o.verdict.confidence, reason = %o.verdict.reason, latency_ms,
                         "confirm-detect verdict"
                     );
-                    hub.apply_verdict(&sid, seq, &v);
+                    hub.broadcast(Outbound::JudgeResult {
+                        session_id: sid.clone(),
+                        layer: o.layer.to_owned(),
+                        awaiting_user: o.verdict.awaiting_user,
+                        done: o.verdict.done,
+                        confidence: o.verdict.confidence,
+                        reason: o.verdict.reason.clone(),
+                        model,
+                        input: final_text,
+                        output: o.raw_output,
+                        cache_hit: hit,
+                        cache_miss: miss,
+                        latency_ms,
+                    });
+                    hub.apply_verdict(&sid, seq, &o.verdict);
                 }
                 // Error → STAY held (the provisional true stands).
                 Err(e) => {
@@ -1746,6 +1811,7 @@ impl Hub {
             // explicit clear.
             if matches!(status, Status::Exited | Status::Crashed | Status::Interrupted) {
                 s.meta.awaiting_user = false;
+                s.meta.done = false;
             }
             // A true turn-end (Busy → Running) is where the agent handed control
             // back — the point to ask the confirm-detect skill "is it waiting on
@@ -2036,8 +2102,9 @@ impl Hub {
             // The user is actively sending → they've engaged with whatever the
             // agent asked, so the "awaiting your reply" state is resolved. Clear it
             // now so the widget vanishes immediately (the next turn re-judges).
-            if s.meta.awaiting_user {
+            if s.meta.awaiting_user || s.meta.done {
                 s.meta.awaiting_user = false;
+                s.meta.done = false;
                 cleared_awaiting = true;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
@@ -2098,8 +2165,9 @@ impl Hub {
                 }
             }
             // Explicit send → the "awaiting your reply" state is resolved; clear it.
-            if s.meta.awaiting_user {
+            if s.meta.awaiting_user || s.meta.done {
                 s.meta.awaiting_user = false;
+                s.meta.done = false;
                 cleared_awaiting = true;
             }
             if wired && Self::ready(s, true) && s.queue.is_empty() {
@@ -2201,6 +2269,30 @@ impl Hub {
         // Explicit user "send now" → manual drain, bypassing the no-key / awaiting
         // holds (the always-available fallback when the judge can't run).
         self.drain_head(session_id, true, true);
+    }
+
+    /// Overlay "Resume" for an interrupted turn: inject the auto-resume
+    /// continuation and drain it now (manual → revives + bypasses holds). A no-op
+    /// if there's nothing to continue from.
+    pub fn resume_turn(&self, session_id: &str) {
+        self.enqueue_continuation(session_id);
+        self.drain_head(session_id, true, true);
+    }
+
+    /// Overlay "Retry" for an errored/crashed turn: re-run the last user prompt
+    /// (reviving the session). No-op if there's no prior prompt.
+    pub fn retry_turn(&self, session_id: &str) {
+        let prompt = {
+            let sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            last_turn_texts(&s.log).0
+        };
+        if prompt.trim().is_empty() {
+            return;
+        }
+        let _ = self.force_submit(session_id, prompt, Vec::new(), None);
     }
 
     /// Move a queued prompt back to drafts.

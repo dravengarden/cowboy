@@ -1403,7 +1403,12 @@ export function Transcript({
           // and growing pb only reflows the scroll RANGE (no container reflow), so
           // the panel can grow (drafts expand) with the newest pinned just above it.
           pt: topInset ? `calc(${topInset} + 8px)` : { xs: 1, sm: 1.5 },
-          pb: bottomInset ? `calc(${bottomInset} + 8px)` : { xs: 1, sm: 1.5 },
+          // `--awaiting-h` (set by TurnStatusOverlay, 0 when absent) RESERVES the
+          // floating status pill's height so the newest message clears it at rest
+          // while the pill stays pinned above the composer (sticky-not-covering).
+          pb: bottomInset
+            ? `calc(${bottomInset} + var(--awaiting-h, 0px) + 8px)`
+            : `calc(var(--awaiting-h, 0px) + 12px)`,
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text

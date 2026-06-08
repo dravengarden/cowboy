@@ -797,6 +797,8 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::RenameSession { session_id, .. }
         | Inbound::SetSessionAutoResume { session_id, .. }
         | Inbound::SetAwaiting { session_id, .. }
+        | Inbound::ResumeTurn { session_id }
+        | Inbound::RetryTurn { session_id }
         | Inbound::SetConfigOption { session_id, .. }
         | Inbound::OpenSession { session_id }
         | Inbound::Submit { session_id, .. }
@@ -915,6 +917,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         }
         Inbound::SetAwaiting { session_id, awaiting } => {
             state.hub.set_awaiting(&session_id, awaiting);
+            Ok(())
+        }
+        Inbound::ResumeTurn { session_id } => {
+            state.hub.resume_turn(&session_id);
+            Ok(())
+        }
+        Inbound::RetryTurn { session_id } => {
+            state.hub.retry_turn(&session_id);
             Ok(())
         }
         Inbound::SetSetting { key, value } => {

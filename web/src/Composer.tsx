@@ -54,7 +54,7 @@ import {
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
 import { PlanDock } from "./PlanDock";
-import { AwaitingBar } from "./AwaitingBar";
+import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
@@ -81,6 +81,7 @@ import {
   send,
   setQueueEditing,
   submitPrompt,
+  useInferenceConfig,
   useStore,
 } from "./store";
 import { haptic } from "./haptic";
@@ -142,9 +143,11 @@ const TOOLBAR_MIN_H = {
 export function Composer({
   sessionId,
   status,
+  onOpenInfo,
 }: {
   sessionId: string;
   status: Status;
+  onOpenInfo: () => void;
 }): React.JSX.Element {
   // Draft state is seeded from the per-session draft store and persisted back to
   // it (see the effect below). The Composer is remounted per session (key in
@@ -198,6 +201,8 @@ export function Composer({
   // in the always-visible sidebar, so the sheet — and this lookup — only
   // matters on the compact tier.
   const session = sessions.find((s) => s.id === sessionId);
+  const inferenceConfig = useInferenceConfig();
+  const hasJudgeKey = inferenceConfig.some((c) => c.provider === "deepseek" && c.key_set);
   const theme = useTheme();
   // Touch tier collapses the agent config into a single Tune button — tapping
   // it opens a BottomSheet with the session info + every config option in one
@@ -447,16 +452,19 @@ export function Composer({
       {showPlan && plan && (
         <PlanDock entries={plan.entries} onDismiss={(): void => setDismissedPlanKey(plan.key)} />
       )}
-      {/* Confirm-detect: when the agent's last turn was judged "awaiting your
-          reply", surface a calm bar (above the queue) that holds the queue and
-          offers Send-now / Clear / dismiss. Shows even with an empty queue. */}
-      {session?.awaiting_user && (
-        <AwaitingBar
-          sessionId={sessionId}
-          queueLen={queue.length}
-          onFocusComposer={(): void => editorRef.current?.focus()}
-        />
-      )}
+      {/* Confirm-detect: the unified turn-status overlay (floats above the
+          composer). It decides its own visibility — awaiting / done / interrupted
+          / error / no-key, hidden while working — so it's rendered unconditionally. */}
+      <TurnStatusOverlay
+        sessionId={sessionId}
+        status={status}
+        awaitingUser={session?.awaiting_user ?? false}
+        done={session?.done ?? false}
+        queue={queue}
+        hasKey={hasJudgeKey}
+        onFocusComposer={(): void => editorRef.current?.focus()}
+        onConfigure={onOpenInfo}
+      />
       {/* Queued prompts (top): while the agent is busy, messages stack here and
           drain one per turn-end. Hidden when empty. */}
       {queue.length > 0 && (

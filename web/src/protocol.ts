@@ -45,6 +45,9 @@ export interface SessionMeta {
    *  the user (a question/confirmation): the queue is held and the awaiting
    *  widget shows. Transient (never persisted) — resets to false on restart. */
   awaiting_user?: boolean;
+  /** True when the last turn was judged as having COMPLETED the task (green "done"
+   *  overlay). Transient, never persisted. */
+  done?: boolean;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -157,6 +160,9 @@ export type Outbound =
   | { type: "inference_config"; providers: InferenceProviderView[] }
   // The static skill registry (prompt + extract), sent once on connect.
   | { type: "skills"; skills: SkillView[] }
+  // The confirm-detect judge's full result for a turn (verdict + raw I/O for the
+  // overlay's "raw data" expand). Latest-per-session.
+  | { type: "judge_result"; judge: JudgeResult }
   // Result of a dev probe (Info sheet "Test"): text + cache token counts, or error.
   | {
     type: "inference_probe_result";
@@ -186,6 +192,23 @@ export interface SkillView {
   description: string;
   prompt_template: string;
   extract: string;
+}
+
+/** One confirm-detect judge run — the verdict + the observability detail the
+ *  overlay's "raw data" expand surfaces. */
+export interface JudgeResult {
+  session_id: string;
+  layer: string; // "L1" | "L2"
+  awaiting_user: boolean;
+  done: boolean;
+  confidence: number;
+  reason: string;
+  model: string;
+  input: string;
+  output: string;
+  cache_hit: number;
+  cache_miss: number;
+  latency_ms: number;
 }
 
 export type Inbound =
@@ -267,6 +290,9 @@ export type Inbound =
   // Confirm-detect: clear/set the "awaiting user" hold (the awaiting widget's
   // dismiss / Send). `awaiting: false` = "not a question" → drain the held queue.
   | { type: "set_awaiting"; session_id: string; awaiting: boolean }
+  // Overlay actions for interrupted / errored turns.
+  | { type: "resume_turn"; session_id: string }
+  | { type: "retry_turn"; session_id: string }
   | { type: "set_setting"; key: string; value: unknown }
   // Inference provider config (model + params) + API key (separate; key never
   // echoed back). See store.ts `inferenceConfig`.

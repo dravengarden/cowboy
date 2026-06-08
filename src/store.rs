@@ -555,9 +555,10 @@ impl SessionRow {
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
             auto_resume: self.auto_resume,
-            // Never restored from the DB — a turn-end hold is transient; the next
-            // turn re-judges. Always start cleared.
+            // Never restored from the DB — turn-end verdicts are transient; the
+            // next turn re-judges. Always start cleared.
             awaiting_user: false,
+            done: false,
         }
     }
 }

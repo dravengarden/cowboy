@@ -9,7 +9,19 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::{SkillMeta, Verdict};
-use crate::inference::{CompleteRequest, InferenceProvider, Message};
+use crate::inference::{CompleteRequest, InferenceProvider, Message, Usage};
+
+/// A judge run's full outcome — the verdict PLUS the observability detail the Info
+/// / overlay surfaces let the user inspect (which layer decided, the raw model
+/// output, token usage). `usage` is `None` for an L1 (no LLM call).
+pub struct JudgeOutcome {
+    pub verdict: Verdict,
+    /// "L1" (deterministic stop-reason) or "L2" (the DeepSeek judge).
+    pub layer: &'static str,
+    /// The model's raw response text (L2), or the L1 reason — what `output` shows.
+    pub raw_output: String,
+    pub usage: Option<Usage>,
+}
 
 /// The stable system prefix — instructions + few-shot. Kept FIRST + constant so
 /// DeepSeek's prefix cache hits across turns; only the per-turn text varies.
@@ -88,14 +100,17 @@ pub async fn classify(
     stop_reason: Option<&str>,
     inference: &dyn InferenceProvider,
     final_text: &str,
-) -> Result<Verdict> {
+) -> Result<JudgeOutcome> {
     let ctx = crate::provider::confirm::TurnEndCtx { stop_reason, final_text };
     if let Some(v) = crate::provider::confirm::l1(agent_provider, &ctx) {
-        return Ok(v); // deterministic — no LLM call
+        // Deterministic — no LLM call.
+        let raw_output = v.reason.clone();
+        return Ok(JudgeOutcome { verdict: v, layer: "L1", raw_output, usage: None });
     }
     let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(final_text.to_owned())];
     let resp = inference.complete(CompleteRequest::json_judge(messages, 128)).await?;
-    parse_verdict(&resp.text)
+    let verdict = parse_verdict(&resp.text)?;
+    Ok(JudgeOutcome { verdict, layer: "L2", raw_output: resp.text, usage: Some(resp.usage) })
 }
 
 #[cfg(test)]
@@ -154,16 +169,20 @@ mod tests {
     async fn end_turn_falls_through_to_l2() {
         let mock = Mock(r#"{"awaiting_user": true, "done": true, "confidence": 0.8, "reason": "x"}"#);
         // EndTurn is ambiguous → L1 returns None → the LLM (mock) decides.
-        let v = classify("claude-code", Some("EndTurn"), &mock, "做完了 A，要不要做 B?").await.unwrap();
-        assert!(v.awaiting_user);
-        assert!(v.done);
+        let o = classify("claude-code", Some("EndTurn"), &mock, "做完了 A，要不要做 B?").await.unwrap();
+        assert_eq!(o.layer, "L2");
+        assert!(o.verdict.awaiting_user);
+        assert!(o.verdict.done);
+        assert!(o.usage.is_some());
     }
 
     #[tokio::test]
     async fn cancelled_short_circuits_l1_no_llm() {
         // A non-EndTurn stop is deterministic → L2 must NOT be called.
-        let v = classify("codex", Some("Cancelled"), &NeverCalled, "anything").await.unwrap();
-        assert!(!v.awaiting_user);
-        assert!(!v.done);
+        let o = classify("codex", Some("Cancelled"), &NeverCalled, "anything").await.unwrap();
+        assert_eq!(o.layer, "L1");
+        assert!(!o.verdict.awaiting_user);
+        assert!(!o.verdict.done);
+        assert!(o.usage.is_none());
     }
 }
