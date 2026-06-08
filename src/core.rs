@@ -117,6 +117,11 @@ pub struct Envelope {
 const AUTO_RESUME_DEFAULT_KEY: &str = "session.autoResume.default";
 /// Settings key: the continuation-message template (string with `{{var}}` holes).
 const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
+/// cmid prefix tagging an auto-enqueued continuation, so it's deduped (never
+/// stacked) and recognizable. (The cmid isn't persisted across restart — it only
+/// guards stacking WITHIN the queue at enqueue time, which is where the pile-up
+/// risk is.)
+const AUTO_CONTINUE_PREFIX: &str = "__cont__";
 /// Built-in continuation template used when the operator hasn't customized one.
 /// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
 /// one source of truth the revived agent's own store lacks. The "don't redo"
@@ -1077,23 +1082,50 @@ impl Hub {
     /// carrying cowboy's partial output (the agent's own store is unreliable after
     /// a mid-turn crash); the template tells it to continue, not redo.
     fn enqueue_continuation(&self, session_id: &str) {
-        let (prompt, partial, cwd) = {
-            let sessions = self.inner.sessions.lock().unwrap();
-            let Some(s) = sessions.get(session_id) else {
+        // Read the template before taking the sessions lock (avoid nesting the
+        // settings lock under it).
+        let template = self.continuation_template();
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            // RUNAWAY GUARD: never stack a second auto-continuation. A session
+            // interrupted across several restarts while never opened (so the
+            // continuation never drains) must not accrue a pile of them — the
+            // bound that keeps "continue" from running away.
+            if s
+                .queue
+                .iter()
+                .any(|m| m.cmid.as_deref().is_some_and(|c| c.starts_with(AUTO_CONTINUE_PREFIX)))
+            {
+                return;
+            }
             let (prompt, partial) = last_turn_texts(&s.log);
-            (prompt, partial, s.meta.cwd.clone())
-        };
-        if prompt.is_empty() && partial.is_empty() {
-            return; // nothing was captured for the cut-off turn
+            // EMPTY-RESULT case: the turn was cut off before producing anything,
+            // so there is nothing to "continue from" — re-issue the ORIGINAL
+            // prompt (a clean retry) instead of a "here's what you produced:
+            // <nothing>" message. Nothing at all (no prompt either) → don't
+            // enqueue, so a content-less interruption can't seed a continue.
+            let text = if partial.trim().is_empty() {
+                if prompt.trim().is_empty() {
+                    return;
+                }
+                prompt
+            } else {
+                render_template(
+                    &template,
+                    &[("partial", &partial), ("prompt", &prompt), ("cwd", &s.meta.cwd)],
+                )
+            };
+            let id = self.next_qid();
+            let cmid = format!("{AUTO_CONTINUE_PREFIX}{id}");
+            // FRONT of the queue: the interrupted turn was running BEFORE anything
+            // queued behind it, so its continuation must run first (the queue was
+            // *waiting on* that turn), not after the backlog.
+            s.queue.insert(0, QueuedMessage { id, text, content: Vec::new(), cmid: Some(cmid) });
         }
-        let text = render_template(
-            &self.continuation_template(),
-            &[("partial", &partial), ("prompt", &prompt), ("cwd", &cwd)],
-        );
-        // No cmid: this is daemon-originated, not an optimistic client row.
-        self.submit(session_id, text, Vec::new(), None);
+        self.emit_pending(session_id);
     }
 
     // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------
