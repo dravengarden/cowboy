@@ -189,7 +189,9 @@ export type Inbound =
   // drain, so every terminal sees identical state. (The bridge keeps using
   // `prompt` for a direct, un-queued dispatch.) `content` is the ACP block array
   // (empty ⇒ plain text in `text`). See src/core.rs Inbound.
-  | { type: "submit"; session_id: string; text?: string; content?: ContentBlock[]; cmid?: string }
+  // `force` = long-press send: jump to the front of the queue + interrupt the
+  // running turn so it runs next (no-op on an idle session).
+  | { type: "submit"; session_id: string; text?: string; content?: ContentBlock[]; cmid?: string; force?: boolean }
   | { type: "remove_queued"; session_id: string; id: string }
   | {
       type: "edit_queued";

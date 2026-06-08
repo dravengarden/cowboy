@@ -672,6 +672,10 @@ interface QValue {
 const qMut = {
   addDraft: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, drafts: [...v.drafts, a.row] }),
   addQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [...v.queue, a.row] }),
+  // Force-push (long-press send): land the optimistic row at the FRONT of the
+  // queue, matching where the daemon puts it; its wire frame is `submit` with
+  // `force: true`, so the daemon also interrupts the running turn.
+  forceQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [a.row, ...v.queue] }),
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
 const qStatus = new Map<string, "pending" | "sending" | "failed">();
@@ -692,7 +696,16 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
         send(
           m.name === "addDraft"
             ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id }
-            : { type: "submit", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id },
+            : {
+              type: "submit",
+              session_id: sessionId,
+              text: row.text,
+              content: contentOf(row.text, row.attachments),
+              cmid: m.id,
+              // `forceQueue` carries the force flag so a reconnect resend still
+              // force-pushes; `addQueue` omits it (normal queue append).
+              ...(m.name === "forceQueue" && { force: true }),
+            },
         );
       },
       onChange: (): void => {
@@ -767,7 +780,13 @@ function armQTimers(sessionId: string, cmid: string): void {
 
 /** Optimistic add to drafts or queue: mutate (id = cmid, so the server echo
  *  drops exactly this row — no ghost) + send the command + arm status timers. */
-function qAdd(target: "drafts" | "queue", sessionId: string, text: string, attachments: Attachment[]): void {
+function qAdd(
+  target: "drafts" | "queue",
+  sessionId: string,
+  text: string,
+  attachments: Attachment[],
+  force = false,
+): void {
   const cmid = newCmid();
   const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid };
   const store = qClient(sessionId);
@@ -776,7 +795,8 @@ function qAdd(target: "drafts" | "queue", sessionId: string, text: string, attac
   // status. `isConnected()` predicts the send's success (same socket check).
   const sent = isConnected();
   qStatus.set(cmid, sent ? "pending" : "failed");
-  store.mutate(target === "drafts" ? "addDraft" : "addQueue", { row }, cmid);
+  const mutator = target === "drafts" ? "addDraft" : force ? "forceQueue" : "addQueue";
+  store.mutate(mutator, { row }, cmid);
   if (sent) armQTimers(sessionId, cmid);
 }
 
@@ -981,6 +1001,26 @@ export function submitPrompt(sessionId: string, text: string, attachments: Attac
   } else {
     // → queue: an optimistic row in the queue sync state.
     qAdd("queue", sessionId, trimmed, attachments);
+  }
+}
+
+/** Force-push send (the long-press affordance): when a turn is in flight, jump
+ *  this prompt to the FRONT of the queue and interrupt the running turn so it
+ *  runs next. On an idle session there's nothing to jump ahead of, so it's just
+ *  a normal send (a chat bubble). Mirrors submitPrompt's optimistic placement. */
+export function forcePrompt(sessionId: string, text: string, attachments: Attachment[] = []): void {
+  const trimmed = text.trimEnd();
+  if (!trimmed.trim() && attachments.length === 0) return;
+  const sess = state.sessions.find((s) => s.id === sessionId);
+  const dispatchable = sess !== undefined
+    && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
+  const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
+  if (dispatchable && queueEmpty) {
+    // Idle → nothing to force ahead of; a normal optimistic chat send.
+    optimisticMessage(sessionId, trimmed, attachments);
+  } else {
+    // Busy → optimistic FRONT row + `submit { force: true }` (interrupt + run next).
+    qAdd("queue", sessionId, trimmed, attachments, true);
   }
 }
 

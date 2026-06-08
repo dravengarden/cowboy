@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   alpha,
   Box,
@@ -75,12 +75,14 @@ import {
   reorderDrafts,
   reorderQueue,
   requestSendQueued,
+  forcePrompt,
   retryQueued,
   send,
   setQueueEditing,
   submitPrompt,
   useStore,
 } from "./store";
+import { haptic } from "./haptic";
 import { useSortable } from "./useSortable";
 import { getDraft, setDraft } from "./draftStore";
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -208,6 +210,16 @@ export function Composer({
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
   const [cancelOpen, setCancelOpen] = useState(false);
+  // Long-press-send → force-push: hold the Queue button ~450ms to pop a confirm
+  // that interrupts the running turn and runs this prompt next (skipping the
+  // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
+  const [holding, setHolding] = useState(false);
+  const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
+  const lpTimer = useRef<number | undefined>(undefined);
+  // Set when the hold crosses the threshold, so the trailing click (pointerup
+  // fires onClick) is suppressed instead of also queuing the message.
+  const lpFired = useRef(false);
+  const lpStart = useRef<{ x: number; y: number } | null>(null);
   // "Move draft to another session" (the parked-in-the-wrong-session fix). Owned
   // HERE, not in the drafts panel, so the undo snackbar survives the panel
   // unmounting when the LAST draft leaves this session. `moveSrcId` = the draft
@@ -325,6 +337,57 @@ export function Composer({
     setText("");
     setAttachments([]);
   }
+
+  // --- Long-press → force-push ------------------------------------------------
+  const LP_MS = 450;
+  function clearLongPress(): void {
+    if (lpTimer.current !== undefined) {
+      globalThis.clearTimeout(lpTimer.current);
+      lpTimer.current = undefined;
+    }
+    lpStart.current = null;
+    setHolding(false);
+  }
+  function onForcePointerDown(e: ReactPointerEvent<HTMLButtonElement>): void {
+    if (!sendable) return;
+    const el = e.currentTarget;
+    lpFired.current = false;
+    lpStart.current = { x: e.clientX, y: e.clientY };
+    setHolding(true);
+    lpTimer.current = globalThis.setTimeout(() => {
+      lpTimer.current = undefined;
+      lpFired.current = true;
+      setHolding(false);
+      haptic();
+      setForceAnchor(el);
+    }, LP_MS);
+  }
+  function onForcePointerMove(e: ReactPointerEvent<HTMLButtonElement>): void {
+    const s = lpStart.current;
+    // A finger that drifts is a scroll/drag, not a press — cancel the hold.
+    if (s !== null && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 10) clearLongPress();
+  }
+  function onQueueClick(): void {
+    // A completed long-press already opened the confirm; swallow the trailing
+    // click so it doesn't ALSO queue the message.
+    if (lpFired.current) {
+      lpFired.current = false;
+      return;
+    }
+    submit();
+  }
+  function confirmForce(): void {
+    setForceAnchor(null);
+    if (!sendable) return;
+    haptic();
+    forcePrompt(sessionId, text.trimEnd(), attachments);
+    editorRef.current?.clear();
+    setText("");
+    setAttachments([]);
+  }
+  useEffect(() => (): void => {
+    if (lpTimer.current !== undefined) globalThis.clearTimeout(lpTimer.current);
+  }, []);
 
   // Park the composer's content as a draft (the Draft button) and clear the
   // input. Drafts persist and are activated later from the Drafts panel.
@@ -639,17 +702,58 @@ export function Composer({
         {busy || starting ? (
           <>
             {sendable && (
-              <Tooltip title="Queue (⌘/Ctrl + Enter)">
-                <span>
+              <Tooltip title="Queue · hold to force-push">
+                <Box component="span" sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
                   <IconButton
                     color="primary"
                     aria-label="queue message"
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={submit}
+                    sx={{ ...TOOLBAR_ICON_BTN, transition: "transform .12s", ...(holding && { transform: "scale(1.12)" }) }}
+                    onClick={onQueueClick}
+                    onPointerDown={onForcePointerDown}
+                    onPointerMove={onForcePointerMove}
+                    onPointerUp={clearLongPress}
+                    onPointerLeave={clearLongPress}
+                    onPointerCancel={clearLongPress}
                   >
                     <Send />
                   </IconButton>
-                </span>
+                  {/* Fill ring: a CSS-keyframe sweep over the hold window — pure
+                      compositor (no per-frame React render). Mounts on hold,
+                      unmounts when the threshold fires the confirm. */}
+                  {holding && (
+                    <Box
+                      component="svg"
+                      aria-hidden
+                      viewBox="0 0 40 40"
+                      sx={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        pointerEvents: "none",
+                        transform: "rotate(-90deg)",
+                      }}
+                    >
+                      <Box
+                        component="circle"
+                        cx="20"
+                        cy="20"
+                        r="18"
+                        fill="none"
+                        strokeLinecap="round"
+                        sx={{
+                          stroke: "primary.main",
+                          strokeWidth: 2.5,
+                          // 2π·18 ≈ 113 — full circumference, swept to 0.
+                          strokeDasharray: 113,
+                          strokeDashoffset: 113,
+                          animation: "lpfill 450ms linear forwards",
+                          "@keyframes lpfill": { to: { strokeDashoffset: 0 } },
+                        }}
+                      />
+                    </Box>
+                  )}
+                </Box>
               </Tooltip>
             )}
             {busy && (
@@ -681,6 +785,35 @@ export function Composer({
           </Tooltip>
         )}
       </Stack>
+      {/* Force-push confirm — opened by a completed long-press on Queue. Anchored
+          to the button, rising above it. Confirm interrupts the running turn and
+          runs this prompt next (skipping the queue). */}
+      <Popover
+        open={forceAnchor !== null}
+        anchorEl={forceAnchor}
+        onClose={(): void => setForceAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+        slotProps={{ paper: { sx: { mt: -1, maxWidth: 268, borderRadius: 2 } } }}
+      >
+        <Box sx={{ p: 1.5 }}>
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+            <Bolt fontSize="small" color="primary" />
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Force push</Typography>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.5 }}>
+            Interrupt the current turn and run this now, skipping the queue.
+          </Typography>
+          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1.5 }}>
+            <Button size="small" color="inherit" onClick={(): void => setForceAnchor(null)}>
+              Cancel
+            </Button>
+            <Button size="small" variant="contained" startIcon={<Bolt />} onClick={confirmForce}>
+              Force push
+            </Button>
+          </Stack>
+        </Box>
+      </Popover>
       {compact && (
         <ComposerSheet
           open={sheetOpen}

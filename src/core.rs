@@ -402,6 +402,12 @@ pub enum Inbound {
         /// retry (Phase 2 uses it for the chat/queue path). See QueuedMessage.
         #[serde(default)]
         cmid: Option<String>,
+        /// "Force push" a busy session: instead of appending to the back of the
+        /// queue, jump this prompt to the FRONT and interrupt the running turn so
+        /// it runs next (the long-press-send affordance). No-op on an idle session
+        /// — it just sends normally. Old clients omit it (defaults false).
+        #[serde(default)]
+        force: bool,
     },
     /// Drop one queued prompt.
     RemoveQueued { session_id: String, id: String },
@@ -1665,6 +1671,52 @@ impl Hub {
             Some(req) => self.send_dispatch(req),
             None => self.emit_pending(session_id),
         }
+    }
+
+    /// Force-push a fresh prompt (the long-press-send affordance). When a turn is
+    /// in flight, the prompt jumps to the FRONT of the queue and this returns
+    /// `true` so the caller interrupts the running turn — the cancelled turn ends,
+    /// the drain then runs this prompt next. On an idle session there's nothing to
+    /// jump ahead of, so it behaves exactly like `submit` (dispatches straight
+    /// through) and returns `false`. Same cmid-idempotency as `submit`.
+    #[must_use]
+    pub fn force_submit(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) -> bool {
+        let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
+        let mut dispatch = None;
+        let mut interrupt = false;
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            if let Some(c) = cmid.as_deref() {
+                if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
+                    return false;
+                }
+            }
+            if wired && Self::ready(s, true) && s.queue.is_empty() {
+                // Idle + nothing queued → straight dispatch, identical to submit.
+                s.in_flight = true;
+                dispatch = Some(DispatchReq { session_id: session_id.to_owned(), text, content, cmid });
+            } else {
+                // Busy / draining / queued ahead → jump to the FRONT so it runs
+                // next, and ask the caller to interrupt the in-flight turn.
+                let id = self.next_qid();
+                s.queue.insert(0, QueuedMessage { id, text, content, cmid });
+                interrupt = true;
+            }
+        }
+        match dispatch {
+            Some(req) => self.send_dispatch(req),
+            None => self.emit_pending(session_id),
+        }
+        interrupt
     }
 
     /// Drop one queued prompt.

@@ -937,9 +937,25 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             text,
             content,
             cmid,
+            force,
         } => {
-            state.hub.submit(&session_id, text, content, cmid);
-            Ok(())
+            if force {
+                // Long-press send: jump to the front of the queue and interrupt the
+                // running turn so it runs next (same end-state as a queued row's
+                // force-push). force_submit returns true when it queued (vs a direct
+                // idle dispatch); only then, and only on a live turn, do we Cancel.
+                let queued = state.hub.force_submit(&session_id, text, content, cmid);
+                if queued
+                    && matches!(state.hub.status(&session_id), Some(Status::Busy | Status::Starting))
+                {
+                    state.supervisor.send(&session_id, AgentCommand::Cancel)
+                } else {
+                    Ok(())
+                }
+            } else {
+                state.hub.submit(&session_id, text, content, cmid);
+                Ok(())
+            }
         }
         Inbound::RemoveQueued { session_id, id } => {
             state.hub.remove_queued(&session_id, &id);
