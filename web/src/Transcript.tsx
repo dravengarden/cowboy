@@ -66,7 +66,8 @@ import {
   setSticky,
   useScrollNonce,
 } from "./stickyStore";
-import { BottomSheet, ImageLightbox } from "./_shell";
+import { ImageLightbox } from "./_shell";
+import { Sheet } from "./Sheet";
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -847,7 +848,7 @@ function PermissionSheet({
   onClose: () => void;
 }): React.JSX.Element {
   return (
-    <BottomSheet
+    <Sheet
       open={open}
       onClose={onClose}
       title={
@@ -885,7 +886,7 @@ function PermissionSheet({
       <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
         {item.title}
       </Typography>
-    </BottomSheet>
+    </Sheet>
   );
 }
 

@@ -39,6 +39,20 @@ function iosSwitchTap(): void {
 
 /** Fire a short, light haptic tap where the platform supports one. */
 export function haptic(ms = 12): void {
+  // 1) Native bridge: the Tauri shell injects `window.__cowboyHaptic` (an init
+  //    script that calls the native haptics plugin). This is the ONLY reliable
+  //    haptic on iOS, where the web Vibration API doesn't exist. See the
+  //    tauri-shell branch (src-tauri). When present it wins outright.
+  try {
+    const native = (globalThis as { __cowboyHaptic?: () => void }).__cowboyHaptic;
+    if (typeof native === "function") {
+      native();
+      return;
+    }
+  } catch {
+    // ignore — fall through to web paths
+  }
+  // 2) Android (+ a few others): the Vibration API.
   try {
     const nav = globalThis.navigator;
     if (typeof nav?.vibrate === "function") {
@@ -47,6 +61,7 @@ export function haptic(ms = 12): void {
   } catch {
     // unsupported — ignore
   }
+  // 3) iOS web fallback: the best-effort switch-toggle tap.
   try {
     iosSwitchTap();
   } catch {

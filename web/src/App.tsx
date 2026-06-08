@@ -87,9 +87,11 @@ import {
     useNavbarAtBottom,
     useNavbarPosition,
 } from "./navbarSettings";
+import { setFrostedSheets, useFrostedSheets } from "./frostedSheets";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
-import { BottomSheet, ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
+import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
+import { Sheet } from "./Sheet";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
@@ -554,7 +556,7 @@ function NewSessionDialog({
     // BottomSheet (not a centered Dialog) to match the rest of the modals — they
     // all rise from the bottom on the mobile tier.
     return (
-        <BottomSheet
+        <Sheet
             forceSheet={navbarAtBottom}
             open={open}
             onClose={onClose}
@@ -599,7 +601,7 @@ function NewSessionDialog({
                     ))}
                 </TextField>
             </Stack>
-        </BottomSheet>
+        </Sheet>
     );
 }
 
@@ -1540,6 +1542,7 @@ function SettingsShell({
         "&:hover": { borderColor: active ? "primary.main" : "text.secondary" },
     });
     const navbarPos = useNavbarPosition();
+    const frostedSheets = useFrostedSheets();
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     // Navbar position is offered on the whole compact tier (`< lg`, tablets
@@ -1549,7 +1552,7 @@ function SettingsShell({
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     return (
-        <BottomSheet open={open} onClose={onClose} title="Settings" forceSheet={navbarAtBottom}>
+        <Sheet open={open} onClose={onClose} title="Settings" forceSheet={navbarAtBottom}>
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -1805,6 +1808,25 @@ function SettingsShell({
                                 <MenuItem value="bottom">Bottom</MenuItem>
                             </Select>
                         </Stack>
+                        <Divider />
+                        <Stack
+                            direction="row"
+                            alignItems="center"
+                            justifyContent="space-between"
+                            spacing={2}
+                        >
+                            <Stack>
+                                <Typography variant="body2">Frosted sheets</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    Translucent 磨砂玻璃 surface on pop-up sheets
+                                </Typography>
+                            </Stack>
+                            <Switch
+                                checked={frostedSheets}
+                                onChange={(e): void => setFrostedSheets(e.target.checked)}
+                                inputProps={{ "aria-label": "Frosted sheets" }}
+                            />
+                        </Stack>
                     </>
                 )}
                 {desktop && (
@@ -1856,7 +1878,7 @@ function SettingsShell({
                     </Typography>
                 </Stack>
             </Stack>
-        </BottomSheet>
+        </Sheet>
     );
 }
 
@@ -1879,7 +1901,7 @@ function DeleteSessionShell({
     if (!session) return null;
     const surface = originLabel(session.origin);
     return (
-        <BottomSheet
+        <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
@@ -1898,7 +1920,7 @@ function DeleteSessionShell({
             <Typography variant="body2" color="text.secondary">
                 Any in-flight turn is cancelled. The agent transcript on this session will be lost.
             </Typography>
-        </BottomSheet>
+        </Sheet>
     );
 }
 
@@ -1932,7 +1954,7 @@ function RenameSessionShell({
         if (canSave) onConfirm(trimmed);
     };
     return (
-        <BottomSheet
+        <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
@@ -1964,7 +1986,7 @@ function RenameSessionShell({
                 sx={{ mt: 1 }}
                 helperText="Shown in the sidebar and the title bar."
             />
-        </BottomSheet>
+        </Sheet>
     );
 }
 
@@ -2047,7 +2069,7 @@ function SessionInfoShell(
         );
     }
     return (
-        <BottomSheet
+        <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
@@ -2055,7 +2077,7 @@ function SessionInfoShell(
             actions={<Button onClick={onClose} color="inherit">Close</Button>}
         >
             {body}
-        </BottomSheet>
+        </Sheet>
     );
 }
 

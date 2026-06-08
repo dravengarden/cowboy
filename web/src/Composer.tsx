@@ -97,7 +97,7 @@ import type {
   SessionMeta,
   Status,
 } from "./protocol";
-import { BottomSheet } from "./_shell";
+import { Sheet } from "./Sheet";
 import { persisted, type Store, useStore as usePrefStore } from "./_store/mod.ts";
 
 // Per-panel-kind collapse pref (app-level, per-device, never synced). One
@@ -874,7 +874,7 @@ export function Composer({
       {/* Move-draft destination picker + undo snackbar. Owned here (not in the
           drafts panel) so the snackbar survives when moving the LAST draft
           unmounts that panel. */}
-      <BottomSheet
+      <Sheet
         open={moveSrcId !== null}
         onClose={(): void => setMoveSrcId(null)}
         title="Move draft to…"
@@ -899,7 +899,7 @@ export function Composer({
             </ListItemButton>
           ))}
         </List>
-      </BottomSheet>
+      </Sheet>
       <Snackbar
         open={moveUndo !== null}
         autoHideDuration={6000}
@@ -1938,7 +1938,7 @@ function ComposerSheet({
 }): React.JSX.Element {
   const navbarAtBottom = useNavbarAtBottom();
   return (
-    <BottomSheet open={open} onClose={onClose} forceSheet={navbarAtBottom}>
+    <Sheet open={open} onClose={onClose} forceSheet={navbarAtBottom}>
       {session && <SessionInfoSection session={session} />}
       {(loading || options.length > 0) && (
         <>
@@ -1980,7 +1980,7 @@ function ComposerSheet({
           </Box>
         </>
       )}
-    </BottomSheet>
+    </Sheet>
   );
 }
 
