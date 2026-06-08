@@ -30,6 +30,7 @@ import {
 import type { SxProps, Theme } from "@mui/material";
 import {
     Add,
+    Bolt,
     Check as CheckIcon,
     Circle,
     DeleteOutline,
@@ -37,11 +38,10 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ExpandMore,
+    FlashOff,
     InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
-    PlayCircle,
-    PlayDisabled,
     Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { Composer } from "./Composer";
@@ -256,7 +256,7 @@ function AutoResumeBadge({
         );
     }
     const off = override === false;
-    const Icon = off ? PlayDisabled : PlayCircle;
+    const Icon = off ? FlashOff : Bolt;
     const tip = off ? "Auto-resume: off for this session" : "Auto-resume: on for this session";
     return (
         <Tooltip title={tip} enterDelay={300}>
