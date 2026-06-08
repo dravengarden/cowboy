@@ -25,30 +25,29 @@ pub struct JudgeOutcome {
 
 /// The stable system prefix — instructions + few-shot. Kept FIRST + constant so
 /// DeepSeek's prefix cache hits across turns; only the per-turn text varies.
-const SYSTEM_PROMPT: &str = r#"你是一个「coding agent 回合结束」分类器。输入是 agent 刚说完、停下来把控制权交还给用户的最后一段话（可能中文也可能英文，可能很长、有多段）。判断完后，最后只输出这一行 JSON，不要任何其它文字、不要 markdown：
-{"awaiting_user": <bool>, "done": <bool>, "confidence": <0..1>, "reason": "<简短>"}
+const SYSTEM_PROMPT: &str = r#"你是一个「coding agent 回合结束」分类器。输入是 agent 刚说完、停下来把控制权交还给用户的最后一段话（中/英文，可能很长）。只输出这一行 JSON，bool 在前，reason 必须很短（≤8 个字），不要任何其它文字 / markdown / 代码块：
+{"awaiting_user": <bool>, "done": <bool>, "confidence": <0..1>, "reason": "<≤8字>"}
 
-按 agent 的真实意图判断，不要只看表面措辞、有没有问号、或客套话。话很长时，看它整体上现在是否真的需要你回应才能继续。
+awaiting_user 的唯一标准：**agent 现在是不是「卡住了」—— 不拿到你的回答就没法往下做。** 不看有没有问号、不看客套话，只看它是否被你挡住了。
 
-awaiting_user —— agent 是否在「等用户回应之后才能继续」：
-- true：明确提问、让用户在选项间挑一个、请求确认某个有风险/不可逆的操作、或表示缺少信息或需要用户拍板才能往下做。
-- false：只是陈述、汇报进度、说明自己做了什么、宣布完成；以及不影响继续的客套结尾（如「有需要再说」「还有别的吗」「希望有帮助」）——这些并不是在等你回应。
-- 真正拿不准、但确实像在征求用户拍板时 → 偏 true（漏掉一个真问题，比偶尔多问一次代价更大）。
+- true：agent 在问一个必须先回答才能继续的问题、让你在几个方案里选一个、或请求确认某个有风险/不可逆的操作。也就是：你不回它，它就停在这儿。
+  （例：用 A 还是 B？要不要接着做 B？确认删除吗？）
+- false：agent 已经把事做完或做到一个段落、在汇报结果。**哪怕结尾邀请你去试用 / 验证 / 反馈（「试试看」「看一眼」「对不对」「有问题告诉我」「满意吗」「效果如何」），也是 false** —— 那只是礼貌邀请，agent 没被卡住，你完全可以去干别的、不必先回答它。
 
-done —— 当前交付的任务/产物是否已经完成（值得提示「完成了」）：
-- true：明确说做完了 / 跑通了 / 已提交。
-- false：还在中途、只是过程汇报、或仅仅在提问。
-- 两者可同时为 true（例：「X 做完了，要不要接着做 Y？」）。
+done —— 这次的任务/产物是否已经做完（值得提示「完成了」）：
+- true：明确说做完 / 跑通 / 已部署 / 已提交。
+- false：还在中途、纯过程汇报、或仅在提问。
+- 两者可同时 true（例「X 做完了，要不要接着做 Y?」：在问要不要继续 → awaiting 也是 true）。
 
-示例（覆盖各种角落，看意图而非措辞）：
-「你想用方案 A 还是 B?」→ {"awaiting_user": true, "done": false}
-「需要我帮你部署上线吗?」→ {"awaiting_user": true, "done": false}
-「这步不可逆，确认要删旧文件吗?」→ {"awaiting_user": true, "done": false}
-「全部完成，测试通过，已提交。」→ {"awaiting_user": false, "done": true}
-「搞定，有需要随时说。」→ {"awaiting_user": false, "done": true}
-「登录接口改好了，要不要顺便加测试?」→ {"awaiting_user": true, "done": true}
-「我先跑一下测试看看结果。」→ {"awaiting_user": false, "done": false}
-「All set — pushed. Let me know if anything else.」→ {"awaiting_user": false, "done": true}"#;
+示例：
+「你想用方案 A 还是 B?」→ {"awaiting_user": true, "done": false, "confidence": 0.96, "reason": "二选一"}
+「这步不可逆，确认删旧文件吗?」→ {"awaiting_user": true, "done": false, "confidence": 0.95, "reason": "危险确认"}
+「X 做完了，要不要接着做 Y?」→ {"awaiting_user": true, "done": true, "confidence": 0.9, "reason": "问是否继续"}
+「全部完成，测试通过，已提交。」→ {"awaiting_user": false, "done": true, "confidence": 0.96, "reason": "纯完成"}
+「上线了，切到前台重开看看效果，对不对告诉我。」→ {"awaiting_user": false, "done": true, "confidence": 0.9, "reason": "完成+邀验证"}
+「修好了，划掉重开试试，还有问题再说。」→ {"awaiting_user": false, "done": true, "confidence": 0.9, "reason": "完成+礼貌"}
+「我先跑一下测试看看结果。」→ {"awaiting_user": false, "done": false, "confidence": 0.85, "reason": "过程"}
+「Done — pushed. Let me know if anything else.」→ {"awaiting_user": false, "done": true, "confidence": 0.9, "reason": "完成+礼貌"}"#;
 
 /// The skill's inspectable metadata (Info UI).
 #[must_use]
@@ -75,9 +74,22 @@ struct Raw {
     reason: String,
 }
 
-/// Parse the model's JSON text into a `Verdict`. Tolerant of a leading/trailing
-/// fence or prose by extracting the first `{ ... }` block.
+/// Parse the model's output into a `Verdict`. ROBUST TO TRUNCATION: v4-pro
+/// sometimes writes a long `reason` that `max_tokens` cuts mid-string, leaving
+/// invalid JSON — but the two booleans are emitted FIRST, so we pull them by a
+/// simple scan and never fail on a cut-off reason (the old strict parse turned
+/// every truncation into "judge failed → hold the queue"). confidence/reason are
+/// best-effort from a clean `{ … }` block when one exists.
 fn parse_verdict(text: &str) -> Result<Verdict> {
+    let awaiting_user = bool_field(text, "awaiting_user");
+    let done = bool_field(text, "done");
+    if let (Some(awaiting_user), Some(done)) = (awaiting_user, done) {
+        let (confidence, reason) = extract_json(text)
+            .and_then(|j| serde_json::from_str::<Raw>(j).ok())
+            .map_or((0.0, String::new()), |r| (r.confidence, r.reason));
+        return Ok(Verdict { awaiting_user, done, confidence, reason });
+    }
+    // Neither boolean present → genuinely unparseable.
     let json = extract_json(text).unwrap_or(text);
     let raw: Raw = serde_json::from_str(json).with_context(|| format!("parse verdict: {text}"))?;
     Ok(Verdict {
@@ -86,6 +98,21 @@ fn parse_verdict(text: &str) -> Result<Verdict> {
         confidence: raw.confidence,
         reason: raw.reason,
     })
+}
+
+/// Find `"<key>": true|false` in the raw text without needing valid JSON. The key
+/// is ASCII so byte indexing is safe.
+fn bool_field(text: &str, key: &str) -> Option<bool> {
+    let pat = format!("\"{key}\"");
+    let after = &text[text.find(&pat)? + pat.len()..];
+    let v = after.trim_start_matches([':', ' ', '\t', '\n', '\r']);
+    if v.starts_with("true") {
+        Some(true)
+    } else if v.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Best-effort: the substring from the first `{` to the last `}`.
@@ -116,9 +143,10 @@ pub async fn classify(
         return Ok(JudgeOutcome { verdict: v, layer: "L1", raw_output, usage: None });
     }
     let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(final_text.to_owned())];
-    // No forced JSON mode (thinking models reject it) + generous tokens so a
-    // thinking model has room to reason before the short JSON.
-    let resp = inference.complete(CompleteRequest::judge(messages, 512)).await?;
+    // No forced JSON mode (thinking models reject it). Generous token budget so a
+    // verbose reason can't truncate the JSON (the prompt also caps reason ≤8 chars,
+    // and parse_verdict survives truncation anyway).
+    let resp = inference.complete(CompleteRequest::judge(messages, 1024)).await?;
     let verdict = parse_verdict(&resp.text)?;
     Ok(JudgeOutcome { verdict, layer: "L2", raw_output: resp.text, usage: Some(resp.usage) })
 }
@@ -138,6 +166,13 @@ mod tests {
         // tolerant of surrounding prose / a code fence
         let v2 = parse_verdict("```json\n{\"awaiting_user\": false, \"done\": true}\n```").unwrap();
         assert!(!v2.awaiting_user && v2.done);
+        // TRUNCATED JSON (the real bug): a long reason cut by max_tokens leaves
+        // invalid JSON, but the booleans came first → still parses.
+        let v3 = parse_verdict(
+            "{\"awaiting_user\": false, \"done\": true, \"confidence\": 0.9, \"reason\": \"汇报完成并邀请用户去验证，结尾是礼貌性的邀请并非",
+        )
+        .unwrap();
+        assert!(!v3.awaiting_user && v3.done);
     }
 
     struct Mock(&'static str);
