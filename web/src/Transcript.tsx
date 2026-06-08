@@ -52,10 +52,10 @@ import { Markdown } from "./Markdown";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
-  discardOptimistic,
+  discardMessage,
   loadOlder,
   type QueuedMessage,
-  retryOptimistic,
+  retryMessage,
   send,
   useStore,
 } from "./store";
@@ -491,7 +491,7 @@ function OptimisticUserBubble({
             <IconButton
               size="small"
               aria-label="retry send"
-              onClick={(): void => retryOptimistic("messages", sessionId, cmid)}
+              onClick={(): void => retryMessage(sessionId, cmid)}
             >
               <Refresh fontSize="small" />
             </IconButton>
@@ -500,7 +500,7 @@ function OptimisticUserBubble({
             <IconButton
               size="small"
               aria-label="discard message"
-              onClick={(): void => discardOptimistic("messages", sessionId, cmid)}
+              onClick={(): void => discardMessage(sessionId, cmid)}
             >
               <Close fontSize="small" />
             </IconButton>

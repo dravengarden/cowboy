@@ -550,20 +550,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                 return;
             }
         }
-        // Replay the server-authoritative queue + drafts so a freshly-opened
-        // terminal renders the same staged messages as every other one.
-        if let Some((queue, drafts)) = state.hub.pending(&meta.id) {
-            if send_json(
-                &mut sink,
-                &Outbound::Queues {
-                    session_id: meta.id,
-                    queue,
-                    drafts,
-                },
-            )
-            .await
-            .is_err()
-            {
+        // Replay the server-authoritative queue + drafts as a resync SyncPatch
+        // (state "queue:<id>") so a freshly-opened terminal renders the same
+        // staged messages and adopts them across a daemon restart.
+        if let Some(patch) = state.hub.queue_resync(&meta.id) {
+            if send_json(&mut sink, &patch).await.is_err() {
                 return;
             }
         }

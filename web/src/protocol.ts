@@ -134,17 +134,14 @@ export type Outbound =
   | { type: "snapshot"; session_id: string; events: Envelope[]; reached_start: boolean }
   | { type: "event"; envelope: Envelope }
   | { type: "config_options"; session_id: string; options: ConfigOption[] }
-  | {
-      type: "queues";
-      session_id: string;
-      queue: WireQueued[];
-      drafts: WireQueued[];
-    }
   // Generic optimistic-sync snapshot patch (@shared-utils/sync): the absolute
-  // `value` of one `state` ("title" map / "order" array / …) at `version`, plus
-  // the mutation ids newly confirmed. The store folds it into that state's sync
-  // client. See store.ts `sync_patch`.
-  | { type: "sync_patch"; state: string; version: number; value: unknown; confirmed: string[] }
+  // `value` of one `state` ("title" map / "order" array / "queue:<sid>" object)
+  // at `version`, plus the mutation ids newly confirmed. `resync` = a
+  // connect/reconnect snapshot the client adopts as ground truth regardless of
+  // version (the daemon's clock resets on restart). The store folds it into that
+  // state's sync client. See store.ts `sync_patch`. (Queue + drafts flow here as
+  // state "queue:<session_id>" — no dedicated `queues` message anymore.)
+  | { type: "sync_patch"; state: string; version: number; value: unknown; confirmed: string[]; resync?: boolean }
   | { type: "error"; session_id?: string; message: string };
 
 export type Inbound =

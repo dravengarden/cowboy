@@ -414,14 +414,8 @@ pub enum Outbound {
         session_id: String,
         options: serde_json::Value,
     },
-    /// A session's queue + drafts. Sent on connect (for every session) and
-    /// whenever either list changes. Server-authoritative so every terminal
-    /// renders the same staged messages.
-    Queues {
-        session_id: String,
-        queue: Vec<QueuedMessage>,
-        drafts: Vec<QueuedMessage>,
-    },
+    // (Queue + drafts now flow on the generic SyncPatch channel as state
+    // "queue:<session_id>", not a dedicated variant — see Hub::emit_pending.)
     /// A generic snapshot patch for one synced `state` (@shared-utils/sync): the
     /// ABSOLUTE `value` at `version`, plus the mutation ids newly confirmed. Sent
     /// on connect as a resync (`confirmed` = every applied id, to seed/heal a
@@ -435,6 +429,12 @@ pub enum Outbound {
         version: u64,
         value: serde_json::Value,
         confirmed: Vec<String>,
+        /// True for a connect/reconnect RESYNC: the client adopts `value` as
+        /// ground truth regardless of version (the daemon's version clock resets
+        /// on restart, so a reconnecting client must not ignore the lower
+        /// post-restart version). False for a live patch (version-gated).
+        #[serde(default)]
+        resync: bool,
     },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
@@ -900,17 +900,32 @@ impl Hub {
         reg.entry(state.to_owned()).or_default().seen.insert(id.to_owned())
     }
 
-    /// Version-stamp `state` and broadcast its derived value, confirming the given
-    /// mutation ids.
-    fn sync_broadcast(&self, state: &str, confirmed: Vec<String>) {
+    /// Cmids carried inside a queue/drafts value — the confirm set for the queue
+    /// sync state (the client drops an optimistic add the moment its cmid lands).
+    fn cmids_of(queue: &[QueuedMessage], drafts: &[QueuedMessage]) -> Vec<String> {
+        queue.iter().chain(drafts.iter()).filter_map(|m| m.cmid.clone()).collect()
+    }
+
+    /// Bump `state`'s version and broadcast a LIVE (version-gated) SyncPatch with
+    /// the given absolute value + confirm set.
+    fn sync_emit(&self, state: &str, value: serde_json::Value, confirmed: Vec<String>) {
         let version = {
             let mut reg = self.inner.sync.lock().unwrap();
             let e = reg.entry(state.to_owned()).or_default();
             e.version += 1;
             e.version
         };
+        let _ = self
+            .inner
+            .tx
+            .send(Outbound::SyncPatch { state: state.to_owned(), version, value, confirmed, resync: false });
+    }
+
+    /// Version-stamp `state` and broadcast its derived value, confirming the given
+    /// mutation ids.
+    fn sync_broadcast(&self, state: &str, confirmed: Vec<String>) {
         let value = self.sync_value(state);
-        let _ = self.inner.tx.send(Outbound::SyncPatch { state: state.to_owned(), version, value, confirmed });
+        self.sync_emit(state, value, confirmed);
     }
 
     /// Generic arbiter apply — see [`Inbound::Sync`]. Validate+parse (rejects a
@@ -958,15 +973,19 @@ impl Hub {
         Ok(())
     }
 
-    /// One resync `SyncPatch` per state mutated this lifetime — at its version,
-    /// confirming all seen ids. Sent on connect so a client seeds/heals (and a
-    /// reconnecting one drops pending confirmed while it was away). States never
-    /// mutated aren't here; the client uses the `Sessions`-derived default.
+    /// Resync `SyncPatch`es for the GLOBAL states (title / order) mutated this
+    /// lifetime — at their version, confirming all seen ids, `resync: true` so the
+    /// client adopts them across a restart. Per-session queue states resync
+    /// separately via [`Self::queue_resync`]. States never mutated aren't here;
+    /// the client uses the `Sessions`-derived default.
     #[must_use]
     pub fn sync_resync(&self) -> Vec<Outbound> {
         let snapshot: Vec<(String, u64, Vec<String>)> = {
             let reg = self.inner.sync.lock().unwrap();
-            reg.iter().map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect())).collect()
+            reg.iter()
+                .filter(|(s, _)| !s.starts_with("queue:"))
+                .map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect()))
+                .collect()
         };
         snapshot
             .into_iter()
@@ -975,8 +994,27 @@ impl Hub {
                 state,
                 version,
                 confirmed,
+                resync: true,
             })
             .collect()
+    }
+
+    /// A resync `SyncPatch` for one session's queue+drafts state — `resync: true`
+    /// so a (re)connecting client adopts it as ground truth. Confirmed = the cmids
+    /// present in the value, so any optimistic add that landed while the client was
+    /// away is dropped from its pending. `None` for an unknown session.
+    #[must_use]
+    pub fn queue_resync(&self, session_id: &str) -> Option<Outbound> {
+        let (queue, drafts) = {
+            let sessions = self.inner.sessions.lock().unwrap();
+            let s = sessions.get(session_id)?;
+            (s.queue.clone(), s.drafts.clone())
+        };
+        let state = format!("queue:{session_id}");
+        let version = self.inner.sync.lock().unwrap().get(&state).map_or(0, |e| e.version);
+        let confirmed = Self::cmids_of(&queue, &drafts);
+        let value = serde_json::json!({ "queue": queue, "drafts": drafts });
+        Some(Outbound::SyncPatch { state, version, value, confirmed, resync: true })
     }
 
     /// Auto-name a session from its first prompt, but ONLY while the title is
@@ -1155,18 +1193,6 @@ impl Hub {
             .map(|s| s.meta.status)
     }
 
-    /// Snapshot a session's queue + drafts — used by the WS connect handler to
-    /// replay staged messages to a freshly-connected client.
-    #[must_use]
-    pub fn pending(&self, session_id: &str) -> Option<(Vec<QueuedMessage>, Vec<QueuedMessage>)> {
-        self.inner
-            .sessions
-            .lock()
-            .unwrap()
-            .get(session_id)
-            .map(|s| (s.queue.clone(), s.drafts.clone()))
-    }
-
     fn next_qid(&self) -> String {
         format!("q{}", self.inner.next_qid.fetch_add(1, Ordering::Relaxed))
     }
@@ -1188,11 +1214,12 @@ impl Hub {
                 drafts: drafts.clone(),
             });
         }
-        let _ = self.inner.tx.send(Outbound::Queues {
-            session_id: session_id.to_owned(),
-            queue,
-            drafts,
-        });
+        // Broadcast on the generic optimistic-sync channel as state "queue:<sid>".
+        // Confirmed = the cmids in the value, so a client drops its optimistic add
+        // the moment its cmid lands here (the cross-terminal reconcile).
+        let confirmed = Self::cmids_of(&queue, &drafts);
+        let value = serde_json::json!({ "queue": queue, "drafts": drafts });
+        self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
     }
 
     fn send_dispatch(&self, req: DispatchReq) {
