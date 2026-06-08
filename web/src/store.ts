@@ -125,6 +125,10 @@ export interface State {
   // converges on the arbiter's `sync_patch`. Ids absent here fall back to the
   // broadcast SessionMeta.title.
   titleOverrides: Record<string, string>;
+  // Global key-value settings (auto-resume default flag + continuation template),
+  // from the `settings` broadcast. Drives the Settings UI + the per-session badge
+  // (effective auto-resume = session override ?? this default).
+  settings: Record<string, unknown>;
 }
 
 let errorSeq = 0;
@@ -142,6 +146,7 @@ let state: State = {
   drafts: new Map(),
   optimisticMessages: new Map(),
   titleOverrides: {},
+  settings: {},
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -388,6 +393,10 @@ function handle(msg: Outbound): void {
       } else {
         syncClients.get(msg.state)?.applyPatch(msg.version, msg.value, msg.confirmed, resync);
       }
+      break;
+    }
+    case "settings": {
+      setState({ ...state, settings: msg.settings });
       break;
     }
     case "error": {
@@ -708,6 +717,39 @@ export function renameSession(sessionId: string, title: string): void {
   const trimmed = title.trim();
   if (trimmed === "") return;
   titleSync.mutate("rename", { session_id: sessionId, title: trimmed });
+}
+
+// --- Auto-resume interrupted turns (tasks/active/session-auto-resume) --------
+
+export const AUTO_RESUME_DEFAULT_KEY = "session.autoResume.default";
+export const AUTO_RESUME_TEMPLATE_KEY = "session.autoResume.template";
+/** The built-in continuation template (mirrors DEFAULT_CONTINUATION_TEMPLATE in
+ *  src/core.rs) — shown in the editor when the operator hasn't customized one. */
+export const DEFAULT_CONTINUATION_TEMPLATE =
+  "你上一次的回复在完成前被中断了。以下是你已经产出的内容:\n\n{{partial}}\n\n请从中断处接着完成,不要重做已经完成的步骤。";
+
+/** The global auto-resume default (off unless explicitly enabled). */
+export function autoResumeDefault(s: State): boolean {
+  return s.settings[AUTO_RESUME_DEFAULT_KEY] === true;
+}
+
+/** Effective auto-resume for a session: its override, else the global default. */
+export function effectiveAutoResume(meta: SessionMeta, s: State): boolean {
+  return meta.auto_resume ?? autoResumeDefault(s);
+}
+
+/** Set one global setting. Optimistic (plain field) + send; the daemon persists
+ *  + re-broadcasts, which reconciles. */
+export function setSetting(key: string, value: unknown): void {
+  setState({ ...state, settings: { ...state.settings, [key]: value } });
+  send({ type: "set_setting", key, value });
+}
+
+/** Set a session's auto-resume override (`null` = inherit the global default).
+ *  Non-optimistic: the daemon re-broadcasts the SessionMeta within a round-trip
+ *  (the override rides the raw session list, which `deriveSessions` rebuilds). */
+export function setSessionAutoResume(sessionId: string, value: boolean | null): void {
+  send({ type: "set_session_auto_resume", session_id: sessionId, value });
 }
 
 // --- Queue + drafts optimistic sync (per session) ----------------------------

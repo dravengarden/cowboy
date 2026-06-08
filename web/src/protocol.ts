@@ -37,6 +37,10 @@ export interface SessionMeta {
   title: string;
   status: Status;
   origin?: SessionOrigin;
+  /** Per-session auto-resume OVERRIDE: `null`/absent = inherit the global
+   *  default (`settings['session.autoResume.default']`); `true`/`false` = force.
+   *  Effective = override ?? default (see store `effectiveAutoResume`). */
+  auto_resume?: boolean | null;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -142,6 +146,9 @@ export type Outbound =
   // state's sync client. See store.ts `sync_patch`. (Queue + drafts flow here as
   // state "queue:<session_id>" — no dedicated `queues` message anymore.)
   | { type: "sync_patch"; state: string; version: number; value: unknown; confirmed: string[]; resync?: boolean }
+  // Global key-value settings (auto-resume default flag + continuation template).
+  // Sent on connect + re-broadcast on every edit. See store.ts `settings`.
+  | { type: "settings"; settings: Record<string, unknown> }
   | { type: "error"; session_id?: string; message: string };
 
 export type Inbound =
@@ -214,6 +221,10 @@ export type Inbound =
   // ids in the new order; omitted ids keep their relative order at the end.
   | { type: "reorder_sessions"; order: string[] }
   | { type: "reorder_queue"; session_id: string; order: string[] }
-  | { type: "reorder_drafts"; session_id: string; order: string[] };
+  | { type: "reorder_drafts"; session_id: string; order: string[] }
+  // Auto-resume (tasks/active/session-auto-resume): per-session override
+  // (`value: null` = inherit the global default) + a global setting upsert.
+  | { type: "set_session_auto_resume"; session_id: string; value: boolean | null }
+  | { type: "set_setting"; key: string; value: unknown };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;
