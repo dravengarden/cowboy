@@ -130,6 +130,11 @@ function playChime(): void {
  */
 export function fireAlert(): void {
   if (!notify.get()) return;
+  // Only alert when the user ISN'T actively looking. A turn that finishes while
+  // you're watching (e.g. the agent's quick reply right after you hit send) you
+  // can already SEE — chiming then is just noise. The alert is for when you've
+  // switched away; the tab being hidden is exactly that signal.
+  if (globalThis.document?.visibilityState === "visible") return;
   playChime();
   // Android only; iOS has no web Vibration API (silent no-op there).
   if (typeof globalThis.navigator?.vibrate === "function") {
