@@ -1,5 +1,6 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 import { DEFAULT_FONT_ID, getFontPreset } from "./fonts";
+import { persisted, useStore } from "./_store/mod.ts";
 
 // Reading-comfort controls for the transcript: a font-size SCALE applied to the
 // message/markdown content, and the transcript's horizontal PADDING (the side
@@ -18,7 +19,6 @@ const FONT_KEY = "cowboy:font-scale";
 const PAD_KEY = "cowboy:reading-pad";
 const LINE_KEY = "cowboy:reading-line-height";
 const VARIANT_KEY = "cowboy:font-variant";
-const EVENT = "cowboy:reading-change";
 
 // The reading font-family is one of the FONT_PRESETS in ./fonts (the full
 // liveview set of self-hosted @fontsource faces). This store keeps only the
@@ -62,91 +62,59 @@ export function nearestPreset(value: number, presets: number[]): number {
   );
 }
 
-// Read a stored numeric setting, snapping a missing/garbage/out-of-range value
-// back to `def`. A MISSING key must use the default, NOT coerce to 0 — for
-// padding (min 0) `Number(localStorage.getItem(key))` of an absent key is
-// `Number(null) === 0`, which is in-range, so it would silently override the
-// default with 0 (the "first launch shows 8px in Settings but 0px gutter" bug;
-// fontScale/lineHeight escaped it only because their min bound excludes 0).
-function readNum(key: string, min: number, max: number, def: number): number {
-  const raw = globalThis.localStorage?.getItem(key);
-  if (raw === null || raw === undefined || raw === "") return def;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= min && n <= max ? n : def;
+// A numeric reading pref, stored as `String(n)` (legacy format preserved). A
+// missing/empty/garbage/out-of-range value snaps back to `def` — crucially a
+// MISSING key must use `def`, NOT coerce to 0 (for padding min 0, the old
+// `Number(null) === 0` silently overrode the default — the "first launch shows
+// 8px in Settings but 0px gutter" bug). Bounds are wider than the preset band so
+// a hand-edited value is honoured.
+function numPref(key: string, min: number, max: number, def: number) {
+  return persisted(key, def, {
+    serialize: String,
+    deserialize: (raw) => {
+      if (raw === "") return def;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= min && n <= max ? n : def;
+    },
+  });
 }
 
-function read(): ReadingSettings {
-  const variant = globalThis.localStorage?.getItem(VARIANT_KEY) ?? "";
-  return {
-    // Bounds are wider than the preset band so a hand-edited value is honoured
-    // but a garbage/missing one snaps back to the default.
-    fontScale: readNum(FONT_KEY, 0.5, 2, FONT_SCALE_DEFAULT),
-    padding: readNum(PAD_KEY, 0, 96, PADDING_DEFAULT),
-    lineHeight: readNum(LINE_KEY, 1, 2.5, LINE_HEIGHT_DEFAULT),
-    // Unknown/missing id resolves to the default preset.
-    fontVariant: getFontPreset(variant).id,
-  };
-}
+const fontScaleStore = numPref(FONT_KEY, 0.5, 2, FONT_SCALE_DEFAULT);
+const paddingStore = numPref(PAD_KEY, 0, 96, PADDING_DEFAULT);
+const lineHeightStore = numPref(LINE_KEY, 1, 2.5, LINE_HEIGHT_DEFAULT);
+// The variant store keeps the raw id but resolves unknown/missing ids to the
+// default preset on read (so the dropdown always has a valid selection).
+const fontVariantStore = persisted(VARIANT_KEY, DEFAULT_FONT_ID, {
+  serialize: (id) => id,
+  deserialize: (raw) => getFontPreset(raw).id,
+});
 
-// useSyncExternalStore requires getSnapshot to return a STABLE reference while
-// nothing changed, or React re-renders forever. Cache the last snapshot and
-// rebuild it only when a write (or another tab's `storage` event) bumps a value.
-let snapshot: ReadingSettings = read();
-
-function refresh(): void {
-  snapshot = read();
-}
-
-function subscribe(onChange: () => void): () => void {
-  const handler = (): void => {
-    refresh();
-    onChange();
-  };
-  globalThis.addEventListener?.(EVENT, handler);
-  globalThis.addEventListener?.("storage", handler); // other tabs
-  return () => {
-    globalThis.removeEventListener?.(EVENT, handler);
-    globalThis.removeEventListener?.("storage", handler);
-  };
-}
-
-// Stable default for the SSR/initial path (getServerSnapshot must be referential
-// -ly stable too).
-const SERVER_SNAPSHOT: ReadingSettings = {
-  fontScale: FONT_SCALE_DEFAULT,
-  padding: PADDING_DEFAULT,
-  lineHeight: LINE_HEIGHT_DEFAULT,
-  fontVariant: DEFAULT_FONT_ID,
-};
-
+// Combine the four independent stores. The returned object is fresh per render
+// (fine — it's a hook return, not a getSnapshot), and consumers destructure to
+// stable primitives; a component re-renders only when a store it reads changes.
 export function useReadingSettings(): ReadingSettings {
-  return useSyncExternalStore(
-    subscribe,
-    () => snapshot,
-    () => SERVER_SNAPSHOT,
-  );
+  return {
+    fontScale: useStore(fontScaleStore),
+    padding: useStore(paddingStore),
+    lineHeight: useStore(lineHeightStore),
+    fontVariant: useStore(fontVariantStore),
+  };
 }
 
 export function setFontScale(scale: number): void {
-  globalThis.localStorage?.setItem(FONT_KEY, String(scale));
-  // dispatchEvent runs listeners synchronously, so `snapshot` is refreshed
-  // before this returns — the caller's next render sees the new value.
-  globalThis.dispatchEvent?.(new Event(EVENT));
+  fontScaleStore.set(scale);
 }
 
 export function setPadding(px: number): void {
-  globalThis.localStorage?.setItem(PAD_KEY, String(px));
-  globalThis.dispatchEvent?.(new Event(EVENT));
+  paddingStore.set(px);
 }
 
 export function setLineHeight(value: number): void {
-  globalThis.localStorage?.setItem(LINE_KEY, String(value));
-  globalThis.dispatchEvent?.(new Event(EVENT));
+  lineHeightStore.set(value);
 }
 
 export function setFontVariant(id: string): void {
-  globalThis.localStorage?.setItem(VARIANT_KEY, id);
-  globalThis.dispatchEvent?.(new Event(EVENT));
+  fontVariantStore.set(id);
 }
 
 /**

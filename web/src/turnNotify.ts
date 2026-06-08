@@ -1,40 +1,27 @@
-import { useSyncExternalStore } from "react";
+import { persisted, useStore } from "./_store/mod.ts";
 
 // Attention alert: a short chime (+ a vibration on devices that support it)
 // when an agent needs the user — a finished turn (done) or a permission request
 // (confirm). NOT fired for any other event. Toggleable in Settings, DEFAULT ON.
-// The
-// setting is persisted in localStorage and reactive across the app (the Settings
-// switch writes it; the store reads it before firing) — same useSyncExternalStore
-// pattern as vimSetting.
+// The setting is persisted + reactive across the app (the Settings switch writes
+// it; the store reads it before firing) via @shared-utils/store.
 //
 // iOS note: the Vibration API is Android-only; iOS Safari/WKWebView has no web
 // vibration, so the buzz is a silent no-op there while the chime still plays.
 
-const KEY = "cowboy:notify";
-const EVENT = "cowboy:notify-change";
-
-// Default ON: only an explicit "0" disables it (an unset key reads as enabled).
-function getNotifySetting(): boolean {
-  return globalThis.localStorage?.getItem(KEY) !== "0";
-}
-
-function subscribe(onChange: () => void): () => void {
-  globalThis.addEventListener?.(EVENT, onChange);
-  globalThis.addEventListener?.("storage", onChange); // other tabs
-  return () => {
-    globalThis.removeEventListener?.(EVENT, onChange);
-    globalThis.removeEventListener?.("storage", onChange);
-  };
-}
+// Default ON: stored as the legacy "1"/"0" string (format preserved) where only
+// an explicit "0" disables it — an unset key reads as enabled.
+const notify = persisted("cowboy:notify", true, {
+  serialize: (on) => (on ? "1" : "0"),
+  deserialize: (s) => s !== "0",
+});
 
 export function useNotifySetting(): boolean {
-  return useSyncExternalStore(subscribe, getNotifySetting, () => true);
+  return useStore(notify);
 }
 
 export function setNotifySetting(on: boolean): void {
-  globalThis.localStorage?.setItem(KEY, on ? "1" : "0");
-  globalThis.dispatchEvent?.(new Event(EVENT));
+  notify.set(on);
 }
 
 // --- Sound (Web Audio) ------------------------------------------------------
@@ -90,7 +77,7 @@ function scheduleSuspend(c: AudioContext): void {
 // just from being open. Only if the chime is enabled; otherwise we never touch
 // audio at all.
 function unlockOnce(): void {
-  if (unlocked || !getNotifySetting()) return;
+  if (unlocked || !notify.get()) return;
   const c = ensureCtx();
   if (!c) return;
   unlocked = true;
@@ -142,7 +129,7 @@ function playChime(): void {
  * never for mid-turn churn.
  */
 export function fireAlert(): void {
-  if (!getNotifySetting()) return;
+  if (!notify.get()) return;
   playChime();
   // Android only; iOS has no web Vibration API (silent no-op there).
   if (typeof globalThis.navigator?.vibrate === "function") {
