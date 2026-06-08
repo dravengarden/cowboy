@@ -87,7 +87,6 @@ import {
     useNavbarAtBottom,
     useNavbarPosition,
 } from "./navbarSettings";
-import { setFrostedSheets, useFrostedSheets } from "./frostedSheets";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
@@ -1557,7 +1556,6 @@ function SettingsShell({
         "&:hover": { borderColor: active ? "primary.main" : "text.secondary" },
     });
     const navbarPos = useNavbarPosition();
-    const frostedSheets = useFrostedSheets();
     const navbarAtBottom = useNavbarAtBottom();
     const theme = useTheme();
     // Navbar position is offered on the whole compact tier (`< lg`, tablets
@@ -1822,25 +1820,6 @@ function SettingsShell({
                                 <MenuItem value="top">Top</MenuItem>
                                 <MenuItem value="bottom">Bottom</MenuItem>
                             </Select>
-                        </Stack>
-                        <Divider />
-                        <Stack
-                            direction="row"
-                            alignItems="center"
-                            justifyContent="space-between"
-                            spacing={2}
-                        >
-                            <Stack>
-                                <Typography variant="body2">Frosted sheets</Typography>
-                                <Typography variant="caption" color="text.secondary">
-                                    Translucent 磨砂玻璃 surface on pop-up sheets
-                                </Typography>
-                            </Stack>
-                            <Switch
-                                checked={frostedSheets}
-                                onChange={(e): void => setFrostedSheets(e.target.checked)}
-                                inputProps={{ "aria-label": "Frosted sheets" }}
-                            />
                         </Stack>
                     </>
                 )}
