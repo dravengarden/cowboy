@@ -72,6 +72,41 @@ The point of the native shell is doing what a pure-web PWA can't. What's wired u
   `LaunchBackground` colour set (light `#f4ecf7` / dark `#15111d`), matching the
   web app's pre-mount splash so cold start has no white flash.
 
+- **Local Network loader** — `../loader/index.html` is bundled as `frontendDist`
+  instead of the remote URL. On iOS the first connection to the tailnet host
+  trips the one-time "Local Network" prompt; the old direct-to-remote load
+  white-screened until force-quit. The loader boots locally (never white), probes
+  the remote, then redirects — granting reconnects automatically, denying shows
+  an error card with a "去设置开启" deep-link (opener plugin → `app-settings:`).
+  See the comment at the top of `loader/index.html` for the full flow. Exposes
+  `tauri-plugin-opener` + `opener:allow-open-url` (the only IPC the shell grants).
+
+### Rebuilding after the Local Network loader change (do this on the Mac)
+
+No `tauri ios init` re-gen needed — the loader is `frontendDist` (re-embedded by
+the Rust rebuild) and the opener is a normal dependency. From `src-tauri/` on the
+Mac (PATH must include Homebrew — see Gotchas):
+
+```sh
+export PATH=/opt/homebrew/bin:$PATH
+cargo tauri ios build        # first run adds tauri-plugin-opener to Cargo.lock — commit it
+```
+
+Then re-sign + reinstall via the usual resign skill, and verify on the device:
+
+1. **Delete the app first** so iOS re-shows the Local Network prompt (otherwise
+   the prior grant/deny sticks and you can't see the new flow).
+2. Launch → the loader's spinner shows briefly, the prompt appears; tap **Allow**
+   → it should connect within ~1–3s with no white screen, no reopen.
+3. Re-install and tap **Don't Allow** → the error card appears; **去设置开启**
+   should open Settings on Cowboy's page. Toggle Local Network on, swipe back →
+   it auto-reconnects (visibilitychange re-probe), no tap needed.
+4. **If 去设置开启 doesn't open Settings**: the opener invoke shape may differ on
+   the installed plugin version — check `window.__TAURI__.opener` vs the
+   `plugin:opener|open_url` invoke in `loader/index.html`'s `openSettings()`. The
+   button degrades to a manual "设置 › Cowboy › 本地网络" hint, so the feature
+   still works while you adjust it.
+
 Safe-area insets (`env(safe-area-inset-*)`) are reported correctly by the native
 WebView with no extra code — verified with a probe page.
 

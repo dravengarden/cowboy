@@ -5,9 +5,10 @@
   "identifier": "top.thundersparrow.cowboy",
   "build": {
     "devUrl": "https://cowboy.hawk.thundersparrow.top",
-    "frontendDist": "https://cowboy.hawk.thundersparrow.top"
+    "frontendDist": "../loader"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Cowboy",
