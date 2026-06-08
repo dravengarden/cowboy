@@ -575,7 +575,13 @@ async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
     let cache_control = if name.starts_with("assets/") {
         "public, max-age=31536000, immutable"
     } else {
-        "no-cache"
+        // `no-store`, NOT `no-cache`. iOS WKWebView (the native Tauri shell) caches
+        // the HTML shell + sw.js under NSURLCache and serves it stale even with
+        // `no-cache`/ETag revalidation — so a redeploy never reached the app until
+        // a manual cache wipe. `no-store` forbids storing it at all, so every cold
+        // start re-fetches index.html → its new hashed asset url → the fresh
+        // bundle. The files this covers are tiny (HTML, sw.js, manifest, icons).
+        "no-store"
     };
     let mime = mime_guess::from_path(name).first_or_octet_stream();
     (
