@@ -341,8 +341,13 @@ function handle(msg: Outbound): void {
       // a chat send but actually QUEUED is confirmed here too — so also drop that
       // cmid from the queue sync client's pending (the wrong-guess self-heal).
       const cmid = env.cmid;
-      if (cmid !== undefined) {
-        qClients.get(env.session_id)?.confirm([cmid]);
+      // Only touch the queue when this cmid is ACTUALLY a queue pending (a
+      // wrong-guessed submit that dispatched). Guarding avoids a spurious
+      // queues/drafts reference churn on every chat echo — keeps the immutable
+      // transcript optimization's referential stability intact.
+      const qc = cmid === undefined ? undefined : qClients.get(env.session_id);
+      if (cmid !== undefined && qc !== undefined && qc.pending().some((m) => m.id === cmid)) {
+        qc.confirm([cmid]);
         if (qStatus.has(cmid)) {
           clearOptTimers(cmid);
           qStatus.delete(cmid);
