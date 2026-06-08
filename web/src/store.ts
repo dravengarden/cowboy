@@ -9,6 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import { type ArgsOf, type Client, createClient, type Mutation, type Mutators, snapshotPatch } from "./_sync/mod.ts";
+import { idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
 import { fireAlert } from "./turnNotify";
@@ -463,7 +464,31 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
+// Hydrate the locally-cached sync states (title/order) from IndexedDB ONCE, then
+// open the socket. Instant-load: the last-known titles/order paint before the
+// first server byte. Reconnects skip this — the in-memory state is already fresh
+// and newer than the debounce-saved cache, so re-hydrating would stomp it.
+let didHydrate = false;
 function connect(): void {
+  if (didHydrate) {
+    openSocket();
+    return;
+  }
+  didHydrate = true;
+  void (async (): Promise<void> => {
+    // Best-effort: a blocked/absent IndexedDB must never delay the socket. Each
+    // hydrate already degrades errors internally; the Promise.all is belt-and-
+    // suspenders so one rejection can't skip openSocket().
+    try {
+      await Promise.all([...syncClients.values()].map((e) => e.hydrate()));
+    } catch (err) {
+      console.warn("sync hydrate failed", err);
+    }
+    openSocket();
+  })();
+}
+
+function openSocket(): void {
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws`);
   socket = ws;
@@ -592,6 +617,8 @@ const orderMutators = {
 interface SyncEntry {
   applyPatch: (version: number, value: unknown, confirmed: string[], resync: boolean) => void;
   resend: () => void;
+  hydrate: () => Promise<void>;
+  flush: () => Promise<void>;
 }
 const syncClients = new Map<string, SyncEntry>();
 const syncBase = newCmid(); // namespaces mutation ids across states + this tab
@@ -607,6 +634,13 @@ function registerSync<T, M extends Mutators<T>>(
     clientId: `${syncBase}:${syncState}`,
     mutators,
     initial: { version: 0, value: initial },
+    // Instant-load + durable outbox: cache {base, pending} to IndexedDB. On
+    // reload we hydrate this BEFORE the socket opens (see connect()), so the
+    // last-known title/order paint immediately; the first server patch arrives
+    // as a forced resync and overwrites stale base, while any unconfirmed
+    // mutation re-sends. The key is NOT tab-namespaced (no syncBase) so every
+    // tab shares one cache — they all sync to the same server truth anyway.
+    local: idbPersistence<T>(`cowboy:sync:${syncState}`),
   });
   const sendMutation = (m: Mutation): void => {
     send({ type: "sync", state: syncState, id: m.id, name: m.name, args: m.args });
@@ -619,6 +653,11 @@ function registerSync<T, M extends Mutators<T>>(
     resend: (): void => {
       for (const m of client.pending()) sendMutation(m);
     },
+    hydrate: async (): Promise<void> => {
+      await client.hydrate();
+      commitSessions();
+    },
+    flush: (): Promise<void> => client.flush(),
   });
   return {
     view: (): T => client.view(),
@@ -1071,6 +1110,16 @@ function subscribe(listener: () => void): () => void {
   return () => {
     listeners.delete(listener);
   };
+}
+
+// Final flush of the IndexedDB sync cache on page hide. Normal use already
+// debounce-saves, so this only captures the last sub-debounce change; it's
+// fire-and-forget because the unload path can't await (IndexedDB writes here are
+// best-effort by spec). Failures are swallowed inside flush().
+if (typeof globalThis.addEventListener === "function") {
+  globalThis.addEventListener("pagehide", () => {
+    for (const entry of syncClients.values()) void entry.flush();
+  });
 }
 
 export function useStore(): State {

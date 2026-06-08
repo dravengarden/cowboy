@@ -948,6 +948,10 @@ impl Hub {
             e.version += 1;
             e.version
         };
+        // Op-log: every AUTHORITATIVE state change, one line → journald → vector
+        // → VictoriaLogs. Lets you (or an AI) replay "how state X reached version
+        // N" via LogsQL. Low volume (user-paced changes, not per-agent-event).
+        tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?confirmed);
         let _ = self
             .inner
             .tx
@@ -1002,23 +1006,38 @@ impl Hub {
             Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
             Op::Reorder { order } => self.apply_reorder(&order),
         }
+        // Op-log: the client INTENT behind a state change (who/what), paired with
+        // the `op=change` line sync_emit writes for the authoritative version bump.
+        tracing::info!(target: "cowboy::oplog", op = "mutation", %state, name, args = %args);
         self.sync_broadcast(state, vec![id]);
         Ok(())
     }
 
-    /// Resync `SyncPatch`es for the GLOBAL states (title / order) mutated this
-    /// lifetime — at their version, confirming all seen ids, `resync: true` so the
-    /// client adopts them across a restart. Per-session queue states resync
-    /// separately via [`Self::queue_resync`]. States never mutated aren't here;
-    /// the client uses the `Sessions`-derived default.
+    /// Resync `SyncPatch`es for the GLOBAL states on connect, `resync: true` so the
+    /// client adopts them as ground truth. `title` and `order` are ALWAYS emitted
+    /// (even if never mutated this lifetime), because a client may carry a locally
+    /// persisted (`@shared-utils/sync-idb`) cache of these states across reloads:
+    /// without an unconditional authoritative seed, a stale cached override would
+    /// overlay the fresh `Sessions` titles with nothing to correct it. Any other
+    /// state mutated this lifetime is included too. Per-session queue states resync
+    /// separately via [`Self::queue_resync`].
     #[must_use]
     pub fn sync_resync(&self) -> Vec<Outbound> {
         let snapshot: Vec<(String, u64, Vec<String>)> = {
             let reg = self.inner.sync.lock().unwrap();
-            reg.iter()
+            let mut out: Vec<(String, u64, Vec<String>)> = reg
+                .iter()
                 .filter(|(s, _)| !s.starts_with("queue:"))
                 .map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect()))
-                .collect()
+                .collect();
+            // Guarantee title + order are present even when untouched this lifetime.
+            for state in ["title", "order"] {
+                if !out.iter().any(|(s, _, _)| s == state) {
+                    let version = reg.get(state).map_or(0, |e| e.version);
+                    out.push((state.to_owned(), version, Vec::new()));
+                }
+            }
+            out
         };
         snapshot
             .into_iter()
