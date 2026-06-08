@@ -1331,6 +1331,13 @@ function PendingPanel({
         // Drafts read as a quieter, dashed-feeling staging area vs the live queue.
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
         overflow: "hidden",
+        // Query container for the rows: their secondary actions go inline on a
+        // roomy panel (iPad / desktop) and collapse to a kebab on a narrow phone
+        // one (ROW_ACTIONS_INLINE). Keyed on the ACTUAL panel width, so the
+        // desktop sidebar drag / portal iframe / orientation all resolve right —
+        // a viewport breakpoint can't, since iPad shares the phone "mobile" bucket.
+        containerType: "inline-size",
+        containerName: "pendingPanel",
       }}
     >
       <Stack direction="row" alignItems="center" sx={{ pl: 0.5, pr: 0.75, py: 0.25 }}>
@@ -1537,6 +1544,15 @@ function ClampedText({ text }: { text: string }): React.JSX.Element {
 // dead session); busy → a warning-coloured "Force push" that interrupts the
 // running turn and runs this prompt next — gated behind a confirm popover
 // because cancelling discards the in-flight turn's progress.
+
+// Container-query breakpoint for a row's secondary actions (see PendingPanel's
+// containerName). Above this panel width the row shows every action inline; below
+// it they fold into the kebab. ~520px: comfortably fits Send + 3 icons + readable
+// text on an iPad/desktop panel, while every portrait phone panel (≤ ~410px) stays
+// kebab. A landscape phone (panel ~900px) genuinely has the room, so inline there
+// is correct too — exactly what keying on real width (not device class) buys.
+const ROW_ACTIONS_INLINE = "@container pendingPanel (min-width: 520px)";
+
 function PendingRow({
   kind,
   sessionId,
@@ -1682,6 +1698,94 @@ function PendingRow({
       </Paper>
     );
   }
+  // Secondary actions (everything but the primary Send / Force). Defined once,
+  // rendered two ways: inline icons on a roomy panel, the same list as kebab
+  // MenuItems on a narrow one — toggled purely by the ROW_ACTIONS_INLINE
+  // container query (no JS measurement, no duplicate logic).
+  const secondary: {
+    key: string;
+    label: string;
+    icon: React.JSX.Element;
+    onClick: () => void;
+  }[] =
+    kind === "draft"
+      ? [
+          { key: "edit", label: "Edit", icon: <EditOutlined fontSize="small" />, onClick: onEdit },
+          ...(onMove
+            ? [{
+                key: "move",
+                label: "Move to another session…",
+                icon: <DriveFileMoveOutlined fontSize="small" />,
+                onClick: onMove,
+              }]
+            : []),
+          {
+            key: "remove",
+            label: "Remove",
+            icon: <Close fontSize="small" />,
+            onClick: (): void => removeDraft(sessionId, message.id),
+          },
+        ]
+      : [
+          {
+            key: "return",
+            label: "Return to drafts",
+            icon: <Undo fontSize="small" />,
+            onClick: (): void => queuedToDraft(sessionId, message.id),
+          },
+          { key: "edit", label: "Edit", icon: <EditOutlined fontSize="small" />, onClick: onEdit },
+          {
+            key: "remove",
+            label: "Remove",
+            icon: <Close fontSize="small" />,
+            onClick: (): void => removeQueued(sessionId, message.id),
+          },
+        ];
+
+  // Primary action — always inline. Drafts always Send (send-or-queue); a queued
+  // row Sends now when the session's free, else Force-pushes (confirm popover).
+  // Built as a statement to avoid a nested ternary in the JSX.
+  let primary: React.JSX.Element;
+  if (kind === "draft") {
+    primary = (
+      <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
+        <IconButton
+          size="small"
+          color="primary"
+          aria-label="send draft"
+          onClick={(): void => activateDraft(sessionId, message.id)}
+        >
+          <Send fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    );
+  } else if (dispatchable) {
+    primary = (
+      <Tooltip title="Send now">
+        <IconButton
+          size="small"
+          color="primary"
+          aria-label="send now"
+          onClick={(): void => requestSendQueued(sessionId, message.id)}
+        >
+          <Send fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    );
+  } else {
+    primary = (
+      <Tooltip title="Force push (interrupt & send)">
+        <IconButton
+          size="small"
+          color="warning"
+          aria-label="force push"
+          onClick={(e): void => setConfirmAnchor(e.currentTarget)}
+        >
+          <Bolt fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    );
+  }
   return (
     <Paper variant="outlined" sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -1690,162 +1794,92 @@ function PendingRow({
           <QueuedAttachmentChips attachments={message.attachments} />
         )}
       </Box>
-      <Stack direction="row" sx={{ flexShrink: 0 }}>
-        {kind === "draft" ? (
-          <>
-            {/* Activate: send now if the session's free, else queue it. */}
-            <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
-              <IconButton
-                size="small"
-                color="primary"
-                aria-label="send draft"
-                onClick={(): void => activateDraft(sessionId, message.id)}
-              >
-                <Send fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            {/* Secondary actions live in a kebab so Send is the only inline
-                control — keeps the row uncluttered (matching the hidden-by-
-                default reorder grip), and is where "Move to another session"
-                lives without adding an always-on icon. */}
-            <Tooltip title="More">
-              <IconButton
-                size="small"
-                aria-label="draft actions"
-                onClick={(e): void => setMenuAnchor(e.currentTarget)}
-              >
-                <MoreVert fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Menu
-              anchorEl={menuAnchor}
-              open={menuAnchor !== null}
-              onClose={(): void => setMenuAnchor(null)}
-            >
-              <MenuItem
-                onClick={(): void => {
-                  setMenuAnchor(null);
-                  onEdit();
-                }}
-              >
-                <ListItemIcon>
-                  <EditOutlined fontSize="small" />
-                </ListItemIcon>
-                <ListItemText>Edit</ListItemText>
-              </MenuItem>
-              {onMove && (
-                <MenuItem
-                  onClick={(): void => {
-                    setMenuAnchor(null);
-                    onMove();
-                  }}
-                >
-                  <ListItemIcon>
-                    <DriveFileMoveOutlined fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText>Move to another session…</ListItemText>
-                </MenuItem>
-              )}
-              <MenuItem
-                onClick={(): void => {
-                  setMenuAnchor(null);
-                  removeDraft(sessionId, message.id);
-                }}
-              >
-                <ListItemIcon>
-                  <Close fontSize="small" />
-                </ListItemIcon>
-                <ListItemText>Remove</ListItemText>
-              </MenuItem>
-            </Menu>
-          </>
-        ) : (
-          <>
-            {dispatchable ? (
-              <Tooltip title="Send now">
-                <IconButton
+      <Stack direction="row" alignItems="center" sx={{ flexShrink: 0 }}>
+        {primary}
+        {/* Force-push confirm — only the queued row has the force path. */}
+        {kind === "queued" && (
+          <Popover
+            open={confirmAnchor !== null}
+            anchorEl={confirmAnchor}
+            onClose={(): void => setConfirmAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+          >
+            <Box sx={{ p: 1.5, maxWidth: 240 }}>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Stop the current turn and send this message now? The agent's
+                in-progress work is discarded.
+              </Typography>
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button
                   size="small"
-                  color="primary"
-                  aria-label="send now"
-                  onClick={(): void => requestSendQueued(sessionId, message.id)}
+                  color="inherit"
+                  onClick={(): void => setConfirmAnchor(null)}
+                  sx={{ textTransform: "none" }}
                 >
-                  <Send fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            ) : (
-              <Tooltip title="Force push (interrupt & send)">
-                <IconButton
+                  Cancel
+                </Button>
+                <Button
                   size="small"
+                  variant="contained"
                   color="warning"
-                  aria-label="force push"
-                  onClick={(e): void => setConfirmAnchor(e.currentTarget)}
+                  startIcon={<Bolt />}
+                  onClick={(): void => {
+                    forcePushQueued(sessionId, message.id);
+                    setConfirmAnchor(null);
+                  }}
+                  sx={{ textTransform: "none" }}
                 >
-                  <Bolt fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            )}
-            <Popover
-              open={confirmAnchor !== null}
-              anchorEl={confirmAnchor}
-              onClose={(): void => setConfirmAnchor(null)}
-              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-              transformOrigin={{ vertical: "top", horizontal: "right" }}
-            >
-              <Box sx={{ p: 1.5, maxWidth: 240 }}>
-                <Typography variant="body2" sx={{ mb: 1 }}>
-                  Stop the current turn and send this message now? The agent's
-                  in-progress work is discarded.
-                </Typography>
-                <Stack direction="row" spacing={1} justifyContent="flex-end">
-                  <Button
-                    size="small"
-                    color="inherit"
-                    onClick={(): void => setConfirmAnchor(null)}
-                    sx={{ textTransform: "none" }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color="warning"
-                    startIcon={<Bolt />}
-                    onClick={(): void => {
-                      forcePushQueued(sessionId, message.id);
-                      setConfirmAnchor(null);
-                    }}
-                    sx={{ textTransform: "none" }}
-                  >
-                    Force push
-                  </Button>
-                </Stack>
-              </Box>
-            </Popover>
-            <Tooltip title="Return to drafts">
-              <IconButton
-                size="small"
-                aria-label="return to drafts"
-                onClick={(): void => queuedToDraft(sessionId, message.id)}
-              >
-                <Undo fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Edit">
-              <IconButton size="small" aria-label="edit message" onClick={onEdit}>
-                <EditOutlined fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Remove">
-              <IconButton
-                size="small"
-                aria-label="remove message"
-                onClick={(): void => removeQueued(sessionId, message.id)}
-              >
-                <Close fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </>
+                  Force push
+                </Button>
+              </Stack>
+            </Box>
+          </Popover>
         )}
+        {/* Secondary actions — inline on a roomy (iPad/desktop) panel … */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          sx={{ display: "none", [ROW_ACTIONS_INLINE]: { display: "flex" } }}
+        >
+          {secondary.map((a) => (
+            <Tooltip key={a.key} title={a.label}>
+              <IconButton size="small" aria-label={a.label} onClick={a.onClick}>
+                {a.icon}
+              </IconButton>
+            </Tooltip>
+          ))}
+        </Stack>
+        {/* … and collapsed into a kebab on a narrow (phone) panel. */}
+        <Box sx={{ [ROW_ACTIONS_INLINE]: { display: "none" } }}>
+          <Tooltip title="More">
+            <IconButton
+              size="small"
+              aria-label={kind === "draft" ? "draft actions" : "message actions"}
+              onClick={(e): void => setMenuAnchor(e.currentTarget)}
+            >
+              <MoreVert fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={menuAnchor}
+            open={menuAnchor !== null}
+            onClose={(): void => setMenuAnchor(null)}
+          >
+            {secondary.map((a) => (
+              <MenuItem
+                key={a.key}
+                onClick={(): void => {
+                  setMenuAnchor(null);
+                  a.onClick();
+                }}
+              >
+                <ListItemIcon>{a.icon}</ListItemIcon>
+                <ListItemText>{a.label}</ListItemText>
+              </MenuItem>
+            ))}
+          </Menu>
+        </Box>
       </Stack>
     </Paper>
   );
