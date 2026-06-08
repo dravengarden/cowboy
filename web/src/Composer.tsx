@@ -942,10 +942,25 @@ function OptimisticDraftRow({
         display: "flex",
         alignItems: "flex-start",
         gap: 0.5,
-        bgcolor: failed ? alpha(t.palette.error.main, 0.06) : "background.paper",
+        bgcolor: failed
+          ? alpha(t.palette.error.main, 0.06)
+          : sending
+            ? alpha(t.palette.primary.main, 0.05)
+            : "background.paper",
+        // Coloured leading edge marks the row's state at a glance: red = failed,
+        // primary = in flight (mirrors the failed affordance so "sending" reads
+        // as clearly as "failed", not as a near-invisible text shimmer).
         ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
+        ...(sending && !failed && { borderLeft: `3px solid ${t.palette.primary.main}` }),
       })}
     >
+      {sending && (
+        <CircularProgress
+          size={13}
+          thickness={5}
+          sx={{ color: "primary.main", mt: 0.25, flexShrink: 0 }}
+        />
+      )}
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography
           variant="body2"

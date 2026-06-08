@@ -437,10 +437,11 @@ function CollapsibleUserBody({
 // An OPTIMISTIC user bubble — shown the instant you hit send (chat), before the
 // daemon's user-echo confirms it. Mirrors the real user bubble (right-aligned,
 // primary fill). `pending` (<200ms) looks normal so a fast send never flashes;
-// `sending` runs a light sweep across the bubble (the gradient "扫光"; a theme-
-// colour text shimmer would vanish on the purple fill, so the sweep is a white
-// highlight instead); `failed` → red edge + Failed + retry / discard. Reconciled
-// out by cmid the moment the echo Envelope lands (same bubble, seamless).
+// `sending` reads unmistakably as in-flight — the bubble dims, a white sweep
+// runs across it, AND an explicit "Sending…" spinner line sits below it (a faint
+// sweep alone was too easy to miss); `failed` → red edge + Failed + retry /
+// discard. Reconciled out by cmid the moment the echo Envelope lands (same
+// bubble, seamless — the dim + line vanish as it confirms).
 function OptimisticUserBubble({
   sessionId,
   message,
@@ -462,6 +463,10 @@ function OptimisticUserBubble({
           bgcolor: "primary.main",
           color: "primary.contrastText",
           overflow: "hidden",
+          // Dim while in flight so a sending bubble is visibly "not yet
+          // delivered"; snaps back to full on confirm.
+          opacity: sending ? 0.62 : 1,
+          transition: "opacity 0.2s ease",
           ...(failed && { borderColor: "error.main" }),
         }}
       >
@@ -474,7 +479,7 @@ function OptimisticUserBubble({
               inset: 0,
               pointerEvents: "none",
               background:
-                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.22) 50%, transparent 100%)",
+                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.34) 50%, transparent 100%)",
               backgroundSize: "200% 100%",
               animation: `${shimmer} 1.6s linear infinite`,
               "@media (prefers-reduced-motion: reduce)": { animation: "none" },
@@ -482,6 +487,14 @@ function OptimisticUserBubble({
           />
         )}
       </Paper>
+      {sending && (
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ pr: 0.25 }}>
+          <CircularProgress size={11} thickness={5} sx={{ color: "text.secondary" }} />
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            Sending…
+          </Typography>
+        </Stack>
+      )}
       {failed && (
         <Stack direction="row" spacing={0.25} alignItems="center">
           <Typography variant="caption" sx={{ color: "error.main" }}>
