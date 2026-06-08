@@ -8,7 +8,14 @@
 // harmless.
 
 import { useSyncExternalStore } from "react";
-import { type ArgsOf, type Client, createClient, type Mutation, type Mutators, snapshotPatch } from "./_sync/mod.ts";
+import {
+  type ArgsOf,
+  type ClientSnapshot,
+  type Mutators,
+  replicatedStore,
+  type ReplicatedStore,
+  snapshotPatch,
+} from "./_sync/mod.ts";
 import { idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
@@ -519,21 +526,12 @@ function openSocket(): void {
       send({ type: "open_session", session_id: openedSessionId });
     }
     // Re-send sync mutations the arbiter never confirmed (sent while the socket
-    // was down). The mutation id makes the daemon idempotent; the resync
+    // was down). Each store re-sends its pending via its own `send` callback (a
+    // generic `sync` frame for title/order, the add_draft/submit command for a
+    // queue). The mutation id makes the daemon idempotent; the resync
     // `sync_patch` that follows drops them from pending once confirmed.
     for (const entry of syncClients.values()) entry.resend();
-    // Same for optimistic queue/draft adds — resend their add_draft/submit
-    // command (cmid = the mutation id ⇒ idempotent).
-    for (const [sid, c] of qClients) {
-      for (const m of c.pending()) {
-        const row = (m.args as { row: QueuedMessage }).row;
-        send(
-          m.name === "addDraft"
-            ? { type: "add_draft", session_id: sid, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id }
-            : { type: "submit", session_id: sid, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id },
-        );
-      }
-    }
+    for (const store of qClients.values()) store.resend();
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
     try {
@@ -566,6 +564,13 @@ export function send(cmd: Inbound): boolean {
     return true;
   }
   return false;
+}
+
+/** Whether a `send` right now would actually leave the device (socket OPEN).
+ *  Lets a caller that routes its send through a sync store's `send` callback
+ *  still learn the outcome for optimistic status (same check `send` makes). */
+function isConnected(): boolean {
+  return socket?.readyState === WebSocket.OPEN;
 }
 
 // --- Optimistic sends (local, never synced) ---------------------------------
@@ -623,48 +628,45 @@ interface SyncEntry {
 const syncClients = new Map<string, SyncEntry>();
 const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 
-/** Wire one synced state to the generic channel: a lib client + optimistic
- *  mutate (instant local + send) + patch fold + resend-on-reconnect. */
+/** Wire one synced state to the generic channel via the shared op-based tier
+ *  (`replicatedStore`): instant optimistic mutate (auto-sent), patch fold,
+ *  resend-on-reconnect, and an IndexedDB durable outbox. `onChange` = re-derive
+ *  the session list, so mutate / patch / hydrate all re-render for free. */
 function registerSync<T, M extends Mutators<T>>(
   syncState: string,
   mutators: M,
   initial: T,
 ): { view: () => T; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
-  const client = createClient<T, M>({
+  const store = replicatedStore<T, M>({
     clientId: `${syncBase}:${syncState}`,
     mutators,
-    initial: { version: 0, value: initial },
+    initial,
+    send: (m): void => {
+      send({ type: "sync", state: syncState, id: m.id, name: m.name, args: m.args });
+    },
+    onChange: commitSessions,
     // Instant-load + durable outbox: cache {base, pending} to IndexedDB. On
     // reload we hydrate this BEFORE the socket opens (see connect()), so the
     // last-known title/order paint immediately; the first server patch arrives
     // as a forced resync and overwrites stale base, while any unconfirmed
     // mutation re-sends. The key is NOT tab-namespaced (no syncBase) so every
     // tab shares one cache — they all sync to the same server truth anyway.
-    local: idbPersistence<T>(`cowboy:sync:${syncState}`),
+    local: idbPersistence<ClientSnapshot<T>>(`cowboy:sync:${syncState}`),
   });
-  const sendMutation = (m: Mutation): void => {
-    send({ type: "sync", state: syncState, id: m.id, name: m.name, args: m.args });
-  };
   syncClients.set(syncState, {
     applyPatch: (version, value, confirmed, resync): void => {
-      client.applyPatch(snapshotPatch(version, value as T, confirmed), { force: resync });
-      commitSessions();
+      store.applyPatch(snapshotPatch(version, value as T, confirmed), { force: resync });
     },
     resend: (): void => {
-      for (const m of client.pending()) sendMutation(m);
+      store.resend();
     },
-    hydrate: async (): Promise<void> => {
-      await client.hydrate();
-      commitSessions();
-    },
-    flush: (): Promise<void> => client.flush(),
+    hydrate: (): Promise<void> => store.hydrate(),
+    flush: (): Promise<void> => store.flush(),
   });
   return {
-    view: (): T => client.view(),
+    view: (): T => store.get(),
     mutate: (name, args): void => {
-      const m = client.mutate(name, args);
-      commitSessions();
-      sendMutation(m);
+      store.mutate(name, args);
     },
   };
 }
@@ -725,16 +727,31 @@ const qMut = {
   addDraft: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, drafts: [...v.drafts, a.row] }),
   addQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [...v.queue, a.row] }),
 } satisfies Mutators<QValue>;
-const qClients = new Map<string, Client<QValue, typeof qMut>>();
+const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
 const qStatus = new Map<string, "pending" | "sending" | "failed">();
 
-function qClient(sessionId: string): Client<QValue, typeof qMut> {
+function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
   let c = qClients.get(sessionId);
   if (c === undefined) {
-    c = createClient<QValue, typeof qMut>({
+    c = replicatedStore<QValue, typeof qMut>({
       clientId: `${syncBase}:queue:${sessionId}`,
       mutators: qMut,
-      initial: { version: 0, value: { queue: [], drafts: [] } },
+      initial: { queue: [], drafts: [] },
+      // An optimistic add's wire frame is the daemon's own add_draft/submit
+      // command (cmid = the mutation id ⇒ the server echo confirms exactly this
+      // row, no ghost). Used both for the initial send (via mutate) and the
+      // reconnect resend (via resend).
+      send: (m): void => {
+        const row = (m.args as { row: QueuedMessage }).row;
+        send(
+          m.name === "addDraft"
+            ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id }
+            : { type: "submit", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid: m.id },
+        );
+      },
+      onChange: (): void => {
+        commitQueue(sessionId);
+      },
     });
     qClients.set(sessionId, c);
   }
@@ -746,7 +763,7 @@ function qClient(sessionId: string): Client<QValue, typeof qMut> {
  *  pending optimistic row. */
 function commitQueue(sessionId: string): void {
   const c = qClients.get(sessionId);
-  const view: QValue = c ? c.view() : { queue: [], drafts: [] };
+  const view: QValue = c ? c.get() : { queue: [], drafts: [] };
   const pend = new Set((c?.pending() ?? []).map((m) => m.id));
   const withStatus = (rows: readonly QueuedMessage[]): QueuedMessage[] =>
     rows.map((r) => (r.cmid !== undefined && pend.has(r.cmid) ? { ...r, status: qStatus.get(r.cmid) ?? "pending" } : r));
@@ -787,15 +804,13 @@ function armQTimers(sessionId: string, cmid: string): void {
 function qAdd(target: "drafts" | "queue", sessionId: string, text: string, attachments: Attachment[]): void {
   const cmid = newCmid();
   const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid };
-  const c = qClient(sessionId);
-  if (target === "drafts") c.mutate("addDraft", { row }, cmid);
-  else c.mutate("addQueue", { row }, cmid);
-  const cmd: Inbound = target === "drafts"
-    ? { type: "add_draft", session_id: sessionId, text, content: contentOf(text, attachments), cmid }
-    : { type: "submit", session_id: sessionId, text, content: contentOf(text, attachments), cmid };
-  const sent = send(cmd);
+  const store = qClient(sessionId);
+  // Set status BEFORE mutating: the mutate auto-sends the add_draft/submit frame
+  // (the store's `send`) AND fires `onChange` → commitQueue, which reads this
+  // status. `isConnected()` predicts the send's success (same socket check).
+  const sent = isConnected();
   qStatus.set(cmid, sent ? "pending" : "failed");
-  commitQueue(sessionId);
+  store.mutate(target === "drafts" ? "addDraft" : "addQueue", { row }, cmid);
   if (sent) armQTimers(sessionId, cmid);
 }
 
@@ -804,7 +819,7 @@ function qAdd(target: "drafts" | "queue", sessionId: string, text: string, attac
 export function retryQueued(sessionId: string, cmid: string): void {
   const c = qClients.get(sessionId);
   if (c === undefined) return;
-  const view = c.view();
+  const view = c.get();
   const inDrafts = view.drafts.some((r) => r.cmid === cmid);
   const row = (inDrafts ? view.drafts : view.queue).find((r) => r.cmid === cmid);
   if (row === undefined) return;

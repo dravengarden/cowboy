@@ -101,9 +101,10 @@ export interface ClientOpts<T, M extends Mutators<T>> {
    *  input throws. O(value) per patch; leave off in production. */
   freezeForDev?: boolean;
   /** App-side persistence backend (e.g. @shared-utils/sync-idb). When set, the
-   *  client debounce-saves {base, pending} on every change and can `hydrate()`
-   *  from it. Omit to keep the client purely in-memory (the default). */
-  local?: LocalPersistence<T>;
+   *  client debounce-saves its `ClientSnapshot<T>` ({base, pending} = a durable
+   *  outbox) on every change and can `hydrate()` from it. Omit to keep the client
+   *  purely in-memory (the default). */
+  local?: LocalPersistence<ClientSnapshot<T>>;
   /** Debounce window (ms) for persistence saves. Default 250. */
   saveDebounceMs?: number;
 }

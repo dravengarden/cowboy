@@ -78,11 +78,29 @@ export interface ClientSnapshot<T> {
 }
 
 /** Pluggable app-side persistence backend (the seam for @shared-utils/sync-idb,
- *  React-Native AsyncStorage, …). The client calls `save` DEBOUNCED on every
- *  change and `load` once on `hydrate()`; the core never assumes a platform.
- *  Async by contract — IndexedDB and friends are async; a stub in-memory impl
- *  satisfies it for tests. */
-export interface LocalPersistence<T> {
-  load(): Promise<ClientSnapshot<T> | null>;
-  save(snapshot: ClientSnapshot<T>): Promise<void>;
+ *  React-Native AsyncStorage, …). Generic over the STORED SHAPE `S`, so it backs
+ *  both tiers of the authority spectrum with one implementation:
+ *    - the OP-based `replicatedStore` stores `S = ClientSnapshot<T>` (base +
+ *      pending = a durable outbox),
+ *    - the STATE-based `mirroredStore` stores `S = T` (the whole value, an
+ *      instant offline mirror).
+ *  The caller calls `save` DEBOUNCED on every change and `load` once on
+ *  `hydrate()`; the core never assumes a platform. Async by contract — IndexedDB
+ *  and friends are async; a stub in-memory impl satisfies it for tests. */
+export interface LocalPersistence<S> {
+  load(): Promise<S | null>;
+  save(value: S): Promise<void>;
+}
+
+/** A PASSIVE remote backend for the state-based `mirroredStore` tier: a dumb
+ *  key-value the server just stores + returns (liveview's `settings`/`progress`
+ *  tables behind `GET`/`PUT`). Unlike the OP-based arbiter, it does NOT serialize
+ *  mutations or assign versions — conflict is resolved client-side by the store's
+ *  `reconcile(local, remote)` merge. `subscribe` is optional live invalidation
+ *  (e.g. riding a one-way broadcast WebSocket): when the server signals a change,
+ *  the store re-reconciles. Everything async; all values JSON-plain. */
+export interface RemoteBackend<T> {
+  load(): Promise<T | null>;
+  save(value: T): Promise<void>;
+  subscribe?(onRemote: (value: T) => void): () => void;
 }
