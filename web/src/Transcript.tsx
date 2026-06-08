@@ -617,7 +617,7 @@ function MessageBubble({
         }}
       >
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-          ↻ Auto-resumed the interrupted turn
+          Auto-resumed the interrupted turn
         </Typography>
         <Box
           sx={{
