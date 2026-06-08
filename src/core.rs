@@ -1466,6 +1466,11 @@ impl Hub {
             // queued behind it, so its continuation must run first (the queue was
             // *waiting on* that turn), not after the backlog.
             s.queue.insert(0, QueuedMessage { id, text, content: Vec::new(), cmid: Some(cmid) });
+            // A continuation is the system telling the agent to finish its OWN work
+            // — never an answer to a question — so it must not sit behind a stale
+            // confirm-detect hold. (The death-edge clear above usually handles this;
+            // this is the belt-and-braces for any path that enqueues without one.)
+            s.meta.awaiting_user = false;
         }
         self.emit_pending(session_id);
     }
@@ -1732,6 +1737,15 @@ impl Hub {
                 || matches!(status, Status::Exited | Status::Crashed | Status::Interrupted)
             {
                 s.in_flight = false;
+            }
+            // A turn that died/was cut off is NOT "awaiting your reply" — the agent
+            // didn't ask a question, it got interrupted. Clear the confirm-detect
+            // hold so it doesn't block the auto-resume continuation (which inserts
+            // at the queue FRONT and must drain to revive the turn). The judge only
+            // runs on a clean Busy→Running end, so these death edges need the
+            // explicit clear.
+            if matches!(status, Status::Exited | Status::Crashed | Status::Interrupted) {
+                s.meta.awaiting_user = false;
             }
             // A true turn-end (Busy → Running) is where the agent handed control
             // back — the point to ask the confirm-detect skill "is it waiting on

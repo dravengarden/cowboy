@@ -6,6 +6,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   Divider,
   MenuItem,
   Stack,
@@ -108,6 +109,13 @@ export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => voi
   const [keyInput, setKeyInput] = useState("");
   const probe = useLastProbe();
   const skills = useSkills();
+  // Probe is fire-and-forget — the result lands later via the broadcast. Show a
+  // spinner in between. The store builds a fresh `probe` object per result, so a
+  // new reference (even with identical values) clears the pending flag.
+  const [testing, setTesting] = useState(false);
+  useEffect(() => {
+    setTesting(false);
+  }, [probe]);
 
   const saveKey = (): void => {
     const k = keyInput.trim();
@@ -178,12 +186,16 @@ export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => voi
               <Button
                 variant="outlined"
                 size="small"
-                onClick={(): void => runInferenceProbe("deepseek")}
-                disabled={!keySet}
+                onClick={(): void => {
+                  setTesting(true);
+                  runInferenceProbe("deepseek");
+                }}
+                disabled={!keySet || testing}
+                startIcon={testing ? <CircularProgress size={14} color="inherit" /> : undefined}
               >
-                Test connection
+                {testing ? "Testing…" : "Test connection"}
               </Button>
-              {probe?.provider === "deepseek" && (
+              {!testing && probe?.provider === "deepseek" && (
                 <Typography variant="caption" color={probe.ok ? "success.main" : "error.main"}>
                   {probe.ok
                     ? `✓ responded (cache hit ${probe.cacheHit} / miss ${probe.cacheMiss})`
