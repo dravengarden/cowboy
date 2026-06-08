@@ -343,17 +343,18 @@ export function Composer({
         // transcript content above), but floored at the device safe-area inset:
         // in landscape the non-zero left/right insets push the action row's
         // far-edge buttons (slash / send) clear of the notch + rounded corner.
-        // Bottom: the home-indicator inset minus 20px so the action row sits
-        // tight (~14px on a home-bar iPhone instead of the full ~34px) — the
-        // buttons reach a bit into the indicator zone, which is fine for taps.
-        // Floored to 2px on devices without a home bar.
+        // Bottom: reserve the FULL home-indicator inset so the action row's
+        // far-edge buttons (slash / send) sit ABOVE the indicator and stay easy to
+        // tap — an earlier `inset − 20px` let them reach into the indicator /
+        // rounded-corner zone, which read as "hard to tap" on iPad. Floored to 10px
+        // off-device.
         pt: { xs: 1, sm: 1.5 },
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain gap.
         pb: navbarAtBottom
           ? 1
-          : { xs: "max(calc(env(safe-area-inset-bottom) - 20px), 2px)", sm: 1.5 },
+          : { xs: "max(env(safe-area-inset-bottom), 10px)", sm: 1.5 },
         pl: `max(env(safe-area-inset-left), ${padding}px)`,
         pr: `max(env(safe-area-inset-right), ${padding}px)`,
         borderColor: "divider",
