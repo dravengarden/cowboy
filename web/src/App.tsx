@@ -57,6 +57,7 @@ import {
     AUTO_RESUME_TEMPLATE_KEY,
     conn,
     DEFAULT_CONTINUATION_TEMPLATE,
+    markSessionHydrated,
     notify,
     openSession,
     renameSession,
@@ -537,7 +538,13 @@ function NewSessionDialog({
         })
             .then((r) => (r.ok ? r.json() : null))
             .then((data: { session_id?: string } | null) => {
-                if (data?.session_id) onCreated(data.session_id);
+                if (data?.session_id) {
+                    // Known-empty: no history is coming (the agent only starts on the
+                    // first prompt, and OpenSession doesn't snapshot), so mark it
+                    // hydrated now — otherwise the transcript skeleton spins forever.
+                    markSessionHydrated(data.session_id);
+                    onCreated(data.session_id);
+                }
             })
             .catch(() => {
                 // Network/daemon error surfaces via the WS error channel.
@@ -1214,6 +1221,7 @@ export function App({
                                 timeline={timelines.get(active.id) ?? []}
                                 status={active.status}
                                 provider={active.provider}
+                                cwd={active.cwd}
                                 // Skeleton until this session's history snapshot
                                 // lands (vs an empty session, which is hydrated).
                                 loading={!hydrated.has(active.id)}

@@ -34,6 +34,7 @@ import {
 import { alpha } from "@mui/material/styles";
 import {
   Bedtime,
+  ChatBubbleOutline,
   Close,
   Code,
   Construction,
@@ -117,6 +118,51 @@ function TranscriptSkeleton(): React.JSX.Element {
   );
 }
 
+
+// Shown when a session has NO messages yet but IS live — a freshly created
+// session (`new_session` spawns the agent right away, so it's Running and idle,
+// waiting for the first prompt; no history is coming, so the skeleton would be
+// wrong and a blank wall reads as broken). Dormant / interrupted / crashed empty
+// sessions are NOT handled here — their SessionStatusBar already carries the
+// matching "send a message to wake/restart it" line, so this would just double it.
+function EmptyTranscript({ provider, cwd }: { provider: string; cwd: string }): React.JSX.Element {
+  return (
+    <Stack
+      // m:auto centers the single child within the column-reverse scroll area.
+      sx={{
+        m: "auto",
+        maxWidth: 360,
+        px: 3,
+        py: 6,
+        alignItems: "center",
+        textAlign: "center",
+        gap: 1.25,
+        color: "text.secondary",
+      }}
+    >
+      <ChatBubbleOutline sx={{ fontSize: 38, opacity: 0.4 }} />
+      <Typography variant="body1" sx={{ fontWeight: 600, color: "text.primary" }}>
+        Send a message to start
+      </Typography>
+      <Typography variant="caption" sx={{ lineHeight: 1.55 }}>
+        The {provider} agent is ready and waiting — your first message kicks off the turn.
+      </Typography>
+      {cwd && (
+        <Typography
+          variant="caption"
+          sx={{
+            opacity: 0.7,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: "0.72rem",
+            wordBreak: "break-all",
+          }}
+        >
+          {cwd}
+        </Typography>
+      )}
+    </Stack>
+  );
+}
 
 // Soft opacity breathing — used both for the in-flight tool card and the
 // Claude "thinking" spark. CSS keyframes instead of a JS animation lib so it's
@@ -1000,6 +1046,7 @@ export function Transcript({
   timeline,
   status,
   provider,
+  cwd,
   loading,
   connected,
   topInset,
@@ -1010,6 +1057,9 @@ export function Transcript({
   status: Status;
   /** Drives the per-provider "thinking" indicator flavor (color + verbs). */
   provider: string;
+  /** The session's working directory — shown in the empty-state hint so a brand
+   *  new session reads as "ready in <cwd>", not a blank wall. */
+  cwd: string;
   /** True until this session's history snapshot has arrived — show a skeleton
    *  instead of an empty column during the initial load. */
   loading: boolean;
@@ -1082,6 +1132,12 @@ export function Transcript({
   // whole restart). The connection banner conveys the disconnect instead; on
   // reconnect the daemon re-broadcasts the real status (Exited after a restart).
   const working = connected && (busy || toolInFlight);
+  // No messages yet + a LIVE session (a freshly created session is Running-idle,
+  // waiting for the first prompt) → show the "send a message to start" empty state
+  // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
+  // already covered by SessionStatusBar's hint, so they fall through to a plain
+  // empty area + that bar (no duplicate).
+  const isLive = status === "starting" || status === "running" || status === "busy";
   const lastIdx = items.length - 1;
   const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
   // The last item is "streaming" if the agent is working AND it's an
@@ -1363,6 +1419,8 @@ export function Transcript({
       >
         {loading && items.length === 0 ? (
           <TranscriptSkeleton />
+        ) : items.length === 0 && isLive ? (
+          <EmptyTranscript provider={provider} cwd={cwd} />
         ) : (
           // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
           // oldest-at-top / newest-at-bottom on screen. The trailing dots are

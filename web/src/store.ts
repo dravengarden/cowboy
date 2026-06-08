@@ -938,6 +938,18 @@ export function openSession(id: string): void {
   send({ type: "open_session", session_id: id });
 }
 
+// Mark a session hydrated WITHOUT waiting for a server snapshot — called the
+// moment the client creates a new session. A brand-new session has no history
+// and the agent only starts on the first prompt, so NO snapshot is coming
+// (`OpenSession` revives the agent but never snapshots; snapshots are sent only
+// at connect-time, for sessions that already existed). Without this the transcript
+// skeleton (`loading = !hydrated`) would spin forever on a freshly created
+// session. Idempotent; a later real snapshot (e.g. after reload) just no-ops.
+export function markSessionHydrated(id: string): void {
+  if (state.hydrated.has(id)) return;
+  setState({ ...state, hydrated: new Set(state.hydrated).add(id) });
+}
+
 // --- Queue + draft commands -------------------------------------------------
 //
 // Every op below is a thin command sent to the daemon, which owns the state and
