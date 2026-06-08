@@ -1101,7 +1101,12 @@ export function App({
                         // the bar clear of the iPhone/iPad R角. env() insets are 0
                         // off-device + when hosted.
                         pt: navbarAtBottom ? 0 : "env(safe-area-inset-top, 0px)",
-                        pb: navbarAtBottom ? "max(env(safe-area-inset-bottom), 10px)" : 0,
+                        // Bottom gap = the home-indicator zone. The FULL inset (~34px)
+                        // read as a big, lopsided gap vs the slim composer→navbar gap
+                        // above; shave it so the bar sits closer to the edge while the
+                        // 44px buttons still clear the indicator (an earlier `inset−20`
+                        // ≈14px dropped them ONTO it — keep ≥ ~20px).
+                        pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 14px), 10px)" : 0,
                         pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                     }}
