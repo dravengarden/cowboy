@@ -76,6 +76,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .collect();
         let restored_count = restored.len();
         hub.restore(restored);
+        // Seed the global settings (auto-resume default + continuation template)
+        // from the table so they're authoritative in-memory before any client
+        // connects.
+        match store.load_settings().await {
+            Ok(entries) => hub.load_settings(entries),
+            Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
+        }
         tracing::info!(
             postgres = url,
             restored = restored_count,
@@ -149,6 +156,10 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
             StoreWrite::UpdateSessionOrder { order } => {
                 store.update_session_order(order).await
             }
+            StoreWrite::UpdateAutoResume { session_id, value } => {
+                store.update_auto_resume(session_id, *value).await
+            }
+            StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
         };
         if let Err(e) = result {
             tracing::warn!(error = %e, "store writer failed an intent (intent dropped)");
@@ -583,6 +594,19 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     {
         return;
     }
+    // Seed the global settings (auto-resume default + continuation template) so
+    // the client's Settings UI + per-session badge render on first paint.
+    if send_json(
+        &mut sink,
+        &Outbound::Settings {
+            settings: state.hub.settings_snapshot(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
     // Seed every optimistic-sync state (@shared-utils/sync): one absolute
     // snapshot patch per state mutated this lifetime, so each of this client's
     // sync clients starts at the arbiter's version and folds any live overrides.
@@ -735,6 +759,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::Permission { session_id, .. }
         | Inbound::DeleteSession { session_id }
         | Inbound::RenameSession { session_id, .. }
+        | Inbound::SetSessionAutoResume { session_id, .. }
         | Inbound::SetConfigOption { session_id, .. }
         | Inbound::OpenSession { session_id }
         | Inbound::Submit { session_id, .. }
@@ -756,7 +781,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
         // Sync mutations are state-scoped (title/order), not session-scoped — a
         // failure surfaces as a daemon-level error (None).
-        Inbound::NewSession { .. } | Inbound::ReorderSessions { .. } | Inbound::Sync { .. } => None,
+        Inbound::NewSession { .. }
+        | Inbound::ReorderSessions { .. }
+        | Inbound::Sync { .. }
+        | Inbound::SetSetting { .. } => None,
     };
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
@@ -840,6 +868,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // Generic arbiter apply (title/order/…); validates, dedupes by id,
             // applies the typed mutation, version-stamps + broadcasts the patch.
             state.hub.sync_apply(&sync_state, id, &name, &args)
+        }
+        Inbound::SetSessionAutoResume { session_id, value } => {
+            state.hub.set_auto_resume(&session_id, value);
+            Ok(())
+        }
+        Inbound::SetSetting { key, value } => {
+            state.hub.set_setting(key, value);
+            Ok(())
         }
         Inbound::SetConfigOption {
             session_id,

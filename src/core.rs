@@ -129,6 +129,12 @@ pub struct SessionMeta {
     /// agent assigns one, and for providers that don't support resume.
     #[serde(default)]
     pub agent_session_id: Option<String>,
+    /// Per-session OVERRIDE of the global auto-resume-interrupted-turns default.
+    /// `None` = inherit `settings['session.autoResume.default']`; `Some(true)` =
+    /// always auto-continue an interrupted turn for this session; `Some(false)` =
+    /// never (explicit opt-out). See tasks/active/session-auto-resume.
+    #[serde(default)]
+    pub auto_resume: Option<bool>,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -261,6 +267,21 @@ pub enum Inbound {
     /// and (post-rename) in the sidebar list. Empty title is rejected at
     /// the server before this point.
     RenameSession { session_id: String, title: String },
+    /// Set a session's auto-resume OVERRIDE (`value: null` = inherit the global
+    /// default, `true`/`false` = force on/off). Persisted + re-broadcast on
+    /// `SessionMeta`. See tasks/active/session-auto-resume.
+    SetSessionAutoResume {
+        session_id: String,
+        #[serde(default)]
+        value: Option<bool>,
+    },
+    /// Set one global setting (`session.autoResume.default` flag /
+    /// `session.autoResume.template` string). Persisted + broadcast to every
+    /// surface as [`Outbound::Settings`].
+    SetSetting {
+        key: String,
+        value: serde_json::Value,
+    },
     /// Generic optimistic-sync mutation (@shared-utils/sync). The client applies
     /// it locally for an INSTANT update, then sends it here; the daemon (the
     /// arbiter) linearizes it per `state`, version-stamps, and broadcasts an
@@ -447,6 +468,13 @@ pub enum Outbound {
         #[serde(default)]
         resync: bool,
     },
+    /// The global key-value settings (auto-resume default flag + continuation
+    /// template). Sent on connect and re-broadcast whenever an edit lands, so
+    /// every surface renders the same Settings UI + computes the same effective
+    /// auto-resume.
+    Settings {
+        settings: std::collections::HashMap<String, serde_json::Value>,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -486,6 +514,10 @@ pub enum StoreWrite {
     /// Persist the manual session ordering (a `position` per id) so a drag-
     /// arranged list survives a daemon restart.
     UpdateSessionOrder { order: Vec<String> },
+    /// Persist a session's auto-resume OVERRIDE (`None` = inherit global default).
+    UpdateAutoResume { session_id: String, value: Option<bool> },
+    /// Upsert one global setting (auto-resume default flag / continuation template).
+    PutSetting { key: String, value: serde_json::Value },
 }
 
 /// Live arbiter state for the title-sync channel (the @shared-utils/sync
@@ -543,6 +575,10 @@ struct HubInner {
     /// that's required (ids are list-local keys, not persisted-across-restart
     /// identities — restored lists keep whatever ids they were saved with).
     next_qid: AtomicU64,
+    /// Global key-value settings (auto-resume default flag + continuation
+    /// template), mirrored from the `settings` table on restore. Authoritative
+    /// in-memory; every edit also write-behinds via `StoreWrite::PutSetting`.
+    settings: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl Hub {
@@ -565,6 +601,7 @@ impl Hub {
                 dispatch_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
+                settings: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -805,6 +842,7 @@ impl Hub {
             status: Status::Starting,
             origin,
             agent_session_id: None,
+            auto_resume: None, // inherit the global default until overridden
         };
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -871,6 +909,56 @@ impl Hub {
             });
         }
         self.broadcast_sessions();
+    }
+
+    /// Set a session's auto-resume OVERRIDE (`None` = inherit the global
+    /// default). Updates the typed truth (`SessionMeta.auto_resume`), persists,
+    /// and re-broadcasts the session list — the override rides on `SessionMeta`,
+    /// so the client recomputes its badge from `override ?? global default`.
+    /// Mirror of [`Self::rename_session`].
+    pub fn set_auto_resume(&self, session_id: &str, value: Option<bool>) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.meta.auto_resume = value;
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateAutoResume {
+                session_id: session_id.to_owned(),
+                value,
+            });
+        }
+        self.broadcast_sessions();
+    }
+
+    /// Snapshot of all global settings — for the connect-time push.
+    #[must_use]
+    pub fn settings_snapshot(&self) -> HashMap<String, serde_json::Value> {
+        self.inner.settings.lock().unwrap().clone()
+    }
+
+    /// Set one global setting (auto-resume default / continuation template),
+    /// persist it, and broadcast the new full map to every connected surface.
+    pub fn set_setting(&self, key: String, value: serde_json::Value) {
+        let snapshot = {
+            let mut s = self.inner.settings.lock().unwrap();
+            s.insert(key.clone(), value.clone());
+            s.clone()
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::PutSetting { key, value });
+        }
+        let _ = self.inner.tx.send(Outbound::Settings { settings: snapshot });
+    }
+
+    /// Seed the in-memory settings map from the persisted table (restore only).
+    pub fn load_settings(&self, entries: Vec<(String, serde_json::Value)>) {
+        let mut s = self.inner.settings.lock().unwrap();
+        for (k, v) in entries {
+            s.insert(k, v);
+        }
     }
 
     // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------

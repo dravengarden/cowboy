@@ -80,8 +80,8 @@ impl Store {
     /// If a query fails or a payload is unparseable.
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, provider, cwd, title, origin, status, agent_session_id, next_seq, \
-             queue, drafts, created_at \
+            "SELECT id, provider, cwd, title, origin, status, agent_session_id, auto_resume, \
+             next_seq, queue, drafts, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -200,6 +200,53 @@ impl Store {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session title {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist a session's auto-resume OVERRIDE (`None` = inherit the global
+    /// default, `Some(true/false)` = force). Mirrors `update_status` — only this
+    /// column + `updated_at` move.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_auto_resume(&self, session_id: &str, value: Option<bool>) -> Result<()> {
+        sqlx::query("UPDATE sessions SET auto_resume = $1, updated_at = now() WHERE id = $2")
+            .bind(value)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session auto_resume {session_id}"))?;
+        Ok(())
+    }
+
+    /// Load the whole global key-value settings table (small; read once on
+    /// startup). Returns `(key, value)` pairs.
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn load_settings(&self) -> Result<Vec<(String, serde_json::Value)>> {
+        let rows: Vec<(String, serde_json::Value)> =
+            sqlx::query_as("SELECT key, value FROM settings")
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT settings")?;
+        Ok(rows)
+    }
+
+    /// Upsert one global setting (`value` is JSONB).
+    ///
+    /// # Errors
+    /// If the UPSERT fails.
+    pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT setting {key}"))?;
         Ok(())
     }
 
@@ -388,6 +435,7 @@ struct SessionRow {
     origin: String,
     status: String,
     agent_session_id: Option<String>,
+    auto_resume: Option<bool>,
     next_seq: i64,
     queue: serde_json::Value,
     drafts: serde_json::Value,
@@ -405,6 +453,7 @@ impl SessionRow {
             status: status_from_str(&self.status),
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
+            auto_resume: self.auto_resume,
         }
     }
 }
