@@ -6,7 +6,10 @@
 // manifest) — is network-first, so a redeploy of those shows up immediately
 // instead of being pinned to whatever the SW cached first. Bump VERSION to evict
 // the old caches on the next activation.
-const VERSION = "cowboy-v28";
+// Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
+// detects a new worker when this string changes, which is what triggers the
+// auto-reload onto the fresh bundle.
+const VERSION = "cowboy-v29";
 const ASSET_CACHE = `${VERSION}-assets`;
 // Immutable history pages (GET /api/history/:id/:page?v=<build>). Their content
 // can never change (append-only log), and the `?v=` build token makes a new

@@ -41,9 +41,30 @@ if (el) {
   );
 }
 
-// Standalone PWA: register the service worker (offline shell + installable).
+// Standalone PWA: register the service worker (offline shell + installable) AND
+// keep it fresh. An installed iOS PWA RESUMES its loaded page on reopen — it does
+// not re-navigate — so without this it runs whatever bundle it first loaded until
+// a manual reload (the recurring "redeploy doesn't show up" trap). So: re-check
+// for a new SW whenever the app returns to the foreground (the SW's VERSION bumps
+// per web deploy → a new sw.js → install → skipWaiting → activate → claim), and
+// reload ONCE when that new worker takes control, picking up the fresh bundle.
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  // Only auto-reload on an UPDATE (a new worker replacing one already in control),
+  // never on the first-install claim.
+  const hadController = navigator.serviceWorker.controller != null;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading || !hadController) return;
+    reloading = true;
+    globalThis.location.reload();
+  });
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js").catch(() => {});
+    void navigator.serviceWorker.register("/sw.js").then((reg) => {
+      const checkForUpdate = (): void => {
+        if (globalThis.document.visibilityState === "visible") void reg.update();
+      };
+      globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+      checkForUpdate();
+    }).catch(() => {});
   });
 }
