@@ -250,6 +250,22 @@ pub enum Inbound {
     /// and (post-rename) in the sidebar list. Empty title is rejected at
     /// the server before this point.
     RenameSession { session_id: String, title: String },
+    /// Generic optimistic-sync mutation (@shared-utils/sync). The client applies
+    /// it locally for an INSTANT update, then sends it here; the daemon (the
+    /// arbiter) linearizes it per `state`, version-stamps, and broadcasts an
+    /// [`Outbound::SyncPatch`] every terminal folds. `id` is the client-minted
+    /// mutation id (the `cmid` generator) — it makes a retry idempotent (the
+    /// arbiter dedupes on it). `state` selects the synced value (`"title"`,
+    /// `"order"`, …); `name`+`args` are the mutator + its JSON-plain args, applied
+    /// by the typed handler in `Hub::sync_apply`. Supersedes the bespoke
+    /// rename/reorder commands for the web client.
+    Sync {
+        state: String,
+        id: String,
+        name: String,
+        #[serde(default)]
+        args: serde_json::Value,
+    },
     /// Set one config option on the session (mode / model / effort / future).
     /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
     /// request that handles all three via the same shape. cowboy sends it as
@@ -406,6 +422,20 @@ pub enum Outbound {
         queue: Vec<QueuedMessage>,
         drafts: Vec<QueuedMessage>,
     },
+    /// A generic snapshot patch for one synced `state` (@shared-utils/sync): the
+    /// ABSOLUTE `value` at `version`, plus the mutation ids newly confirmed. Sent
+    /// on connect as a resync (`confirmed` = every applied id, to seed/heal a
+    /// client) and after each accepted [`Inbound::Sync`] (`confirmed` = just that
+    /// mutation). The client keeps the highest `version` per state, drops
+    /// confirmed pending, and folds `value`. `fromVersion` is implicitly 0
+    /// (absolute snapshot). `value` is the state's derived JSON (title map / order
+    /// array / queues).
+    SyncPatch {
+        state: String,
+        version: u64,
+        value: serde_json::Value,
+        confirmed: Vec<String>,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -447,6 +477,31 @@ pub enum StoreWrite {
     UpdateSessionOrder { order: Vec<String> },
 }
 
+/// Live arbiter state for the title-sync channel (the @shared-utils/sync
+/// reference arbiter, in Rust). Coordinates optimistic cross-terminal renames:
+/// each accepted mutation bumps `version` and yields a snapshot patch (the whole
+/// `titles` override map + the confirmed id). EPHEMERAL by design — durability
+/// rides on the existing per-title persistence (`StoreWrite::UpdateTitle`) and
+/// the `SessionMeta.title` mirror, so this map holds only live rename overrides
+/// and resets (empty, version 0) on restart, while the persisted title reloads
+/// into `SessionMeta`. `seen` dedupes a retried mutation so it never double-
+/// patches (the arbiter's idempotency half; the client's confirmed-drop is the
+/// other half).
+/// Per-state bookkeeping for the generic optimistic-sync channel (the
+/// @shared-utils/sync reference arbiter, in Rust). One entry per synced state
+/// (`"title"`, `"order"`, `"queue:<session>"`, …). `version` is the state's
+/// monotonic clock; `seen` dedupes a retried mutation so it never double-patches
+/// (the arbiter's idempotency half; the client's confirmed-drop is the other).
+/// EPHEMERAL: the VALUE itself is always derived from the typed source of truth
+/// (SessionMeta / the order list / the queues), which is what's persisted — so
+/// this holds no value, only the clock + dedupe set, and resets on restart while
+/// the derived value reloads from pg.
+#[derive(Default)]
+struct SyncArbiter {
+    version: u64,
+    seen: HashSet<String>,
+}
+
 /// The single source of truth. Cloneable handle (`Arc` inside) shared by the
 /// server, the supervisor, and every agent thread's ACP client.
 #[derive(Clone)]
@@ -469,6 +524,9 @@ struct HubInner {
     /// in tests), in which case a drain decision is computed but no prompt is
     /// actually sent. See [`DispatchReq`].
     dispatch_tx: Mutex<Option<mpsc::UnboundedSender<DispatchReq>>>,
+    /// Per-state arbiters for the generic optimistic-sync channel, keyed by
+    /// state name (`"title"`, `"order"`, …). See [`SyncArbiter`].
+    sync: Mutex<HashMap<String, SyncArbiter>>,
     /// Monotonic source of queued/draft message ids (`q1`, `q2`, …). Seeded from
     /// the wall-clock-free counter; uniqueness across a daemon lifetime is all
     /// that's required (ids are list-local keys, not persisted-across-restart
@@ -494,6 +552,7 @@ impl Hub {
                 tx,
                 store_tx,
                 dispatch_tx: Mutex::new(None),
+                sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
             }),
         }
@@ -779,6 +838,145 @@ impl Hub {
             });
         }
         self.broadcast_sessions();
+    }
+
+    // --- Generic optimistic-sync channel (@shared-utils/sync arbiter) --------
+    // The daemon is the arbiter for each synced `state`. A mutation is applied to
+    // the TYPED source of truth (SessionMeta / order list); the patch carries the
+    // state's DERIVED json value. No bespoke per-state wire — one Sync/SyncPatch.
+
+    /// Apply a rename to the typed truth (NO `Sessions` re-broadcast — the sync
+    /// channel carries the title now). Persists so fresh-connect + restart show
+    /// it. Mirror of [`Self::rename_session`] minus the broadcast.
+    fn apply_rename(&self, session_id: &str, title: String) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            if let Some(s) = sessions.get_mut(session_id) {
+                s.meta.title.clone_from(&title);
+            }
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateTitle { session_id: session_id.to_owned(), title });
+        }
+    }
+
+    /// Apply a session reorder to the order list (NO broadcast — the sync channel
+    /// carries it). Mirror of [`Self::reorder_sessions`] minus the broadcast.
+    fn apply_reorder(&self, order: &[String]) {
+        {
+            let mut list = self.inner.order.lock().unwrap();
+            list.sort_by_key(|id| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let order = self.inner.order.lock().unwrap().clone();
+            let _ = tx.send(StoreWrite::UpdateSessionOrder { order });
+        }
+    }
+
+    /// The derived JSON value of one synced state — what a `SyncPatch` carries and
+    /// the client folds. Always read live from the typed truth (so it's durable by
+    /// derivation, no shadow copy to drift).
+    fn sync_value(&self, state: &str) -> serde_json::Value {
+        match state {
+            "title" => {
+                let sessions = self.inner.sessions.lock().unwrap();
+                let map: serde_json::Map<String, serde_json::Value> = sessions
+                    .values()
+                    .map(|s| (s.meta.id.clone(), serde_json::Value::String(s.meta.title.clone())))
+                    .collect();
+                serde_json::Value::Object(map)
+            }
+            "order" => {
+                let list = self.inner.order.lock().unwrap();
+                serde_json::Value::Array(list.iter().map(|id| serde_json::Value::String(id.clone())).collect())
+            }
+            _ => serde_json::Value::Null,
+        }
+    }
+
+    /// Record `id` as seen for `state`; returns true if it's NEW (first delivery).
+    fn sync_first_seen(&self, state: &str, id: &str) -> bool {
+        let mut reg = self.inner.sync.lock().unwrap();
+        reg.entry(state.to_owned()).or_default().seen.insert(id.to_owned())
+    }
+
+    /// Version-stamp `state` and broadcast its derived value, confirming the given
+    /// mutation ids.
+    fn sync_broadcast(&self, state: &str, confirmed: Vec<String>) {
+        let version = {
+            let mut reg = self.inner.sync.lock().unwrap();
+            let e = reg.entry(state.to_owned()).or_default();
+            e.version += 1;
+            e.version
+        };
+        let value = self.sync_value(state);
+        let _ = self.inner.tx.send(Outbound::SyncPatch { state: state.to_owned(), version, value, confirmed });
+    }
+
+    /// Generic arbiter apply — see [`Inbound::Sync`]. Validate+parse (rejects a
+    /// bad/unknown mutation before burning the id), dedupe (retry = no-op), apply
+    /// the typed mutation, then version-stamp + broadcast. Returns an error string
+    /// the server surfaces to the user.
+    pub fn sync_apply(&self, state: &str, id: String, name: &str, args: &serde_json::Value) -> Result<(), String> {
+        enum Op {
+            Rename { session_id: String, title: String },
+            Reorder { order: Vec<String> },
+        }
+        let op = match (state, name) {
+            ("title", "rename") => {
+                let session_id = args
+                    .get("session_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("rename: missing session_id")?
+                    .to_owned();
+                let title = args.get("title").and_then(serde_json::Value::as_str).unwrap_or("").trim().to_owned();
+                if title.is_empty() {
+                    return Err("title cannot be empty".to_owned());
+                }
+                Op::Rename { session_id, title }
+            }
+            ("order", "reorder") => {
+                let order = args
+                    .get("order")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or("reorder: missing order")?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect();
+                Op::Reorder { order }
+            }
+            _ => return Err(format!("unknown sync mutation {state}/{name}")),
+        };
+        if !self.sync_first_seen(state, &id) {
+            return Ok(()); // duplicate delivery/retry — already applied + broadcast
+        }
+        match op {
+            Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
+            Op::Reorder { order } => self.apply_reorder(&order),
+        }
+        self.sync_broadcast(state, vec![id]);
+        Ok(())
+    }
+
+    /// One resync `SyncPatch` per state mutated this lifetime — at its version,
+    /// confirming all seen ids. Sent on connect so a client seeds/heals (and a
+    /// reconnecting one drops pending confirmed while it was away). States never
+    /// mutated aren't here; the client uses the `Sessions`-derived default.
+    #[must_use]
+    pub fn sync_resync(&self) -> Vec<Outbound> {
+        let snapshot: Vec<(String, u64, Vec<String>)> = {
+            let reg = self.inner.sync.lock().unwrap();
+            reg.iter().map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect())).collect()
+        };
+        snapshot
+            .into_iter()
+            .map(|(state, version, confirmed)| Outbound::SyncPatch {
+                value: self.sync_value(&state),
+                state,
+                version,
+                confirmed,
+            })
+            .collect()
     }
 
     /// Auto-name a session from its first prompt, but ONLY while the title is

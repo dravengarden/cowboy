@@ -8,6 +8,7 @@
 // harmless.
 
 import { useSyncExternalStore } from "react";
+import { type ArgsOf, createClient, type Mutation, type Mutators, snapshotPatch } from "./_sync/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
 import { fireAlert } from "./turnNotify";
@@ -112,6 +113,12 @@ export interface State {
   // `| undefined` (not bare optional) so `{ ...state, banner }` can carry an
   // explicit undefined under exactOptionalPropertyTypes.
   banner?: Banner | undefined;
+  // session_id → title from the "title" sync state (@shared-utils/sync). Source
+  // of title truth on the client: overlaid onto SessionMeta.title by
+  // `deriveSessions`, so an optimistic rename shows instantly and every terminal
+  // converges on the arbiter's `sync_patch`. Ids absent here fall back to the
+  // broadcast SessionMeta.title.
+  titleOverrides: Record<string, string>;
 }
 
 let errorSeq = 0;
@@ -130,6 +137,7 @@ let state: State = {
   optimisticDrafts: new Map(),
   optimisticQueue: new Map(),
   optimisticMessages: new Map(),
+  titleOverrides: {},
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -286,7 +294,13 @@ function handle(msg: Outbound): void {
       // Commit the list — the queue drain is now server-side, so there's no
       // client-side in-flight reconciliation to do. `sessionsLoaded` latches true
       // on the first list so the UI can detect a now-gone persisted focus.
-      setState({ ...state, sessions: msg.sessions, sessionsLoaded: true });
+      // Keep the raw list; the rendered `sessions` is re-derived with the title +
+      // order overlays so a synced rename/reorder isn't clobbered by an unrelated
+      // `sessions` broadcast (status flip, new/deleted session). The overlays are
+      // the client's source of truth for title + order.
+      rawSessions = msg.sessions;
+      if (!state.sessionsLoaded) setState({ ...state, sessionsLoaded: true });
+      commitSessions();
       // The list is authoritative: drop composer drafts for sessions that no
       // longer exist (deleted here or on another terminal). Tolerant + off the
       // input path.
@@ -372,6 +386,13 @@ function handle(msg: Outbound): void {
       const next = new Map(state.configOptions);
       next.set(msg.session_id, msg.options);
       setState({ ...state, configOptions: next });
+      break;
+    }
+    case "sync_patch": {
+      // Arbiter snapshot for one state: fold it into that state's sync client
+      // (keeps the highest version, drops confirmed pending, rebases the rest)
+      // and re-derive the session list. Unknown state → ignored (forward-compat).
+      syncClients.get(msg.state)?.applyPatch(msg.version, msg.value, msg.confirmed);
       break;
     }
     case "error": {
@@ -485,6 +506,10 @@ function connect(): void {
     if (openedSessionId) {
       send({ type: "open_session", session_id: openedSessionId });
     }
+    // Re-send sync mutations the arbiter never confirmed (sent while the socket
+    // was down). The mutation id makes the daemon idempotent; the resync
+    // `sync_patch` that follows drops them from pending once confirmed.
+    for (const entry of syncClients.values()) entry.resend();
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
     try {
@@ -541,6 +566,109 @@ function newCmid(): string {
   const c = globalThis.crypto;
   if (c?.randomUUID) return c.randomUUID();
   return `c-${String(Date.now())}-${Math.random().toString(36).slice(2)}`;
+}
+
+// --- Optimistic sync (state-sync engine: @shared-utils/sync) -----------------
+// The daemon is the arbiter for each synced `state`. Each client applies a
+// mutation LOCALLY for an instant change, sends a generic `sync` command, and
+// folds the arbiter's `sync_patch` back (drops confirmed pending, converges on
+// server order). Synced states today: "title" (session_id→title map) and
+// "order" (the session-id ordering) — both overlaid onto the session list by
+// `deriveSessions`, so the rest of the UI is untouched. The bespoke
+// rename/reorder commands are retired for the web client.
+
+// The daemon broadcasts the full session list (`sessions`); the synced states
+// are overlays on top, so we keep the raw list and re-derive on any change.
+let rawSessions: SessionMeta[] = [];
+
+type TitleMap = Readonly<Record<string, string>>;
+type OrderList = readonly string[];
+
+const titleMutators = {
+  rename: (m: TitleMap, a: { session_id: string; title: string }): TitleMap => ({ ...m, [a.session_id]: a.title }),
+} satisfies Mutators<TitleMap>;
+const orderMutators = {
+  // Absolute set: the arbiter's reorder is a full new ordering.
+  reorder: (_m: OrderList, a: { order: OrderList }): OrderList => a.order,
+} satisfies Mutators<OrderList>;
+
+interface SyncEntry {
+  applyPatch: (version: number, value: unknown, confirmed: string[]) => void;
+  resend: () => void;
+}
+const syncClients = new Map<string, SyncEntry>();
+const syncBase = newCmid(); // namespaces mutation ids across states + this tab
+
+/** Wire one synced state to the generic channel: a lib client + optimistic
+ *  mutate (instant local + send) + patch fold + resend-on-reconnect. */
+function registerSync<T, M extends Mutators<T>>(
+  syncState: string,
+  mutators: M,
+  initial: T,
+): { view: () => T; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
+  const client = createClient<T, M>({
+    clientId: `${syncBase}:${syncState}`,
+    mutators,
+    initial: { version: 0, value: initial },
+  });
+  const sendMutation = (m: Mutation): void => {
+    send({ type: "sync", state: syncState, id: m.id, name: m.name, args: m.args });
+  };
+  syncClients.set(syncState, {
+    applyPatch: (version, value, confirmed): void => {
+      client.applyPatch(snapshotPatch(version, value as T, confirmed));
+      commitSessions();
+    },
+    resend: (): void => {
+      for (const m of client.pending()) sendMutation(m);
+    },
+  });
+  return {
+    view: (): T => client.view(),
+    mutate: (name, args): void => {
+      const m = client.mutate(name, args);
+      commitSessions();
+      sendMutation(m);
+    },
+  };
+}
+
+const titleSync = registerSync<TitleMap, typeof titleMutators>("title", titleMutators, {});
+const orderSync = registerSync<OrderList, typeof orderMutators>("order", orderMutators, []);
+
+/** Apply the title + order overlays to the raw session list (title override
+ *  wins; then a stable sort by the synced order — ids not in `order` keep their
+ *  relative position at the end, mirroring the daemon's `sort_by_id_order`). */
+function deriveSessions(raw: SessionMeta[], titles: TitleMap, order: OrderList): SessionMeta[] {
+  const titled = raw.map((s) => {
+    const t = titles[s.id];
+    return t !== undefined && t !== s.title ? { ...s, title: t } : s;
+  });
+  if (order.length === 0) return titled;
+  const pos = new Map(order.map((id, i): [string, number] => [id, i]));
+  return titled
+    .map((s, i): { s: SessionMeta; i: number } => ({ s, i }))
+    .sort((a, b) => {
+      const pa = pos.get(a.s.id) ?? Number.MAX_SAFE_INTEGER;
+      const pb = pos.get(b.s.id) ?? Number.MAX_SAFE_INTEGER;
+      return pa !== pb ? pa - pb : a.i - b.i;
+    })
+    .map((x) => x.s);
+}
+
+/** Re-derive the rendered session list from the raw list + every synced overlay
+ *  and commit it. Called on a `sessions` broadcast and on any sync patch/mutate. */
+function commitSessions(): void {
+  const titles = titleSync.view();
+  setState({ ...state, sessions: deriveSessions(rawSessions, titles, orderSync.view()), titleOverrides: titles });
+}
+
+/** Optimistic rename via the title-sync engine: instant local + send; re-sent on
+ *  reconnect (id ⇒ idempotent). Empty title is a no-op (also rejected server). */
+export function renameSession(sessionId: string, title: string): void {
+  const trimmed = title.trim();
+  if (trimmed === "") return;
+  titleSync.mutate("rename", { session_id: sessionId, title: trimmed });
 }
 
 function optGet(kind: OptKind): Map<string, QueuedMessage[]> {
@@ -822,11 +950,11 @@ export function moveDraft(fromSession: string, id: string, toSession: string): v
 }
 
 // --- Reorder (drag) ---------------------------------------------------------
-// Server-authoritative: send the full new id order; the daemon reorders + echoes
-// the list back (sessions / queues broadcast) so every terminal stays in sync.
+// Optimistic via the "order" sync state: apply the new ordering locally (instant
+// drag result) + send; the arbiter echoes a `sync_patch` every terminal folds.
 
 export function reorderSessions(order: string[]): void {
-  send({ type: "reorder_sessions", order });
+  orderSync.mutate("reorder", { order });
 }
 
 export function reorderQueue(sessionId: string, order: string[]): void {

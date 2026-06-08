@@ -24,3 +24,7 @@ web/dist/
 
 # Materialized at build from the atlantis components package.
 web/src/_shell
+
+# Per-worktree symlink to shared-utils packages/sync (state-sync engine);
+# materialized like _shell, never committed.
+web/src/_sync

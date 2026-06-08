@@ -509,6 +509,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     {
         return;
     }
+    // Seed every optimistic-sync state (@shared-utils/sync): one absolute
+    // snapshot patch per state mutated this lifetime, so each of this client's
+    // sync clients starts at the arbiter's version and folds any live overrides.
+    for patch in state.hub.sync_resync() {
+        if send_json(&mut sink, &patch).await.is_err() {
+            return;
+        }
+    }
     for meta in state.hub.session_list() {
         if let Some((events, reached_start)) = state.hub.snapshot(&meta.id) {
             if send_json(
@@ -681,7 +689,9 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::MoveDraft { session_id, .. }
         | Inbound::ReorderQueue { session_id, .. }
         | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
-        Inbound::NewSession { .. } | Inbound::ReorderSessions { .. } => None,
+        // Sync mutations are state-scoped (title/order), not session-scoped — a
+        // failure surfaces as a daemon-level error (None).
+        Inbound::NewSession { .. } | Inbound::ReorderSessions { .. } | Inbound::Sync { .. } => None,
     };
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
@@ -760,6 +770,11 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 state.hub.rename_session(&session_id, trimmed);
                 Ok(())
             }
+        }
+        Inbound::Sync { state: sync_state, id, name, args } => {
+            // Generic arbiter apply (title/order/…); validates, dedupes by id,
+            // applies the typed mutation, version-stamps + broadcasts the patch.
+            state.hub.sync_apply(&sync_state, id, &name, &args)
         }
         Inbound::SetConfigOption {
             session_id,

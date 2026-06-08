@@ -49,7 +49,7 @@ import {
     type SessionOrigin,
     type Status,
 } from "./protocol";
-import { applyUpdate, notify, openSession, reorderSessions, send, useStore } from "./store";
+import { applyUpdate, notify, openSession, renameSession, reorderSessions, send, useStore } from "./store";
 import { useSortable } from "./useSortable";
 import { setNotifySetting, useNotifySetting } from "./turnNotify";
 import { setVimSetting, useVimSetting } from "./vimSetting";
@@ -1157,11 +1157,9 @@ export function App({
                 onClose={(): void => setPendingRename(null)}
                 onConfirm={(title): void => {
                     if (pendingRename) {
-                        send({
-                            type: "rename_session",
-                            session_id: pendingRename.id,
-                            title,
-                        });
+                        // Optimistic rename via the title-sync engine: the new
+                        // title shows instantly and converges on every terminal.
+                        renameSession(pendingRename.id, title);
                     }
                     setPendingRename(null);
                 }}

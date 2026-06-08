@@ -140,6 +140,11 @@ export type Outbound =
       queue: WireQueued[];
       drafts: WireQueued[];
     }
+  // Generic optimistic-sync snapshot patch (@shared-utils/sync): the absolute
+  // `value` of one `state` ("title" map / "order" array / …) at `version`, plus
+  // the mutation ids newly confirmed. The store folds it into that state's sync
+  // client. See store.ts `sync_patch`.
+  | { type: "sync_patch"; state: string; version: number; value: unknown; confirmed: string[] }
   | { type: "error"; session_id?: string; message: string };
 
 export type Inbound =
@@ -159,6 +164,11 @@ export type Inbound =
     }
   | { type: "delete_session"; session_id: string }
   | { type: "rename_session"; session_id: string; title: string }
+  // Generic optimistic-sync mutation (@shared-utils/sync): `state` selects the
+  // synced value ("title"/"order"/…), `name`+`args` are the mutator + args, `id`
+  // is the client-minted mutation id (idempotent retry). The daemon arbiter
+  // echoes a `sync_patch`. Supersedes rename_session/reorder_sessions for the web.
+  | { type: "sync"; state: string; id: string; name: string; args: unknown }
   | {
       // Mode / model / effort change — same wire shape, server routes the
       // right ext_method downstream. See src/acp.rs SetConfigOption.
