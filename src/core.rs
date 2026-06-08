@@ -176,6 +176,17 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
     (prompt, partial)
 }
 
+/// The ACP stop-reason string from the most recent `TurnEnd` event, if any. Read
+/// by the confirm-detect L1 (a non-`EndTurn` stop ⇒ the turn was cut off, not a
+/// question). `acp.rs` pushes `TurnEnd` to the log just before flipping the
+/// status, so it's already present when the turn-end judge runs.
+fn last_stop_reason(log: &[Envelope]) -> Option<String> {
+    log.iter().rev().find_map(|e| match &e.event {
+        Event::TurnEnd { stop_reason } => Some(stop_reason.clone()),
+        _ => None,
+    })
+}
+
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -200,6 +211,14 @@ pub struct SessionMeta {
     /// never (explicit opt-out). See tasks/active/session-auto-resume.
     #[serde(default)]
     pub auto_resume: Option<bool>,
+    /// True when the confirm-detect skill judged the agent's last turn as
+    /// "awaiting the user" (a question/confirmation). Like `editing`, it PAUSES
+    /// the whole drain so the next queued message isn't auto-sent as a wrong
+    /// answer; it also drives the awaiting widget. Lives in the broadcast meta so
+    /// clients see it. NOT persisted (`serde(default)`): on restart it resets to
+    /// false and the next turn re-judges — never restore a stale hold.
+    #[serde(default)]
+    pub awaiting_user: bool,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -287,6 +306,11 @@ struct Session {
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared on
     /// the `Busy`→`Running` turn-end edge or on death (see `set_status`).
     in_flight: bool,
+    /// Monotonic counter bumped on every turn-end judge dispatch. The async
+    /// confirm-detect verdict carries the seq it was issued under and is applied
+    /// ONLY if still current — a newer turn-end supersedes a stale verdict (the
+    /// stale-clear race in plan.md Risks). Not persisted; resets to 0 on restart.
+    judge_seq: u64,
 }
 
 /// A command sent by a client (Web UI, `acp-bridge`, future test harnesses)
@@ -340,12 +364,41 @@ pub enum Inbound {
         #[serde(default)]
         value: Option<bool>,
     },
+    /// Clear/set a session's confirm-detect "awaiting user" hold from the awaiting
+    /// widget. The user dismissing it (`false`) means "not a question" → the hold
+    /// lifts and the queue drains. Broadcasts the updated session list.
+    SetAwaiting {
+        session_id: String,
+        awaiting: bool,
+    },
     /// Set one global setting (`session.autoResume.default` flag /
     /// `session.autoResume.template` string). Persisted + broadcast to every
     /// surface as [`Outbound::Settings`].
     SetSetting {
         key: String,
         value: serde_json::Value,
+    },
+    /// Set an inference provider's non-secret config (model + params). Persisted
+    /// + broadcast as [`Outbound::InferenceConfig`].
+    SetInferenceConfig {
+        provider: String,
+        model: String,
+        #[serde(default)]
+        params: serde_json::Value,
+    },
+    /// Set an inference provider's API key. Persisted to a SEPARATE table; the
+    /// broadcast only flips `key_set` — the key itself never leaves the daemon.
+    SetInferenceSecret {
+        provider: String,
+        api_key: String,
+    },
+    /// DEV probe: call the inference provider once with `prompt` and broadcast an
+    /// [`Outbound::InferenceProbeResult`] (text + cache token counts). Proves the
+    /// key/model/HTTP wiring end to end.
+    InferenceProbe {
+        provider: String,
+        #[serde(default)]
+        prompt: String,
     },
     /// Generic optimistic-sync mutation (@shared-utils/sync). The client applies
     /// it locally for an INSTANT update, then sends it here; the daemon (the
@@ -546,6 +599,28 @@ pub enum Outbound {
     Settings {
         settings: std::collections::HashMap<String, serde_json::Value>,
     },
+    /// The inference-provider configs (model + params + whether a key is set —
+    /// NEVER the key). Sent on connect + re-broadcast on every edit.
+    InferenceConfig {
+        providers: Vec<InferenceView>,
+    },
+    /// The registered skills (id/title/description + the prompt template + the
+    /// extraction rule), so the Info sheet can render each skill's prompt verbatim.
+    /// Static — sent once on connect.
+    Skills {
+        skills: Vec<SkillView>,
+    },
+    /// Result of an [`Inbound::InferenceProbe`] — surfaced in the Info sheet.
+    InferenceProbeResult {
+        provider: String,
+        ok: bool,
+        #[serde(default)]
+        text: String,
+        cache_hit: u32,
+        cache_miss: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
     /// design means any window watching the same session should see why a
@@ -589,6 +664,41 @@ pub enum StoreWrite {
     UpdateAutoResume { session_id: String, value: Option<bool> },
     /// Upsert one global setting (auto-resume default flag / continuation template).
     PutSetting { key: String, value: serde_json::Value },
+    /// Upsert an inference provider's non-secret config.
+    PutInferenceConfig { provider: String, model: String, params: serde_json::Value },
+    /// Upsert an inference provider's API key (separate secrets table).
+    PutInferenceSecret { provider: String, api_key: String },
+}
+
+/// Client-facing view of one inference provider's config — carries `key_set`
+/// (whether an API key exists) but NEVER the key itself.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InferenceView {
+    pub provider: String,
+    pub model: String,
+    pub params: serde_json::Value,
+    pub key_set: bool,
+}
+
+/// Client-facing, owned view of a registered skill (the static `SkillMeta` has
+/// `&'static str` fields, which `Outbound`'s `Deserialize` can't target — so we
+/// snapshot it into owned strings for the wire).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillView {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub prompt_template: String,
+    pub extract: String,
+}
+
+/// In-memory inference entry: the non-secret config PLUS the API key (read by the
+/// judge call, never broadcast).
+#[derive(Debug, Clone, Default)]
+struct InferenceEntry {
+    model: String,
+    params: serde_json::Value,
+    api_key: Option<String>,
 }
 
 /// Live arbiter state for the title-sync channel (the @shared-utils/sync
@@ -650,6 +760,10 @@ struct HubInner {
     /// template), mirrored from the `settings` table on restore. Authoritative
     /// in-memory; every edit also write-behinds via `StoreWrite::PutSetting`.
     settings: Mutex<HashMap<String, serde_json::Value>>,
+    /// In-memory inference-provider configs keyed by provider id (model/params +
+    /// the API key the judge reads). Seeded from the DB on restore; every edit
+    /// write-behinds + re-broadcasts (key_set only).
+    inference: Mutex<HashMap<String, InferenceEntry>>,
 }
 
 impl Hub {
@@ -673,6 +787,7 @@ impl Hub {
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
                 settings: Mutex::new(HashMap::new()),
+                inference: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -779,6 +894,7 @@ impl Hub {
                         drafts,
                         editing: None,
                         in_flight: false,
+                        judge_seq: 0,
                     },
                 );
                 order.push(id);
@@ -922,6 +1038,7 @@ impl Hub {
             origin,
             agent_session_id: None,
             auto_resume: None, // inherit the global default until overridden
+            awaiting_user: false,
         };
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -937,6 +1054,7 @@ impl Hub {
                     drafts: Vec::new(),
                     editing: None,
                     in_flight: false,
+                    judge_seq: 0,
                 },
             );
             order.push(id);
@@ -1038,6 +1156,223 @@ impl Hub {
         for (k, v) in entries {
             s.insert(k, v);
         }
+    }
+
+    /// Snapshot of inference configs for the connect-time push + broadcast —
+    /// `key_set` only, NEVER the key. Sorted by provider for a stable UI order.
+    #[must_use]
+    pub fn inference_snapshot(&self) -> Vec<InferenceView> {
+        let m = self.inner.inference.lock().unwrap();
+        let mut v: Vec<InferenceView> = m
+            .iter()
+            .map(|(p, e)| InferenceView {
+                provider: p.clone(),
+                model: e.model.clone(),
+                params: e.params.clone(),
+                key_set: e.api_key.is_some(),
+            })
+            .collect();
+        v.sort_by(|a, b| a.provider.cmp(&b.provider));
+        v
+    }
+
+    /// Snapshot the static skill registry into owned wire views (Info sheet).
+    #[must_use]
+    pub fn skills_snapshot(&self) -> Vec<SkillView> {
+        crate::skills::registry()
+            .into_iter()
+            .map(|m| SkillView {
+                id: m.id.to_owned(),
+                title: m.title.to_owned(),
+                description: m.description.to_owned(),
+                prompt_template: m.prompt_template.to_owned(),
+                extract: m.extract.to_owned(),
+            })
+            .collect()
+    }
+
+    /// Set a provider's non-secret config; persist + broadcast.
+    pub fn set_inference_config(&self, provider: String, model: String, params: serde_json::Value) {
+        {
+            let mut m = self.inner.inference.lock().unwrap();
+            let e = m.entry(provider.clone()).or_default();
+            e.model = model.clone();
+            e.params = params.clone();
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::PutInferenceConfig { provider, model, params });
+        }
+        let _ = self.inner.tx.send(Outbound::InferenceConfig { providers: self.inference_snapshot() });
+    }
+
+    /// Set a provider's API key; persist (separate table) + broadcast (key_set only).
+    pub fn set_inference_secret(&self, provider: String, api_key: String) {
+        {
+            let mut m = self.inner.inference.lock().unwrap();
+            m.entry(provider.clone()).or_default().api_key = Some(api_key.clone());
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::PutInferenceSecret { provider, api_key });
+        }
+        let _ = self.inner.tx.send(Outbound::InferenceConfig { providers: self.inference_snapshot() });
+    }
+
+    /// Seed inference state from the persisted tables (restore only).
+    pub fn load_inference(
+        &self,
+        configs: Vec<(String, String, serde_json::Value)>,
+        keys: Vec<(String, String)>,
+    ) {
+        let mut m = self.inner.inference.lock().unwrap();
+        for (provider, model, params) in configs {
+            let e = m.entry(provider).or_default();
+            e.model = model;
+            e.params = params;
+        }
+        for (provider, api_key) in keys {
+            m.entry(provider).or_default().api_key = Some(api_key);
+        }
+    }
+
+    /// The API key for `provider` — INTERNAL (the judge call). Never broadcast.
+    #[must_use]
+    pub fn inference_key(&self, provider: &str) -> Option<String> {
+        self.inner.inference.lock().unwrap().get(provider).and_then(|e| e.api_key.clone())
+    }
+
+    /// The configured model for `provider` (the caller applies a default if unset).
+    #[must_use]
+    pub fn inference_model(&self, provider: &str) -> Option<String> {
+        self.inner.inference.lock().unwrap().get(provider).map(|e| e.model.clone())
+    }
+
+    /// Whether the confirm-detect judge can run — i.e. the `deepseek` provider has
+    /// an API key. When false, the drain holds everything (§J no-token block).
+    #[must_use]
+    pub fn confirm_key_present(&self) -> bool {
+        self.inner.inference.lock().unwrap().get("deepseek").is_some_and(|e| e.api_key.is_some())
+    }
+
+    /// Whether a session is currently holding for "awaiting user".
+    #[must_use]
+    pub fn is_awaiting(&self, session_id: &str) -> bool {
+        self.inner.sessions.lock().unwrap().get(session_id).is_some_and(|s| s.meta.awaiting_user)
+    }
+
+    /// Set/clear a session's "awaiting user" hold. Broadcasts the session list so
+    /// the awaiting widget updates; clearing also resumes the drain.
+    pub fn set_awaiting(&self, session_id: &str, awaiting: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.awaiting_user != awaiting => {
+                    s.meta.awaiting_user = awaiting;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+            if !awaiting {
+                self.try_drain(session_id);
+            }
+        }
+    }
+
+    /// Apply a confirm-detect verdict under the `judge_seq` stale-guard: set the
+    /// hold to `v.awaiting_user` only if no newer turn-end has superseded `seq`.
+    /// Broadcasts and resumes the drain when the hold clears.
+    fn apply_verdict(&self, session_id: &str, seq: u64, v: &crate::skills::Verdict) {
+        let resume = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.judge_seq != seq {
+                return; // a newer turn-end already re-judged — drop this verdict
+            }
+            let resume = s.meta.awaiting_user && !v.awaiting_user;
+            s.meta.awaiting_user = v.awaiting_user;
+            resume
+        };
+        self.broadcast_sessions();
+        if resume {
+            self.try_drain(session_id);
+        }
+    }
+
+    /// Turn-end hook: classify the agent's last message with the confirm-detect
+    /// skill. L1 (the agent provider's deterministic stop-reason rule) runs inline
+    /// and short-circuits; only an ambiguous `EndTurn` spawns the async L2 judge.
+    ///
+    /// Recall-first (design §I): before the async judge, set `awaiting_user=true`
+    /// synchronously so the drain can't release a queued prompt as a wrong answer.
+    /// The verdict is applied under the `judge_seq` guard — `false` clears + drains,
+    /// `true`/error keeps the hold (continuity over a wrong drain). `done` is logged
+    /// for a future "task complete" notification hook.
+    fn judge_turn_end(&self, session_id: &str) {
+        let (final_text, seq, provider, stop_reason) = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.judge_seq = s.judge_seq.wrapping_add(1);
+            (
+                last_turn_texts(&s.log).1,
+                s.judge_seq,
+                s.meta.provider.clone(),
+                last_stop_reason(&s.log),
+            )
+        };
+        // L1: deterministic, no LLM. A cut-off/cancelled turn settles here; only a
+        // normal `EndTurn` returns None and falls through to L2.
+        if let Some(v) =
+            crate::provider::confirm::l1(&provider, &crate::provider::confirm::TurnEndCtx {
+                stop_reason: stop_reason.as_deref(),
+                final_text: &final_text,
+            })
+        {
+            self.apply_verdict(session_id, seq, &v);
+            return;
+        }
+        // Nothing the agent said this turn → nothing to judge; don't hold.
+        if final_text.trim().is_empty() {
+            self.set_awaiting(session_id, false);
+            return;
+        }
+        // Provisional hold while the async L2 judge runs.
+        self.set_awaiting(session_id, true);
+        let Some(key) = self.inference_key("deepseek") else {
+            return; // confirm_key_present() gated us in, but be defensive
+        };
+        let model = self
+            .inference_model("deepseek")
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| crate::inference::deepseek::DEFAULT_MODEL.to_owned());
+        let hub = self.clone();
+        let sid = session_id.to_owned();
+        tokio::spawn(async move {
+            let ds = crate::inference::deepseek::DeepSeek::new(key, model);
+            match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text).await
+            {
+                Ok(v) => {
+                    tracing::info!(
+                        session = %sid,
+                        awaiting = v.awaiting_user,
+                        done = v.done,
+                        confidence = v.confidence,
+                        reason = %v.reason,
+                        "confirm-detect verdict"
+                    );
+                    hub.apply_verdict(&sid, seq, &v);
+                }
+                // Error → STAY held (the provisional true stands).
+                Err(e) => {
+                    tracing::warn!(session = %sid, error = %e, "confirm-detect judge failed; holding queue");
+                }
+            }
+        });
     }
 
     /// The global default for auto-resuming interrupted turns (off when unset).
@@ -1381,6 +1716,7 @@ impl Hub {
 
     /// Update a session's status, emit a `Lifecycle` event, refresh the list.
     pub fn set_status(&self, session_id: &str, status: Status, detail: Option<String>) {
+        let turn_ended;
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -1397,6 +1733,10 @@ impl Hub {
             {
                 s.in_flight = false;
             }
+            // A true turn-end (Busy → Running) is where the agent handed control
+            // back — the point to ask the confirm-detect skill "is it waiting on
+            // me?". Captured here under the lock; the judge runs after we release.
+            turn_ended = was == Status::Busy && status == Status::Running;
             s.meta.status = status;
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -1407,8 +1747,17 @@ impl Hub {
         }
         self.push(session_id, Event::Lifecycle { status, detail });
         self.broadcast_sessions();
+        // On a turn-end, judge whether the agent is awaiting the user BEFORE the
+        // drain can release the next queued prompt. Recall-first: the judge sets a
+        // provisional hold synchronously, so try_drain below is a no-op until the
+        // async verdict either clears it (drains) or confirms it (stays held). With
+        // no judge key configured, drain_head already blocks wholesale (§J), so we
+        // skip the judge entirely.
+        if turn_ended && self.confirm_key_present() {
+            self.judge_turn_end(session_id);
+        }
         // A turn-end / death may make the session drainable — try the next
-        // queued prompt now (no-op if still busy or nothing queued).
+        // queued prompt now (no-op if still busy, held, or nothing queued).
         self.try_drain(session_id);
     }
 
@@ -1491,6 +1840,11 @@ impl Hub {
             session_id,
             message,
         });
+    }
+
+    /// Broadcast an arbitrary outbound message to every connected client.
+    pub fn broadcast(&self, msg: Outbound) {
+        let _ = self.inner.tx.send(msg);
     }
 
     // --- Queue + drafts (server-authoritative, synced to every terminal) ------
@@ -1577,12 +1931,22 @@ impl Hub {
         if self.inner.dispatch_tx.lock().unwrap().is_none() {
             return;
         }
+        // No inference key → we can't judge whether the agent is asking the user,
+        // so never auto-drain (§J). The warning widget nudges configuring a key.
+        if !self.confirm_key_present() {
+            return;
+        }
         let req = {
             let mut sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             if !Self::ready(s, allow_revive) {
+                return;
+            }
+            // The agent's last turn was judged "awaiting the user" → hold the whole
+            // queue so the next message isn't auto-sent as a wrong answer.
+            if s.meta.awaiting_user {
                 return;
             }
             let Some(head) = s.queue.first() else {
@@ -2052,5 +2416,44 @@ fn sort_by_id_order<T>(items: &mut [T], order: &[String], id_of: impl Fn(&T) -> 
 impl Default for Hub {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod confirm_hold_tests {
+    use super::*;
+
+    fn hub_with_session(id: &str) -> Hub {
+        let hub = Hub::new();
+        hub.create_session(
+            id.to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "t".to_owned(),
+            SessionOrigin::Web,
+        );
+        hub
+    }
+
+    // The two inputs `drain_head` reads before draining: a present judge key
+    // (§J no-token block) and the per-session awaiting hold (§I). The drain is a
+    // no-op without a registered dispatcher, so we assert the guard *state* the
+    // drain branches on rather than the dispatch side effect (live-verified).
+    #[test]
+    fn no_key_blocks_then_key_unblocks() {
+        let hub = hub_with_session("s1");
+        assert!(!hub.confirm_key_present(), "no key → drain blocks");
+        hub.set_inference_secret("deepseek".to_owned(), "sk-test".to_owned());
+        assert!(hub.confirm_key_present(), "key present → drain may proceed");
+    }
+
+    #[test]
+    fn awaiting_hold_toggles() {
+        let hub = hub_with_session("s2");
+        assert!(!hub.is_awaiting("s2"));
+        hub.set_awaiting("s2", true);
+        assert!(hub.is_awaiting("s2"), "judge held the queue");
+        hub.set_awaiting("s2", false);
+        assert!(!hub.is_awaiting("s2"), "clearing resumes the drain");
     }
 }

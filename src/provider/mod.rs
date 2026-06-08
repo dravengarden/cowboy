@@ -7,6 +7,13 @@
 
 use std::collections::HashMap;
 
+// Per-provider specifics beyond launching. Today each holds its L1 confirm-detect
+// (the volatile, often-changing turn-end markers — design §B), sharing the
+// portable stop-reason rule in `confirm`.
+pub mod claude_code;
+pub mod codex;
+pub mod confirm;
+
 /// How to spawn one provider's ACP adapter as a subprocess.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {

@@ -26,8 +26,10 @@ import type {
   ContentBlock,
   Envelope,
   Inbound,
+  InferenceProviderView,
   Outbound,
   SessionMeta,
+  SkillView,
   WireQueued,
 } from "./protocol";
 
@@ -76,6 +78,16 @@ export interface QueuedMessage {
   status?: "pending" | "sending" | "failed";
 }
 
+/** Result of a dev inference probe (Info sheet "Test"). */
+export interface ProbeResult {
+  provider: string;
+  ok: boolean;
+  text: string;
+  cacheHit: number;
+  cacheMiss: number;
+  error?: string;
+}
+
 export interface State {
   connected: boolean;
   sessions: SessionMeta[];
@@ -120,6 +132,13 @@ export interface State {
   // from the `settings` broadcast. Drives the Settings UI + the per-session badge
   // (effective auto-resume = session override ?? this default).
   settings: Record<string, unknown>;
+  // Inference-provider configs (model + key_set, NEVER the key) from the
+  // `inference_config` broadcast. Drives the Info sheet's provider config.
+  inferenceConfig: InferenceProviderView[];
+  // The static skill registry (prompt + extract) from the `skills` broadcast.
+  skills: SkillView[];
+  // Last dev-probe result (Info sheet "Test"), or undefined.
+  lastProbe: ProbeResult | undefined;
 }
 
 let errorSeq = 0;
@@ -138,6 +157,9 @@ let state: State = {
   optimisticMessages: new Map(),
   titleOverrides: {},
   settings: {},
+  inferenceConfig: [],
+  skills: [],
+  lastProbe: undefined,
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -367,6 +389,28 @@ function handle(msg: Outbound): void {
     }
     case "settings": {
       setState({ ...state, settings: msg.settings });
+      break;
+    }
+    case "inference_config": {
+      setState({ ...state, inferenceConfig: msg.providers });
+      break;
+    }
+    case "skills": {
+      setState({ ...state, skills: msg.skills });
+      break;
+    }
+    case "inference_probe_result": {
+      setState({
+        ...state,
+        lastProbe: {
+          provider: msg.provider,
+          ok: msg.ok,
+          text: msg.text,
+          cacheHit: msg.cache_hit,
+          cacheMiss: msg.cache_miss,
+          ...(msg.error !== undefined && { error: msg.error }),
+        },
+      });
       break;
     }
     case "error": {
@@ -646,6 +690,46 @@ export function effectiveAutoResume(meta: SessionMeta, s: State): boolean {
 export function setSetting(key: string, value: unknown): void {
   setState({ ...state, settings: { ...state.settings, [key]: value } });
   send({ type: "set_setting", key, value });
+}
+
+/** All inference-provider configs (model + key_set, never the key). */
+export function useInferenceConfig(): InferenceProviderView[] {
+  return useStore().inferenceConfig;
+}
+
+/** The registered skills (prompt + extract), for the Info sheet viewer. */
+export function useSkills(): SkillView[] {
+  return useStore().skills;
+}
+
+/** Set a provider's model/params (optimistic local update + send). */
+export function setInferenceConfig(provider: string, model: string, params?: unknown): void {
+  const next = state.inferenceConfig.some((p) => p.provider === provider)
+    ? state.inferenceConfig.map((p) => (p.provider === provider ? { ...p, model } : p))
+    : [...state.inferenceConfig, { provider, model, params: params ?? {}, key_set: false }];
+  setState({ ...state, inferenceConfig: next });
+  send({ type: "set_inference_config", provider, model, params });
+}
+
+/** Set a provider's API key (optimistic `key_set` flip + send; the key never
+ *  comes back from the daemon). */
+export function setInferenceSecret(provider: string, apiKey: string): void {
+  const next = state.inferenceConfig.some((p) => p.provider === provider)
+    ? state.inferenceConfig.map((p) => (p.provider === provider ? { ...p, key_set: true } : p))
+    : [...state.inferenceConfig, { provider, model: "", params: {}, key_set: true }];
+  setState({ ...state, inferenceConfig: next });
+  send({ type: "set_inference_secret", provider, api_key: apiKey });
+}
+
+/** Last dev-probe result (Info sheet "Test"). */
+export function useLastProbe(): ProbeResult | undefined {
+  return useStore().lastProbe;
+}
+
+/** Fire a dev probe against a provider — the daemon calls it once and broadcasts
+ *  an `inference_probe_result` (text + cache tokens, or error). */
+export function runInferenceProbe(provider: string, prompt?: string): void {
+  send({ type: "inference_probe", provider, ...(prompt !== undefined && { prompt }) });
 }
 
 /** Set a session's auto-resume override (`null` = inherit the global default).
@@ -1057,6 +1141,14 @@ export function removeQueued(sessionId: string, id: string): void {
 // Drop a session's whole queue (the "Clear All" header action).
 export function clearQueue(sessionId: string): void {
   send({ type: "clear_queue", session_id: sessionId });
+}
+
+// Lift the confirm-detect "awaiting user" hold (the awaiting widget's dismiss /
+// Send). `false` = "the agent wasn't really asking" → the queue drains. Non-
+// optimistic: the daemon `broadcast_sessions()` reflects the cleared flag within
+// a round-trip (mirrors `setSessionAutoResume`).
+export function dismissAwaiting(sessionId: string): void {
+  send({ type: "set_awaiting", session_id: sessionId, awaiting: false });
 }
 
 // Hold (or release, with `null`) the queue head for editing — pauses the daemon

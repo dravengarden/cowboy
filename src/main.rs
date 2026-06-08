@@ -2,6 +2,8 @@ mod acp;
 mod acp_bridge;
 mod cli;
 mod core;
+mod inference;
+mod skills;
 mod files;
 mod provider;
 mod server;

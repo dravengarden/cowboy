@@ -65,6 +65,7 @@ import {
     send,
     setSessionAutoResume,
     setSetting,
+    useInferenceConfig,
     useStore,
 } from "./store";
 import { useSortable } from "./useSortable";
@@ -92,6 +93,8 @@ import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
 import { Sheet } from "./Sheet";
+import { InfoSheet } from "./InfoSheet";
+import { type Notice, Notices } from "./Notices";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
@@ -713,6 +716,26 @@ export function App({
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [infoOpen, setInfoOpen] = useState(false);
+    // Top-of-content notices (design §J). The no-inference-key warning: without a
+    // judge key the daemon holds the queue on EVERY turn (it can't tell a question
+    // from a finished turn), so surface a calm MUI warning + a Configure shortcut
+    // to the Info sheet. Auto-clears the moment a key is set (the broadcast flips
+    // `key_set`). Future notices push more entries onto this list.
+    const inferenceConfig = useInferenceConfig();
+    const hasJudgeKey = inferenceConfig.some((c) => c.provider === "deepseek" && c.key_set);
+    const notices: Notice[] = hasJudgeKey
+        ? []
+        : [
+              {
+                  id: "no-inference-key",
+                  severity: "warning",
+                  message:
+                      "No API key set — the queue is held on every turn. Add a key so the agent's questions are detected and only real answers are sent.",
+                  actionLabel: "Configure",
+                  onAction: (): void => setInfoOpen(true),
+              },
+          ];
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
     // old fluid clamp) so the divider can set it directly; `resizing` drives
     // the handle's active highlight and a body-wide drag cursor / no-select.
@@ -1190,6 +1213,13 @@ export function App({
                             <Box sx={{ flex: 1, minWidth: 0 }} />
                         )}
                         <IconButton
+                            onClick={(): void => setInfoOpen(true)}
+                            aria-label="info"
+                            title="Info"
+                        >
+                            <InfoOutlined />
+                        </IconButton>
+                        <IconButton
                             onClick={(): void => setSettingsOpen(true)}
                             aria-label="settings"
                             title="Settings"
@@ -1218,6 +1248,7 @@ export function App({
                                     : { display: "contents" }
                             }
                         >
+                            <Notices notices={notices} />
                             <Transcript
                                 sessionId={active.id}
                                 timeline={timelines.get(active.id) ?? []}
@@ -1347,6 +1378,7 @@ export function App({
                 }}
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
+            <InfoSheet open={infoOpen} onClose={(): void => setInfoOpen(false)} />
             <SettingsShell
                 open={settingsOpen}
                 onClose={(): void => setSettingsOpen(false)}
@@ -1861,22 +1893,8 @@ function SettingsShell({
                 )}
                 <Divider />
                 <AutoResumeSettings />
-                <Divider />
-                <Stack spacing={1}>
-                    <Typography variant="overline" color="text.secondary">
-                        Storage
-                    </Typography>
-                    <StorageInfoSection />
-                </Stack>
-                <Divider />
-                <Stack spacing={0.5}>
-                    <Typography variant="overline" color="text.secondary">
-                        About
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                        cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
-                    </Typography>
-                </Stack>
+                {/* Daemon system info (Storage metrics + About) moved to the Info
+                    sheet — Settings holds user preferences only. */}
             </Stack>
         </Sheet>
     );
@@ -1994,18 +2012,6 @@ function RenameSessionShell({
 // Both read the daemon's HTTP info endpoints (GET, no WS) and surface the
 // capacity numbers the audit flagged — events are the unbounded grower.
 
-function formatBytes(n: number): string {
-    if (n < 1024) return `${String(n)} B`;
-    const units = ["KB", "MB", "GB", "TB"];
-    let v = n / 1024;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-        v /= 1024;
-        i += 1;
-    }
-    return `${v.toFixed(1)} ${units[i] ?? "B"}`;
-}
-
 // A label/value row used by both info surfaces.
 function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
     return (
@@ -2078,43 +2084,6 @@ function SessionInfoShell(
         >
             {body}
         </Sheet>
-    );
-}
-
-interface MetricsData {
-    db_bytes: number;
-    events_rows: number;
-    sessions_live: number;
-    sessions_deleted: number;
-    daemon_rss_bytes: number;
-}
-
-// Storage/runtime metrics for the Settings panel (GET /api/metrics).
-function StorageInfoSection(): React.JSX.Element {
-    const [m, setM] = useState<MetricsData | null>(null);
-    useEffect(() => {
-        const ctrl = new AbortController();
-        void fetch("/api/metrics", { signal: ctrl.signal })
-            .then((r) => r.json() as Promise<MetricsData>)
-            .then(setM)
-            .catch(() => {
-                /* leave as Loading… */
-            });
-        return () => {
-            ctrl.abort();
-        };
-    }, []);
-    if (!m) {
-        return <Typography variant="body2" sx={{ color: "text.secondary" }}>Loading…</Typography>;
-    }
-    return (
-        <Stack spacing={1}>
-            <InfoRow k="Database" v={formatBytes(m.db_bytes)} />
-            <InfoRow k="Event rows" v={m.events_rows.toLocaleString()} />
-            <InfoRow k="Live sessions" v={String(m.sessions_live)} />
-            <InfoRow k="Deleted (purge ≤3d)" v={String(m.sessions_deleted)} />
-            <InfoRow k="Daemon memory" v={formatBytes(m.daemon_rss_bytes)} />
-        </Stack>
     );
 }
 

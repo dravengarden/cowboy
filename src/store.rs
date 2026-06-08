@@ -250,6 +250,107 @@ impl Store {
         Ok(())
     }
 
+    // --- Inference providers (design: tasks/active/confirm-detect-skills §H) ---
+    // Config (model + params) and the API key live in SEPARATE tables so the key
+    // never rides along a non-secret read: the web is only ever told "is a key
+    // set?" (`inference_secret_set`), never the key itself.
+
+    /// All stored inference configs: `(provider, model, params)`.
+    ///
+    /// # Errors
+    /// If the SELECT fails.
+    pub async fn load_inference_config(&self) -> Result<Vec<(String, String, serde_json::Value)>> {
+        let rows = sqlx::query_as("SELECT provider, model, params FROM inference_config")
+            .fetch_all(&self.pool)
+            .await
+            .context("SELECT inference_config")?;
+        Ok(rows)
+    }
+
+    /// Upsert an inference provider's non-secret config.
+    ///
+    /// # Errors
+    /// If the UPSERT fails.
+    pub async fn put_inference_config(
+        &self,
+        provider: &str,
+        model: &str,
+        params: &serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO inference_config(provider, model, params, updated_at) \
+             VALUES ($1, $2, $3, now()) \
+             ON CONFLICT (provider) DO UPDATE SET model = $2, params = $3, updated_at = now()",
+        )
+        .bind(provider)
+        .bind(model)
+        .bind(params)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT inference_config {provider}"))?;
+        Ok(())
+    }
+
+    /// Upsert an inference provider's API key.
+    ///
+    /// # Errors
+    /// If the UPSERT fails.
+    pub async fn put_inference_secret(&self, provider: &str, api_key: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO inference_secrets(provider, api_key, updated_at) \
+             VALUES ($1, $2, now()) \
+             ON CONFLICT (provider) DO UPDATE SET api_key = $2, updated_at = now()",
+        )
+        .bind(provider)
+        .bind(api_key)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT inference_secret {provider}"))?;
+        Ok(())
+    }
+
+    /// The API key — INTERNAL ONLY (the judge call reads it). NEVER exposed to a
+    /// web client; pair `inference_secret_set` for the client-facing fact.
+    ///
+    /// # Errors
+    /// If the SELECT fails.
+    pub async fn load_inference_secret(&self, provider: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT api_key FROM inference_secrets WHERE provider = $1")
+                .bind(provider)
+                .fetch_optional(&self.pool)
+                .await
+                .context("SELECT inference_secret")?;
+        Ok(row.map(|(k,)| k))
+    }
+
+    /// Whether a key is set for `provider` — the ONLY secret fact the web is told.
+    ///
+    /// # Errors
+    /// If the SELECT fails.
+    pub async fn inference_secret_set(&self, provider: &str) -> Result<bool> {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM inference_secrets WHERE provider = $1")
+                .bind(provider)
+                .fetch_optional(&self.pool)
+                .await
+                .context("EXISTS inference_secret")?;
+        Ok(row.is_some())
+    }
+
+    /// All API keys — INTERNAL ONLY, restore-time bulk load into the Hub's memory
+    /// (so the judge can call without a per-turn DB read). Never reaches the web.
+    ///
+    /// # Errors
+    /// If the SELECT fails.
+    pub async fn load_inference_secrets(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query_as("SELECT provider, api_key FROM inference_secrets")
+            .fetch_all(&self.pool)
+            .await
+            .context("SELECT inference_secrets")?;
+        Ok(rows)
+    }
+
     /// Append an event under its session. Also bumps `sessions.next_seq` so
     /// the high-water mark survives restart. Single transaction so seq
     /// stays monotonic from any concurrent appender.
@@ -454,6 +555,9 @@ impl SessionRow {
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
             auto_resume: self.auto_resume,
+            // Never restored from the DB — a turn-end hold is transient; the next
+            // turn re-judges. Always start cleared.
+            awaiting_user: false,
         }
     }
 }

@@ -54,6 +54,7 @@ import {
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
 import { PlanDock } from "./PlanDock";
+import { AwaitingBar } from "./AwaitingBar";
 import { latestPlan } from "./derive";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
@@ -445,6 +446,16 @@ export function Composer({
           superseded by a new turn (see showPlan). */}
       {showPlan && plan && (
         <PlanDock entries={plan.entries} onDismiss={(): void => setDismissedPlanKey(plan.key)} />
+      )}
+      {/* Confirm-detect: when the agent's last turn was judged "awaiting your
+          reply", surface a calm bar (above the queue) that holds the queue and
+          offers Send-now / Clear / dismiss. Shows even with an empty queue. */}
+      {session?.awaiting_user && (
+        <AwaitingBar
+          sessionId={sessionId}
+          queueLen={queue.length}
+          onFocusComposer={(): void => editorRef.current?.focus()}
+        />
       )}
       {/* Queued prompts (top): while the agent is busy, messages stack here and
           drain one per turn-end. Hidden when empty. */}

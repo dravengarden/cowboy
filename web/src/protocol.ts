@@ -41,6 +41,10 @@ export interface SessionMeta {
    *  default (`settings['session.autoResume.default']`); `true`/`false` = force.
    *  Effective = override ?? default (see store `effectiveAutoResume`). */
   auto_resume?: boolean | null;
+  /** True when the confirm-detect skill judged the agent's last turn as awaiting
+   *  the user (a question/confirmation): the queue is held and the awaiting
+   *  widget shows. Transient (never persisted) — resets to false on restart. */
+  awaiting_user?: boolean;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -149,7 +153,40 @@ export type Outbound =
   // Global key-value settings (auto-resume default flag + continuation template).
   // Sent on connect + re-broadcast on every edit. See store.ts `settings`.
   | { type: "settings"; settings: Record<string, unknown> }
+  // Inference-provider configs (model + key_set — NEVER the key). Connect + edits.
+  | { type: "inference_config"; providers: InferenceProviderView[] }
+  // The static skill registry (prompt + extract), sent once on connect.
+  | { type: "skills"; skills: SkillView[] }
+  // Result of a dev probe (Info sheet "Test"): text + cache token counts, or error.
+  | {
+    type: "inference_probe_result";
+    provider: string;
+    ok: boolean;
+    text: string;
+    cache_hit: number;
+    cache_miss: number;
+    error?: string;
+  }
   | { type: "error"; session_id?: string; message: string };
+
+/** One inference provider's config as the daemon exposes it — `key_set` says
+ *  whether an API key exists, but the key itself never reaches the client. */
+export interface InferenceProviderView {
+  provider: string;
+  model: string;
+  params: unknown;
+  key_set: boolean;
+}
+
+/** A registered skill as the daemon exposes it — the prompt template + extraction
+ *  rule are rendered verbatim in the Info sheet so they're inspectable. */
+export interface SkillView {
+  id: string;
+  title: string;
+  description: string;
+  prompt_template: string;
+  extract: string;
+}
 
 export type Inbound =
   | { type: "new_session"; provider: string; cwd?: string }
@@ -227,6 +264,14 @@ export type Inbound =
   // Auto-resume (tasks/active/session-auto-resume): per-session override
   // (`value: null` = inherit the global default) + a global setting upsert.
   | { type: "set_session_auto_resume"; session_id: string; value: boolean | null }
-  | { type: "set_setting"; key: string; value: unknown };
+  // Confirm-detect: clear/set the "awaiting user" hold (the awaiting widget's
+  // dismiss / Send). `awaiting: false` = "not a question" → drain the held queue.
+  | { type: "set_awaiting"; session_id: string; awaiting: boolean }
+  | { type: "set_setting"; key: string; value: unknown }
+  // Inference provider config (model + params) + API key (separate; key never
+  // echoed back). See store.ts `inferenceConfig`.
+  | { type: "set_inference_config"; provider: string; model: string; params?: unknown }
+  | { type: "set_inference_secret"; provider: string; api_key: string }
+  | { type: "inference_probe"; provider: string; prompt?: string };
 
 export const PROVIDERS = ["claude-code", "codex"] as const;
