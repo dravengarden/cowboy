@@ -1570,6 +1570,7 @@ function PendingRow({
     message.attachments,
   );
   const editorRef = useRef<ComposerEditorHandle>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
   // "running" is the idle-ready state; "exited"/"crashed"/"interrupted" dispatch
@@ -1591,9 +1592,18 @@ function PendingRow({
   // inside the gesture and pops the keyboard. (@uiw's own autoFocus wouldn't
   // help: it focuses from a passive useEffect — the same late timing.)
   useLayoutEffect(() => {
+    if (!editing) return undefined;
     // focusEnd, not focus: opening an existing draft/queued message should put
     // the caret at the end of its text so you continue typing, not at the start.
-    if (editing) editorRef.current?.focusEnd();
+    editorRef.current?.focusEnd();
+    // Focusing raises the keyboard; with `interactive-widget=resizes-content` the
+    // layout viewport then shrinks. A row low in the drafts list would land BEHIND
+    // the keyboard (you'd have to scroll up to see what you're typing). Once the
+    // keyboard has settled, pull the edit row into view.
+    const t = globalThis.setTimeout(() => {
+      rowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 350);
+    return () => globalThis.clearTimeout(t);
   }, [editing]);
   if (editing) {
     const save = (): void => {
@@ -1613,7 +1623,7 @@ function PendingRow({
       });
     };
     return (
-      <Paper variant="outlined" sx={{ p: 0.75 }}>
+      <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
         {editAttachments.length > 0 && (
           <AttachmentPreviews
             attachments={editAttachments}
