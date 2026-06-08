@@ -358,7 +358,17 @@ export function Composer({
         pr: `max(env(safe-area-inset-right), ${padding}px)`,
         borderTop: 1,
         borderColor: "divider",
-        bgcolor: "background.paper",
+        // Frosted glass (磨砂玻璃), matching the top status strip: translucent
+        // tint + blur + saturate so it reads as iOS material, and — once the
+        // transcript runs UNDER it (floating model below) — the content scrolling
+        // behind it diffuses through the blur. Lower alpha than the old solid
+        // `background.paper` for the glassy look; the up-shadow + top hairline
+        // give the "floating above the scroll" depth. Tuned per theme so controls
+        // stay legible over arbitrary scrolling content (incl. a code block).
+        bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.6 : 0.64),
+        backdropFilter: "blur(24px) saturate(180%)",
+        WebkitBackdropFilter: "blur(24px) saturate(180%)",
+        boxShadow: (t) => `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
         position: "relative", // anchor for Popper portal placement
       }}
     >

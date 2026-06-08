@@ -989,6 +989,7 @@ export function Transcript({
   loading,
   connected,
   topInset,
+  bottomInset,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -1006,6 +1007,11 @@ export function Transcript({
   /** Extra top padding for the scroll content (a CSS length), so content clears
    *  the bottom-mode glass status-bar strip at rest. Undefined = none. */
   topInset?: string | undefined;
+  /** Extra BOTTOM padding for the scroll content (a CSS length), so the newest
+   *  message clears the floating glass composer+navbar at rest while still
+   *  scrolling UNDER it mid-scroll. column-reverse → padding-bottom is the
+   *  visual bottom (newest side). Undefined = none. */
+  bottomInset?: string | undefined;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -1319,6 +1325,14 @@ export function Transcript({
           // side); content still scrolls UNDER the strip mid-scroll. Overrides
           // the `py` top only when an inset is supplied.
           ...(topInset && { pt: `calc(${topInset} + 8px)` }),
+          // Mirror for the floating bottom glass (composer + navbar): reserve its
+          // height at the bottom so the newest message clears it at rest, while
+          // content still scrolls UNDER the glass. column-reverse → pb is the
+          // visual bottom (newest side); changing it only reflows the scroll
+          // RANGE, never the container height, so the panel can grow (drafts
+          // expand) with no transcript reflow — the native bottom anchor keeps
+          // the newest message pinned just above the growing panel.
+          ...(bottomInset && { pb: `calc(${bottomInset} + 8px)` }),
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text

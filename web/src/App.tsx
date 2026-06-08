@@ -710,7 +710,30 @@ export function App({
     // `forceSheet`), so a tablet's bottom navbar gets bottom-up modals too
     // rather than centered dialogs.
     const navbarAtBottom = useNavbarAtBottom();
+    // Floating-glass bottom (bottom-navbar mode): the composer + navbar float as
+    // frosted overlays over a full-height transcript. Publish their measured
+    // heights as CSS vars on the column so the transcript reserves that space
+    // (its `bottomInset`) — content scrolls UNDER the glass but the newest message
+    // clears it. Re-measures on drafts/queue expand + keyboard, so the scroll
+    // RANGE tracks the panel with NO column reflow (column-reverse keeps the
+    // newest pinned just above the growing panel).
+    const columnRef = useRef<HTMLDivElement>(null);
+    const appBarRef = useRef<HTMLDivElement>(null);
+    const composerRef = useRef<HTMLDivElement>(null);
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
+    useEffect(() => {
+        const col = columnRef.current;
+        if (!col || !navbarAtBottom) return undefined;
+        const measure = (): void => {
+            col.style.setProperty("--navbar-h", `${appBarRef.current?.offsetHeight ?? 0}px`);
+            col.style.setProperty("--composer-h", `${composerRef.current?.offsetHeight ?? 0}px`);
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        if (appBarRef.current) ro.observe(appBarRef.current);
+        if (composerRef.current) ro.observe(composerRef.current);
+        return (): void => ro.disconnect();
+    }, [navbarAtBottom, activeId]);
     // The focus id we restored from localStorage at mount (PWA relaunch / reload).
     // Held in a ref so the gone-check fires exactly once after the first session
     // list arrives — if that session was deleted while we were away, the
@@ -974,11 +997,14 @@ export function App({
             )}
 
             <Stack
+                ref={columnRef}
                 sx={{
                     flex: 1,
                     minWidth: 0,
-                    // Anchor the bottom-mode glass status-bar strip (below).
+                    // Anchor the bottom-mode glass status-bar strip + the floating
+                    // composer/navbar overlays (below); clip them to the column.
                     position: "relative",
+                    ...(navbarAtBottom && { overflow: "hidden" }),
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -1020,6 +1046,7 @@ export function App({
                     />
                 )}
                 <AppBar
+                    ref={appBarRef}
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT
                     // `color="default"`: MUI's "default" AppBar resolves to a
@@ -1032,7 +1059,24 @@ export function App({
                     color="transparent"
                     elevation={0}
                     sx={{
-                        bgcolor: "background.default",
+                        // Bottom mode: frosted glass (磨砂), same recipe as the
+                        // composer + top strip, so navbar → composer read as one
+                        // floating glass slab over the scroll. Top mode keeps the
+                        // solid themed surface (it's the leading edge, nothing
+                        // scrolls behind it).
+                        ...(navbarAtBottom
+                            ? {
+                                  bgcolor: (t) =>
+                                      alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.6 : 0.64),
+                                  backdropFilter: "blur(24px) saturate(180%)",
+                                  WebkitBackdropFilter: "blur(24px) saturate(180%)",
+                                  // Float above the absolute full-height transcript
+                                  // layer (zIndex 0): positioned + zIndex so the
+                                  // navbar glass paints over the scrolling content.
+                                  position: "relative",
+                                  zIndex: 1,
+                              }
+                            : { bgcolor: "background.default" }),
                         color: "text.primary",
                         // Bottom mode (mobile, navbar-pos=bottom): flex `order` puts
                         // the bar at the VERY bottom — below the transcript (0) AND
@@ -1160,27 +1204,62 @@ export function App({
 
                 {active ? (
                     <>
-                        <Transcript
-                            sessionId={active.id}
-                            timeline={timelines.get(active.id) ?? []}
-                            status={active.status}
-                            provider={active.provider}
-                            // Skeleton until this session's history snapshot
-                            // lands (vs an empty session, which is hydrated).
-                            loading={!hydrated.has(active.id)}
-                            // While the WS is down the "working" spinner must not
-                            // keep spinning on a stale status (daemon restart).
-                            connected={connected}
-                            // Bottom-navbar mode: reserve the status-bar inset at
-                            // the transcript's top so content clears the glass
-                            // strip at rest (top mode: the AppBar owns that edge).
-                            topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : undefined}
-                        />
+                        {/* Bottom-navbar mode → the transcript is the FULL-height
+                            background layer (absolute, zIndex 0) and the composer +
+                            navbar float over it as frosted glass; content scrolls
+                            UNDER them. `display:contents` in top mode keeps the
+                            Transcript a plain flex:1 child (unchanged layout). The
+                            absolute layer is a flex column so the Transcript's own
+                            flex:1 fills it. */}
+                        <Box
+                            sx={
+                                navbarAtBottom
+                                    ? { position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }
+                                    : { display: "contents" }
+                            }
+                        >
+                            <Transcript
+                                sessionId={active.id}
+                                timeline={timelines.get(active.id) ?? []}
+                                status={active.status}
+                                provider={active.provider}
+                                // Skeleton until this session's history snapshot
+                                // lands (vs an empty session, which is hydrated).
+                                loading={!hydrated.has(active.id)}
+                                // While the WS is down the "working" spinner must not
+                                // keep spinning on a stale status (daemon restart).
+                                connected={connected}
+                                // Bottom-navbar mode: reserve the status-bar inset at
+                                // the transcript's top so content clears the glass
+                                // strip at rest (top mode: the AppBar owns that edge).
+                                topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : undefined}
+                                // Reserve the floating composer+navbar height (measured
+                                // into CSS vars) so the newest message clears the glass
+                                // at rest. Tracks drafts-expand with no column reflow.
+                                bottomInset={
+                                    navbarAtBottom
+                                        ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
+                                        : undefined
+                                }
+                            />
+                        </Box>
+                        {/* Bottom mode: a flex:1 spacer takes the place the (now
+                            absolute) transcript vacated, so the composer (order 1) +
+                            navbar (order 2) sit at the column bottom. */}
+                        {navbarAtBottom && <Box aria-hidden sx={{ order: 0, flex: 1 }} />}
                         {/* Bottom mode: order 1 sits the composer above the
                             navbar (order 2, the very bottom) and below the
-                            transcript (0). Top mode: order 0 (default DOM order).
-                            minWidth:0 so long content can't overflow the column. */}
-                        <Box sx={{ order: navbarAtBottom ? 1 : 0, minWidth: 0 }}>
+                            transcript. position:relative + zIndex lifts the frosted
+                            composer above the absolute transcript layer. Top mode:
+                            order 0 (default DOM order). */}
+                        <Box
+                            ref={composerRef}
+                            sx={{
+                                order: navbarAtBottom ? 1 : 0,
+                                minWidth: 0,
+                                ...(navbarAtBottom && { position: "relative", zIndex: 1 }),
+                            }}
+                        >
                             <Composer
                                 // Remount per session: each session owns its draft
                                 // (seeded from the per-session draft store) and a
