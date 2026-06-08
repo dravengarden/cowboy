@@ -178,6 +178,17 @@ pub struct RestoredSession {
     pub drafts: Vec<QueuedMessage>,
 }
 
+/// Per-session info for the UI's session-info dialog — the metadata plus the
+/// live in-memory counts (event log length + staged queue/drafts sizes).
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionInfo {
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+    pub event_count: u64,
+    pub queue_count: usize,
+    pub drafts_count: usize,
+}
+
 /// Per-session state: metadata + the seq-ordered event log.
 struct Session {
     meta: SessionMeta,
@@ -711,6 +722,28 @@ impl Hub {
             .iter()
             .filter_map(|id| sessions.get(id).map(|s| s.meta.clone()))
             .collect()
+    }
+
+    /// Per-session info (metadata + live event/queue/draft counts) for the
+    /// session-info dialog. `None` for an unknown session.
+    #[must_use]
+    pub fn session_info(&self, session_id: &str) -> Option<SessionInfo> {
+        let sessions = self.inner.sessions.lock().unwrap();
+        let s = sessions.get(session_id)?;
+        Some(SessionInfo {
+            meta: s.meta.clone(),
+            event_count: u64::try_from(s.log.len()).unwrap_or(u64::MAX),
+            queue_count: s.queue.len(),
+            drafts_count: s.drafts.len(),
+        })
+    }
+
+    /// Total events held in memory across all live sessions — the event-count
+    /// metric for the info panel.
+    #[must_use]
+    pub fn event_total(&self) -> u64 {
+        let sessions = self.inner.sessions.lock().unwrap();
+        sessions.values().map(|s| u64::try_from(s.log.len()).unwrap_or(u64::MAX)).sum()
     }
 
     /// Recent log TAIL for a fresh client (last [`SNAPSHOT_TAIL`] events) plus

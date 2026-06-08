@@ -41,6 +41,8 @@ use tokio::sync::mpsc;
 struct AppState {
     hub: Hub,
     supervisor: Arc<Supervisor>,
+    /// Kept for read-only storage metrics (`/api/metrics`). `None` in-memory.
+    store: Option<Store>,
 }
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
@@ -83,13 +85,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         // Errors are logged but don't bring the daemon down — the in-memory
         // state remains authoritative for the current process.
         tokio::spawn(run_store_writer(store.clone(), rx));
+        // Background sweeper: hard-delete sessions soft-deleted past the
+        // retention window, reclaiming their event storage.
+        tokio::spawn(run_purge_sweeper(store.clone()));
         (hub, Some(store))
     } else {
         tracing::info!("no --postgres-url: running in-memory only");
         (Hub::new(), None)
     };
-    drop(store); // We only kept it to thread the type; the writer holds it.
-
     let supervisor = Arc::new(Supervisor::new(hub.clone(), args.workspace_root.clone()));
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
@@ -111,7 +114,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         "cowboy serving",
     );
 
-    serve_axum(args.bind, hub, supervisor).await
+    serve_axum(args.bind, hub, supervisor, store).await
 }
 
 /// Drain the write-behind channel into postgres. One row per intent, no
@@ -152,6 +155,26 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
         }
     }
     tracing::info!("store writer shutting down (channel closed)");
+}
+
+/// Retention (days) for soft-deleted sessions before the sweeper hard-deletes
+/// them + their events.
+const PURGE_RETENTION_DAYS: i64 = 3;
+
+/// Periodically hard-delete sessions soft-deleted past [`PURGE_RETENTION_DAYS`],
+/// reclaiming their event storage. `interval` fires immediately on the first
+/// tick (clears any backlog accrued while the daemon was down), then every 6h.
+/// Errors are logged, never fatal.
+async fn run_purge_sweeper(store: Store) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
+    loop {
+        tick.tick().await;
+        match store.purge_deleted(PURGE_RETENTION_DAYS).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(purged = n, "swept soft-deleted sessions past retention"),
+            Err(e) => tracing::warn!(error = %e, "purge sweep failed"),
+        }
+    }
 }
 
 /// Drain the Hub→dispatcher channel: each [`DispatchReq`] is a queued prompt the
@@ -224,14 +247,17 @@ async fn serve_axum(
     bind: std::net::SocketAddr,
     hub: Hub,
     supervisor: Arc<Supervisor>,
+    store: Option<Store>,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(AppState { hub, supervisor });
+    let state = Arc::new(AppState { hub, supervisor, store });
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/version", get(version))
+        .route("/api/metrics", get(api_metrics))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
+        .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/history/{id}/{page}", get(api_history))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
@@ -293,6 +319,54 @@ fn content_hash_hex(hash: &[u8; 32]) -> String {
         u64::from_be_bytes(hash[0..8].try_into().expect("8 bytes")),
         u64::from_be_bytes(hash[8..16].try_into().expect("8 bytes")),
     )
+}
+
+/// Storage/runtime metrics for the Settings info panel — the capacity dashboard
+/// for the unbounded growers (events) + the deleted-session purge backlog.
+#[derive(Debug, Serialize)]
+struct Metrics {
+    /// postgres database size (bytes).
+    db_bytes: i64,
+    /// total rows in the events log (the unbounded grower).
+    events_rows: i64,
+    /// live (non-deleted) sessions.
+    sessions_live: usize,
+    /// sessions soft-deleted, awaiting the 3-day purge.
+    sessions_deleted: i64,
+    /// daemon resident memory (bytes), excluding agent subprocesses.
+    daemon_rss_bytes: u64,
+}
+
+/// Resident set size of THIS process (the daemon, not its agent children) from
+/// `/proc/self/statm` — field 2 is resident pages. 0 if unreadable.
+fn daemon_rss_bytes() -> u64 {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1).and_then(|f| f.parse::<u64>().ok()))
+        .map_or(0, |pages| pages.saturating_mul(4096))
+}
+
+async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
+    let sessions_live = state.hub.session_list().len();
+    let (db_bytes, events_rows, sessions_deleted) = match &state.store {
+        Some(s) => s.storage_metrics().await.unwrap_or((0, 0, 0)),
+        None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
+    };
+    Json(Metrics {
+        db_bytes,
+        events_rows,
+        sessions_live,
+        sessions_deleted,
+        daemon_rss_bytes: daemon_rss_bytes(),
+    })
+    .into_response()
+}
+
+async fn api_session_info(State(state): State<Arc<AppState>>, Path(session_id): Path<String>) -> Response {
+    match state.hub.session_info(&session_id) {
+        Some(info) => Json(info).into_response(),
+        None => (StatusCode::NOT_FOUND, "unknown session").into_response(),
+    }
 }
 
 /// Request body for `POST /api/sessions`.

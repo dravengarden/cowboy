@@ -36,6 +36,7 @@ import {
     DriveFileRenameOutline,
     ExpandLess,
     ExpandMore,
+    InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
     Settings as SettingsIcon,
@@ -225,6 +226,7 @@ function SessionList({
     onPick,
     onNew,
     onRequestDelete,
+    onRequestInfo,
     onRequestRename,
 }: {
     sessions: SessionMeta[];
@@ -232,6 +234,7 @@ function SessionList({
     onPick: (id: string) => void;
     onNew: () => void;
     onRequestDelete: (s: SessionMeta) => void;
+    onRequestInfo: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
 }): React.JSX.Element {
     // Per-row kebab Menu anchor + target. Standard Material list-row
@@ -381,6 +384,17 @@ function SessionList({
                 onClose={(): void => setMenuAnchor(null)}
                 slotProps={{ paper: { sx: { minWidth: 180 } } }}
             >
+                <MenuItem
+                    onClick={(): void => {
+                        if (menuAnchor) onRequestInfo(menuAnchor.row);
+                        setMenuAnchor(null);
+                    }}
+                >
+                    <ListItemIcon>
+                        <InfoOutlined fontSize="medium" />
+                    </ListItemIcon>
+                    <ListItemText primary="Info" />
+                </MenuItem>
                 <MenuItem
                     onClick={(): void => {
                         if (menuAnchor) onRequestRename(menuAnchor.row);
@@ -662,6 +676,8 @@ export function App({
     const [pendingRename, setPendingRename] = useState<SessionMeta | null>(
         null,
     );
+    // Per-session info dialog target (kebab → Info).
+    const [pendingInfo, setPendingInfo] = useState<SessionMeta | null>(null);
     // Default to the first session once one exists.
     const active =
         sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
@@ -740,6 +756,7 @@ export function App({
             onPick={pick}
             onNew={(): void => setDialogOpen(true)}
             onRequestDelete={(s): void => setPendingDelete(s)}
+            onRequestInfo={(s): void => setPendingInfo(s)}
             onRequestRename={(s): void => setPendingRename(s)}
         />
     );
@@ -1165,6 +1182,7 @@ export function App({
                     setPendingRename(null);
                 }}
             />
+            <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
             <SettingsShell
                 open={settingsOpen}
                 onClose={(): void => setSettingsOpen(false)}
@@ -1538,6 +1556,13 @@ function SettingsShell({
                     </>
                 )}
                 <Divider />
+                <Stack spacing={1}>
+                    <Typography variant="overline" color="text.secondary">
+                        Storage
+                    </Typography>
+                    <StorageInfoSection />
+                </Stack>
+                <Divider />
                 <Stack spacing={0.5}>
                     <Typography variant="overline" color="text.secondary">
                         About
@@ -1656,6 +1681,134 @@ function RenameSessionShell({
                 helperText="Shown in the sidebar and the title bar."
             />
         </BottomSheet>
+    );
+}
+
+// --- Info: per-session dialog + the Settings storage panel ------------------
+// Both read the daemon's HTTP info endpoints (GET, no WS) and surface the
+// capacity numbers the audit flagged — events are the unbounded grower.
+
+function formatBytes(n: number): string {
+    if (n < 1024) return `${String(n)} B`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let v = n / 1024;
+    let i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i += 1;
+    }
+    return `${v.toFixed(1)} ${units[i] ?? "B"}`;
+}
+
+// A label/value row used by both info surfaces.
+function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
+    return (
+        <Stack direction="row" spacing={2} sx={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>{k}</Typography>
+            <Typography variant="body2" sx={{ wordBreak: "break-all", textAlign: "right" }}>{v}</Typography>
+        </Stack>
+    );
+}
+
+interface SessionInfoData {
+    id: string;
+    provider: string;
+    cwd: string;
+    title: string;
+    status: string;
+    event_count: number;
+    queue_count: number;
+    drafts_count: number;
+}
+
+function SessionInfoShell(
+    { session, onClose }: { session: SessionMeta | null; onClose: () => void },
+): React.JSX.Element | null {
+    const navbarAtBottom = useNavbarAtBottom();
+    const [info, setInfo] = useState<SessionInfoData | null>(null);
+    const [error, setError] = useState(false);
+    useEffect(() => {
+        if (!session) return undefined;
+        setInfo(null);
+        setError(false);
+        const ctrl = new AbortController();
+        void fetch(`/api/sessions/${encodeURIComponent(session.id)}/info`, { signal: ctrl.signal })
+            .then((r) => (r.ok ? (r.json() as Promise<SessionInfoData>) : Promise.reject(new Error("not found"))))
+            .then(setInfo)
+            .catch(() => {
+                if (!ctrl.signal.aborted) setError(true);
+            });
+        return () => {
+            ctrl.abort();
+        };
+    }, [session?.id]);
+    if (!session) return null;
+    let body: React.JSX.Element;
+    if (error) {
+        body = <Typography color="error" variant="body2" sx={{ p: 1 }}>Couldn't load session info.</Typography>;
+    } else if (!info) {
+        body = <Typography variant="body2" sx={{ p: 1, color: "text.secondary" }}>Loading…</Typography>;
+    } else {
+        body = (
+            <Stack spacing={1} sx={{ mt: 1 }}>
+                <InfoRow k="Title" v={info.title} />
+                <InfoRow k="Status" v={info.status} />
+                <InfoRow k="Provider" v={info.provider} />
+                <InfoRow k="Directory" v={info.cwd} />
+                <InfoRow k="Events" v={info.event_count.toLocaleString()} />
+                <InfoRow k="Queued" v={String(info.queue_count)} />
+                <InfoRow k="Drafts" v={String(info.drafts_count)} />
+                <InfoRow k="ID" v={info.id} />
+            </Stack>
+        );
+    }
+    return (
+        <BottomSheet
+            forceSheet={navbarAtBottom}
+            open
+            onClose={onClose}
+            title="Session info"
+            actions={<Button onClick={onClose} color="inherit">Close</Button>}
+        >
+            {body}
+        </BottomSheet>
+    );
+}
+
+interface MetricsData {
+    db_bytes: number;
+    events_rows: number;
+    sessions_live: number;
+    sessions_deleted: number;
+    daemon_rss_bytes: number;
+}
+
+// Storage/runtime metrics for the Settings panel (GET /api/metrics).
+function StorageInfoSection(): React.JSX.Element {
+    const [m, setM] = useState<MetricsData | null>(null);
+    useEffect(() => {
+        const ctrl = new AbortController();
+        void fetch("/api/metrics", { signal: ctrl.signal })
+            .then((r) => r.json() as Promise<MetricsData>)
+            .then(setM)
+            .catch(() => {
+                /* leave as Loading… */
+            });
+        return () => {
+            ctrl.abort();
+        };
+    }, []);
+    if (!m) {
+        return <Typography variant="body2" sx={{ color: "text.secondary" }}>Loading…</Typography>;
+    }
+    return (
+        <Stack spacing={1}>
+            <InfoRow k="Database" v={formatBytes(m.db_bytes)} />
+            <InfoRow k="Event rows" v={m.events_rows.toLocaleString()} />
+            <InfoRow k="Live sessions" v={String(m.sessions_live)} />
+            <InfoRow k="Deleted (purge ≤3d)" v={String(m.sessions_deleted)} />
+            <InfoRow k="Daemon memory" v={formatBytes(m.daemon_rss_bytes)} />
+        </Stack>
     );
 }
 

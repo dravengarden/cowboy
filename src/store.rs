@@ -82,7 +82,7 @@ impl Store {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, cwd, title, origin, status, agent_session_id, next_seq, \
              queue, drafts, created_at \
-             FROM sessions ORDER BY position ASC NULLS LAST, created_at ASC",
+             FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -282,18 +282,55 @@ impl Store {
         Ok(())
     }
 
-    /// Remove a session. ON DELETE CASCADE on the FK drops every row in
-    /// `events` for the same id.
+    /// SOFT-delete a session: mark `deleted_at` so it vanishes from the UI (the
+    /// in-memory Hub already dropped it, and `load_all` skips it) but its rows
+    /// linger for the retention window before [`Self::purge_deleted`] hard-drops
+    /// them (cascade → events). Idempotent; re-deleting keeps the first time.
     ///
     /// # Errors
-    /// If the DELETE fails.
+    /// If the UPDATE fails.
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM sessions WHERE id = $1")
+        sqlx::query("UPDATE sessions SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
             .bind(session_id)
             .execute(&self.pool)
             .await
-            .with_context(|| format!("DELETE session {session_id}"))?;
+            .with_context(|| format!("soft-delete session {session_id}"))?;
         Ok(())
+    }
+
+    /// Hard-delete sessions soft-deleted more than `retention_days` ago (cascade
+    /// → their events). The storage-reclaim half of soft-delete; run on startup
+    /// and periodically. Returns the number of sessions purged.
+    ///
+    /// # Errors
+    /// If the DELETE fails.
+    pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
+        let done = sqlx::query(
+            "DELETE FROM sessions WHERE deleted_at IS NOT NULL \
+             AND deleted_at < now() - make_interval(days => $1::int)",
+        )
+        .bind(i32::try_from(retention_days).unwrap_or(3))
+        .execute(&self.pool)
+        .await
+        .context("purge soft-deleted sessions")?;
+        Ok(done.rows_affected())
+    }
+
+    /// Storage metrics for the info panel: `(db_bytes, events_rows,
+    /// sessions_soft_deleted)`. One round-trip.
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn storage_metrics(&self) -> Result<(i64, i64, i64)> {
+        let row: (i64, i64, i64) = sqlx::query_as(
+            "SELECT pg_database_size(current_database())::bigint, \
+             (SELECT count(*) FROM events)::bigint, \
+             (SELECT count(*) FROM sessions WHERE deleted_at IS NOT NULL)::bigint",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("storage metrics")?;
+        Ok(row)
     }
 }
 
