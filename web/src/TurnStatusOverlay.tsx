@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, IconButton, Stack, Typography, alpha } from "@mui/material";
 import type { PaletteColor, Theme } from "@mui/material";
-import ChatBubbleOutlineRounded from "@mui/icons-material/ChatBubbleOutlineRounded";
-import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
-import ReplayRounded from "@mui/icons-material/ReplayRounded";
-import ErrorOutlineRounded from "@mui/icons-material/ErrorOutlineRounded";
-import KeyOffRounded from "@mui/icons-material/KeyOffRounded";
 import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
-import CloseRounded from "@mui/icons-material/CloseRounded";
 import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 import type { Status } from "./protocol";
 import {
@@ -47,12 +41,12 @@ function deriveKind(args: {
   return null;
 }
 
-const KIND_META: Record<Kind, { color: PaletteKey; Icon: typeof ChatBubbleOutlineRounded; label: string }> = {
-  awaiting: { color: "primary", Icon: ChatBubbleOutlineRounded, label: "Waiting for your reply" },
-  done: { color: "success", Icon: CheckCircleRounded, label: "Task complete" },
-  interrupted: { color: "warning", Icon: ReplayRounded, label: "Turn interrupted" },
-  error: { color: "error", Icon: ErrorOutlineRounded, label: "Agent error" },
-  "no-key": { color: "info", Icon: KeyOffRounded, label: "Queue held · no judge key" },
+const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
+  awaiting: { color: "primary", label: "Waiting for your reply" },
+  done: { color: "success", label: "Task complete" },
+  interrupted: { color: "warning", label: "Turn interrupted" },
+  error: { color: "error", label: "Agent error" },
+  "no-key": { color: "info", label: "Queue held · no judge key" },
 };
 
 export function TurnStatusOverlay({
@@ -130,11 +124,6 @@ export function TurnStatusOverlay({
       : { label: "Set key", onClick: onConfigure };
   }
 
-  const dismiss = (): void => {
-    if (kind === "awaiting") dismissAwaiting(sessionId);
-    else setHidden(true);
-  };
-
   return (
     <Box
       ref={measureRef}
@@ -159,11 +148,12 @@ export function TurnStatusOverlay({
               maxWidth: 460,
               p: 1.25,
               borderRadius: 2,
-              backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.86 : 0.92),
-              backdropFilter: "blur(30px) saturate(200%)",
-              WebkitBackdropFilter: "blur(30px) saturate(200%)",
-              border: (t) => `1px solid ${alpha(tone(t).main, 0.3)}`,
-              boxShadow: (t) => `0 6px 20px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.18)}`,
+              // The raw-data panel carries denser text → a touch more base than the
+              // pill (still no border, same heavy frost).
+              backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.6 : 0.66),
+              backdropFilter: "blur(44px) saturate(200%)",
+              WebkitBackdropFilter: "blur(44px) saturate(200%)",
+              boxShadow: (t) => `0 6px 22px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.2)}`,
               fontSize: 11,
               maxHeight: 280,
               overflow: "auto",
@@ -192,21 +182,20 @@ export function TurnStatusOverlay({
           sx={{
             cursor: "text",
             maxWidth: "100%",
-            pl: 1.5,
+            pl: 1.75,
             pr: 0.5,
             py: 0.5,
             borderRadius: 999,
-            // Milky, mostly-opaque base + a thin tone tint so it's legible over the
-            // busy transcript on desktop AND iOS (low-alpha-only bleeds text through).
-            backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.82 : 0.88),
-            backgroundImage: (t) => `linear-gradient(0deg, ${alpha(tone(t).main, 0.16)}, ${alpha(tone(t).main, 0.16)})`,
-            backdropFilter: "blur(30px) saturate(200%)",
-            WebkitBackdropFilter: "blur(30px) saturate(200%)",
-            border: (t) => `1px solid ${alpha(tone(t).main, 0.32)}`,
-            boxShadow: (t) => `0 6px 20px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.45 : 0.18)}`,
+            // No border. MORE transparent than the navbar but a STRONGER frost — a
+            // heavy blur turns the transcript behind into an unreadable wash, so a
+            // thin tinted base stays legible at high transparency (the iOS look).
+            backgroundColor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.5 : 0.56),
+            backgroundImage: (t) => `linear-gradient(0deg, ${alpha(tone(t).main, 0.18)}, ${alpha(tone(t).main, 0.18)})`,
+            backdropFilter: "blur(44px) saturate(200%)",
+            WebkitBackdropFilter: "blur(44px) saturate(200%)",
+            boxShadow: (t) => `0 6px 22px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.5 : 0.2)}`,
           }}
         >
-          <meta.Icon sx={{ fontSize: 18, color: (t) => tone(t).main }} />
           <Typography variant="body2" sx={{ fontWeight: 600, color: (t) => tone(t).main, whiteSpace: "nowrap" }}>
             {meta.label}
             {kind === "awaiting" && held ? ` · ${queue.length} held` : ""}
@@ -247,17 +236,6 @@ export function TurnStatusOverlay({
               {action.icon ?? action.label}
             </IconButton>
           )}
-          <IconButton
-            size="small"
-            aria-label="Dismiss"
-            onClick={(e): void => {
-              e.stopPropagation();
-              dismiss();
-            }}
-            sx={{ color: "text.secondary", width: 26, height: 26 }}
-          >
-            <CloseRounded sx={{ fontSize: 18 }} />
-          </IconButton>
         </Stack>
       </Stack>
     </Box>
