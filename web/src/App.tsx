@@ -1954,11 +1954,18 @@ function RenameSessionShell({
     useEffect(() => {
         if (!session) return undefined;
         setValue(session.title);
-        // Select-all on open so the first keystroke replaces the whole title
-        // (you're almost always retyping, not appending). rAF so it runs after
-        // the new value is painted into the input.
-        const raf = requestAnimationFrame(() => inputRef.current?.select());
-        return () => cancelAnimationFrame(raf);
+        // Focus + select-all only AFTER the sheet's open animation settles. Focusing
+        // immediately (the old `autoFocus`) raised the keyboard mid-slide; with
+        // `interactive-widget=resizes-content` the layout viewport shrank during the
+        // open, so the sheet's geometry computed against the wrong height and it
+        // didn't land (the reported rename bug). Deferring past the ~320ms settle
+        // lets the sheet finish opening first, then the keyboard rises under a sheet
+        // that's already in place. Select-all because you're almost always retyping.
+        const t = globalThis.setTimeout(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select();
+        }, 380);
+        return () => globalThis.clearTimeout(t);
     }, [session?.id, session?.title]);
     if (!session) return null;
     const trimmed = value.trim();
@@ -1984,7 +1991,6 @@ function RenameSessionShell({
             }
         >
             <TextField
-                autoFocus
                 fullWidth
                 inputRef={inputRef}
                 label="Title"
