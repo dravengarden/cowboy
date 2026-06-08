@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Box,
   ButtonBase,
@@ -12,6 +11,7 @@ import {
 } from "@mui/material";
 import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
+import { persisted, useStore } from "./_store/mod.ts";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
 // update), docked above the message queue so the task's progress stays in view
@@ -22,10 +22,11 @@ import type { PlanEntry } from "./protocol";
 
 // Persist the collapse choice globally — the dock remounts per session (with the
 // composer), so a local-only state would forget the user's preference on switch.
-const KEY = "cowboy:plan-expanded";
-function readExpanded(): boolean {
-  return globalThis.localStorage?.getItem(KEY) === "1";
-}
+// "1"/"0" legacy format preserved.
+const planExpanded = persisted("cowboy:plan-expanded", false, {
+  serialize: (v) => (v ? "1" : "0"),
+  deserialize: (s) => s === "1",
+});
 
 export function PlanDock({
   entries,
@@ -36,7 +37,7 @@ export function PlanDock({
    *  plan arrives — see Composer's dismissedPlanKey. */
   onDismiss: () => void;
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(readExpanded);
+  const expanded = useStore(planExpanded);
   const total = entries.length;
   const done = entries.filter((e) => e.status === "completed").length;
   const allDone = total > 0 && done === total;
@@ -47,11 +48,7 @@ export function PlanDock({
   const current = active ?? entries.find((e) => e.status !== "completed");
 
   const toggle = (): void => {
-    setExpanded((prev) => {
-      const next = !prev;
-      globalThis.localStorage?.setItem(KEY, next ? "1" : "0");
-      return next;
-    });
+    planExpanded.set(!expanded);
   };
 
   return (

@@ -96,6 +96,20 @@ import type {
   Status,
 } from "./protocol";
 import { BottomSheet } from "./_shell";
+import { persisted, type Store, useStore as usePrefStore } from "./_store/mod.ts";
+
+// Per-panel-kind collapse pref (app-level, per-device, never synced). One
+// persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
+// preserved. Memoized so each kind has a single shared store instance.
+const collapseStores = new Map<string, Store<boolean>>();
+function collapseStore(key: string): Store<boolean> {
+  let s = collapseStores.get(key);
+  if (s === undefined) {
+    s = persisted(key, false, { serialize: (v) => (v ? "1" : "0"), deserialize: (raw) => raw === "1" });
+    collapseStores.set(key, s);
+  }
+  return s;
+}
 
 // Cmd/Ctrl + Enter = send. Plain Enter = newline.
 //
@@ -1083,16 +1097,10 @@ function PendingPanel({
   // persists in localStorage per panel kind so it survives reloads + session
   // switches, but is never synced across terminals (mirrors PlanDock's
   // `cowboy:plan-expanded`). Default expanded; the count stays visible either way.
-  const collapseKey = `cowboy:${kind}-collapsed`;
-  const [collapsed, setCollapsed] = useState(
-    () => globalThis.localStorage?.getItem(collapseKey) === "1",
-  );
+  const collapse = collapseStore(`cowboy:${kind}-collapsed`);
+  const collapsed = usePrefStore(collapse);
   const toggleCollapsed = (): void => {
-    setCollapsed((c) => {
-      const next = !c;
-      globalThis.localStorage?.setItem(collapseKey, next ? "1" : "0");
-      return next;
-    });
+    collapse.set(!collapsed);
   };
   const [editingId, setEditingId] = useState<string | null>(null);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by

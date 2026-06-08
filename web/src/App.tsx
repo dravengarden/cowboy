@@ -74,6 +74,7 @@ import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { BottomSheet, DetentSheet, ThemeModeControl } from "./_shell";
 import type { Mode as ThemeMode } from "./theme";
+import { persisted } from "./_store/mod.ts";
 
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
@@ -85,30 +86,33 @@ import type { Mode as ThemeMode } from "./theme";
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 300;
-const SIDEBAR_WIDTH_KEY = "cowboy:sidebar-width";
 
 function clampSidebarWidth(px: number): number {
     return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
 }
 
-// Seed the width from localStorage, re-clamped in case the bounds changed
-// since it was stored. Falls back to the default when unset or unparseable.
-function readSidebarWidth(): number {
-    const raw = globalThis.localStorage?.getItem(SIDEBAR_WIDTH_KEY);
-    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
-    return Number.isFinite(n) ? clampSidebarWidth(n) : SIDEBAR_DEFAULT;
-}
+// Persisted (per-device) sidebar width — seeded into local state for the live
+// drag, written back on settle. Re-clamped on read in case the bounds changed
+// since it was stored; default when unset/unparseable. String(px) format kept.
+const sidebarWidthStore = persisted("cowboy:sidebar-width", SIDEBAR_DEFAULT, {
+    serialize: String,
+    deserialize: (raw) => {
+        const n = Number.parseInt(raw, 10);
+        return Number.isFinite(n) ? clampSidebarWidth(n) : SIDEBAR_DEFAULT;
+    },
+});
 
 // The session the user last had focused, so a page reload (or PWA relaunch)
 // reopens it instead of snapping back to the top of the list. Just an id; if it
 // names a session that no longer exists (deleted elsewhere) the `active`
 // derivation falls back to the first session AND a one-shot warning snackbar
 // fires once the session list loads (see restoredFocusRef / goneCheckedRef).
-const ACTIVE_SESSION_KEY = "cowboy:active-session";
-
-function readActiveSession(): string | null {
-    return globalThis.localStorage?.getItem(ACTIVE_SESSION_KEY) ?? null;
-}
+// The session the user last had focused — persisted (per-device) so a reload /
+// PWA relaunch reopens it. Just an id (or null).
+const activeSessionStore = persisted<string | null>("cowboy:active-session", null, {
+    serialize: (id) => id ?? "",
+    deserialize: (raw) => (raw === "" ? null : raw),
+});
 
 // Status is shown as a single color-coded dot/spinner (no text label), so the
 // hue has to carry the whole meaning. The palette tokens are chosen so the
@@ -611,13 +615,13 @@ export function App({
     // `forceSheet`), so a tablet's bottom navbar gets bottom-up modals too
     // rather than centered dialogs.
     const navbarAtBottom = useNavbarAtBottom();
-    const [activeId, setActiveId] = useState<string | null>(readActiveSession);
+    const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
     // The focus id we restored from localStorage at mount (PWA relaunch / reload).
     // Held in a ref so the gone-check fires exactly once after the first session
     // list arrives — if that session was deleted while we were away, the
     // `active` derivation silently falls back to sessions[0], which would hide
     // the loss; this surfaces it as a warning snackbar instead.
-    const restoredFocusRef = useRef<string | null>(readActiveSession());
+    const restoredFocusRef = useRef<string | null>(activeSessionStore.get());
     const goneCheckedRef = useRef(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -625,7 +629,7 @@ export function App({
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
     // old fluid clamp) so the divider can set it directly; `resizing` drives
     // the handle's active highlight and a body-wide drag cursor / no-select.
-    const [sidebarWidth, setSidebarWidth] = useState<number>(readSidebarWidth);
+    const [sidebarWidth, setSidebarWidth] = useState<number>(sidebarWidthStore.get);
     const [resizing, setResizing] = useState(false);
     // Persist after a drag settles, not on every pointermove (localStorage is
     // synchronous — writing per pixel would stutter the drag). The ref carries
@@ -669,7 +673,7 @@ export function App({
     // the stored id with null before it has a chance to resolve.
     useEffect(() => {
         if (active) {
-            globalThis.localStorage?.setItem(ACTIVE_SESSION_KEY, active.id);
+            activeSessionStore.set(active.id);
         }
     }, [active]);
 
@@ -723,10 +727,7 @@ export function App({
             el.removeEventListener("pointermove", onMove);
             el.removeEventListener("pointerup", onUp);
             setResizing(false);
-            globalThis.localStorage?.setItem(
-                SIDEBAR_WIDTH_KEY,
-                String(widthRef.current),
-            );
+            sidebarWidthStore.set(widthRef.current);
         };
         el.addEventListener("pointermove", onMove);
         el.addEventListener("pointerup", onUp);
