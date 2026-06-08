@@ -14,7 +14,6 @@ import {
   Typography,
 } from "@mui/material";
 import { CheckCircle, ExpandMore } from "@mui/icons-material";
-import { Sheet } from "./Sheet";
 import {
   runInferenceProbe,
   setInferenceConfig,
@@ -101,7 +100,10 @@ function StorageInfoSection(): React.JSX.Element {
 // The Info sheet (opened from the info button left of the Settings gear). Holds
 // the inference-provider config, the skills viewer, and the daemon system-info
 // block (migrated out of user Settings).
-export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => void }): React.JSX.Element {
+// The Info tab's body — rendered inside the merged Settings sheet (no own Sheet
+// wrapper). Holds the inference-provider config, the skills viewer, and the
+// daemon system-info (Storage / About).
+export function InfoContent(): React.JSX.Element {
   const configs = useInferenceConfig();
   const ds = configs.find((c) => c.provider === "deepseek");
   const model = ds?.model || "deepseek-v4-pro"; // matches Rust DEFAULT_MODEL
@@ -125,8 +127,7 @@ export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => voi
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="Info" cover>
-      <Stack spacing={2.5} sx={{ mt: 1 }}>
+    <Stack spacing={2.5} sx={{ mt: 1 }}>
         <Box>
           <Typography variant="overline" color="text.secondary">
             Inference provider
@@ -292,6 +293,5 @@ export function InfoSheet({ open, onClose }: { open: boolean; onClose: () => voi
           </Typography>
         </Stack>
       </Stack>
-    </Sheet>
   );
 }

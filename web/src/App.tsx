@@ -91,7 +91,8 @@ import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
 import { Sheet } from "./Sheet";
-import { InfoSheet } from "./InfoSheet";
+import { InfoContent } from "./InfoSheet";
+import { SegmentedPill } from "./SegmentedPill";
 import { ConfirmSendModal } from "./ConfirmSendModal";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
@@ -714,7 +715,12 @@ export function App({
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [infoOpen, setInfoOpen] = useState(false);
+    // Settings + Info are one merged sheet; this picks which tab it opens on.
+    const [settingsTab, setSettingsTab] = useState<"settings" | "info">("settings");
+    const openSettings = (tab: "settings" | "info"): void => {
+        setSettingsTab(tab);
+        setSettingsOpen(true);
+    };
     // (The no-judge-key warning now lives in the unified TurnStatusOverlay — the
     // blue "no key" pill — so it's no longer a separate top-of-content Notice.)
     // Desktop sidebar width + live-drag flag. Width is a pixel value (not the
@@ -1194,14 +1200,14 @@ export function App({
                             <Box sx={{ flex: 1, minWidth: 0 }} />
                         )}
                         <IconButton
-                            onClick={(): void => setInfoOpen(true)}
+                            onClick={(): void => openSettings("info")}
                             aria-label="info"
                             title="Info"
                         >
                             <InfoOutlined />
                         </IconButton>
                         <IconButton
-                            onClick={(): void => setSettingsOpen(true)}
+                            onClick={(): void => openSettings("settings")}
                             aria-label="settings"
                             title="Settings"
                             // Unified 44px box + 24px glyph (global MuiIconButton),
@@ -1282,7 +1288,7 @@ export function App({
                                 key={active.id}
                                 sessionId={active.id}
                                 status={active.status}
-                                onOpenInfo={(): void => setInfoOpen(true)}
+                                onOpenInfo={(): void => openSettings("info")}
                             />
                         </Box>
                     </>
@@ -1359,11 +1365,11 @@ export function App({
                 }}
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
-            <InfoSheet open={infoOpen} onClose={(): void => setInfoOpen(false)} />
             <ConfirmSendModal />
             <SettingsShell
                 open={settingsOpen}
                 onClose={(): void => setSettingsOpen(false)}
+                initialTab={settingsTab}
                 themeMode={themeMode}
                 onSetThemeMode={onSetThemeMode}
             />
@@ -1524,14 +1530,22 @@ function AutoResumeSettings(): React.JSX.Element {
 function SettingsShell({
     open,
     onClose,
+    initialTab,
     themeMode,
     onSetThemeMode,
 }: {
     open: boolean;
     onClose: () => void;
+    initialTab: "settings" | "info";
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
+    // Merged sheet: a Settings / Info segmented switch in the header. Each open
+    // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
+    const [tab, setTab] = useState<"settings" | "info">(initialTab);
+    useEffect(() => {
+        if (open) setTab(initialTab);
+    }, [open, initialTab]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const reading = useReadingSettings();
@@ -1565,7 +1579,20 @@ function SettingsShell({
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     return (
-        <Sheet open={open} onClose={onClose} title="Settings" forceSheet={navbarAtBottom} cover>
+        <Sheet
+            open={open}
+            onClose={onClose}
+            title={
+                <SegmentedPill
+                    value={tab}
+                    onChange={setTab}
+                    options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
+                />
+            }
+            forceSheet={navbarAtBottom}
+            cover
+        >
+            {tab === "info" ? <InfoContent /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -1855,9 +1882,10 @@ function SettingsShell({
                 )}
                 <Divider />
                 <AutoResumeSettings />
-                {/* Daemon system info (Storage metrics + About) moved to the Info
-                    sheet — Settings holds user preferences only. */}
+                {/* Daemon system info (Storage metrics + About) lives in the Info
+                    tab — Settings holds user preferences only. */}
             </Stack>
+            )}
         </Sheet>
     );
 }
