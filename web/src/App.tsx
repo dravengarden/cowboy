@@ -1111,7 +1111,7 @@ export function App({
                         // above; shave it so the bar sits closer to the edge while the
                         // 44px buttons still clear the indicator (an earlier `inset−20`
                         // ≈14px dropped them ONTO it — keep ≥ ~20px).
-                        pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 18px), 8px)" : 0,
+                        pb: navbarAtBottom ? "max(calc(env(safe-area-inset-bottom) - 26px), 6px)" : 0,
                         pl: navbarAtBottom ? "env(safe-area-inset-left, 0px)" : 0,
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                     }}

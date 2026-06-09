@@ -650,7 +650,7 @@ export function Composer({
         alignItems="center"
         spacing={0.5}
         sx={{
-          mt: 0.5,
+          mt: 0.25,
           ml: navGutterMx("left"),
           mr: navGutterMx("right"),
           ...TOOLBAR_MIN_H,
