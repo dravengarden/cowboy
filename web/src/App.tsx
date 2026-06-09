@@ -849,7 +849,10 @@ export function App({
             onNew={(): void => setDialogOpen(true)}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
-            onRequestRename={(s): void => setPendingRename(s)}
+            onRequestRename={(s): void => {
+                claimKeyboard(); // raise the keyboard in-gesture (iOS)
+                setPendingRename(s);
+            }}
             autoResumeDefault={autoResumeDefaultOn}
             loaded={sessionsLoaded}
         />
@@ -1233,8 +1236,10 @@ export function App({
                                     <IconButton
                                         size="small"
                                         aria-label="rename session"
-                                        onClick={(): void =>
-                                            setPendingRename(active)}
+                                        onClick={(): void => {
+                                            claimKeyboard(); // raise the keyboard in-gesture (iOS)
+                                            setPendingRename(active);
+                                        }}
                                         sx={{ flexShrink: 0 }}
                                     >
                                         <DriveFileRenameOutline fontSize="small" />
@@ -2000,6 +2005,39 @@ function DeleteSessionShell({
 
 // Prefills the textfield with the current title; Save is disabled while empty
 // or unchanged (server-side also rejects empty).
+// iOS raises the soft keyboard ONLY for a focus() that runs inside a user
+// gesture. A sheet opened by a tap mounts its input asynchronously, so the
+// input's own focus() (380ms later, after the sheet settles) lands OUTSIDE the
+// gesture window — the caret + selection appear but no keyboard (the reported
+// bug). Fix: synchronously focus a persistent off-screen input DURING the tap to
+// "claim" the keyboard in-gesture; once the real field mounts and focuses, focus
+// just transfers between inputs and the keyboard stays up. The DetentSheet is
+// deliberately NOT a Modal, so it never steals focus back off the claim.
+let kbClaimEl: HTMLInputElement | null = null;
+function claimKeyboard(): void {
+    const doc = globalThis.document;
+    if (typeof doc === "undefined") return;
+    if (!kbClaimEl) {
+        kbClaimEl = doc.createElement("input");
+        kbClaimEl.setAttribute("aria-hidden", "true");
+        kbClaimEl.tabIndex = -1;
+        Object.assign(kbClaimEl.style, {
+            position: "fixed",
+            top: "0px",
+            left: "0px",
+            width: "1px",
+            height: "1px",
+            opacity: "0",
+            border: "0",
+            padding: "0",
+            // ≥16px so focusing it never triggers iOS auto-zoom.
+            fontSize: "16px",
+        });
+        doc.body.appendChild(kbClaimEl);
+    }
+    kbClaimEl.focus();
+}
+
 function RenameSessionShell({
     session,
     onClose,
@@ -2015,17 +2053,17 @@ function RenameSessionShell({
     useEffect(() => {
         if (!session) return undefined;
         setValue(session.title);
-        // Focus + select-all only AFTER the sheet's open animation settles. Focusing
-        // immediately (the old `autoFocus`) raised the keyboard mid-slide; with
-        // `interactive-widget=resizes-content` the layout viewport shrank during the
-        // open, so the sheet's geometry computed against the wrong height and it
-        // didn't land (the reported rename bug). Deferring past the ~320ms settle
-        // lets the sheet finish opening first, then the keyboard rises under a sheet
-        // that's already in place. Select-all because you're almost always retyping.
+        // The keyboard was already claimed in-gesture (claimKeyboard, on the rename
+        // tap) so it's rising regardless; here we just TRANSFER focus to the real
+        // field + select-all (you're almost always retyping). A short delay lets the
+        // field mount and its value commit before select(); the transfer keeps the
+        // keyboard up (the DetentSheet is bottom-anchored + not a Modal, so it tracks
+        // the keyboard and never steals focus). Snappy so it beats any menu
+        // focus-restore that would otherwise blur the claim before the transfer.
         const t = globalThis.setTimeout(() => {
             inputRef.current?.focus();
             inputRef.current?.select();
-        }, 380);
+        }, 120);
         return () => globalThis.clearTimeout(t);
     }, [session?.id, session?.title]);
     if (!session) return null;
