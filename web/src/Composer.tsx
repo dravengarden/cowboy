@@ -455,7 +455,10 @@ export function Composer({
         // tap — an earlier `inset − 20px` let them reach into the indicator /
         // rounded-corner zone, which read as "hard to tap" on iPad. Floored to 10px
         // off-device.
-        pt: { xs: 0.5, sm: 1 },
+        // Match the inter-panel gap (PendingPanel mb: 1 = 8px): the space above
+        // the first pending panel reads as the same "panel spacing" as between
+        // the queue + drafts panels, instead of a tighter xs top.
+        pt: 1,
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain (tight) gap.
