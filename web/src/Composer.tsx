@@ -1027,13 +1027,6 @@ export function Composer({
           cover
           ariaLabel="Compose message"
           onClose={(): void => setComposeFs(false)}
-          header={
-            <Box sx={{ px: 1.5, pb: 0.5 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                Compose
-              </Typography>
-            </Box>
-          }
           footer={
             // pb lifts the footer above the on-screen keyboard (--kb-inset, set on
             // :root by keyboardInset) — the shared DetentSheet footer doesn't do
