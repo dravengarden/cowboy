@@ -1064,12 +1064,15 @@ export function Composer({
       {composeFs && (
         <DetentSheet
           open
-          // Full-screen frosted glass (cover): 100dvh translucent blur surface, the
-          // primary mobile writing canvas. COVER_SCRIM_MAX≈0.03 keeps the body at
-          // page brightness so the frosted top blends into the bg-tinted status bar
-          // (no seam); surfaceColor tints that status bar to background.default.
+          // Frosted glass (translucent blur), content-height — NOT `cover`.
+          // A full-screen cover is fixed 100dvh anchored at the screen bottom with
+          // no keyboard awareness: the on-screen keyboard then buries the footer
+          // and iOS scroll-into-view shoves the tall expanded editor's blank middle
+          // into view (the "input invisible" bug). Content-height + the footer's
+          // `pb: var(--kb-inset)` rises above the keyboard so the field + Send stay
+          // visible. surfaceColor dims/restores the status bar.
           ariaLabel="Compose message"
-          cover
+          frosted
           surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
@@ -2209,11 +2212,12 @@ function PendingRow({
         {overlayOpen && (
           <DetentSheet
             open
-            // Full-screen frosted glass (cover) — matches the compose sheet. 100dvh
-            // translucent blur; COVER_SCRIM_MAX keeps the body at page brightness so
-            // the frosted top blends into the bg-tinted status bar (no seam).
+            // Frosted glass, content-height — matches the compose sheet. NOT
+            // `cover`: full-screen 100dvh fights the keyboard (footer buried + iOS
+            // scroll-into-view hides the field). Content-height + footer kb-inset
+            // keeps the editor + Save/Cancel above the keyboard.
             ariaLabel="Edit message"
-            cover
+            frosted
             surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
