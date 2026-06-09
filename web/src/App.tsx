@@ -47,6 +47,7 @@ import {
 import { Composer } from "./Composer";
 import { useTouchComposer } from "./ComposerTextarea";
 import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
+import { claimKeyboard } from "./keyboardClaim";
 import { Transcript } from "./Transcript";
 import {
     originLabel,
@@ -2064,39 +2065,8 @@ function DeleteSessionShell({
 }
 
 // Prefills the textfield with the current title; Save is disabled while empty
-// or unchanged (server-side also rejects empty).
-// iOS raises the soft keyboard ONLY for a focus() that runs inside a user
-// gesture. A sheet opened by a tap mounts its input asynchronously, so the
-// input's own focus() (380ms later, after the sheet settles) lands OUTSIDE the
-// gesture window — the caret + selection appear but no keyboard (the reported
-// bug). Fix: synchronously focus a persistent off-screen input DURING the tap to
-// "claim" the keyboard in-gesture; once the real field mounts and focuses, focus
-// just transfers between inputs and the keyboard stays up. The DetentSheet is
-// deliberately NOT a Modal, so it never steals focus back off the claim.
-let kbClaimEl: HTMLInputElement | null = null;
-function claimKeyboard(): void {
-    const doc = globalThis.document;
-    if (typeof doc === "undefined") return;
-    if (!kbClaimEl) {
-        kbClaimEl = doc.createElement("input");
-        kbClaimEl.setAttribute("aria-hidden", "true");
-        kbClaimEl.tabIndex = -1;
-        Object.assign(kbClaimEl.style, {
-            position: "fixed",
-            top: "0px",
-            left: "0px",
-            width: "1px",
-            height: "1px",
-            opacity: "0",
-            border: "0",
-            padding: "0",
-            // ≥16px so focusing it never triggers iOS auto-zoom.
-            fontSize: "16px",
-        });
-        doc.body.appendChild(kbClaimEl);
-    }
-    kbClaimEl.focus();
-}
+// or unchanged (server-side also rejects empty). The rename + compose sheets both
+// raise the keyboard in-gesture via `claimKeyboard` (see ./keyboardClaim).
 
 // The connecting/loading placeholder — a soft spinner instead of bare "Loading…".
 // If the WS snapshot still hasn't landed after a stall (a wedged socket / SW), it

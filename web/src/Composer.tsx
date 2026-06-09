@@ -72,6 +72,7 @@ import { DetentSheet } from "./_shell";
 import { toggleComposerExpanded, useComposerExpanded } from "./composerExpand";
 import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
+import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
@@ -674,7 +675,13 @@ export function Composer({
               ? "fullscreen editor"
               : (expanded ? "collapse editor" : "expand editor")}
             onClick={touchInput
-              ? (): void => setComposeFs(true)
+              ? (): void => {
+                // Claim the keyboard IN-gesture (iOS) so it's already up when the
+                // sheet's editor mounts + focuses; else the focus lands outside the
+                // gesture window and the keyboard stays down (you'd have to tap).
+                claimKeyboard();
+                setComposeFs(true);
+              }
               : toggleComposerExpanded}
             sx={{
               position: "absolute",
