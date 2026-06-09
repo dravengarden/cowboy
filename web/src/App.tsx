@@ -433,13 +433,17 @@ function SessionList({
                     );
                 })}
                 {sessions.length === 0 && (
-                    <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{ p: 2, textAlign: "center" }}
-                    >
-                        {loaded ? "No sessions yet." : "Loading…"}
-                    </Typography>
+                    loaded
+                        ? (
+                            <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{ p: 2, textAlign: "center" }}
+                            >
+                                No sessions yet.
+                            </Typography>
+                        )
+                        : <LoadingState compact />
                 )}
             </List>
             <Menu
@@ -1371,10 +1375,10 @@ export function App({
                                     </>
                                 )
                                 : (
-                                    // Until the WS snapshot lands, the list is unknown — show
-                                    // "Loading…" not the empty "No session selected." CTA, so a
-                                    // reload never flashes a false "create your first session".
-                                    <Typography color="text.secondary">Loading…</Typography>
+                                    // Until the WS snapshot lands, the list is unknown — show the
+                                    // spinner, NOT the empty "No session selected." CTA, so a reload
+                                    // never flashes a false "create your first session".
+                                    <LoadingState />
                                 )}
                         </Stack>
                     </Box>
@@ -2036,6 +2040,44 @@ function claimKeyboard(): void {
         doc.body.appendChild(kbClaimEl);
     }
     kbClaimEl.focus();
+}
+
+// The connecting/loading placeholder — a soft spinner instead of bare "Loading…".
+// If the WS snapshot still hasn't landed after a stall (a wedged socket / SW), it
+// reveals a manual reload so a desktop session never sits dead on "Loading…"
+// forever. NOT auto-reload: an auto-loop could spin if the reload also stalls.
+function LoadingState({ compact = false }: { compact?: boolean }): React.JSX.Element {
+    const [stalled, setStalled] = useState(false);
+    useEffect(() => {
+        const t = globalThis.setTimeout(() => setStalled(true), 8000);
+        return () => globalThis.clearTimeout(t);
+    }, []);
+    return (
+        <Stack
+            alignItems="center"
+            spacing={compact ? 1 : 1.5}
+            sx={{ color: "text.secondary", ...(compact && { py: 3 }) }}
+        >
+            <CircularProgress
+                size={compact ? 16 : 24}
+                thickness={4}
+                sx={{ color: "primary.main", opacity: 0.65 }}
+            />
+            <Typography variant={compact ? "caption" : "body2"} color="text.secondary">
+                Connecting…
+            </Typography>
+            {stalled && (
+                <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={(): void => globalThis.location.reload()}
+                    sx={{ mt: 0.5, textTransform: "none" }}
+                >
+                    Taking a while — reload
+                </Button>
+            )}
+        </Stack>
+    );
 }
 
 function RenameSessionShell({
