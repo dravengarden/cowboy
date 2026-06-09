@@ -1064,28 +1064,18 @@ export function Composer({
       {composeFs && (
         <DetentSheet
           open
-          // Frosted glass (translucent blur), content-height — NOT `cover`.
-          // A full-screen cover is fixed 100dvh anchored at the screen bottom with
-          // no keyboard awareness: the on-screen keyboard then buries the footer
-          // and iOS scroll-into-view shoves the tall expanded editor's blank middle
-          // into view (the "input invisible" bug). Content-height + the footer's
-          // `pb: var(--kb-inset)` rises above the keyboard so the field + Send stay
-          // visible. surfaceColor dims/restores the status bar.
+          // Full-screen frosted glass (cover), the primary mobile writing canvas.
+          // The shared DetentSheet cover is now keyboard-aware (lifts above the
+          // keyboard via --kb-inset + shrinks its height to match), so the field +
+          // footer stay visible — no consumer-side keyboard hack needed.
           ariaLabel="Compose message"
-          frosted
+          cover
           surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
-            // pb lifts the footer above the on-screen keyboard (--kb-inset, set on
-            // :root by keyboardInset) — the shared DetentSheet footer doesn't do
-            // this, and on mobile this Send is the ONLY way to send, so without it
-            // the keyboard buries it. 0 when the keyboard is down.
-            <Stack
-              direction="row"
-              alignItems="center"
-              spacing={0.5}
-              sx={{ pb: "var(--kb-inset, 0px)" }}
-            >
+            // The shared cover sheet lifts itself above the keyboard, so the footer
+            // needs no kb-inset pad of its own.
+            <Stack direction="row" alignItems="center" spacing={0.5}>
               <Tooltip title="Slash command / skill">
                 <span>
                   <IconButton
@@ -2212,12 +2202,11 @@ function PendingRow({
         {overlayOpen && (
           <DetentSheet
             open
-            // Frosted glass, content-height — matches the compose sheet. NOT
-            // `cover`: full-screen 100dvh fights the keyboard (footer buried + iOS
-            // scroll-into-view hides the field). Content-height + footer kb-inset
-            // keeps the editor + Save/Cancel above the keyboard.
+            // Full-screen frosted glass (cover) — matches the compose sheet. The
+            // shared cover is keyboard-aware (lifts above the keyboard + shrinks), so
+            // the editor + Save/Cancel stay visible with the keyboard up.
             ariaLabel="Edit message"
-            frosted
+            cover
             surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
@@ -2237,14 +2226,9 @@ function PendingRow({
               </Box>
             }
             footer={
-              // pb lifts Save/Cancel above the on-screen keyboard (--kb-inset) —
-              // the shared DetentSheet footer doesn't, so the keyboard buried them.
-              <Stack
-                direction="row"
-                justifyContent="flex-end"
-                spacing={1}
-                sx={{ pb: "var(--kb-inset, 0px)" }}
-              >
+              // The shared cover sheet lifts itself above the keyboard — no
+              // consumer-side kb-inset pad needed.
+              <Stack direction="row" justifyContent="flex-end" spacing={1}>
                 <Button
                   color="inherit"
                   onClick={(): void => {
