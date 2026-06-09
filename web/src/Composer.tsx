@@ -213,8 +213,6 @@ function ComposeBar(
       spacing={0.75}
       sx={{
         width: "100%",
-        mx: -2,
-        px: 2,
         pt: 1,
         borderTop: (t) => `1px solid ${t.palette.divider}`,
       }}
@@ -238,124 +236,116 @@ function ComposeBar(
           )}
         </Box>
       )}
-      <Stack direction="row" alignItems="center" spacing={0.5}>
-        {/* Left icon group takes the available width and scrolls if it overflows,
-            so Send (pinned right, never shrinks) is ALWAYS visible — the icons are
-            flexShrink:0, so otherwise the busy-state force-push pushed Send off. */}
-        <Box
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 0.5,
-            overflowX: "auto",
-            scrollbarWidth: "none",
-            "&::-webkit-scrollbar": { display: "none" },
-          }}
-        >
-          <Tooltip title="Slash command / skill">
+      {/* All actions evenly distributed across the row (same proven layout as the
+          inline mobile toolbar) — no flex spacer / overflow-scroll / negative-margin
+          breakout, which were clipping the leftmost icon + pushing Send off. Every
+          item, Send included, is an evenly-spaced cell, so nothing overflows. */}
+      <Stack
+        direction="row"
+        alignItems="center"
+        sx={{ justifyContent: "space-evenly" }}
+      >
+        <Tooltip title="Slash command / skill">
+          <span>
+            <IconButton
+              aria-label="slash command"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => onTrigger("/")}
+            >
+              <Box
+                component="span"
+                sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
+              >
+                /
+              </Box>
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Reference a file (@)">
+          <span>
+            <IconButton
+              aria-label="reference a file"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => onTrigger("@")}
+            >
+              <AlternateEmail />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {onAttach && (
+          <Tooltip title="Attach image or file">
             <span>
               <IconButton
-                aria-label="slash command"
+                aria-label="attach image or file"
                 disabled={dead}
                 sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => onTrigger("/")}
+                onClick={onAttach}
               >
-                <Box
-                  component="span"
-                  sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
-                >
-                  /
-                </Box>
+                <AttachFile />
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Reference a file (@)">
+        )}
+        {hasConfig && (
+          <Tooltip title="Options">
             <span>
               <IconButton
-                aria-label="reference a file"
+                aria-label="options"
                 disabled={dead}
+                color={configOpen ? "primary" : "default"}
                 sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => onTrigger("@")}
+                onClick={(): void => setConfigOpen((o) => !o)}
               >
-                <AlternateEmail />
+                <Tune />
               </IconButton>
             </span>
           </Tooltip>
-          {onAttach && (
-            <Tooltip title="Attach image or file">
-              <span>
-                <IconButton
-                  aria-label="attach image or file"
-                  disabled={dead}
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={onAttach}
-                >
-                  <AttachFile />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          {hasConfig && (
-            <Tooltip title="Options">
-              <span>
-                <IconButton
-                  aria-label="options"
-                  disabled={dead}
-                  color={configOpen ? "primary" : "default"}
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={(): void => setConfigOpen((o) => !o)}
-                >
-                  <Tune />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          {/* Secondary actions are direct buttons on the bar (not folded behind a
-              ⋮ — the user wanted them visible). Force push only while busy/starting. */}
-          {onForcePush && (
-            <Tooltip title="Force push">
-              <span>
-                <IconButton
-                  color="primary"
-                  aria-label="force push"
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={(e): void => onForcePush(e.currentTarget)}
-                >
-                  <Bolt />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          {onSaveDraft && (
-            <Tooltip title="Save as draft">
-              <span>
-                <IconButton
-                  aria-label="save as draft"
-                  disabled={!sendable}
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={onSaveDraft}
-                >
-                  <EditNoteOutlined />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-          {onCollapse && (
-            <Tooltip title="Exit fullscreen">
-              <span>
-                <IconButton
-                  aria-label="exit fullscreen"
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={onCollapse}
-                >
-                  <CloseFullscreen />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
-        </Box>
+        )}
+        {/* Secondary actions are direct buttons on the bar (not folded behind a
+            ⋮ — the user wanted them visible). Force push only while busy/starting. */}
+        {onForcePush && (
+          <Tooltip title="Force push">
+            <span>
+              <IconButton
+                color="primary"
+                aria-label="force push"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(e): void => onForcePush(e.currentTarget)}
+              >
+                <Bolt />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {onSaveDraft && (
+          <Tooltip title="Save as draft">
+            <span>
+              <IconButton
+                aria-label="save as draft"
+                disabled={!sendable}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onSaveDraft}
+              >
+                <EditNoteOutlined />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {onCollapse && (
+          <Tooltip title="Exit fullscreen">
+            <span>
+              <IconButton
+                aria-label="exit fullscreen"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onCollapse}
+              >
+                <CloseFullscreen />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         <Tooltip title="Send">
           <span>
             <IconButton
