@@ -130,6 +130,10 @@ export const ComposerTextarea = forwardRef<
     /// Drop the TextField's outlined border so the surrounding composer Paper card
     /// owns the box (no double border). Mirrors ComposerEditor.borderless.
     borderless?: boolean;
+    /// Tall editing area (the mobile fullscreen compose / edit sheet): grows from
+    /// many rows and caps high so it fills the sheet instead of the compact
+    /// auto-grow. Mirrors ComposerEditor.expanded.
+    expanded?: boolean;
   }
 >(function ComposerTextarea(
   {
@@ -145,6 +149,7 @@ export const ComposerTextarea = forwardRef<
     onPasteFiles,
     endInset = 0,
     borderless = false,
+    expanded = false,
   },
   ref,
 ): React.JSX.Element {
@@ -360,8 +365,8 @@ export const ComposerTextarea = forwardRef<
         placeholder={placeholder}
         disabled={disabled}
         multiline
-        minRows={1}
-        maxRows={10}
+        minRows={expanded ? 10 : 1}
+        maxRows={expanded ? 30 : 10}
         size="small"
         fullWidth
         sx={{

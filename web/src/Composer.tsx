@@ -237,6 +237,18 @@ export function Composer({
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
+  // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
+  // inline expand instead (composeFs is never set true there).
+  const [composeFs, setComposeFs] = useState(false);
+  // Focus the fullscreen editor when it opens (the inline one just unmounted, so
+  // the shared editorRef now points here). Small delay so the sheet has mounted;
+  // on touch the keyboard may need one tap if it lands outside the gesture window.
+  useEffect(() => {
+    if (!composeFs) return undefined;
+    const t = globalThis.setTimeout(() => editorRef.current?.focusEnd(), 60);
+    return () => globalThis.clearTimeout(t);
+  }, [composeFs]);
   // Stopping a running turn is confirmed through a modal (Enter confirms, Esc
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
@@ -571,7 +583,7 @@ export function Composer({
           bgcolor: "transparent",
         }}
       >
-      {touchInput
+      {!composeFs && (touchInput
         ? (
           <ComposerTextarea
             ref={editorRef}
@@ -587,6 +599,7 @@ export function Composer({
               : "Message the agent…"}
             onPasteFiles={addFiles}
             borderless
+            endInset={36}
             onEscape={(): boolean => {
               if (busy) {
                 setCancelOpen(true);
@@ -637,35 +650,40 @@ export function Composer({
               return false;
             }}
           />
-        )}
-        {/* Expand / collapse toggle (Zed-style), top-right INSIDE the card —
-            desktop only (touch keeps the auto-grow textarea; Step 9 extends it).
-            The editor reserves a right gutter (endInset) so text never runs under
-            it. The taller card flows through the existing --composer-h ResizeObserver
-            so the transcript reservation tracks it automatically. */}
-        {!touchInput && (
-          <Tooltip title={expanded ? "Collapse editor" : "Expand editor"}>
-            <IconButton
-              size="small"
-              aria-label={expanded ? "collapse editor" : "expand editor"}
-              onClick={toggleComposerExpanded}
-              sx={{
-                position: "absolute",
-                top: 2,
-                right: 2,
-                zIndex: 1,
-                color: "text.secondary",
-                // Size the glyph at the BUTTON level so it beats the global
-                // MuiIconButton override (`& .MuiSvgIcon-root: 1.5rem`) — a
-                // per-icon sx loses that specificity battle. rem so it tracks the
-                // reading font-scale like the rest of the chrome.
-                "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
-              }}
-            >
-              {expanded ? <CloseFullscreen /> : <OpenInFull />}
-            </IconButton>
-          </Tooltip>
-        )}
+        ))}
+        {/* Expand toggle, top-right INSIDE the card. DESKTOP: Zed-style inline
+            expand — toggles a taller editor in place (flows through the
+            --composer-h ResizeObserver). MOBILE: space is tight inline, so ↗ goes
+            straight to the FULLSCREEN compose sheet (the first-class long-form /
+            future-markdown editor). The editor reserves a right gutter (endInset)
+            so text never runs under it. Glyph sized at the BUTTON level so it
+            beats the global MuiIconButton `& .MuiSvgIcon-root: 1.5rem` override
+            (a per-icon sx loses that specificity); rem so it tracks the font scale. */}
+        <Tooltip
+          title={touchInput
+            ? "Fullscreen editor"
+            : (expanded ? "Collapse editor" : "Expand editor")}
+        >
+          <IconButton
+            size="small"
+            aria-label={touchInput
+              ? "fullscreen editor"
+              : (expanded ? "collapse editor" : "expand editor")}
+            onClick={touchInput
+              ? (): void => setComposeFs(true)
+              : toggleComposerExpanded}
+            sx={{
+              position: "absolute",
+              top: 2,
+              right: 2,
+              zIndex: 1,
+              color: "text.secondary",
+              "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+            }}
+          >
+            {!touchInput && expanded ? <CloseFullscreen /> : <OpenInFull />}
+          </IconButton>
+        </Tooltip>
         {/* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
             + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
             cluster pinned to the card's right edge. This replaces BOTH the old
@@ -997,6 +1015,130 @@ export function Composer({
             });
           }}
         />
+      )}
+      {/* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
+          comfortable long-form writing — the first-class editor + future home of a
+          markdown / rich-text toolbar + preview. Shares the composer's `text` +
+          attachments; the inline editor is hidden while this is open (xor), so the
+          shared editorRef points at the one mounted here. */}
+      {composeFs && (
+        <DetentSheet
+          open
+          cover
+          ariaLabel="Compose message"
+          onClose={(): void => setComposeFs(false)}
+          surfaceColor={theme.palette.background.default}
+          header={
+            <Box sx={{ px: 1.5, pb: 0.5 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                Compose
+              </Typography>
+            </Box>
+          }
+          footer={
+            <Stack direction="row" alignItems="center" spacing={0.5}>
+              <Tooltip title="Slash command / skill">
+                <span>
+                  <IconButton
+                    aria-label="slash command"
+                    disabled={dead}
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={(): void => editorRef.current?.insertTrigger("/")}
+                  >
+                    <Box
+                      component="span"
+                      sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
+                    >
+                      /
+                    </Box>
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Reference a file (@)">
+                <span>
+                  <IconButton
+                    aria-label="reference a file"
+                    disabled={dead}
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={(): void => editorRef.current?.insertTrigger("@")}
+                  >
+                    <AlternateEmail />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Attach image or file">
+                <span>
+                  <IconButton
+                    aria-label="attach image or file"
+                    disabled={dead}
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={(): void => fileInputRef.current?.click()}
+                  >
+                    <AttachFile />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Options">
+                <span>
+                  <IconButton
+                    aria-label="options"
+                    disabled={dead}
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={(): void => setSheetOpen(true)}
+                  >
+                    <Tune />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Box sx={{ flex: 1 }} />
+              <Tooltip title="Send">
+                <span>
+                  <IconButton
+                    color="primary"
+                    aria-label="send"
+                    disabled={!sendable}
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={(): void => {
+                      submit();
+                      setComposeFs(false);
+                    }}
+                  >
+                    <Send />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
+          }
+        >
+          <Box sx={{ p: 1.5 }}>
+            {attachments.length > 0 && (
+              <AttachmentPreviews
+                attachments={attachments}
+                onRemove={removeAttachment}
+              />
+            )}
+            <ComposerTextarea
+              ref={editorRef}
+              value={text}
+              onChange={setText}
+              onSubmit={(): void => {
+                submit();
+                setComposeFs(false);
+              }}
+              onSaveDraft={saveDraft}
+              sessionId={sessionId}
+              commands={(): AvailableCommand[] => availableCommands}
+              placeholder="Message the agent…"
+              onPasteFiles={addFiles}
+              borderless
+              expanded
+              onEscape={(): boolean => {
+                setComposeFs(false);
+                return true;
+              }}
+            />
+          </Box>
+        </DetentSheet>
       )}
       {
         /* Confirm before stopping a running turn. The Stop button is destructive
@@ -1890,6 +2032,13 @@ function PendingRow({
   }, [overlayOpen]);
   useLayoutEffect(() => {
     if (!editing) return undefined;
+    // On TOUCH, editing a queued/draft message goes straight to the fullscreen
+    // overlay — no cramped inline edit on a phone (the mobile fullscreen-first
+    // design). Desktop keeps the inline edit + the ↗ to expand.
+    if (touchInput) {
+      setOverlayOpen(true);
+      return undefined;
+    }
     // focusEnd, not focus: opening an existing draft/queued message should put
     // the caret at the end of its text so you continue typing, not at the start.
     editorRef.current?.focusEnd();
@@ -1901,7 +2050,7 @@ function PendingRow({
       rowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
     }, 350);
     return () => globalThis.clearTimeout(t);
-  }, [editing]);
+  }, [editing, touchInput]);
   if (editing) {
     const save = (): void => {
       if (kind === "draft") {
@@ -2016,7 +2165,13 @@ function PendingRow({
             open
             cover
             ariaLabel="Edit message"
-            onClose={(): void => setOverlayOpen(false)}
+            // Desktop: dismiss returns to the inline edit (the overlay is an
+            // optional expand). Touch: the overlay IS the edit (no inline card on a
+            // phone), so a grab-dismiss abandons the edit rather than dropping to a
+            // cramped inline box.
+            onClose={touchInput
+              ? cancel
+              : (): void => setOverlayOpen(false)}
             // Dim the iOS status bar in lockstep with the scrim so the top
             // safe-area strip doesn't read as an undimmed band above the sheet.
             surfaceColor={theme.palette.background.default}
