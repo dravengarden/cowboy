@@ -984,6 +984,11 @@ export function App({
                     onClose={(): void => setDrawerOpen(false)}
                     anchor={navbarAtBottom ? "bottom" : "top"}
                     ariaLabel="Sessions"
+                    // Frosted glass (translucent blur) like the compose/edit sheets.
+                    // NOT `cover`: the session list is content-height — a full-screen
+                    // sheet would leave empty frosted space below a short list. frosted
+                    // works at either anchor (top on desktop, bottom on mobile).
+                    frosted
                     surfaceColor={theme.palette.background.default}
                 >
                     {/* DetentSheet's body has no side padding, so the list spans
