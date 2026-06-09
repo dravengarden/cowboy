@@ -1027,7 +1027,6 @@ export function Composer({
           cover
           ariaLabel="Compose message"
           onClose={(): void => setComposeFs(false)}
-          surfaceColor={theme.palette.background.default}
           header={
             <Box sx={{ px: 1.5, pb: 0.5 }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
@@ -1036,7 +1035,16 @@ export function Composer({
             </Box>
           }
           footer={
-            <Stack direction="row" alignItems="center" spacing={0.5}>
+            // pb lifts the footer above the on-screen keyboard (--kb-inset, set on
+            // :root by keyboardInset) — the shared DetentSheet footer doesn't do
+            // this, and on mobile this Send is the ONLY way to send, so without it
+            // the keyboard buries it. 0 when the keyboard is down.
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.5}
+              sx={{ pb: "var(--kb-inset, 0px)" }}
+            >
               <Tooltip title="Slash command / skill">
                 <span>
                   <IconButton
@@ -2020,7 +2028,6 @@ function PendingRow({
   // tall editor so a long queued message edits comfortably without ballooning the
   // queue panel inline. ONE editor is mounted at a time (inline XOR overlay), both
   // driving the shared `draft` — so there's no uncontrolled-editor desync.
-  const theme = useTheme();
   const [overlayOpen, setOverlayOpen] = useState(false);
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   useLayoutEffect(() => {
@@ -2172,9 +2179,6 @@ function PendingRow({
             onClose={touchInput
               ? cancel
               : (): void => setOverlayOpen(false)}
-            // Dim the iOS status bar in lockstep with the scrim so the top
-            // safe-area strip doesn't read as an undimmed band above the sheet.
-            surfaceColor={theme.palette.background.default}
             header={
               // px matches the body's p:1.5 so the title's left edge lines up with
               // the attachments + editor below (it was flush to the edge before);
@@ -2186,7 +2190,14 @@ function PendingRow({
               </Box>
             }
             footer={
-              <Stack direction="row" justifyContent="flex-end" spacing={1}>
+              // pb lifts Save/Cancel above the on-screen keyboard (--kb-inset) —
+              // the shared DetentSheet footer doesn't, so the keyboard buried them.
+              <Stack
+                direction="row"
+                justifyContent="flex-end"
+                spacing={1}
+                sx={{ pb: "var(--kb-inset, 0px)" }}
+              >
                 <Button
                   color="inherit"
                   onClick={(): void => {
