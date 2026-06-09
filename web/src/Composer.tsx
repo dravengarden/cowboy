@@ -58,6 +58,7 @@ import {
   SwapVert,
   Tune,
   Undo,
+  VerticalAlignBottom,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
@@ -70,6 +71,7 @@ import { latestPlan } from "./derive";
 import { DetentSheet } from "./_shell";
 import { toggleComposerExpanded, useComposerExpanded } from "./composerExpand";
 import { setVimMode } from "./vimModeStore";
+import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
@@ -353,6 +355,8 @@ export function Composer({
   const vim = useVimSetting();
   // Expand toggle (desktop only — gated where rendered). Persisted per device.
   const expanded = useComposerExpanded();
+  // Auto-scroll / stick-to-bottom state for the toolbar's scroll-to-bottom toggle.
+  const sticky = useSticky(sessionId);
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
@@ -796,9 +800,27 @@ export function Composer({
             </Stack>
           )}
 
-        {/* (The auto-scroll toggle moved OUT of the composer to a "jump to latest"
-            pill on the transcript — it controls the transcript, not the input.
-            See Transcript.JumpToLatestPill.) */}
+        {/* Sticky / auto-scroll toggle — the persistent scroll-to-bottom control,
+            rightmost of the left group. Default ON (active = primary, following the
+            latest); inactive = muted. Tap while inactive → scroll to bottom + follow
+            again; tap while active → stop following. The Transcript owns the actual
+            scroll (stickyStore). Hover-only tooltip (disableFocus/Touch) so a tap on
+            the most-tapped control doesn't pop the bubble. */}
+        <Tooltip
+          title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
+          disableFocusListener
+          disableTouchListener
+        >
+          <IconButton
+            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
+            color={sticky ? "primary" : "default"}
+            sx={TOOLBAR_ICON_BTN}
+            onClick={(): void =>
+              sticky ? setSticky(sessionId, false) : requestStickToBottom(sessionId)}
+          >
+            <VerticalAlignBottom />
+          </IconButton>
+        </Tooltip>
 
         {/* Spacer → the Stop + the send/queue/⋮ action cluster pin to the card's
             right edge while the left group (triggers + config) stays left. */}
