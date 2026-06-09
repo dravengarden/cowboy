@@ -44,20 +44,18 @@ if (el) {
 // macOS native-fullscreen guard (WKWebView / Tauri desktop shell + standalone
 // PWA). An Esc keydown the page doesn't consume walks AppKit's responder chain to
 // `cancelOperation:`, which EXITS macOS native fullscreen (the green-button
-// fullscreen) — jarring when Esc is meant to leave vim insert mode. preventDefault
-// (NOT stopPropagation) cancels ONLY that native default; every JS Esc handler
-// (vim mode change, MUI modal/sheet close, cancel-turn) still fires because the
-// event keeps propagating. Skipped during IME composition so Esc can still cancel
-// a pinyin candidate. (Browser Fullscreen-API exit is UA-enforced + unaffected —
-// this only cancels the native default action, which, unlike the browser API, IS
-// cancelable from the page.)
-globalThis.addEventListener(
-  "keydown",
-  (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && !e.isComposing) e.preventDefault();
-  },
-  { capture: true },
-);
+// fullscreen) — jarring when Esc is meant to leave vim insert mode. We cancel that
+// ONE native default by preventDefault-ing Escape — but in the BUBBLE phase, NOT
+// capture: CodeMirror skips a keydown whose `defaultPrevented` is already set (it
+// checks the flag), so a capture-phase preventDefault silently broke vim's
+// insert→normal. Bubbling means the editor (and every other JS Esc handler — modal
+// close, cancel-turn) runs FIRST and unaffected; we only stamp preventDefault
+// afterwards to suppress the native exit. Skipped during IME composition so Esc can
+// still cancel a pinyin candidate. (Browser Fullscreen-API exit is UA-enforced +
+// uncancelable; the native responder default, unlike it, IS cancelable.)
+globalThis.addEventListener("keydown", (e: KeyboardEvent): void => {
+  if (e.key === "Escape" && !e.isComposing) e.preventDefault();
+});
 
 // Standalone PWA: register the service worker (offline shell + installable) AND
 // keep it fresh. An installed iOS PWA RESUMES its loaded page on reopen — it does
