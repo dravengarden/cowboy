@@ -183,6 +183,9 @@ function ComposeBar(
     onAttach,
     attachments = [],
     onRemoveAttachment,
+    onSaveDraft,
+    onCollapse,
+    onForcePush,
   }: {
     readonly dead: boolean;
     readonly sendable: boolean;
@@ -194,12 +197,20 @@ function ComposeBar(
     readonly onAttach?: (() => void) | undefined;
     readonly attachments?: Attachment[];
     readonly onRemoveAttachment?: ((id: string) => void) | undefined;
+    readonly onSaveDraft?: (() => void) | undefined;
+    readonly onCollapse?: (() => void) | undefined;
+    /** Receives the ⋮ button so the caller can anchor its force-push confirm. */
+    readonly onForcePush?: ((anchor: HTMLElement) => void) | undefined;
   },
 ): React.JSX.Element {
   // Config dropdowns fold behind the ⚙ toggle — the bar stays one compact row,
   // and tapping ⚙ reveals the dropdowns ABOVE the action row.
   const [configOpen, setConfigOpen] = useState(false);
   const hasConfig = showSkeleton || options.length > 0;
+  // Secondary actions (exit fullscreen / save draft / force push) live in a ⋮
+  // overflow menu so the bar stays compact.
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const hasMenu = Boolean(onCollapse) || Boolean(onSaveDraft) || Boolean(onForcePush);
   return (
     <Stack
       direction="column"
@@ -291,6 +302,63 @@ function ComposeBar(
           </Tooltip>
         )}
         <Box sx={{ flex: 1 }} />
+        {hasMenu && (
+          <>
+            <Tooltip title="More actions">
+              <IconButton
+                aria-label="more actions"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(e): void => setMenuAnchor(e.currentTarget)}
+              >
+                <MoreVert />
+              </IconButton>
+            </Tooltip>
+            <Menu
+              anchorEl={menuAnchor}
+              open={menuAnchor !== null}
+              onClose={(): void => setMenuAnchor(null)}
+              anchorOrigin={{ vertical: "top", horizontal: "right" }}
+              transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+            >
+              {onCollapse && (
+                <MenuItem
+                  onClick={(): void => {
+                    setMenuAnchor(null);
+                    onCollapse();
+                  }}
+                >
+                  <CloseFullscreen fontSize="small" sx={{ mr: 1 }} />
+                  Exit fullscreen
+                </MenuItem>
+              )}
+              {onSaveDraft && (
+                <MenuItem
+                  onClick={(): void => {
+                    setMenuAnchor(null);
+                    onSaveDraft();
+                  }}
+                >
+                  <EditNoteOutlined fontSize="small" sx={{ mr: 1 }} />
+                  Save as draft
+                </MenuItem>
+              )}
+              {onForcePush && (
+                <MenuItem
+                  onClick={(): void => {
+                    // Keep the ⋮ element to anchor the caller's confirm popover,
+                    // then close the menu.
+                    const anchor = menuAnchor;
+                    setMenuAnchor(null);
+                    if (anchor) onForcePush(anchor);
+                  }}
+                >
+                  <Bolt fontSize="small" sx={{ mr: 1 }} />
+                  Force push
+                </MenuItem>
+              )}
+            </Menu>
+          </>
+        )}
         <Tooltip title="Send">
           <span>
             <IconButton
@@ -1210,14 +1278,8 @@ export function Composer({
       {composeFs && (
         <DetentSheet
           open
-          // Full-screen frosted glass (cover), the primary mobile writing canvas.
-          // Full-screen frosted glass WHILE the keyboard is up (the writing canvas,
-          // keyboard-aware: the shared cover lifts above the keyboard + shrinks to
-          // match). When the keyboard is dismissed, drop to a content-height frosted
-          // sheet (still `frosted`) so the bar docks snugly under the text instead
-          // of stranding at the bottom of an empty full-screen canvas.
-          // Always full-screen frosted glass (the writing canvas) — does NOT
-          // collapse to content-height when the keyboard's dismissed.
+          // Always full-screen frosted glass — the primary mobile writing canvas
+          // (does not collapse to content-height when the keyboard is dismissed).
           ariaLabel="Compose message"
           frosted
           cover
@@ -1245,6 +1307,14 @@ export function Composer({
                 submit();
                 setComposeFs(false);
               }}
+              onCollapse={(): void => setComposeFs(false)}
+              onSaveDraft={(): void => {
+                saveDraft();
+                setComposeFs(false);
+              }}
+              onForcePush={busy || starting
+                ? (anchor): void => setForceAnchor(anchor)
+                : undefined}
             />
           }
         >
