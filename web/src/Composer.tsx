@@ -1593,7 +1593,9 @@ function PendingPanel({
         </Typography>
         {
           /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
-            only shown) with 2+ rows. Primary-tinted while active. */
+            only shown) with 2+ rows. Primary-tinted while active. HIDDEN on a wide
+            panel (ROW_ACTIONS_INLINE): there the grips are always shown, so the
+            toggle is redundant — same adaptive rule as the row actions. */
         }
         {count >= 2 && (
           <IconButton
@@ -1602,7 +1604,7 @@ function PendingPanel({
             title={reordering ? "Done" : "Reorder"}
             color={reordering ? "primary" : "default"}
             onClick={(): void => setReordering((r) => !r)}
-            sx={{ flexShrink: 0 }}
+            sx={{ flexShrink: 0, [ROW_ACTIONS_INLINE]: { display: "none" } }}
           >
             <SwapVert fontSize="small" />
           </IconButton>
@@ -1659,17 +1661,23 @@ function PendingPanel({
                 spacing={0.5}
               >
                 {
-                  /* Leading grip — only in reorder mode (off by default so rows
-                    reclaim the width), and never on the row being edited (the edit
-                    field owns the row then) nor on an optimistic row. A real
-                    IconButton so the drag area stays a fixed tap target even as
-                    the glyph scales with the font. */
+                  /* Leading grip — visibility is ADAPTIVE: on a narrow panel it's
+                    hidden until reorder mode (so rows reclaim ~40px), but on a wide
+                    panel (ROW_ACTIONS_INLINE) it's always shown — there's room, so
+                    no reorder toggle is needed (the toggle hides itself there too).
+                    Always RENDERED when draggable so CSS alone decides; never on the
+                    row being edited (the edit field owns it) nor an optimistic row. */
                 }
-                {reordering && editingId !== m.id && !optimistic && (
+                {editingId !== m.id && !optimistic && (
                   <IconButton
                     {...sortable.handleProps(m.id)}
                     aria-label="Drag to reorder"
-                    sx={{ ...TOOLBAR_ICON_BTN, color: "text.disabled" }}
+                    sx={{
+                      ...TOOLBAR_ICON_BTN,
+                      color: "text.disabled",
+                      display: reordering ? "inline-flex" : "none",
+                      [ROW_ACTIONS_INLINE]: { display: "inline-flex" },
+                    }}
                   >
                     <DragIndicator fontSize="small" />
                   </IconButton>
