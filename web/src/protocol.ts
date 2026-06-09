@@ -14,15 +14,14 @@ export type Status =
 
 // Which surface opened the session — for the sidebar badge.
 // Mirrors src/core.rs `SessionOrigin`. Older daemons that predate this field
-// will omit it; treat absent as "api".
-export type SessionOrigin = "api" | "web" | "zed";
+// will omit it; treat absent as "api". (Legacy "zed" rows from the retired
+// bridge now read back as "api".)
+export type SessionOrigin = "api" | "web";
 
 // Human label for the surface that opened a session. Absent origin (older
 // daemons) reads as "API", matching the daemon's `SessionOrigin` default.
 export function originLabel(o: SessionOrigin | undefined): string {
   switch (o ?? "api") {
-    case "zed":
-      return "Zed";
     case "web":
       return "Web";
     default:

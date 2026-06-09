@@ -25,16 +25,6 @@ build-web:
 build: build-web
     cargo build --release
 
-# Build the bridge and expose it at ./bin/cowboy for Zed's dev agent entry
-# (`cowboy-dev: …` → command: <repo>/bin/cowboy). Explicit on purpose: re-run
-# after changing bridge code, then restart the Zed thread. One fixed path, no
-# fallback — if bin/cowboy is stale it's because you didn't re-run this, not
-# because a wrapper silently picked an old artifact. The deployed `cowboy` on
-# PATH (nix) backs the prod entries and needs none of this.
-bridge-dev:
-    cargo build --release
-    mkdir -p bin && ln -sf ../target/release/cowboy bin/cowboy
-
 # Quality gates.
 fmt:
     cargo fmt

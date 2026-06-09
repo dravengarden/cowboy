@@ -403,20 +403,18 @@ async fn api_session_info(State(state): State<Arc<AppState>>, Path(session_id): 
 /// Request body for `POST /api/sessions`.
 ///
 /// WS `Inbound::NewSession` is fire-and-forget without a `sessionId` reply, so
-/// external drivers (e.g. the `acp-bridge` translating ACP `session/new`)
-/// would have to diff `Outbound::Sessions` broadcasts to learn their id —
-/// racey. This endpoint exists so a single synchronous HTTP request returns
-/// the assigned id directly. Web UI clients can keep using the WS path;
-/// this is purely additive.
+/// an external HTTP caller would have to diff `Outbound::Sessions` broadcasts
+/// to learn their id — racey. This endpoint exists so a single synchronous HTTP
+/// request returns the assigned id directly. Web UI clients can keep using the
+/// WS path; this is purely additive.
 #[derive(Debug, Deserialize)]
 struct NewSessionRequest {
     provider: String,
     #[serde(default)]
     cwd: Option<String>,
     /// Which surface opened the session — defaults to `Api` for direct
-    /// `curl`/test callers. `acp-bridge` sends `Zed`. The Web UI uses the WS
-    /// `Inbound::NewSession` path (which always tags `Web`), not this
-    /// endpoint, so `Web` shouldn't normally arrive here.
+    /// `curl`/test callers. The Web UI uses the WS `Inbound::NewSession` path
+    /// (which always tags `Web`), not this endpoint.
     #[serde(default)]
     origin: SessionOrigin,
 }
@@ -874,7 +872,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                     })
                     .collect()
             };
-            // Bridge/API direct prompt — no optimistic client, so no cmid.
+            // API direct prompt — no optimistic client, so no cmid.
             let result = state
                 .supervisor
                 .send(&session_id, AgentCommand::Prompt(blocks, None));

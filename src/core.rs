@@ -31,7 +31,6 @@ pub const HISTORY_PAGE: usize = 200;
 /// Who opened a session. Used by the UI to render an `origin` badge and
 /// (eventually) to decide which sessions belong to which client surface.
 /// `Web` = a browser/phone clicked "New session" on cowboy's own UI.
-/// `Zed` = the `acp-bridge` translated an ACP `session/new` from Zed.
 /// `Api` = a direct `POST /api/sessions` with no `origin` field (curl, tests,
 /// future scripted callers).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -40,7 +39,6 @@ pub enum SessionOrigin {
     #[default]
     Api,
     Web,
-    Zed,
 }
 
 /// Provider/session status as shown in the session list.
@@ -320,7 +318,7 @@ struct Session {
     judge_seq: u64,
 }
 
-/// A command sent by a client (Web UI, `acp-bridge`, future test harnesses)
+/// A command sent by a client (Web UI, native shell, API / test harnesses)
 /// to the daemon over the WebSocket. Tag is `type`, snake-cased.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -335,9 +333,9 @@ pub enum Inbound {
     ///
     /// - **Web UI** sends `text: "..."` (legacy text-only path; daemon wraps
     ///   it in a single ACP `Text` content block).
-    /// - **Bridge** sends `content: [...ACP ContentBlock JSON]` to carry rich
-    ///   content (e.g. pasted images). When both are present, `content`
-    ///   wins. At least one must be non-empty; otherwise the prompt is
+    /// - **API / direct callers** send `content: [...ACP ContentBlock JSON]` to
+    ///   carry rich content (e.g. pasted images). When both are present,
+    ///   `content` wins. At least one must be non-empty; otherwise the prompt is
     ///   dropped server-side with a warn log.
     Prompt {
         session_id: String,
@@ -459,7 +457,7 @@ pub enum Inbound {
     // every connected terminal sees identical state and only one turn ever runs.
     /// Send a user turn the queue-aware way: dispatch immediately if the session
     /// is idle and nothing is queued/in-flight, otherwise append to the queue.
-    /// (The bridge/API keep using `Prompt` for a direct, un-queued dispatch.)
+    /// (The API keeps using `Prompt` for a direct, un-queued dispatch.)
     Submit {
         session_id: String,
         #[serde(default)]

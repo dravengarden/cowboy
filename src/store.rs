@@ -507,13 +507,12 @@ fn origin_to_str(o: SessionOrigin) -> &'static str {
     match o {
         SessionOrigin::Api => "api",
         SessionOrigin::Web => "web",
-        SessionOrigin::Zed => "zed",
     }
 }
 
 fn origin_from_str(s: &str) -> SessionOrigin {
+    // Legacy "zed" rows (the retired Zed bridge) fall through to the Api default.
     match s {
-        "zed" => SessionOrigin::Zed,
         "web" => SessionOrigin::Web,
         _ => SessionOrigin::Api,
     }

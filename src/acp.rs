@@ -367,7 +367,7 @@ async fn run_session(
             AgentCommand::Prompt(blocks, cmid) => {
                 state.hub.set_status(&session_id, Status::Busy, None);
                 // Echo each user content block into the timeline so every
-                // client (Web UI, phone, Zed via bridge) sees it — the upstream
+                // client (Web UI, phone, native shell) sees it — the upstream
                 // agent may not stream a user_message_chunk back. One Hub event
                 // per block so each renders as its own bubble. The FIRST echo
                 // carries the originating client's cmid so that client reconciles

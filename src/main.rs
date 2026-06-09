@@ -1,5 +1,4 @@
 mod acp;
-mod acp_bridge;
 mod cli;
 mod core;
 mod inference;

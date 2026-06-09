@@ -268,8 +268,6 @@ function originColor(
     o: SessionOrigin | undefined,
 ): "primary" | "secondary" | "default" {
     switch (o ?? "api") {
-        case "zed":
-            return "primary";
         case "web":
             return "secondary";
         default:

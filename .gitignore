@@ -1,9 +1,6 @@
 # Rust
 /target
 
-# Dev bridge binary for Zed's `cowboy-dev` agent entry (`just bridge-dev`).
-/bin
-
 # Frontend
 web/node_modules/
 web/dist/
