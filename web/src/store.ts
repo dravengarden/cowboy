@@ -723,7 +723,7 @@ export const AUTO_RESUME_TEMPLATE_KEY = "session.autoResume.template";
 /** The built-in continuation template (mirrors DEFAULT_CONTINUATION_TEMPLATE in
  *  src/core.rs) — shown in the editor when the operator hasn't customized one. */
 export const DEFAULT_CONTINUATION_TEMPLATE =
-  "你上一次的回复在完成前被中断了。以下是你已经产出的内容:\n\n{{partial}}\n\n请从中断处接着完成,不要重做已经完成的步骤。";
+  "[系统自动续接,非用户重新提问] 你上一轮回复在完成前被 cowboy 重启打断,系统现自动恢复该轮。请**从中断处接着完成**,不要从头重做整个任务;尤其在重新执行任何有副作用的操作(写/改文件、部署、git 提交、发网络请求等)之前,先确认它是否已经做过,避免重复执行导致循环或副作用叠加。以下是你被打断前已产出的内容:\n\n{{partial}}";
 
 /** The global auto-resume default (off unless explicitly enabled). */
 export function autoResumeDefault(s: State): boolean {

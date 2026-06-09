@@ -123,9 +123,20 @@ const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
 pub(crate) const AUTO_CONTINUE_PREFIX: &str = "__cont__";
 /// Built-in continuation template used when the operator hasn't customized one.
 /// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
-/// one source of truth the revived agent's own store lacks. The "don't redo"
-/// line is the best-effort idempotency guard.
-const DEFAULT_CONTINUATION_TEMPLATE: &str = "你上一次的回复在完成前被中断了。以下是你已经产出的内容:\n\n{{partial}}\n\n请从中断处接着完成,不要重做已经完成的步骤。";
+/// one source of truth the revived agent's own store lacks. It MUST self-identify
+/// as a SYSTEM auto-resume (not a fresh user request) and guard against re-running
+/// side-effectful work: a revived agent that re-does already-done steps can loop
+/// (re-deploy → another restart → resume → …) or double its side effects. The
+/// "verify before re-running" line is the best-effort idempotency guard.
+const DEFAULT_CONTINUATION_TEMPLATE: &str = "[系统自动续接,非用户重新提问] 你上一轮回复在完成前被 cowboy 重启打断,系统现自动恢复该轮。请**从中断处接着完成**,不要从头重做整个任务;尤其在重新执行任何有副作用的操作(写/改文件、部署、git 提交、发网络请求等)之前,先确认它是否已经做过,避免重复执行导致循环或副作用叠加。以下是你被打断前已产出的内容:\n\n{{partial}}";
+
+/// Empty-partial framing: the turn was cut off BEFORE producing anything, so
+/// there's nothing to "continue from" and we re-issue the original prompt. But it
+/// must STILL be framed as a system auto-retry — a bare verbatim re-send (the old
+/// behaviour) reads to the agent as a brand-new user request, so it re-runs
+/// side-effectful work (re-deploy → another restart → resume → …): the exact loop
+/// the user hit. `{{prompt}}` is the original request.
+const DEFAULT_RETRY_TEMPLATE: &str = "[系统自动续接,非用户重新提问] 你上一轮还没产出任何内容就被 cowboy 重启打断,系统现自动重试该轮。请重新处理下面这条原始请求;但在执行其中任何有副作用的操作(写/改文件、部署、git 提交、发网络请求等)之前,先确认它是否已经做过,避免重复执行导致循环或副作用叠加:\n\n{{prompt}}";
 
 /// Render a `{{var}}` template by literal substitution. Unknown vars are left
 /// verbatim (the UI flags them); a var absent from the map is simply not
@@ -1756,16 +1767,18 @@ impl Hub {
                 return;
             }
             let (prompt, partial) = last_turn_texts(&s.log);
-            // EMPTY-RESULT case: the turn was cut off before producing anything,
-            // so there is nothing to "continue from" — re-issue the ORIGINAL
-            // prompt (a clean retry) instead of a "here's what you produced:
-            // <nothing>" message. Nothing at all (no prompt either) → don't
+            // EMPTY-RESULT case: the turn was cut off before producing anything, so
+            // there's nothing to "continue from" — re-issue the ORIGINAL prompt, but
+            // WRAPPED in the auto-retry framing (NOT verbatim: a bare re-send reads
+            // as a fresh user request → the agent re-runs side effects → loop). A
+            // "here's what you produced: <nothing>" message would be nonsense, hence
+            // the separate retry template. Nothing at all (no prompt either) → don't
             // enqueue, so a content-less interruption can't seed a continue.
             let text = if partial.trim().is_empty() {
                 if prompt.trim().is_empty() {
                     return;
                 }
-                prompt
+                render_template(DEFAULT_RETRY_TEMPLATE, &[("prompt", &prompt), ("cwd", &s.meta.cwd)])
             } else {
                 render_template(
                     &template,
