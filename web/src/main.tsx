@@ -41,6 +41,24 @@ if (el) {
   );
 }
 
+// macOS native-fullscreen guard (WKWebView / Tauri desktop shell + standalone
+// PWA). An Esc keydown the page doesn't consume walks AppKit's responder chain to
+// `cancelOperation:`, which EXITS macOS native fullscreen (the green-button
+// fullscreen) — jarring when Esc is meant to leave vim insert mode. preventDefault
+// (NOT stopPropagation) cancels ONLY that native default; every JS Esc handler
+// (vim mode change, MUI modal/sheet close, cancel-turn) still fires because the
+// event keeps propagating. Skipped during IME composition so Esc can still cancel
+// a pinyin candidate. (Browser Fullscreen-API exit is UA-enforced + unaffected —
+// this only cancels the native default action, which, unlike the browser API, IS
+// cancelable from the page.)
+globalThis.addEventListener(
+  "keydown",
+  (e: KeyboardEvent): void => {
+    if (e.key === "Escape" && !e.isComposing) e.preventDefault();
+  },
+  { capture: true },
+);
+
 // Standalone PWA: register the service worker (offline shell + installable) AND
 // keep it fresh. An installed iOS PWA RESUMES its loaded page on reopen — it does
 // not re-navigate — so without this it runs whatever bundle it first loaded until
