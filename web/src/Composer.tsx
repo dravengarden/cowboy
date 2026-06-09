@@ -1570,10 +1570,16 @@ function PendingPanel({
     <Box
       sx={{
         mb: 1,
-        // No border, NO bg tint, no side padding: the panel is just a header + the
-        // full-width outlined row Papers, so there's no container "frame" padding
-        // around them and their left/right edges line up exactly with the main
-        // composer input box. Drafts vs queue are told apart by the header label.
+        // The original framed container, KEPT (the user liked it): a soft tinted,
+        // rounded, bordered box that groups the rows. Its OUTER edge sits at the
+        // composer's content gutter — exactly where the input box's outer border is
+        // — so the panel frame and the message box line up edge-to-edge (no horizontal
+        // margin on either). Drafts read a touch more "staging" than the live queue.
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 1,
+        bgcolor: kind === "draft" ? "action.selected" : "action.hover",
+        overflow: "hidden",
         // Query container for the rows: their secondary actions go inline on a
         // roomy panel (iPad / desktop) and collapse to a kebab on a narrow phone
         // one (ROW_ACTIONS_INLINE). Keyed on the ACTUAL panel width, so the
@@ -1656,9 +1662,10 @@ function PendingPanel({
         <Stack
           spacing={0.5}
           sx={{
-            // No side padding — rows span the full panel width to align with the
-            // main composer input box (request: "去掉 padding 对齐").
-            px: 0,
+            // Inner padding so the rows sit INSIDE the frame with a small inset
+            // (the original framed look). The frame's OUTER edge is what aligns
+            // with the input box, not the rows.
+            px: 0.5,
             pb: 0.5,
             // Cap so a long backlog scrolls instead of pushing the editor off
             // a phone viewport; the editor must always stay reachable.
