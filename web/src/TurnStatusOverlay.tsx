@@ -3,7 +3,6 @@ import { alpha, Box, IconButton, Stack, Typography } from "@mui/material";
 import type { PaletteColor, Theme } from "@mui/material";
 import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
 import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
-import Close from "@mui/icons-material/Close";
 import type { Status } from "./protocol";
 import {
   dismissAwaiting,
@@ -87,19 +86,27 @@ export function TurnStatusOverlay({
   // those keep their own tap. `fired` suppresses the trailing click (focus).
   const lpTimer = useRef<number | null>(null);
   const lpFired = useRef(false);
+  // `pressing` drives the press-and-hold GROW animation: the pill swells while
+  // held (a 480ms transition matching the threshold), so the hold reads as
+  // "building up", then snaps back as the inspector opens.
+  const [pressing, setPressing] = useState(false);
   const clearLongPress = (): void => {
     if (lpTimer.current !== null) {
       clearTimeout(lpTimer.current);
       lpTimer.current = null;
     }
+    setPressing(false);
   };
   const startLongPress = (e: React.PointerEvent): void => {
     if ((e.target as HTMLElement).closest("button")) return;
     lpFired.current = false;
     clearLongPress();
+    setPressing(true);
     lpTimer.current = globalThis.setTimeout(() => {
       lpFired.current = true;
-      haptic(18);
+      setPressing(false);
+      // A firmer tap right as the inspector opens — the "you got it" confirmation.
+      haptic(24);
       openJudgeInspector(sessionId);
     }, 480);
   };
@@ -170,7 +177,7 @@ export function TurnStatusOverlay({
   }
   // Symmetric padding (centred text) when there's no trailing control; otherwise
   // tighten the right so the button sits in.
-  const hasTrailing = showExpand || action !== undefined || kind === "done";
+  const hasTrailing = showExpand || action !== undefined;
 
   return (
     <Box
@@ -283,6 +290,14 @@ export function TurnStatusOverlay({
           sx={{
             cursor: "text",
             maxWidth: "100%",
+            // Press-and-hold grows the pill; release/settle snaps it back.
+            transform: pressing ? "scale(1.07)" : "scale(1)",
+            transition: "transform .42s cubic-bezier(.4,0,.2,1)",
+            // A long-press must NOT trigger the OS text-selection (the blue
+            // handles) on the label — it's a gesture target, not copyable text.
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            WebkitTouchCallout: "none",
             ...(hasTrailing ? { pl: 2, pr: 0.5 } : { px: 2 }),
             // Symmetric, tight vertical padding so a trailing pill button (Retry /
             // Resume / Send) sits with a uniform ~4px inset instead of the old
@@ -382,23 +397,6 @@ export function TurnStatusOverlay({
               }}
             >
               {action.icon ?? action.label}
-            </IconButton>
-          )}
-          {
-            /* "done" has no primary action — give the now-persistent green pill a
-              × so it can be cleared without sending the next message. */
-          }
-          {kind === "done" && (
-            <IconButton
-              size="small"
-              aria-label="dismiss"
-              onClick={(e): void => {
-                e.stopPropagation();
-                setHidden(true);
-              }}
-              sx={{ color: "text.secondary", width: 26, height: 26 }}
-            >
-              <Close sx={{ fontSize: 16 }} />
             </IconButton>
           )}
         </Stack>
