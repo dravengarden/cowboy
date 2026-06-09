@@ -2282,16 +2282,21 @@ impl Hub {
     /// Overlay "Retry" for an errored/crashed turn: re-run the last user prompt
     /// (reviving the session). No-op if there's no prior prompt.
     pub fn retry_turn(&self, session_id: &str) {
-        let prompt = {
+        let (prompt, status) = {
             let sessions = self.inner.sessions.lock().unwrap();
             let Some(s) = sessions.get(session_id) else {
+                tracing::warn!(session = %session_id, "retry_turn: unknown session — no-op");
                 return;
             };
-            last_turn_texts(&s.log).0
+            (last_turn_texts(&s.log).0, s.meta.status)
         };
         if prompt.trim().is_empty() {
+            // The "no response" report points here first: a crashed turn whose
+            // user prompt never made it into the log leaves nothing to re-run.
+            tracing::warn!(session = %session_id, ?status, "retry_turn: no prior prompt to retry — no-op");
             return;
         }
+        tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), "retry_turn: re-submitting last prompt");
         let _ = self.force_submit(session_id, prompt, Vec::new(), None);
     }
 
