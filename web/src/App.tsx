@@ -1208,13 +1208,6 @@ export function App({
                             <Box sx={{ flex: 1, minWidth: 0 }} />
                         )}
                         <IconButton
-                            onClick={(): void => openSettings("info")}
-                            aria-label="info"
-                            title="Info"
-                        >
-                            <InfoOutlined />
-                        </IconButton>
-                        <IconButton
                             onClick={(): void => openSettings("settings")}
                             aria-label="settings"
                             title="Settings"
