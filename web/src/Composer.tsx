@@ -69,6 +69,7 @@ import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
 import { DetentSheet } from "./_shell";
 import { toggleComposerExpanded, useComposerExpanded } from "./composerExpand";
+import { setVimMode } from "./vimModeStore";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
@@ -154,12 +155,6 @@ function collapseStore(key: string): Store<boolean> {
 // global MuiIconButton theme override (same as the session-list buttons); this
 // only keeps them from shrinking in the flex toolbar row.
 const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
-// Vim hint colour per mode — insert is the "you can type" green, visual the
-// selection amber; normal/anything else falls back to muted text.
-const VIM_MODE_COLOR: Record<string, string> = {
-  insert: "success.main",
-  visual: "warning.main",
-};
 const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
@@ -346,9 +341,6 @@ export function Composer({
   const vim = useVimSetting();
   // Expand toggle (desktop only — gated where rendered). Persisted per device.
   const expanded = useComposerExpanded();
-  // Live vim mode (normal/insert/visual) for the card hint — only meaningful
-  // when vim is on; ComposerEditor pushes changes via onVimMode.
-  const [vimMode, setVimMode] = useState("normal");
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
@@ -892,43 +884,8 @@ export function Composer({
           <MoreVert fontSize="small" />
         </IconButton>
         </Stack>
-        {/* Zed-style status bar at the card's bottom edge — DESKTOP ONLY (these
-            statuses aren't shown on mobile). A thin strip for editor state; today
-            it carries the vim mode, laid out as a flex row so more statuses
-            (line:col, language, diagnostics, …) can sit beside it later. Rendered
-            only when vim is on, so it never adds an empty strip otherwise. */}
-        {!touchInput && vim && (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1.5,
-              px: 1,
-              py: 0.25,
-              minHeight: 22,
-              borderTop: 1,
-              borderColor: "divider",
-              color: "text.secondary",
-              fontFamily: "monospace",
-              fontSize: "0.6875rem",
-              lineHeight: 1.5,
-              userSelect: "none",
-            }}
-          >
-            <Box
-              component="span"
-              aria-label={`vim ${vimMode} mode`}
-              sx={{
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: VIM_MODE_COLOR[vimMode] ?? "text.secondary",
-              }}
-            >
-              {vimMode}
-            </Box>
-          </Box>
-        )}
+        {/* (Vim status moved to the app-wide bottom status bar — see App's
+            StatusBar at the very bottom of the window, Zed/VSCode style.) */}
       </Paper>
       {
         /* The input overlay's ⋮ kebab — secondary actions that used to sit in the

@@ -45,6 +45,8 @@ import {
     Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { Composer } from "./Composer";
+import { useTouchComposer } from "./ComposerTextarea";
+import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
 import { Transcript } from "./Transcript";
 import {
     originLabel,
@@ -109,6 +111,51 @@ import { persisted } from "./_store/mod.ts";
 // `clamp(240px, 22vw, 360px)` it replaces. Resize is desktop-only: below the
 // `lg` breakpoint the sidebar is a full-width top Drawer (touch layout), which
 // has no divider — so neither bound nor handle applies there.
+// App-wide bottom status bar (Zed / VSCode style): a thin strip at the very
+// bottom of the window. DESKTOP ONLY + only when vim is on (its sole status today
+// is the vim mode); a flex row so line:col / language / diagnostics can join it
+// later. Reads the live mode from vimModeStore, which ComposerEditor writes. Lives
+// inside the composer's measured wrapper so the transcript's `--composer-h`
+// reservation includes it automatically.
+function AppStatusBar(): React.JSX.Element | null {
+    const vim = useVimSetting();
+    const vimMode = useVimMode();
+    const touchInput = useTouchComposer();
+    if (touchInput || !vim) return null;
+    return (
+        <Box
+            sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1.5,
+                px: 1.5,
+                py: 0.25,
+                minHeight: 22,
+                borderTop: 1,
+                borderColor: "divider",
+                color: "text.secondary",
+                fontFamily: "monospace",
+                fontSize: "0.6875rem",
+                lineHeight: 1.5,
+                userSelect: "none",
+            }}
+        >
+            <Box
+                component="span"
+                aria-label={`vim ${vimMode} mode`}
+                sx={{
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: VIM_MODE_COLOR[vimMode] ?? "text.secondary",
+                }}
+            >
+                {vimMode}
+            </Box>
+        </Box>
+    );
+}
+
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 300;
@@ -1342,6 +1389,10 @@ export function App({
                                 status={active.status}
                                 onOpenInfo={(): void => openSettings("info")}
                             />
+                            {/* Zed/VSCode-style status bar at the very bottom of
+                                the window; inside this measured wrapper so the
+                                transcript reserves it via --composer-h. */}
+                            <AppStatusBar />
                         </Box>
                     </>
                 ) : (
