@@ -1069,6 +1069,47 @@ function SessionStatusBar({
   );
 }
 
+// FREEZE-WHILE-DETACHED anchor (see the scroll effect). Held in a ref so both
+// the scroll listener (capture) and the per-chunk timeline layout effect
+// (restore) share one anchor. `self` flags our own corrective scrollTop write so
+// the listener swallows the scroll event it triggers.
+interface FreezeAnchor {
+  key: string | null;
+  top: number;
+  self: boolean;
+}
+
+// Snapshot the message row at the viewport CENTRE + its offset from the
+// container top. Centre (not the top edge) so the probe always lands on a row,
+// never in the container's top padding / status-strip inset.
+function captureFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
+  const r = el.getBoundingClientRect();
+  const hit = el.ownerDocument.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  const row = hit?.closest<HTMLElement>("[data-key]");
+  if (!row) {
+    a.key = null;
+    return;
+  }
+  a.key = row.getAttribute("data-key");
+  a.top = row.getBoundingClientRect().top - r.top;
+}
+
+// Re-assert the captured anchor's offset. d(anchor.screenTop)/d(scrollTop) = -1
+// in any container, so `scrollTop += delta` pulls the anchor back to where it
+// was — sign-agnostic, so it works for column-reverse's negative scrollTop too.
+// Bottom-bubble growth moves the anchor (→ corrected); a top prepend
+// (loadOlder) leaves it put (→ delta≈0, no-op). Sub-pixel deltas are skipped so
+// a streamed token doesn't churn a scroll write every frame.
+function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
+  if (a.key === null) return;
+  const row = el.querySelector<HTMLElement>(`[data-key="${CSS.escape(a.key)}"]`);
+  if (!row) return;
+  const delta = row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+  if (Math.abs(delta) < 0.5) return;
+  a.self = true;
+  el.scrollTop += delta;
+}
+
 export function Transcript({
   sessionId,
   timeline,
@@ -1182,6 +1223,9 @@ export function Transcript({
   // completes while waiting for the model to start text again).
   const showTrailingDots = working && !lastIsStreamingAssistant;
   const parentRef = useRef<HTMLDivElement>(null);
+  // Shared FREEZE-WHILE-DETACHED anchor (captured by the scroll listener,
+  // restored by the per-chunk timeline effect). See the scroll effect below.
+  const freezeRef = useRef<FreezeAnchor>({ key: null, top: 0, self: false });
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
   const store = useStore();
@@ -1257,6 +1301,18 @@ export function Transcript({
         setSticky(sessionIdRef.current, false);
       }
     };
+
+    // FREEZE-WHILE-DETACHED. When the reader is scrolled up (NOT stuck), the
+    // newest bubble streaming at the visual bottom grows UPWARD (column-reverse
+    // anchors the bottom, so a taller bottom shoves everything — including the
+    // reader's view — up). The native bottom-anchor only helps while stuck. To
+    // hold a detached view still, element-anchor it: snapshot the message row at
+    // the viewport centre + its offset (captureFreezeAnchor) as the reader
+    // scrolls, then re-assert that offset on every content change — driven from
+    // the per-chunk timeline layout effect below (the container's own RO doesn't
+    // fire on content growth) plus this RO for container resizes (keyboard).
+    const captureAnchor = (): void => captureFreezeAnchor(el, freezeRef.current);
+    const restoreAnchor = (): void => restoreFreezeAnchor(el, freezeRef.current);
     const onTouchStart = (): void => {
       touching = true;
       detach();
@@ -1265,6 +1321,12 @@ export function Transcript({
       touching = false;
     };
     const onScroll = (): void => {
+      // Our own anchor-restoring scrollTop write re-enters here; swallow it so it
+      // neither re-captures (would chase its own correction) nor re-sticks.
+      if (freezeRef.current.self) {
+        freezeRef.current.self = false;
+        return;
+      }
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
       if (fromBottom < 24 && !stick.current && !touching) {
@@ -1272,7 +1334,13 @@ export function Transcript({
         // reactivates (REQ-4).
         stick.current = true;
         setSticky(sessionIdRef.current, true);
+        // Drop the freeze anchor so a later detach captures fresh, not a stale
+        // pre-re-stick row (which would yank the view on restore).
+        freezeRef.current.key = null;
       }
+      // Detached → keep the freeze anchor fresh as the reader scrolls, so the
+      // moment they stop, the held position is exactly where they left off.
+      if (!stick.current) captureAnchor();
       // Near the top (oldest): prefetch the next older page 2 screens early so
       // the prepend lands before the user reaches it. column-reverse keeps the
       // viewport put when it lands (added at the visual top, away from the bottom
@@ -1314,7 +1382,12 @@ export function Transcript({
       if (++roTries < 5) roRaf = requestAnimationFrame(repin);
     };
     const ro = new ResizeObserver(() => {
-      if (!stick.current) return;
+      if (!stick.current) {
+        // Detached: don't follow the bottom — hold the reader's view against the
+        // streaming bottom bubble's upward growth (see FREEZE-WHILE-DETACHED).
+        restoreAnchor();
+        return;
+      }
       roTries = 0; // extend the convergence window for this resize burst
       if (roRaf === 0) roRaf = requestAnimationFrame(repin);
     });
@@ -1353,15 +1426,28 @@ export function Transcript({
     return () => cancelAnimationFrame(raf);
   }, [sessionId]);
 
-  // FOLLOW after a timeline change. column-reverse makes prepend + scrolled-up
-  // append jitter-free natively (see the SCROLL MODEL note above), so the only
-  // thing left to assert is "keep following the bottom while stuck" — set
-  // scrollTop 0 (a no-op when the native bottom anchor already held it there,
-  // a safety net if it didn't). When NOT stuck we never touch scrollTop, so a
-  // prepend / new message can't move the reader's view.
+  // After a timeline change (fires per streamed chunk — `timeline` is a fresh
+  // array each envelope). STUCK: follow the bottom, scrollTop 0 (a no-op when the
+  // native bottom anchor already held it there, a safety net if it didn't).
+  // DETACHED: hold the reader's view against the streaming bottom bubble's upward
+  // growth by re-asserting the freeze anchor (column-reverse's native anchor only
+  // pins the bottom, which is exactly what a scrolled-up reader does NOT want).
+  // Pre-paint (layout effect) so the correction lands without a visible jump.
   useLayoutEffect(() => {
     const el = parentRef.current;
-    if (el && stick.current) el.scrollTop = 0;
+    if (!el) return;
+    if (stick.current) {
+      el.scrollTop = 0;
+      // Stuck → no live anchor; clear so the next detach captures fresh (never
+      // restores to a stale, pre-re-stick position → a jump).
+      freezeRef.current.key = null;
+    } else if (freezeRef.current.key === null) {
+      // Detached without a scroll gesture to capture one (e.g. the composer's
+      // sticky toggle) → seed the anchor at the current view this first chunk.
+      captureFreezeAnchor(el, freezeRef.current);
+    } else {
+      restoreFreezeAnchor(el, freezeRef.current);
+    }
   }, [timeline]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
