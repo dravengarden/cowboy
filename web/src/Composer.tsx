@@ -468,26 +468,15 @@ export function Composer({
         pl: `max(env(safe-area-inset-left), ${padding}px)`,
         pr: `max(env(safe-area-inset-right), ${padding}px)`,
         borderColor: "divider",
-        // Bottom mode: TRANSPARENT. The composer + navbar share ONE frosted slab
-        // rendered behind them (see App.tsx); the composer therefore adds no own
-        // tint / backdrop-filter / up-shadow / top border — doing so would double
-        // the blur and redraw the very seam we removed. Top mode: the composer IS
-        // the bottom glass (nothing scrolls under it), so it keeps the full frosted
-        // recipe — milkier tint + heavy blur + saturate + top hairline + up-shadow.
-        ...(navbarAtBottom ? { bgcolor: "transparent", borderTop: 0 } : {
-          borderTop: 1,
-          bgcolor: (t) =>
-            alpha(
-              t.palette.background.default,
-              t.palette.mode === "dark" ? 0.72 : 0.76,
-            ),
-          backdropFilter: "blur(30px) saturate(200%)",
-          WebkitBackdropFilter: "blur(30px) saturate(200%)",
-          boxShadow: (t) =>
-            `0 -1px 24px ${
-              t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"
-            }`,
-        }),
+        // TRANSPARENT in BOTH modes. The composer floats over ONE frosted slab
+        // rendered behind it in App.tsx (the bottom slab); it therefore adds no own
+        // tint / backdrop-filter / up-shadow / top border — doing so would double the
+        // blur. The transcript is the full-height background and scrolls UNDER it.
+        // (Top mode used to self-frost back when it sat in normal flow with nothing
+        // scrolling under it; the overlay layout now puts the transcript behind it,
+        // so the slab owns the glass — same as mobile.)
+        bgcolor: "transparent",
+        borderTop: 0,
         position: "relative", // anchor for Popper portal placement
       }}
     >

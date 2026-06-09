@@ -992,10 +992,13 @@ export function App({
                 sx={{
                     flex: 1,
                     minWidth: 0,
-                    // Anchor the bottom-mode glass status-bar strip + the floating
-                    // composer/navbar overlays (below); clip them to the column.
+                    // Anchor the floating frosted navbar + composer overlays (below)
+                    // and clip them to the column. The overlay design (transcript is
+                    // the full-height background, bars float over it as frosted glass)
+                    // now applies in BOTH modes — desktop top-navbar included — so the
+                    // clip is unconditional.
                     position: "relative",
-                    ...(navbarAtBottom && { overflow: "hidden" }),
+                    overflow: "hidden",
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -1015,28 +1018,44 @@ export function App({
                     no-notch screen / when hosted, so it costs nothing there.
                     `pointer-events:none` so taps + scroll pass straight through.
                     Top mode doesn't need it — the AppBar already owns that edge. */}
-                {navbarAtBottom && (
-                    <Box
-                        aria-hidden
-                        sx={{
-                            position: "absolute",
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            height: "env(safe-area-inset-top, 0px)",
-                            zIndex: (t) => t.zIndex.appBar,
-                            pointerEvents: "none",
-                            // Frosted / matte glass (磨砂): a milkier tint (0.62)
-                            // diffuses the content rather than showing it clearly,
-                            // and the heavier blur + `saturate` add the iOS-material
-                            // vibrancy that reads as thick frosted glass — not a
-                            // clear pane. Matches the bottom slab's recipe.
-                            bgcolor: (t) => alpha(t.palette.background.default, 0.62),
-                            backdropFilter: "blur(30px) saturate(200%)",
-                            WebkitBackdropFilter: "blur(30px) saturate(200%)",
-                        }}
-                    />
-                )}
+                {/* TOP frosted glass. Bottom mode: a thin strip over the safe-area-top
+                    so the iOS status bar sits on blur and content scrolls under it. Top
+                    mode (desktop): a full navbar-height slab — the frosted glass BEHIND
+                    the (now transparent) top AppBar, so the transcript diffuses under the
+                    navbar exactly like the mobile bottom bar. Height tracks the measured
+                    --navbar-h. pointer-events:none so taps reach the (lifted) navbar. */}
+                <Box
+                    aria-hidden
+                    sx={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)",
+                        // Behind the AppBar content (zIndex 2) but above the transcript (0).
+                        // Bottom mode's strip sits alone at the top, so keep it high.
+                        zIndex: navbarAtBottom ? ((t) => t.zIndex.appBar) : 1,
+                        pointerEvents: "none",
+                        // Frosted / matte glass (磨砂): a milkier tint diffuses the content
+                        // rather than showing it clearly; the heavy blur + `saturate` add
+                        // the iOS-material vibrancy that reads as thick frosted glass.
+                        bgcolor: (t) =>
+                            alpha(
+                                t.palette.background.default,
+                                navbarAtBottom ? 0.62 : (t.palette.mode === "dark" ? 0.72 : 0.76),
+                            ),
+                        backdropFilter: "blur(30px) saturate(200%)",
+                        WebkitBackdropFilter: "blur(30px) saturate(200%)",
+                        // Desktop: a hairline + soft down-shadow give the navbar the
+                        // "floating over scrolling content" depth (mirrors the bottom slab).
+                        ...(!navbarAtBottom && {
+                            borderBottom: 1,
+                            borderColor: "divider",
+                            boxShadow: (t) =>
+                                `0 1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
+                        }),
+                    }}
+                />
                 {/* ONE frosted-glass slab behind BOTH the composer and the navbar,
                     so they read as a single piece of glass — not two stacked panes
                     with a seam. Its height is exactly the measured panel height
@@ -1046,15 +1065,21 @@ export function App({
                     there's ONE blur context and no dividing line. zIndex 1 sits it
                     over the absolute transcript (0) and under the panel content (2);
                     pointer-events:none so taps fall through to that content. */}
-                {navbarAtBottom && (
-                    <Box
-                        aria-hidden
-                        sx={{
+                {/* BOTTOM frosted glass. Bottom mode: covers composer + navbar (one
+                    continuous slab — they share the bottom edge). Top mode (desktop):
+                    covers the composer only (the navbar is its own slab at the top), so
+                    the composer/action bar floats as frosted glass with the transcript
+                    diffusing under it. Height tracks the measured vars per mode. */}
+                <Box
+                    aria-hidden
+                    sx={{
                             position: "absolute",
                             left: 0,
                             right: 0,
                             bottom: "var(--kb-inset, 0px)",
-                            height: "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))",
+                            height: navbarAtBottom
+                                ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
+                                : "var(--composer-h, 0px)",
                             zIndex: 1,
                             pointerEvents: "none",
                             // Milkier than a clear pane + heavy blur + saturate → thick
@@ -1068,9 +1093,8 @@ export function App({
                             borderColor: "divider",
                             boxShadow: (t) =>
                                 `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
-                        }}
-                    />
-                )}
+                    }}
+                />
                 <AppBar
                     ref={appBarRef}
                     position="static"
@@ -1090,9 +1114,13 @@ export function App({
                         // blur context with no seam. Just lift the content above the slab
                         // (zIndex 2 > slab's 1 > transcript's 0). Top mode keeps the solid
                         // themed surface (leading edge, nothing scrolls behind it).
-                        ...(navbarAtBottom
-                            ? { bgcolor: "transparent", position: "relative", zIndex: 2 }
-                            : { bgcolor: "background.default" }),
+                        // BOTH modes now: transparent + lifted above the transcript
+                        // (zIndex 2 > the frosted slab's 1 > transcript's 0), so the
+                        // slab behind provides the glass and content scrolls under the
+                        // bar. (Was a solid `background.default` in top mode.)
+                        bgcolor: "transparent",
+                        position: "relative",
+                        zIndex: 2,
                         color: "text.primary",
                         // Bottom mode (mobile, navbar-pos=bottom): flex `order` puts
                         // the bar at the VERY bottom — below the transcript (0) AND
@@ -1124,11 +1152,11 @@ export function App({
                     <Toolbar
                         variant="dense"
                         sx={{
-                            // Top mode: bottom border faces the transcript. Bottom
-                            // mode: NO border — the navbar shares one continuous frosted
-                            // slab with the composer above it, so a divider here would be
-                            // the very seam we removed.
-                            borderBottom: navbarAtBottom ? 0 : 1,
+                            // No border in either mode — the frosted slab behind the bar
+                            // (top slab in desktop mode, bottom slab in mobile) owns the
+                            // edge hairline + shadow, so a divider here would just be a
+                            // double line / seam.
+                            borderBottom: 0,
                             borderTop: 0,
                             borderColor: "divider",
                             // Hug the 44px icon row: the dense Toolbar's 48px min-height
@@ -1234,19 +1262,13 @@ export function App({
 
                 {active ? (
                     <>
-                        {/* Bottom-navbar mode → the transcript is the FULL-height
-                            background layer (absolute, zIndex 0) and the composer +
-                            navbar float over it as frosted glass; content scrolls
-                            UNDER them. `display:contents` in top mode keeps the
-                            Transcript a plain flex:1 child (unchanged layout). The
+                        {/* BOTH modes → the transcript is the FULL-height background
+                            layer (absolute, zIndex 0) and the navbar + composer float
+                            over it as frosted glass; content scrolls UNDER them. The
                             absolute layer is a flex column so the Transcript's own
                             flex:1 fills it. */}
                         <Box
-                            sx={
-                                navbarAtBottom
-                                    ? { position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }
-                                    : { display: "contents" }
-                            }
+                            sx={{ position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }}
                         >
                             <Transcript
                                 sessionId={active.id}
@@ -1260,37 +1282,40 @@ export function App({
                                 // While the WS is down the "working" spinner must not
                                 // keep spinning on a stale status (daemon restart).
                                 connected={connected}
-                                // Bottom-navbar mode: reserve the status-bar inset at
-                                // the transcript's top so content clears the glass
-                                // strip at rest (top mode: the AppBar owns that edge).
-                                topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : undefined}
-                                // Reserve the floating composer+navbar height (measured
-                                // into CSS vars) so the newest message clears the glass
-                                // at rest. Tracks drafts-expand with no column reflow.
+                                // Reserve the top frosted bar at the transcript's top so
+                                // content clears it at rest: the status-bar strip in
+                                // mobile mode, the full navbar height in desktop mode.
+                                topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)"}
+                                // Reserve the floating bottom bar height (measured into CSS
+                                // vars) so the newest message clears the glass at rest:
+                                // composer+navbar in mobile mode, composer-only in desktop
+                                // mode (the navbar is reserved at the top instead).
                                 bottomInset={
                                     navbarAtBottom
                                         ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
-                                        : undefined
+                                        : "var(--composer-h, 0px)"
                                 }
                             />
                         </Box>
-                        {/* Bottom mode: a flex:1 spacer takes the place the (now
-                            absolute) transcript vacated, so the composer (order 1) +
-                            navbar (order 2) sit at the column bottom. */}
-                        {navbarAtBottom && <Box aria-hidden sx={{ order: 0, flex: 1 }} />}
-                        {/* Bottom mode: order 1 sits the composer above the
-                            navbar (order 2, the very bottom) and below the
-                            transcript. position:relative + zIndex lifts the frosted
-                            composer above the absolute transcript layer. Top mode:
-                            order 0 (default DOM order). */}
+                        {/* A flex:1 spacer takes the place the (now absolute) transcript
+                            vacated, so the floating bars sit at the column edges. Bottom
+                            mode (order 0): pushes composer(1) + navbar(2) to the bottom.
+                            Top mode (order 1): sits BETWEEN the navbar(0, top) and the
+                            composer(2), pushing the composer to the bottom. */}
+                        <Box aria-hidden sx={{ order: navbarAtBottom ? 0 : 1, flex: 1 }} />
+                        {/* Composer order: mobile = 1 (above the bottom navbar); desktop =
+                            2 (the very bottom, after the spacer). position:relative + zIndex
+                            lifts the frosted composer above the absolute transcript layer. */}
                         <Box
                             ref={composerRef}
                             sx={{
-                                order: navbarAtBottom ? 1 : 0,
+                                order: navbarAtBottom ? 1 : 2,
                                 minWidth: 0,
-                                // Lift the composer content above the single frosted slab
-                                // (zIndex 1) — it's transparent now, the slab is the glass.
-                                ...(navbarAtBottom && { position: "relative", zIndex: 2 }),
+                                // Lift the composer content above the frosted slab behind
+                                // it (zIndex 1) in BOTH modes — the composer is transparent,
+                                // the slab is the glass, the transcript scrolls under both.
+                                position: "relative",
+                                zIndex: 2,
                             }}
                         >
                             <Composer
