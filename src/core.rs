@@ -215,14 +215,15 @@ pub struct SessionMeta {
     /// "awaiting the user" (a question/confirmation). Like `editing`, it PAUSES
     /// the whole drain so the next queued message isn't auto-sent as a wrong
     /// answer; it also drives the awaiting widget. Lives in the broadcast meta so
-    /// clients see it. NOT persisted (`serde(default)`): on restart it resets to
-    /// false and the next turn re-judges — never restore a stale hold.
+    /// clients see it. Persisted (migration 0008) so a held session survives a
+    /// daemon restart; `serde(default)` only covers old clients omitting it.
     #[serde(default)]
     pub awaiting_user: bool,
     /// True when the confirm-detect skill judged the agent's last turn as having
     /// COMPLETED the task (drives the green "Task complete" overlay + a future
-    /// notification). Transient, never persisted; re-judged each turn and cleared
-    /// when the user sends or a new turn starts.
+    /// notification). Persisted (migration 0008) so a finished session keeps it
+    /// across a restart; re-judged each turn, cleared when the user sends / a new
+    /// turn starts (a stale value is harmless — busy/crashed take overlay priority).
     #[serde(default)]
     pub done: bool,
 }
@@ -678,6 +679,9 @@ pub enum StoreWrite {
     InsertSession(SessionMeta),
     AppendEvent(Envelope),
     UpdateStatus { session_id: String, status: Status },
+    /// Persist the confirm-detect turn-end verdict (so a done/awaiting session
+    /// survives a daemon restart — migration 0008).
+    UpdateVerdict { session_id: String, awaiting_user: bool, done: bool },
     UpdateTitle { session_id: String, title: String },
     SetAgentSessionId {
         session_id: String,
@@ -1297,18 +1301,32 @@ impl Hub {
 
     /// Set/clear a session's "awaiting user" hold. Broadcasts the session list so
     /// the awaiting widget updates; clearing also resumes the drain.
+    /// Write-behind the current turn-end verdict so it survives a restart (0008).
+    fn persist_verdict(&self, session_id: &str, awaiting_user: bool, done: bool) {
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateVerdict {
+                session_id: session_id.to_owned(),
+                awaiting_user,
+                done,
+            });
+        }
+    }
+
     pub fn set_awaiting(&self, session_id: &str, awaiting: bool) {
+        // `Some(done)` when the awaiting flag actually flipped — carries the
+        // unchanged `done` so the persisted pair stays consistent.
         let changed = {
             let mut sessions = self.inner.sessions.lock().unwrap();
             match sessions.get_mut(session_id) {
                 Some(s) if s.meta.awaiting_user != awaiting => {
                     s.meta.awaiting_user = awaiting;
-                    true
+                    Some(s.meta.done)
                 }
-                _ => false,
+                _ => None,
             }
         };
-        if changed {
+        if let Some(done) = changed {
+            self.persist_verdict(session_id, awaiting, done);
             self.broadcast_sessions();
             if !awaiting {
                 self.try_drain(session_id);
@@ -1333,6 +1351,7 @@ impl Hub {
             s.meta.done = v.done;
             resume
         };
+        self.persist_verdict(session_id, v.awaiting_user, v.done);
         self.broadcast_sessions();
         if resume {
             self.try_drain(session_id);

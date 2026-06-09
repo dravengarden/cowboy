@@ -147,6 +147,9 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
             StoreWrite::UpdateStatus { session_id, status } => {
                 store.update_status(session_id, *status).await
             }
+            StoreWrite::UpdateVerdict { session_id, awaiting_user, done } => {
+                store.update_verdict(session_id, *awaiting_user, *done).await
+            }
             StoreWrite::UpdateTitle { session_id, title } => {
                 store.update_title(session_id, title).await
             }

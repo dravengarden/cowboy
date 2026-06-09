@@ -81,7 +81,7 @@ impl Store {
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, cwd, title, origin, status, agent_session_id, auto_resume, \
-             next_seq, queue, drafts, created_at \
+             awaiting_user, done, next_seq, queue, drafts, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -164,6 +164,22 @@ impl Store {
             .execute(&self.pool)
             .await
             .with_context(|| format!("UPDATE session status {session_id}"))?;
+        Ok(())
+    }
+
+    /// Persist the confirm-detect turn-end verdict so a finished/awaiting session
+    /// survives a daemon restart (migration 0008).
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_verdict(&self, session_id: &str, awaiting_user: bool, done: bool) -> Result<()> {
+        sqlx::query("UPDATE sessions SET awaiting_user = $1, done = $2, updated_at = now() WHERE id = $3")
+            .bind(awaiting_user)
+            .bind(done)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session verdict {session_id}"))?;
         Ok(())
     }
 
@@ -537,6 +553,8 @@ struct SessionRow {
     status: String,
     agent_session_id: Option<String>,
     auto_resume: Option<bool>,
+    awaiting_user: bool,
+    done: bool,
     next_seq: i64,
     queue: serde_json::Value,
     drafts: serde_json::Value,
@@ -555,10 +573,12 @@ impl SessionRow {
             origin: origin_from_str(&self.origin),
             agent_session_id: self.agent_session_id,
             auto_resume: self.auto_resume,
-            // Never restored from the DB — turn-end verdicts are transient; the
-            // next turn re-judges. Always start cleared.
-            awaiting_user: false,
-            done: false,
+            // Restored from the DB (migration 0008) so a finished session keeps its
+            // "Task complete" across a daemon restart — a done session has no next
+            // turn to re-judge. `crashed`/`interrupted` status still takes overlay
+            // precedence, and the next turn re-judges + re-persists.
+            awaiting_user: self.awaiting_user,
+            done: self.done,
         }
     }
 }
