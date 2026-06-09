@@ -23,6 +23,10 @@ export type RenderItem = { key: string } & (
       id: string;
       title: string;
       toolKind: string;
+      /// Upstream tool NAME (`_meta.<provider>.toolName`, e.g. "Bash" / "Edit" /
+      /// codex "shell"), or "" when the agent didn't tag one. Drives the
+      /// per-tool renderer in tools/registry; `toolKind` is the ACP fallback.
+      toolName: string;
       status: string;
       /// Raw input JSON (tool args), preserved for the expanded card.
       rawInput?: unknown;
@@ -89,6 +93,22 @@ function textOf(update: AcpUpdate): string {
   return ch?.type === "text" ? ch.text : "";
 }
 
+/// The upstream tool name lives under `_meta.<provider>.toolName` (e.g.
+/// `_meta.claudeCode.toolName = "Bash"`). The provider key varies, so scan the
+/// one-level `_meta` object for any `{ toolName }`. "" when absent.
+function toolNameOf(update: AcpUpdate): string {
+  const meta = update["_meta"];
+  if (meta && typeof meta === "object") {
+    for (const v of Object.values(meta as Record<string, unknown>)) {
+      if (v && typeof v === "object") {
+        const tn = (v as { toolName?: unknown }).toolName;
+        if (typeof tn === "string") return tn;
+      }
+    }
+  }
+  return "";
+}
+
 function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void {
   const last = item.chunks[item.chunks.length - 1];
   if (last && last.type === "text" && chunk.type === "text") {
@@ -150,6 +170,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               id,
               title: u.title ?? id,
               toolKind: u.kind ?? "other",
+              toolName: toolNameOf(u),
               status: u.status ?? "pending",
               rawInput: u["rawInput"] ?? u["input"],
               content: u["content"],
@@ -164,6 +185,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (existing && existing.kind === "tool") {
               if (u.status) existing.status = u.status;
               if (u.title) existing.title = u.title;
+              if (!existing.toolName) existing.toolName = toolNameOf(u);
               if (u["rawInput"] !== undefined) existing.rawInput = u["rawInput"];
               if (u["content"] !== undefined) existing.content = u["content"];
             }

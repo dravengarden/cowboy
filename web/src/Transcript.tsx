@@ -50,6 +50,7 @@ import {
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
+import { ToolBody, type ToolCtx } from "./tools/registry";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
@@ -672,8 +673,24 @@ function ToolCard({
   item: Extract<RenderItem, { kind: "tool" }>;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  // Raw escape hatch: any card can flip to the verbatim input/output JSON,
+  // regardless of how the friendly renderer formatted it.
+  const [raw, setRaw] = useState(false);
   const hasDetail = item.rawInput !== undefined || item.content !== undefined;
   const running = item.status === "in_progress" || item.status === "pending";
+  // The header shows only the first line of the title — a Bash title IS the whole
+  // (possibly multi-line) command, which would otherwise blow up the row.
+  const headerTitle = (item.title || "").split("\n")[0] || item.title;
+  const ctx: ToolCtx = {
+    toolName: item.toolName,
+    kind: item.toolKind,
+    title: item.title,
+    rawInput: item.rawInput && typeof item.rawInput === "object" && !Array.isArray(item.rawInput)
+      ? (item.rawInput as Record<string, unknown>)
+      : {},
+    content: item.content,
+    running,
+  };
   return (
     <Paper
       elevation={0}
@@ -735,46 +752,56 @@ function ToolCard({
                 : "var(--cowboy-reading-font, inherit)",
           }}
         >
-          {item.title}
+          {headerTitle}
         </Typography>
         <Chip size="small" color={toolColor(item.status)} label={item.status} variant="outlined" />
         {hasDetail && (open ? <ExpandLess fontSize="medium" /> : <ExpandMore fontSize="medium" />)}
       </Stack>
       {open && hasDetail && (
-        <Box sx={{ borderTop: 1, borderColor: "divider", p: 1, bgcolor: "action.hover" }}>
-          {item.rawInput !== undefined && (
-            <>
-              <Typography variant="caption" color="text.secondary">
-                Input
-              </Typography>
-              <Markdown
-                text={"```json\n" + JSON.stringify(item.rawInput, null, 2) + "\n```"}
-              />
-            </>
-          )}
-          {item.content !== undefined ? (
-            <>
-              <Typography variant="caption" color="text.secondary">
-                Output
-              </Typography>
-              <Markdown
-                text={
-                  "```json\n" + JSON.stringify(item.content, null, 2) + "\n```"
-                }
-              />
-            </>
-          ) : (
-            running && (
+        <Box sx={{ borderTop: 1, borderColor: "divider", p: 1, bgcolor: "background.paper" }}>
+          {/* Formatted ⇄ Raw toggle (top-right) — friendly view by default, the
+              verbatim JSON one tap away for when the structured render hides a
+              detail. */}
+          <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.5 }}>
+            <Box
+              role="button"
+              tabIndex={0}
+              onClick={(): void => setRaw((v) => !v)}
+              onKeyDown={(e): void => {
+                if (e.key === "Enter" || e.key === " ") setRaw((v) => !v);
+              }}
+              sx={{
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+                color: raw ? "primary.main" : "text.disabled",
+                fontFamily: "ui-monospace, monospace",
+                userSelect: "none",
+                px: 0.5,
+                "&:hover": { color: "primary.main" },
+              }}
+            >
+              {raw ? "↩ Formatted" : "{ } Raw"}
+            </Box>
+          </Stack>
+          {raw
+            ? (
               <>
-                <Typography variant="caption" color="text.secondary">
-                  Output
-                </Typography>
-                <Skeleton animation="wave" width="80%" />
-                <Skeleton animation="wave" width="60%" />
-                <Skeleton animation="wave" width="40%" />
+                {item.rawInput !== undefined && (
+                  <>
+                    <Typography variant="caption" color="text.secondary">Input</Typography>
+                    <Markdown text={"```json\n" + JSON.stringify(item.rawInput, null, 2) + "\n```"} />
+                  </>
+                )}
+                {item.content !== undefined && (
+                  <>
+                    <Typography variant="caption" color="text.secondary">Output</Typography>
+                    <Markdown text={"```json\n" + JSON.stringify(item.content, null, 2) + "\n```"} />
+                  </>
+                )}
               </>
             )
-          )}
+            : <ToolBody ctx={ctx} />}
         </Box>
       )}
     </Paper>

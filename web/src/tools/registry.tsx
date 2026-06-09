@@ -1,0 +1,212 @@
+import { Component, type ReactNode } from "react";
+import { Box, Skeleton, Stack, Typography } from "@mui/material";
+import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
+import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
+import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
+import {
+  CodeView,
+  FileChip,
+  hasDiff,
+  KeyValues,
+  Labeled,
+  langFromPath,
+  OutputBlocks,
+  PreBlock,
+  textOfContent,
+} from "./blocks";
+
+// The dispatch layer: given a tool call, pick how to render its body. Two tiers,
+// both leaning on the provider-agnostic primitives in blocks.tsx:
+//
+//  1. `BY_TOOL` — keyed by the upstream tool NAME (claude-code `Bash`/`Edit`/…,
+//     codex `shell`/`apply_patch`/…; the name already encodes the provider, so a
+//     flat map IS the provider-adaptation layer). Only tools that need bespoke
+//     rendering beyond their ACP kind live here (e.g. TodoWrite → a checklist).
+//  2. `BY_KIND` — keyed by the ACP `kind`, which the adapters NORMALIZE across
+//     providers (codex `shell`→execute, `apply_patch`→edit, …). This is where the
+//     bulk of the work happens, so one renderer serves every provider's tools of
+//     that kind. Falls back to a generic args+result view for unknown kinds.
+//
+// The Raw-JSON escape hatch lives in the card shell (Transcript.tsx), so it wraps
+// whatever these return and is always one tap away.
+
+export interface ToolCtx {
+  /** Upstream tool name (`_meta.<provider>.toolName`), or "" if absent. */
+  toolName: string;
+  /** ACP kind: read | edit | execute | search | fetch | think | other | … */
+  kind: string;
+  title: string;
+  rawInput: Record<string, unknown>;
+  content: unknown;
+  running: boolean;
+}
+
+type Renderer = (ctx: ToolCtx) => ReactNode;
+
+function RunningHint(): React.JSX.Element {
+  return (
+    <Stack spacing={0.5}>
+      <Skeleton animation="wave" width="80%" />
+      <Skeleton animation="wave" width="55%" />
+    </Stack>
+  );
+}
+
+/** The shell command, whether a string (claude `Bash`) or argv array (codex). */
+function commandText(raw: Record<string, unknown>): string {
+  const c = raw["command"] ?? raw["cmd"];
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) return c.map((x) => String(x)).join(" ");
+  return "";
+}
+
+// --- kind renderers (provider-agnostic via the normalized ACP kind) ----------
+
+const executeTool: Renderer = ({ rawInput, content, running }) => {
+  const cmd = commandText(rawInput);
+  const out = textOfContent(content);
+  return (
+    <>
+      {cmd && (
+        <Labeled label="Command">
+          <CodeView code={cmd} lang="bash" maxHeight={180} />
+        </Labeled>
+      )}
+      <Labeled label="Output">
+        {out ? <PreBlock text={out} /> : running ? <RunningHint /> : <Empty />}
+      </Labeled>
+    </>
+  );
+};
+
+const editTool: Renderer = ({ content, running }) => {
+  const out = <OutputBlocks content={content} />;
+  if (out && (hasDiff(content) || textOfContent(content))) return out;
+  return running ? <RunningHint /> : <Empty />;
+};
+
+const readTool: Renderer = ({ rawInput, content, running }) => {
+  const path = String(rawInput["file_path"] ?? rawInput["path"] ?? "");
+  const lang = path ? langFromPath(path) : "";
+  const has = textOfContent(content);
+  const offset = rawInput["offset"];
+  const limit = rawInput["limit"];
+  return (
+    <Stack spacing={0.75}>
+      {path && (
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
+          <FileChip path={path} />
+          {(offset !== undefined || limit !== undefined) && (
+            <Typography variant="caption" color="text.disabled">
+              {offset !== undefined ? `from line ${String(offset)}` : ""}
+              {limit !== undefined ? ` · ${String(limit)} lines` : ""}
+            </Typography>
+          )}
+        </Stack>
+      )}
+      {has ? <OutputBlocks content={content} lang={lang} /> : running ? <RunningHint /> : <Empty />}
+    </Stack>
+  );
+};
+
+const genericTool: Renderer = ({ rawInput, content, running }) => {
+  const result = <OutputBlocks content={content} />;
+  const hasResult = Boolean(textOfContent(content) || hasDiff(content));
+  return (
+    <Stack spacing={1}>
+      {Object.keys(rawInput).length > 0 && (
+        <Labeled label="Arguments">
+          <KeyValues data={rawInput} />
+        </Labeled>
+      )}
+      {hasResult
+        ? <Labeled label="Result">{result}</Labeled>
+        : running
+        ? <RunningHint />
+        : null}
+    </Stack>
+  );
+};
+
+function Empty(): React.JSX.Element {
+  return <Typography variant="caption" color="text.disabled">No output</Typography>;
+}
+
+const BY_KIND: Record<string, Renderer> = {
+  execute: executeTool,
+  edit: editTool,
+  read: readTool,
+  // search / fetch / think / delete / move / other → the generic args+result.
+};
+
+// --- per-tool overrides (the provider layer; name encodes the provider) ------
+
+const todoTool: Renderer = (ctx) => {
+  const todos = ctx.rawInput["todos"];
+  if (!Array.isArray(todos)) return genericTool(ctx);
+  return (
+    <Stack spacing={0.5}>
+      {todos.map((t, i) => {
+        const todo = t as { content?: string; status?: string };
+        const status = todo.status ?? "pending";
+        const icon = status === "completed"
+          ? <CheckCircleRounded sx={{ fontSize: 16, color: "success.main" }} />
+          : status === "in_progress"
+          ? <AutorenewRounded sx={{ fontSize: 16, color: "primary.main" }} />
+          : <RadioButtonUncheckedRounded sx={{ fontSize: 16, color: "text.disabled" }} />;
+        return (
+          <Stack key={i} direction="row" spacing={0.75} alignItems="center">
+            {icon}
+            <Typography
+              variant="body2"
+              sx={{
+                fontSize: "0.85em",
+                color: status === "completed" ? "text.disabled" : "text.primary",
+                textDecoration: status === "completed" ? "line-through" : "none",
+              }}
+            >
+              {todo.content ?? ""}
+            </Typography>
+          </Stack>
+        );
+      })}
+    </Stack>
+  );
+};
+
+const BY_TOOL: Record<string, Renderer> = {
+  // claude-code
+  TodoWrite: todoTool,
+  // codex / others can add bespoke renderers here; everything else flows through
+  // the kind layer, which already covers shell/apply_patch/read/etc.
+};
+
+// A tool renderer formats arbitrary agent-supplied data; a malformed payload
+// must never crash the whole transcript. This boundary catches a renderer throw
+// and degrades to a hint — the card's Raw toggle still shows the verbatim JSON.
+class ToolBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+  override render(): ReactNode {
+    if (this.state.failed) {
+      return (
+        <Typography variant="caption" color="text.disabled">
+          Couldn&apos;t format this tool — tap “{"{ } Raw"}” above to see the data.
+        </Typography>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/** Render a tool call's expanded body — the public entry the card shell calls. */
+export function ToolBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
+  const renderer = BY_TOOL[ctx.toolName] ?? BY_KIND[ctx.kind] ?? genericTool;
+  return (
+    <Box>
+      <ToolBoundary>{renderer(ctx)}</ToolBoundary>
+    </Box>
+  );
+}
