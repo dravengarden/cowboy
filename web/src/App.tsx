@@ -1591,11 +1591,20 @@ function SettingsShell({
             open={open}
             onClose={onClose}
             title={
-                <SegmentedPill
-                    value={tab}
-                    onChange={setTab}
-                    options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
-                />
+                // Center the pill in the header. The sheet's close button (40px) +
+                // its 8px gap sit to the right, so a 48px left pad balances them →
+                // the pill lands at the sheet's true centre, not shoved against the
+                // left edge. Desktop renders the title in a full-width DialogTitle
+                // (no sibling X), so it needs no balance.
+                <Box
+                    sx={{ display: "flex", justifyContent: "center", width: "100%", pl: { xs: "48px", lg: 0 } }}
+                >
+                    <SegmentedPill
+                        value={tab}
+                        onChange={setTab}
+                        options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
+                    />
+                </Box>
             }
             forceSheet={navbarAtBottom}
             cover

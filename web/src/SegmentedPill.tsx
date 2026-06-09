@@ -29,13 +29,23 @@ export function SegmentedPill<T extends string>({
         borderRadius: 999,
         // Translucent track on the frosted sheet — carries its own light blur so
         // the page still diffuses through.
-        backgroundColor: (t) => alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.1 : 0.06),
+        backgroundColor: (t) =>
+          alpha(
+            t.palette.text.primary,
+            t.palette.mode === "dark" ? 0.12 : 0.07,
+          ),
         backdropFilter: "blur(16px) saturate(180%)",
         WebkitBackdropFilter: "blur(16px) saturate(180%)",
         ...sx,
       }}
     >
-      {/* The sliding active pill. */}
+      {
+        /* The sliding active pill — an ELEVATED neutral surface (iOS / 微信读书
+          segmented control), not a saturated brand block: a white (light) /
+          lifted-grey (dark) chip whose soft shadow does the separation, with the
+          label colour (below) carrying the active state. Reads far softer on the
+          frosted lilac sheet than the old solid-primary fill. */
+      }
       <Box
         aria-hidden
         sx={{
@@ -47,8 +57,14 @@ export function SegmentedPill<T extends string>({
           transform: `translateX(${String(idx * 100)}%)`,
           transition: "transform .26s cubic-bezier(0.22, 1, 0.36, 1)",
           borderRadius: 999,
-          backgroundColor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.92 : 1),
-          boxShadow: (t) => `0 2px 8px ${alpha(t.palette.primary.main, 0.35)}`,
+          backgroundColor: (t) =>
+            t.palette.mode === "dark"
+              ? alpha(t.palette.common.white, 0.16)
+              : t.palette.background.paper,
+          boxShadow: (t) =>
+            t.palette.mode === "dark"
+              ? "0 1px 2px rgba(0,0,0,0.4)"
+              : "0 1px 3px rgba(0,0,0,0.16), 0 1px 1px rgba(0,0,0,0.05)",
         }}
       />
       {options.map((o) => {
@@ -61,13 +77,14 @@ export function SegmentedPill<T extends string>({
             sx={{
               position: "relative",
               zIndex: 1,
-              minWidth: 80,
-              px: 2,
+              minWidth: 76,
+              px: 1.75,
               py: 0.5,
               borderRadius: 999,
-              fontSize: 14,
+              fontSize: 13.5,
               fontWeight: 600,
-              color: active ? "primary.contrastText" : "text.secondary",
+              letterSpacing: 0.1,
+              color: active ? "text.primary" : "text.secondary",
               transition: "color .2s",
             }}
           >
