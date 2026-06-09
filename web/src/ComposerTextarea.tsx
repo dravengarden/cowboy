@@ -124,6 +124,9 @@ export const ComposerTextarea = forwardRef<
     disabled?: boolean;
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
+    /// Right padding (px) reserved on the text so it never runs under the action
+    /// buttons the composer overlays at the input's bottom-right. 0 when none.
+    endInset?: number;
   }
 >(function ComposerTextarea(
   {
@@ -137,6 +140,7 @@ export const ComposerTextarea = forwardRef<
     disabled,
     onEscape,
     onPasteFiles,
+    endInset = 0,
   },
   ref,
 ): React.JSX.Element {
@@ -369,6 +373,8 @@ export const ComposerTextarea = forwardRef<
           "& .MuiInputBase-input": {
             fontSize: "1rem",
             lineHeight: "var(--cowboy-reading-line-height, 1.5)",
+            // Clear the overlaid send/kebab buttons at the bottom-right.
+            ...(endInset > 0 && { paddingRight: `${String(endInset)}px` }),
           },
         }}
       />

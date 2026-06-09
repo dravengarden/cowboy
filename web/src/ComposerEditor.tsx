@@ -129,6 +129,9 @@ export const ComposerEditor = forwardRef<
     // a copied image). When it handles them the editor swallows the paste so
     // no stray base64 / filename text lands in the document.
     onPasteFiles?: (files: File[]) => void;
+    /// Right padding (px) reserved on the editor content so text never runs under
+    /// the action buttons the composer overlays at the input's bottom-right.
+    endInset?: number;
   }
 >(function ComposerEditor(
   {
@@ -145,6 +148,7 @@ export const ComposerEditor = forwardRef<
     vim,
     onEscape,
     onPasteFiles,
+    endInset = 0,
   },
   ref,
 ): React.JSX.Element {
@@ -417,6 +421,8 @@ export const ComposerEditor = forwardRef<
         // OutlinedInput small content padding.
         px: "14px",
         py: "8.5px",
+        // Clear the overlaid send/kebab buttons at the bottom-right (base 14 + inset).
+        ...(endInset > 0 && { pr: `${String(14 + endInset)}px` }),
         cursor: "text",
         "&:hover .composer-notch": disabled
           ? {}

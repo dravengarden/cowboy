@@ -238,6 +238,10 @@ export function Composer({
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
   const [cancelOpen, setCancelOpen] = useState(false);
+  // The composer's overlaid ⋮ kebab (Save draft / Force push) anchor. The
+  // secondary actions live here so the input's bottom-right shows only the
+  // primary Send/Queue + (busy) Stop, matching the pending-row layout.
+  const [actionsMenu, setActionsMenu] = useState<HTMLElement | null>(null);
   // Long-press-send → force-push: hold the Queue button ~450ms to pop a confirm
   // that interrupts the running turn and runs this prompt next (skipping the
   // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
@@ -305,6 +309,16 @@ export function Composer({
   // thread is never permanently unusable just because its agent process ended.
   // An attachment-only prompt (e.g. just a pasted screenshot) is also sendable.
   const sendable = !!text.trim() || attachments.length > 0;
+  // How many ~38px action buttons overlay the input's bottom-right, so the text
+  // (endInset) reserves room for exactly them. Idle: Send (+ kebab if sendable).
+  // Busy/starting: Queue (if sendable) + Stop (busy only) + kebab (if sendable).
+  let actionBtns: number;
+  if (busy || starting) {
+    actionBtns = (sendable ? 1 : 0) + (busy ? 1 : 0) + (sendable ? 1 : 0);
+  } else {
+    actionBtns = 1 + (sendable ? 1 : 0);
+  }
+  const actionInset = Math.max(actionBtns, 1) * 38 + 10;
 
   // Read picked / pasted files into ACP content blocks and stage them. Async
   // (FileReader), so previews appear once each file is encoded; unreadable
@@ -571,6 +585,10 @@ export function Composer({
           strands IME pinyin on iOS — see ComposerTextarea), CodeMirror on
           desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */
       }
+      {/* Input + overlaid actions: the Send/Queue + Stop + ⋮ kebab sit at the
+          input's bottom-right (inside its border), like a pending row. `endInset`
+          reserves text room so nothing runs under them. */}
+      <Box sx={{ position: "relative" }}>
       {touchInput
         ? (
           <ComposerTextarea
@@ -586,6 +604,7 @@ export function Composer({
               ? "Send to resume this session…"
               : "Message the agent…"}
             onPasteFiles={addFiles}
+            endInset={actionInset}
             onEscape={(): boolean => {
               if (busy) {
                 setCancelOpen(true);
@@ -603,6 +622,7 @@ export function Composer({
             onChange={setText}
             onSubmit={submit}
             onSaveDraft={saveDraft}
+            endInset={actionInset}
             // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
             // long-press opens, anchored to that button.
             holdToForce={busy || starting}
@@ -631,11 +651,117 @@ export function Composer({
             }}
           />
         )}
+        {/* Overlaid actions at the input's bottom-right (inside the border),
+            mirroring a pending row: primary Send/Queue, Stop while busy, and a ⋮
+            kebab for the secondary actions (Save draft / Force push). */}
+        <Box
+          sx={{
+            position: "absolute",
+            right: 4,
+            bottom: 4,
+            display: "flex",
+            alignItems: "center",
+            gap: 0.25,
+          }}
+        >
+          {busy || starting
+            ? (
+              <>
+                {sendable && (
+                  <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
+                    <IconButton
+                      ref={queueBtnRef}
+                      size="small"
+                      color="primary"
+                      aria-label="queue message"
+                      sx={{ transition: "transform .12s", ...(holding && { transform: "scale(1.12)" }) }}
+                      onClick={onQueueClick}
+                      onPointerDown={onForcePointerDown}
+                      onPointerMove={onForcePointerMove}
+                      onPointerUp={clearLongPress}
+                      onPointerLeave={clearLongPress}
+                      onPointerCancel={clearLongPress}
+                    >
+                      <Send fontSize="small" />
+                    </IconButton>
+                    {holding && (
+                      <Box
+                        component="svg"
+                        aria-hidden
+                        viewBox="0 0 40 40"
+                        sx={{
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          pointerEvents: "none",
+                          transform: "rotate(-90deg)",
+                        }}
+                      >
+                        <Box
+                          component="circle"
+                          cx="20"
+                          cy="20"
+                          r="18"
+                          fill="none"
+                          strokeLinecap="round"
+                          sx={{
+                            stroke: "primary.main",
+                            strokeWidth: 2.5,
+                            strokeDasharray: 113,
+                            strokeDashoffset: 113,
+                            animation: "lpfill 450ms linear forwards",
+                            "@keyframes lpfill": { to: { strokeDashoffset: 0 } },
+                          }}
+                        />
+                      </Box>
+                    )}
+                  </Box>
+                )}
+                {busy && (
+                  <Tooltip title="Stop">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      aria-label="cancel"
+                      onClick={(): void => setCancelOpen(true)}
+                    >
+                      <Stop fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </>
+            )
+            : (
+              <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
+                <span>
+                  <IconButton
+                    size="small"
+                    color="primary"
+                    aria-label="send"
+                    disabled={!sendable}
+                    onClick={submit}
+                  >
+                    <Send fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+          {sendable && (
+            <IconButton
+              size="small"
+              aria-label="more actions"
+              onClick={(e): void => setActionsMenu(e.currentTarget)}
+            >
+              <MoreVert fontSize="small" />
+            </IconButton>
+          )}
+        </Box>
+      </Box>
       {
-        /* Action row below the input: slash-command / @-reference triggers on
-          the left, then the agent config (inline chips on desktop, the bottom
-          sheet on touch), then the send button. Buttons are 40px on touch so
-          the side safe-area floor keeps them off the iPhone corner radius. */
+        /* Action row below the input: slash-command / @-reference triggers + the
+          agent config (chips on desktop, bottom sheet on touch). The Send / Queue
+          / Stop / draft moved INTO the input overlay above (kebab for secondary). */
       }
       <Stack
         direction="row"
@@ -775,147 +901,40 @@ export function Composer({
           </IconButton>
         </Tooltip>
 
-        <Box sx={{ flex: 1 }} />
-
-        {!compact && (
-          <Typography
-            variant="caption"
-            color="text.disabled"
-            sx={{ whiteSpace: "nowrap", fontSize: 11, flexShrink: 0, mr: 0.5 }}
-          >
-            {busy || starting
-              ? `${MOD_LABEL}${ENTER_LABEL} queue · hold → force`
-              : `${MOD_LABEL}${ENTER_LABEL} send · ${DRAFT_LABEL}${ENTER_LABEL} draft`}
-          </Typography>
-        )}
-
-        {
-          /* Draft: park the current message in the Drafts panel (persisted) to
-            send later, instead of sending/queuing now. Shown only when there's
-            something to save. */
-        }
-        {sendable && (
-          <Tooltip title={`Save as draft (${DRAFT_LABEL}${ENTER_LABEL})`}>
-            <IconButton
-              aria-label="save as draft"
-              sx={TOOLBAR_ICON_BTN}
-              onClick={saveDraft}
-            >
-              <EditNoteOutlined />
-            </IconButton>
-          </Tooltip>
-        )}
-
-        {
-          /* Busy: the agent owns the turn, so the primary button is Stop. A
-            secondary "queue" button appears once there's text to stack, so the
-            enqueue affordance is visible (not just ⌘/Ctrl+Enter). Idle: a single
-            Send button, the unchanged fast path. */
-        }
-        {busy || starting
-          ? (
-            <>
-              {sendable && (
-                <Tooltip title="Queue · hold to force-push">
-                  <Box
-                    component="span"
-                    sx={{
-                      position: "relative",
-                      display: "inline-flex",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <IconButton
-                      ref={queueBtnRef}
-                      color="primary"
-                      aria-label="queue message"
-                      sx={{
-                        ...TOOLBAR_ICON_BTN,
-                        transition: "transform .12s",
-                        ...(holding && { transform: "scale(1.12)" }),
-                      }}
-                      onClick={onQueueClick}
-                      onPointerDown={onForcePointerDown}
-                      onPointerMove={onForcePointerMove}
-                      onPointerUp={clearLongPress}
-                      onPointerLeave={clearLongPress}
-                      onPointerCancel={clearLongPress}
-                    >
-                      <Send />
-                    </IconButton>
-                    {
-                      /* Fill ring: a CSS-keyframe sweep over the hold window — pure
-                      compositor (no per-frame React render). Mounts on hold,
-                      unmounts when the threshold fires the confirm. */
-                    }
-                    {holding && (
-                      <Box
-                        component="svg"
-                        aria-hidden
-                        viewBox="0 0 40 40"
-                        sx={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          pointerEvents: "none",
-                          transform: "rotate(-90deg)",
-                        }}
-                      >
-                        <Box
-                          component="circle"
-                          cx="20"
-                          cy="20"
-                          r="18"
-                          fill="none"
-                          strokeLinecap="round"
-                          sx={{
-                            stroke: "primary.main",
-                            strokeWidth: 2.5,
-                            // 2π·18 ≈ 113 — full circumference, swept to 0.
-                            strokeDasharray: 113,
-                            strokeDashoffset: 113,
-                            animation: "lpfill 450ms linear forwards",
-                            "@keyframes lpfill": {
-                              to: { strokeDashoffset: 0 },
-                            },
-                          }}
-                        />
-                      </Box>
-                    )}
-                  </Box>
-                </Tooltip>
-              )}
-              {busy && (
-                <Tooltip title="Stop">
-                  <IconButton
-                    color="error"
-                    aria-label="cancel"
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={(): void => setCancelOpen(true)}
-                  >
-                    <Stop />
-                  </IconButton>
-                </Tooltip>
-              )}
-            </>
-          )
-          : (
-            <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
-              <span>
-                <IconButton
-                  color="primary"
-                  aria-label="send"
-                  disabled={!sendable}
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={submit}
-                >
-                  <Send />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
       </Stack>
+      {
+        /* The input overlay's ⋮ kebab — secondary actions that used to sit in the
+          toolbar (Save draft) + the keyboard-only force-push, now discoverable. */
+      }
+      <Menu
+        anchorEl={actionsMenu}
+        open={actionsMenu !== null}
+        onClose={(): void => setActionsMenu(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+      >
+        <MenuItem
+          onClick={(): void => {
+            saveDraft();
+            setActionsMenu(null);
+          }}
+        >
+          <EditNoteOutlined fontSize="small" sx={{ mr: 1 }} />
+          Save as draft
+          <Kbd keys={`${DRAFT_LABEL}${ENTER_LABEL}`} />
+        </MenuItem>
+        {(busy || starting) && (
+          <MenuItem
+            onClick={(): void => {
+              setActionsMenu(null);
+              if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
+            }}
+          >
+            <Bolt fontSize="small" sx={{ mr: 1 }} />
+            Force push
+          </MenuItem>
+        )}
+      </Menu>
       {
         /* Force-push confirm — opened by a completed long-press on Queue. Anchored
           to the button, rising above it. Confirm interrupts the running turn and
@@ -1542,10 +1561,10 @@ function PendingPanel({
     <Box
       sx={{
         mb: 1,
-        border: 1,
-        borderColor: "divider",
         borderRadius: 1,
-        // Drafts read as a quieter, dashed-feeling staging area vs the live queue.
+        // No border + no side padding (below): the rows are full-width outlined
+        // Papers that line up edge-to-edge with the main composer input box. A
+        // subtle bg tint still groups drafts vs the live queue.
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
         overflow: "hidden",
         // Query container for the rows: their secondary actions go inline on a
@@ -1630,7 +1649,9 @@ function PendingPanel({
         <Stack
           spacing={0.5}
           sx={{
-            px: 0.5,
+            // No side padding — rows span the full panel width to align with the
+            // main composer input box (request: "去掉 padding 对齐").
+            px: 0,
             pb: 0.5,
             // Cap so a long backlog scrolls instead of pushing the editor off
             // a phone viewport; the editor must always stay reachable.
@@ -1712,7 +1733,7 @@ function PendingPanel({
 // (the "多行末尾要有折叠按钮，默认折叠" ask). Measured only while clamped (the
 // expanded state has no overflow to read) and re-measured on resize. The toggle
 // is a real button with a touch-sized hit target (mobile + desktop).
-function ClampedText({ text }: { text: string }): React.JSX.Element {
+function ClampedText({ text, onTextClick }: { text: string; onTextClick?: () => void }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -1730,10 +1751,14 @@ function ClampedText({ text }: { text: string }): React.JSX.Element {
     <>
       <Box
         ref={ref}
+        onClick={onTextClick}
         sx={{
           typography: "body2",
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
+          // Tap the text to edit the message (the "Show more" button below has
+          // its own handler and isn't affected).
+          ...(onTextClick && { cursor: "pointer" }),
           ...(expanded ? {} : {
             display: "-webkit-box",
             WebkitLineClamp: 2,
@@ -2066,7 +2091,7 @@ function PendingRow({
       sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        {message.text && <ClampedText text={message.text} />}
+        {message.text && <ClampedText text={message.text} onTextClick={onEdit} />}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
         )}
