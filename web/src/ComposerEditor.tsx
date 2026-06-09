@@ -338,7 +338,10 @@ export const ComposerEditor = forwardRef<
       }),
       history(),
       placeholderExt(placeholder ?? ""),
-      cmTheme(theme),
+      // Monospace + the Zed block-cursor styling only when vim is active (the
+      // "code editor" mode); normal chat keeps the prose font. vimExt is already
+      // a dep of this memo, so toggling vim rebuilds the theme.
+      cmTheme(theme, !!vimExt),
       tokenChipPlugin,
       autocompletion({
         override: [

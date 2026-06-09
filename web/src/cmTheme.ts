@@ -7,7 +7,7 @@ import type { Extension } from "@codemirror/state";
 // accent for caret/selection, light vs dark. Pure styling, no behavior. Driven
 // from theme tokens so it tracks light/dark + accent changes automatically.
 // (Task composer-cm6, plan Step 6 — the "yes, customizable to MUI" answer.)
-export function cmTheme(theme: Theme): Extension {
+export function cmTheme(theme: Theme, mono = false): Extension {
   const dark = theme.palette.mode === "dark";
   const accent = theme.palette.primary.main;
   // Match the MUI theme's own typography so the editor text is indistinguishable
@@ -15,6 +15,12 @@ export function cmTheme(theme: Theme): Extension {
   const fontStack =
     theme.typography.fontFamily ??
     'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  // Zed-style monospace buffer font, used when `mono` is on (vim mode). CJK has
+  // no glyphs in these faces, so Chinese falls back to the system CJK font —
+  // same as Zed; this is why mono is gated to vim, not to normal prose chat.
+  const monoStack =
+    'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
+  const editorFont = mono ? monoStack : fontStack;
   return EditorView.theme(
     {
       // `1rem` so the composer text TRACKS the reading font-size setting exactly
@@ -30,7 +36,7 @@ export function cmTheme(theme: Theme): Extension {
         fontSize: "1rem",
       },
       ".cm-content": {
-        fontFamily: fontStack,
+        fontFamily: editorFont,
         fontSize: "1rem",
         // The MUI-outline shell owns the padding (see ComposerEditor).
         padding: "0",
@@ -53,12 +59,27 @@ export function cmTheme(theme: Theme): Extension {
       // is an identity transform (no visual shift), so CodeMirror's
       // getBoundingClientRect-based cursor/selection measurement is unaffected.
       ".cm-scroller": {
-        fontFamily: fontStack,
+        fontFamily: editorFont,
         fontSize: "1rem",
         lineHeight: "var(--cowboy-reading-line-height, 1.5)",
         transform: "translateZ(0)",
       },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: accent },
+      // Vim block ("fat") cursor → Zed look. @replit/codemirror-vim defaults to a
+      // pink #ff9696 block; recolour to a solid accent block with the glyph
+      // inverted onto it (primary.contrastText → always readable on the accent).
+      // Unfocused: a hollow accent outline (the package blanks the glyph there).
+      ".cm-fat-cursor": {
+        background: `${accent} !important`,
+        color: `${theme.palette.primary.contrastText} !important`,
+      },
+      "&:not(.cm-focused) .cm-fat-cursor": {
+        background: "none !important",
+        outline: `solid 1px ${accent}`,
+      },
+      // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
+      // blinks via a JS-set CSS animation on `.cm-vimCursorLayer`; cancel it.
+      ".cm-cursorLayer.cm-vimCursorLayer": { animation: "none !important" },
       ".cm-placeholder": { color: theme.palette.text.disabled },
       "&.cm-focused": { outline: "none" },
       // Selection — use the MUI selection token in both the focused and
