@@ -72,6 +72,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 next_seq: ls.next_seq,
                 queue: ls.queue,
                 drafts: ls.drafts,
+                judge_runs: ls.judge_runs,
             })
             .collect();
         let restored_count = restored.len();
@@ -169,6 +170,9 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
             } => store.update_pending(session_id, queue, drafts).await,
             StoreWrite::UpdateSessionOrder { order } => {
                 store.update_session_order(order).await
+            }
+            StoreWrite::UpdateJudgeRuns { session_id, runs } => {
+                store.update_judge_runs(session_id, runs).await
             }
             StoreWrite::UpdateAutoResume { session_id, value } => {
                 store.update_auto_resume(session_id, *value).await
@@ -699,6 +703,21 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                 return;
             }
         }
+        // Seed the confirm-detect judge-run history so the inspector widget
+        // (long-press the turn-status pill) hydrates with the persisted runs on
+        // first paint instead of waiting for the next turn-end judge.
+        if send_json(
+            &mut sink,
+            &Outbound::JudgeHistory {
+                session_id: meta.id.clone(),
+                runs: state.hub.judge_history(&meta.id),
+            },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
     }
 
     // Fan-out task: broadcast events → this socket.
@@ -824,7 +843,9 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::ActivateAllDrafts { session_id }
         | Inbound::MoveDraft { session_id, .. }
         | Inbound::ReorderQueue { session_id, .. }
-        | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
+        | Inbound::ReorderDrafts { session_id, .. }
+        | Inbound::RemoveJudgeRun { session_id, .. }
+        | Inbound::ClearJudgeRuns { session_id } => Some(session_id.clone()),
         // Sync mutations are state-scoped (title/order), not session-scoped — a
         // failure surfaces as a daemon-level error (None).
         Inbound::NewSession { .. }
@@ -1139,6 +1160,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         }
         Inbound::ReorderDrafts { session_id, order } => {
             state.hub.reorder_drafts(&session_id, &order);
+            Ok(())
+        }
+        Inbound::RemoveJudgeRun { session_id, id } => {
+            state.hub.remove_judge_run(&session_id, &id);
+            Ok(())
+        }
+        Inbound::ClearJudgeRuns { session_id } => {
+            state.hub.clear_judge_runs(&session_id);
             Ok(())
         }
     };

@@ -12,6 +12,8 @@ import {
   retryTurn,
   useJudgeResult,
 } from "./store";
+import { openJudgeInspector } from "./JudgeInspector";
+import { haptic } from "./haptic";
 
 type Kind = "awaiting" | "done" | "interrupted" | "error" | "no-key";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
@@ -79,6 +81,29 @@ export function TurnStatusOverlay({
   const judge = useJudgeResult(sessionId);
   const [hidden, setHidden] = useState(false);
   const [expanded, setExpanded] = useState(false);
+
+  // Long-press the pill → open the judge-run inspector (full history + raw I/O +
+  // delete). A press that lands on a control (chevron / action / ×) is ignored so
+  // those keep their own tap. `fired` suppresses the trailing click (focus).
+  const lpTimer = useRef<number | null>(null);
+  const lpFired = useRef(false);
+  const clearLongPress = (): void => {
+    if (lpTimer.current !== null) {
+      clearTimeout(lpTimer.current);
+      lpTimer.current = null;
+    }
+  };
+  const startLongPress = (e: React.PointerEvent): void => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    lpFired.current = false;
+    clearLongPress();
+    lpTimer.current = globalThis.setTimeout(() => {
+      lpFired.current = true;
+      haptic(18);
+      openJudgeInspector(sessionId);
+    }, 480);
+  };
+  useEffect(() => clearLongPress, []);
 
   // A new state always re-shows (reset the local dismiss); collapse the detail.
   useEffect(() => {
@@ -242,7 +267,19 @@ export function TurnStatusOverlay({
           direction="row"
           alignItems="center"
           spacing={1}
-          onClick={onFocusComposer}
+          onPointerDown={startLongPress}
+          onPointerUp={clearLongPress}
+          onPointerLeave={clearLongPress}
+          onPointerCancel={clearLongPress}
+          onClick={(): void => {
+            // A long-press already opened the inspector — swallow the trailing
+            // click so it doesn't also focus the composer.
+            if (lpFired.current) {
+              lpFired.current = false;
+              return;
+            }
+            onFocusComposer();
+          }}
           sx={{
             cursor: "text",
             maxWidth: "100%",

@@ -28,6 +28,7 @@ import type {
   Inbound,
   InferenceProviderView,
   JudgeResult,
+  JudgeRun,
   Outbound,
   SessionMeta,
   SkillView,
@@ -141,6 +142,11 @@ export interface State {
   // Latest confirm-detect judge result per session (drives the overlay's raw-data
   // expand). Keyed by session id.
   judgeResults: Record<string, JudgeResult>;
+  // The confirm-detect judge-run HISTORY per session (newest first, capped),
+  // server-authoritative + persisted. Backs the inspector widget (long-press the
+  // turn-status pill). Keyed by session id; populated by the `judge_history`
+  // broadcast (connect seed + every add/delete/clear).
+  judgeRuns: Record<string, JudgeRun[]>;
   // Last dev-probe result (Info sheet "Test"), or undefined.
   lastProbe: ProbeResult | undefined;
   // A manual "send now" awaiting user confirmation because the judge can't run
@@ -168,6 +174,7 @@ let state: State = {
   inferenceConfig: [],
   skills: [],
   judgeResults: {},
+  judgeRuns: {},
   lastProbe: undefined,
   confirmSend: undefined,
 };
@@ -411,6 +418,10 @@ function handle(msg: Outbound): void {
     }
     case "judge_result": {
       setState({ ...state, judgeResults: { ...state.judgeResults, [msg.judge.session_id]: msg.judge } });
+      break;
+    }
+    case "judge_history": {
+      setState({ ...state, judgeRuns: { ...state.judgeRuns, [msg.session_id]: msg.runs } });
       break;
     }
     case "inference_probe_result": {
@@ -1212,6 +1223,25 @@ export function dismissAwaiting(sessionId: string): void {
 /** The latest confirm-detect judge result for a session (overlay raw-data expand). */
 export function useJudgeResult(sessionId: string): JudgeResult | undefined {
   return useStore().judgeResults[sessionId];
+}
+
+const EMPTY_RUNS: JudgeRun[] = [];
+
+/** A session's confirm-detect judge-run history (newest first), for the inspector
+ *  widget. Server-authoritative — stable empty array when none yet. */
+export function useJudgeRuns(sessionId: string): JudgeRun[] {
+  return useStore().judgeRuns[sessionId] ?? EMPTY_RUNS;
+}
+
+/** Delete one judge run from a session's inspector history (server-authoritative;
+ *  the `judge_history` re-broadcast reflects it across terminals). */
+export function removeJudgeRun(sessionId: string, id: string): void {
+  send({ type: "remove_judge_run", session_id: sessionId, id });
+}
+
+/** Clear a session's entire judge history. */
+export function clearJudgeRuns(sessionId: string): void {
+  send({ type: "clear_judge_runs", session_id: sessionId });
 }
 
 /** Overlay "Resume": continue an interrupted turn. */

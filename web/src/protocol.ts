@@ -162,6 +162,10 @@ export type Outbound =
   // The confirm-detect judge's full result for a turn (verdict + raw I/O for the
   // overlay's "raw data" expand). Latest-per-session.
   | { type: "judge_result"; judge: JudgeResult }
+  // A session's confirm-detect judge-run HISTORY (newest first), capped. Backs the
+  // inspector widget (long-press the turn-status pill). Sent per session on
+  // connect + re-broadcast on every new run / per-item delete / clear.
+  | { type: "judge_history"; session_id: string; runs: JudgeRun[] }
   // Result of a dev probe (Info sheet "Test"): text + cache token counts, or error.
   | {
     type: "inference_probe_result";
@@ -208,6 +212,14 @@ export interface JudgeResult {
   cache_hit: number;
   cache_miss: number;
   latency_ms: number;
+}
+
+/** One persisted judge run — the `JudgeResult` detail (minus `session_id`, which
+ *  rides on the `JudgeHistory` wrapper) plus the durable `id` (delete key) and
+ *  `at` (unix-ms). Backs the inspector widget's history list. */
+export interface JudgeRun extends Omit<JudgeResult, "session_id"> {
+  id: string;
+  at: number;
 }
 
 export type Inbound =
@@ -283,6 +295,9 @@ export type Inbound =
   | { type: "reorder_sessions"; order: string[] }
   | { type: "reorder_queue"; session_id: string; order: string[] }
   | { type: "reorder_drafts"; session_id: string; order: string[] }
+  // Inspector widget: delete one judge run from a session's history, or clear all.
+  | { type: "remove_judge_run"; session_id: string; id: string }
+  | { type: "clear_judge_runs"; session_id: string }
   // Auto-resume (tasks/active/session-auto-resume): per-session override
   // (`value: null` = inherit the global default) + a global setting upsert.
   | { type: "set_session_auto_resume"; session_id: string; value: boolean | null }

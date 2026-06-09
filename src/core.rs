@@ -271,6 +271,49 @@ pub struct RestoredSession {
     pub next_seq: u64,
     pub queue: Vec<QueuedMessage>,
     pub drafts: Vec<QueuedMessage>,
+    /// Persisted confirm-detect judge-run history (newest first), capped.
+    pub judge_runs: Vec<JudgeRun>,
+}
+
+/// One persisted confirm-detect judge run — the verdict PLUS the raw LLM I/O,
+/// kept as a per-session history that backs the inspector widget (long-press the
+/// turn-status pill). This is the durable superset of the live `JudgeResult`
+/// broadcast: same fields, plus an `id` for delete and an `at` for display/sort.
+///
+/// `id` is server-minted as `<at>-<seq>` (unix-ms + the turn's judge_seq). The
+/// timestamp makes it monotonic ACROSS restarts, so a run minted after a restart
+/// (when `judge_seq` resets to 0) can never collide with a persisted one — the
+/// only key the client deletes by.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JudgeRun {
+    pub id: String,
+    /// Unix-ms when the verdict landed.
+    pub at: i64,
+    /// "L1" (deterministic stop-reason) or "L2" (the DeepSeek judge).
+    pub layer: String,
+    pub awaiting_user: bool,
+    pub done: bool,
+    pub confidence: f32,
+    pub reason: String,
+    /// The model id (L2) or empty (L1).
+    pub model: String,
+    /// What the judge looked at — the agent's final text.
+    pub input: String,
+    /// The model's raw output (L2) or the L1 reason.
+    pub output: String,
+    pub cache_hit: u32,
+    pub cache_miss: u32,
+    pub latency_ms: u64,
+}
+
+/// How many judge runs to keep per session. The raw input (the agent's full final
+/// message) can be a few KB, and the whole array is rewritten as JSONB on every
+/// turn, so this caps both the wire/broadcast size and the DB write.
+const JUDGE_HISTORY_CAP: usize = 30;
+
+/// Unix-ms now — the `at`/id stamp for a judge run.
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }
 
 /// Per-session info for the UI's session-info dialog — the metadata plus the
@@ -316,6 +359,10 @@ struct Session {
     /// ONLY if still current — a newer turn-end supersedes a stale verdict (the
     /// stale-clear race in plan.md Risks). Not persisted; resets to 0 on restart.
     judge_seq: u64,
+    /// Confirm-detect judge-run history (newest first), capped at
+    /// [`JUDGE_HISTORY_CAP`]. Server-authoritative + persisted (migration 0009);
+    /// backs the inspector widget. Broadcast as [`Outbound::JudgeHistory`].
+    judge_runs: Vec<JudgeRun>,
 }
 
 /// A command sent by a client (Web UI, native shell, API / test harnesses)
@@ -554,6 +601,11 @@ pub enum Inbound {
         session_id: String,
         order: Vec<String>,
     },
+    /// Delete one run from a session's confirm-detect judge history (the
+    /// inspector widget's per-item delete).
+    RemoveJudgeRun { session_id: String, id: String },
+    /// Clear a session's entire confirm-detect judge history.
+    ClearJudgeRuns { session_id: String },
 }
 
 /// What the server pushes to a WebSocket client.
@@ -644,6 +696,14 @@ pub enum Outbound {
         cache_miss: u32,
         latency_ms: u64,
     },
+    /// A session's confirm-detect judge-run HISTORY (newest first), capped. The
+    /// durable, server-authoritative superset of `JudgeResult` that backs the
+    /// inspector widget. Sent per session on connect + re-broadcast on every new
+    /// run / per-item delete / clear.
+    JudgeHistory {
+        session_id: String,
+        runs: Vec<JudgeRun>,
+    },
     /// Result of an [`Inbound::InferenceProbe`] — surfaced in the Info sheet.
     InferenceProbeResult {
         provider: String,
@@ -699,6 +759,10 @@ pub enum StoreWrite {
     UpdateSessionOrder { order: Vec<String> },
     /// Persist a session's auto-resume OVERRIDE (`None` = inherit global default).
     UpdateAutoResume { session_id: String, value: Option<bool> },
+    /// Persist a session's confirm-detect judge-run history (whole list, as JSONB
+    /// — migration 0009). Written on every add / delete / clear, like
+    /// [`StoreWrite::UpdatePending`].
+    UpdateJudgeRuns { session_id: String, runs: Vec<JudgeRun> },
     /// Upsert one global setting (auto-resume default flag / continuation template).
     PutSetting { key: String, value: serde_json::Value },
     /// Upsert an inference provider's non-secret config.
@@ -894,6 +958,7 @@ impl Hub {
                     next_seq,
                     mut queue,
                     mut drafts,
+                    judge_runs,
                 } = r;
                 let mut healed = false;
                 for m in queue.iter_mut().chain(drafts.iter_mut()) {
@@ -932,6 +997,7 @@ impl Hub {
                         editing: None,
                         in_flight: false,
                         judge_seq: 0,
+                        judge_runs,
                     },
                 );
                 order.push(id);
@@ -1093,6 +1159,7 @@ impl Hub {
                     editing: None,
                     in_flight: false,
                     judge_seq: 0,
+                    judge_runs: Vec::new(),
                 },
             );
             order.push(id);
@@ -1387,8 +1454,10 @@ impl Hub {
                 final_text: &final_text,
             })
         {
-            self.broadcast(Outbound::JudgeResult {
-                session_id: session_id.to_owned(),
+            let at = now_ms();
+            self.emit_and_record_judge(session_id, JudgeRun {
+                id: format!("{at}-{seq}"),
+                at,
                 layer: "L1".to_owned(),
                 awaiting_user: v.awaiting_user,
                 done: v.done,
@@ -1433,8 +1502,10 @@ impl Hub {
                         confidence = o.verdict.confidence, reason = %o.verdict.reason, latency_ms,
                         "confirm-detect verdict"
                     );
-                    hub.broadcast(Outbound::JudgeResult {
-                        session_id: sid.clone(),
+                    let at = now_ms();
+                    hub.emit_and_record_judge(&sid, JudgeRun {
+                        id: format!("{at}-{seq}"),
+                        at,
                         layer: o.layer.to_owned(),
                         awaiting_user: o.verdict.awaiting_user,
                         done: o.verdict.done,
@@ -1455,6 +1526,96 @@ impl Hub {
                 }
             }
         });
+    }
+
+    /// Broadcast a judge run for the LIVE overlay (`JudgeResult`, latest-per-
+    /// session — the pill's quick-peek expand) AND append it to the durable,
+    /// per-session history (the inspector widget). One call from both judge
+    /// layers so the two surfaces never diverge.
+    fn emit_and_record_judge(&self, session_id: &str, run: JudgeRun) {
+        self.broadcast(Outbound::JudgeResult {
+            session_id: session_id.to_owned(),
+            layer: run.layer.clone(),
+            awaiting_user: run.awaiting_user,
+            done: run.done,
+            confidence: run.confidence,
+            reason: run.reason.clone(),
+            model: run.model.clone(),
+            input: run.input.clone(),
+            output: run.output.clone(),
+            cache_hit: run.cache_hit,
+            cache_miss: run.cache_miss,
+            latency_ms: run.latency_ms,
+        });
+        let runs = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.judge_runs.insert(0, run); // newest first
+            s.judge_runs.truncate(JUDGE_HISTORY_CAP);
+            s.judge_runs.clone()
+        };
+        self.persist_and_emit_judge_runs(session_id, runs);
+    }
+
+    /// Write-behind the whole history + broadcast it. Shared by add/delete/clear.
+    fn persist_and_emit_judge_runs(&self, session_id: &str, runs: Vec<JudgeRun>) {
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateJudgeRuns {
+                session_id: session_id.to_owned(),
+                runs: runs.clone(),
+            });
+        }
+        self.broadcast(Outbound::JudgeHistory {
+            session_id: session_id.to_owned(),
+            runs,
+        });
+    }
+
+    /// Delete one run from a session's judge history (inspector per-item delete).
+    /// No-op (no broadcast) if the id isn't present.
+    pub fn remove_judge_run(&self, session_id: &str, id: &str) {
+        let runs = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let before = s.judge_runs.len();
+            s.judge_runs.retain(|r| r.id != id);
+            if s.judge_runs.len() == before {
+                return; // nothing removed → don't churn
+            }
+            s.judge_runs.clone()
+        };
+        self.persist_and_emit_judge_runs(session_id, runs);
+    }
+
+    /// Clear a session's entire judge history. No-op if already empty.
+    pub fn clear_judge_runs(&self, session_id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.judge_runs.is_empty() {
+                return;
+            }
+            s.judge_runs.clear();
+        }
+        self.persist_and_emit_judge_runs(session_id, Vec::new());
+    }
+
+    /// Snapshot a session's judge history for the connect seed. Empty for an
+    /// unknown session.
+    #[must_use]
+    pub fn judge_history(&self, session_id: &str) -> Vec<JudgeRun> {
+        self.inner
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map_or_else(Vec::new, |s| s.judge_runs.clone())
     }
 
     /// The global default for auto-resuming interrupted turns (off when unset).

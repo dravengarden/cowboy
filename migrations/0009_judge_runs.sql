@@ -1,0 +1,11 @@
+-- Persist the confirm-detect judge-run HISTORY per session — backs the inspector
+-- widget (long-press the turn-status pill → a list of recent judge runs, each
+-- with its raw LLM input/output, deletable). Before this, a judge result was
+-- broadcast live and only the LATEST verdict survived a restart (migration 0008);
+-- the raw I/O was transient (the overlay's quick-peek expand). The full history
+-- is now durable, server-authoritative, and cross-terminal — the daemon caps it
+-- per session and owns add/delete/clear. A JSONB array (newest first) of
+-- { id, at, layer, awaiting_user, done, confidence, reason, model, input, output,
+-- cache_hit, cache_miss, latency_ms }. Default '[]' = no backfill; existing
+-- sessions simply start with an empty history.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS judge_runs jsonb NOT NULL DEFAULT '[]'::jsonb;

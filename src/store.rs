@@ -26,7 +26,7 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-use crate::core::{Envelope, Event, QueuedMessage, SessionMeta, SessionOrigin, Status};
+use crate::core::{Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, SessionOrigin, Status};
 
 /// All persistent state needed to rehydrate a single session after restart.
 pub struct LoadedSession {
@@ -38,6 +38,8 @@ pub struct LoadedSession {
     /// Persisted send-queue + drafts (cross-terminal sync survives restart).
     pub queue: Vec<QueuedMessage>,
     pub drafts: Vec<QueuedMessage>,
+    /// Persisted confirm-detect judge-run history (newest first), capped.
+    pub judge_runs: Vec<JudgeRun>,
 }
 
 #[derive(Clone)]
@@ -81,7 +83,7 @@ impl Store {
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, cwd, title, origin, status, agent_session_id, auto_resume, \
-             awaiting_user, done, next_seq, queue, drafts, created_at \
+             awaiting_user, done, next_seq, queue, drafts, judge_runs, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -119,12 +121,15 @@ impl Store {
                 serde_json::from_value(row.queue.clone()).unwrap_or_default();
             let drafts: Vec<QueuedMessage> =
                 serde_json::from_value(row.drafts.clone()).unwrap_or_default();
+            let judge_runs: Vec<JudgeRun> =
+                serde_json::from_value(row.judge_runs.clone()).unwrap_or_default();
             out.push(LoadedSession {
                 meta: row.into_meta(),
                 events,
                 next_seq,
                 queue,
                 drafts,
+                judge_runs,
             });
         }
         Ok(out)
@@ -423,6 +428,23 @@ impl Store {
         Ok(())
     }
 
+    /// Persist a session's confirm-detect judge-run history (the whole list, as
+    /// `jsonb`; migration 0009). Whole-list overwrite like [`Self::update_pending`];
+    /// the daemon caps the list, so it stays small.
+    ///
+    /// # Errors
+    /// If serializing the list fails or the UPDATE fails.
+    pub async fn update_judge_runs(&self, session_id: &str, runs: &[JudgeRun]) -> Result<()> {
+        let runs_json = serde_json::to_value(runs).context("serialize judge_runs")?;
+        sqlx::query("UPDATE sessions SET judge_runs = $1, updated_at = now() WHERE id = $2")
+            .bind(&runs_json)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("UPDATE session judge_runs {session_id}"))?;
+        Ok(())
+    }
+
     /// Persist the manual session ordering: write each id's index as its
     /// `position`. `load_all` then restores the drag-arranged order (NULLS LAST
     /// + created_at keeps any unknown/never-reordered rows sensible). One UPDATE
@@ -557,6 +579,7 @@ struct SessionRow {
     next_seq: i64,
     queue: serde_json::Value,
     drafts: serde_json::Value,
+    judge_runs: serde_json::Value,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
 }
