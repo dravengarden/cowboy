@@ -1,19 +1,23 @@
-import { useEffect, useSyncExternalStore } from "react";
-import { Box, IconButton, Stack, Typography } from "@mui/material";
-import Close from "@mui/icons-material/Close";
-import ChevronLeft from "@mui/icons-material/ChevronLeft";
-import ChevronRight from "@mui/icons-material/ChevronRight";
-import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
+import { useSyncExternalStore } from "react";
+import { type GalleryImage, ImageLightbox } from "./_shell";
 import type { Attachment } from "./attachments";
 
-// Full-screen preview for an already-staged/pasted resource. A single module-
-// level store drives ONE overlay (rendered once at the app root) that any
-// thumbnail anywhere — the composer's staged strip OR a parked draft / queued
-// row — opens by calling `openLightbox(list, index)`. Keeping the state global
-// (not per-row) avoids prop-drilling a preview callback through PendingPanel →
-// PendingRow → the chips, and guarantees a single overlay instance.
+// Fullscreen preview for a staged/queued attachment. Thin wrapper over the SHARED
+// `_shell` ImageLightbox (zoom / pan / swipe-to-dismiss / arrow nav) so the
+// composer's attachment preview behaves exactly like a message image — one common
+// image-preview component, not a cowboy-special overlay.
+//
+// A single module-level store drives ONE lightbox mounted at the app root, opened
+// from any thumbnail (staged strip, parked draft, queued row) via
+// `openLightbox(items, clickedIndex)`. Keeping it global avoids prop-drilling a
+// preview callback through PendingPanel → PendingRow → the chips.
+//
+// Image-only (the shared component is): non-image resources (the rare attached
+// file) are filtered out — the gallery is just the images, and the click index is
+// remapped into it. `plate={false}`: attachments are screenshots/photos, so no
+// white framing behind them.
 
-type LightboxState = { items: Attachment[]; index: number } | null;
+type LightboxState = { images: GalleryImage[]; index: number } | null;
 
 let current: LightboxState = null;
 const listeners = new Set<() => void>();
@@ -21,10 +25,21 @@ const emit = (): void => {
   for (const l of listeners) l();
 };
 
-/** Open the preview on `items[index]`. No-op for an empty list. */
-export function openLightbox(items: Attachment[], index: number): void {
-  if (items.length === 0) return;
-  current = { items, index: Math.max(0, Math.min(index, items.length - 1)) };
+/** Open the preview on the clicked attachment (mapped into the images-only
+ *  gallery). No-op when there are no previewable images in the set. */
+export function openLightbox(items: Attachment[], clickedIndex: number): void {
+  const imageItems = items.filter((a) => a.isImage && a.previewUrl);
+  if (imageItems.length === 0) return;
+  const images: GalleryImage[] = imageItems.map((a) => ({
+    src: a.previewUrl as string,
+    alt: a.name,
+  }));
+  // Remap the clicked position (an index into the full `items`) onto the
+  // images-only gallery; fall back to the first image if the click was a
+  // non-image (filtered out).
+  const clicked = items[clickedIndex];
+  const found = clicked ? imageItems.indexOf(clicked) : -1;
+  current = { images, index: found >= 0 ? found : 0 };
   emit();
 }
 
@@ -33,19 +48,13 @@ function close(): void {
   emit();
 }
 
-function step(delta: number): void {
+function setIndex(index: number): void {
   if (!current) return;
-  const n = current.items.length;
-  current = { items: current.items, index: (current.index + delta + n) % n };
+  current = { images: current.images, index };
   emit();
 }
 
-const NAV_BTN = {
-  color: "#fff",
-  bgcolor: "rgba(255,255,255,0.12)",
-  "&:hover": { bgcolor: "rgba(255,255,255,0.22)" },
-} as const;
-
+/** Mount once at the app root. */
 export function ResourceLightbox(): React.JSX.Element | null {
   const state = useSyncExternalStore(
     (cb) => {
@@ -57,143 +66,13 @@ export function ResourceLightbox(): React.JSX.Element | null {
     () => current,
     () => null,
   );
-
-  // Desktop keys: Esc closes, ←/→ page through a multi-attachment set.
-  useEffect(() => {
-    if (!state) return undefined;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") close();
-      else if (e.key === "ArrowLeft") step(-1);
-      else if (e.key === "ArrowRight") step(1);
-    };
-    globalThis.addEventListener("keydown", onKey);
-    return () => globalThis.removeEventListener("keydown", onKey);
-  }, [state]);
-
-  if (!state) return null;
-  const a = state.items[state.index];
-  if (!a) return null;
-  const multi = state.items.length > 1;
-
   return (
-    // Tap the backdrop to dismiss; the media itself stops propagation so a tap
-    // ON the image doesn't close it. position:fixed covers the (cowboy) viewport.
-    <Box
-      onClick={close}
-      sx={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        bgcolor: "rgba(0,0,0,0.92)",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
-      }}
-    >
-      <IconButton
-        aria-label="close preview"
-        onClick={(e): void => {
-          e.stopPropagation();
-          close();
-        }}
-        sx={{
-          position: "absolute",
-          top: "max(env(safe-area-inset-top), 12px)",
-          right: "max(env(safe-area-inset-right), 12px)",
-          ...NAV_BTN,
-        }}
-      >
-        <Close />
-      </IconButton>
-
-      {a.isImage && a.previewUrl
-        ? (
-          <Box
-            component="img"
-            src={a.previewUrl}
-            alt={a.name}
-            onClick={(e): void => e.stopPropagation()}
-            sx={{
-              maxWidth: "92vw",
-              maxHeight: "82vh",
-              objectFit: "contain",
-              borderRadius: 1.5,
-              boxShadow: "0 16px 56px rgba(0,0,0,0.6)",
-            }}
-          />
-        )
-        : (
-          // Non-image (a file resource) can't be rendered — show its identity.
-          <Stack
-            onClick={(e): void => e.stopPropagation()}
-            alignItems="center"
-            spacing={1.5}
-            sx={{ color: "#fff", px: 4, textAlign: "center" }}
-          >
-            <InsertDriveFileOutlined sx={{ fontSize: 72, opacity: 0.7 }} />
-            <Typography sx={{ wordBreak: "break-word", maxWidth: 320 }}>
-              {a.name}
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.6 }}>
-              {a.mimeType}
-            </Typography>
-          </Stack>
-        )}
-
-      {/* Caption + (for a set) a position counter, pinned above the home edge. */}
-      <Typography
-        variant="caption"
-        sx={{
-          position: "absolute",
-          bottom: "max(env(safe-area-inset-bottom), 16px)",
-          left: 0,
-          right: 0,
-          textAlign: "center",
-          color: "rgba(255,255,255,0.78)",
-          px: 6,
-          wordBreak: "break-word",
-        }}
-      >
-        {a.name}
-        {multi
-          ? `  ·  ${String(state.index + 1)} / ${String(state.items.length)}`
-          : ""}
-      </Typography>
-
-      {multi && (
-        <>
-          <IconButton
-            aria-label="previous"
-            onClick={(e): void => {
-              e.stopPropagation();
-              step(-1);
-            }}
-            sx={{
-              position: "absolute",
-              left: "max(env(safe-area-inset-left), 8px)",
-              ...NAV_BTN,
-            }}
-          >
-            <ChevronLeft />
-          </IconButton>
-          <IconButton
-            aria-label="next"
-            onClick={(e): void => {
-              e.stopPropagation();
-              step(1);
-            }}
-            sx={{
-              position: "absolute",
-              right: "max(env(safe-area-inset-right), 8px)",
-              ...NAV_BTN,
-            }}
-          >
-            <ChevronRight />
-          </IconButton>
-        </>
-      )}
-    </Box>
+    <ImageLightbox
+      images={state?.images ?? []}
+      index={state ? state.index : null}
+      onIndex={setIndex}
+      onClose={close}
+      plate={false}
+    />
   );
 }
