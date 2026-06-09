@@ -309,16 +309,14 @@ export function Composer({
   // thread is never permanently unusable just because its agent process ended.
   // An attachment-only prompt (e.g. just a pasted screenshot) is also sendable.
   const sendable = !!text.trim() || attachments.length > 0;
-  // How many ~38px action buttons overlay the input's bottom-right, so the text
+  // How many ~38px action buttons overlay the input's right edge, so the text
   // (endInset) reserves room for exactly them. Idle: Send (+ kebab if sendable).
-  // Busy/starting: Queue (if sendable) + Stop (busy only) + kebab (if sendable).
-  let actionBtns: number;
-  if (busy || starting) {
-    actionBtns = (sendable ? 1 : 0) + (busy ? 1 : 0) + (sendable ? 1 : 0);
-  } else {
-    actionBtns = 1 + (sendable ? 1 : 0);
-  }
-  const actionInset = Math.max(actionBtns, 1) * 38 + 10;
+  // Busy/starting: Queue + kebab (only when sendable). Stop is NOT here — it lives
+  // back in the toolbar at its original place (the input shows send-path only).
+  const actionBtns = busy || starting
+    ? (sendable ? 2 : 0)
+    : 1 + (sendable ? 1 : 0);
+  const actionInset = actionBtns === 0 ? 0 : actionBtns * 38 + 10;
 
   // Read picked / pasted files into ACP content blocks and stage them. Async
   // (FileReader), so previews appear once each file is encoded; unreadable
@@ -658,7 +656,11 @@ export function Composer({
           sx={{
             position: "absolute",
             right: 4,
-            bottom: 4,
+            // Vertically CENTERED in the input (top:0/bottom:0 + center), so on a
+            // single-line message the send button sits on the text's line instead
+            // of dropping to the bottom-right corner.
+            top: 0,
+            bottom: 0,
             display: "flex",
             alignItems: "center",
             gap: 0.25,
@@ -717,18 +719,6 @@ export function Composer({
                       </Box>
                     )}
                   </Box>
-                )}
-                {busy && (
-                  <Tooltip title="Stop">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      aria-label="cancel"
-                      onClick={(): void => setCancelOpen(true)}
-                    >
-                      <Stop fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
                 )}
               </>
             )
@@ -901,6 +891,24 @@ export function Composer({
           </IconButton>
         </Tooltip>
 
+        {/* Stop stays in its ORIGINAL place — the toolbar's far right — not in the
+            input overlay (the input shows only the send path). A spacer pushes it
+            to the edge while the agent owns the turn. */}
+        {busy && (
+          <>
+            <Box sx={{ flex: 1 }} />
+            <Tooltip title="Stop">
+              <IconButton
+                color="error"
+                aria-label="cancel"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => setCancelOpen(true)}
+              >
+                <Stop />
+              </IconButton>
+            </Tooltip>
+          </>
+        )}
       </Stack>
       {
         /* The input overlay's ⋮ kebab — secondary actions that used to sit in the
@@ -1561,12 +1569,10 @@ function PendingPanel({
     <Box
       sx={{
         mb: 1,
-        borderRadius: 1,
-        // No border + no side padding (below): the rows are full-width outlined
-        // Papers that line up edge-to-edge with the main composer input box. A
-        // subtle bg tint still groups drafts vs the live queue.
-        bgcolor: kind === "draft" ? "action.selected" : "action.hover",
-        overflow: "hidden",
+        // No border, NO bg tint, no side padding: the panel is just a header + the
+        // full-width outlined row Papers, so there's no container "frame" padding
+        // around them and their left/right edges line up exactly with the main
+        // composer input box. Drafts vs queue are told apart by the header label.
         // Query container for the rows: their secondary actions go inline on a
         // roomy panel (iPad / desktop) and collapse to a kebab on a narrow phone
         // one (ROW_ACTIONS_INLINE). Keyed on the ACTUAL panel width, so the
