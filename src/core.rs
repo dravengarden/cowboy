@@ -2283,11 +2283,17 @@ impl Hub {
             if !manual && s.meta.awaiting_user {
                 return;
             }
-            let Some(head) = s.queue.first() else {
+            if s.queue.is_empty() {
                 return;
-            };
-            if s.editing.as_deref() == Some(head.id.as_str()) {
-                return; // head held for edit → whole queue pauses
+            }
+            // ANY message being edited pauses the WHOLE auto-drain — not just when
+            // the head is the one open (the old `== head` check let the head fire
+            // out from under you while you edited message #2). The hold lifts on
+            // Save/Cancel (set_queue_editing(None)). A MANUAL "send now" still
+            // overrides (the user explicitly chose to send), so the queue is never
+            // permanently trapped.
+            if !manual && s.editing.is_some() {
+                return;
             }
             let head = s.queue.remove(0);
             s.in_flight = true;
