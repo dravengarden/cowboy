@@ -1064,11 +1064,12 @@ export function Composer({
       {composeFs && (
         <DetentSheet
           open
-          // Solid non-cover sheet (NOT cover/frosted) to match the Settings sheet
-          // exactly — a clean opaque surface that sits below the status bar with a
-          // rounded top, no translucent-bleed boundaries. surfaceColor dims +
-          // restores the status bar like BottomSheet does.
+          // Full-screen frosted glass (cover): 100dvh translucent blur surface, the
+          // primary mobile writing canvas. COVER_SCRIM_MAX≈0.03 keeps the body at
+          // page brightness so the frosted top blends into the bg-tinted status bar
+          // (no seam); surfaceColor tints that status bar to background.default.
           ariaLabel="Compose message"
+          cover
           surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
@@ -2208,9 +2209,11 @@ function PendingRow({
         {overlayOpen && (
           <DetentSheet
             open
-            // Solid non-cover sheet (matches the compose + Settings sheets) — clean
-            // opaque surface below the status bar, no translucent-bleed boundaries.
+            // Full-screen frosted glass (cover) — matches the compose sheet. 100dvh
+            // translucent blur; COVER_SCRIM_MAX keeps the body at page brightness so
+            // the frosted top blends into the bg-tinted status bar (no seam).
             ariaLabel="Edit message"
+            cover
             surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
