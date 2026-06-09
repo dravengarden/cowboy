@@ -752,6 +752,12 @@ export function useSkills(): SkillView[] {
   return useStore().skills;
 }
 
+/** Whether the live WS is currently open. False the moment it drops (onclose),
+ *  true on (re)open — drives the turn-status pill's "Reconnecting…" state. */
+export function useConnected(): boolean {
+  return useStore().connected;
+}
+
 /** Set a provider's model/params (optimistic local update + send). */
 export function setInferenceConfig(provider: string, model: string, params?: unknown): void {
   const next = state.inferenceConfig.some((p) => p.provider === provider)

@@ -9,12 +9,13 @@ import {
   requestSendQueued,
   resumeTurn,
   retryTurn,
+  useConnected,
   useJudgeResult,
 } from "./store";
 import { openJudgeInspector } from "./JudgeInspector";
 import { haptic } from "./haptic";
 
-type Kind = "judging" | "awaiting" | "done" | "interrupted" | "error" | "no-key";
+type Kind = "offline" | "judging" | "awaiting" | "done" | "interrupted" | "error" | "no-key";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
 // The unified "turn status" overlay (replaces the old AwaitingBar): one floating
@@ -27,6 +28,7 @@ type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 // the session status; `no-key` when the judge can't run and a queue is held.
 
 function deriveKind(args: {
+  offline: boolean;
   status: Status;
   judging: boolean;
   awaitingUser: boolean;
@@ -34,7 +36,11 @@ function deriveKind(args: {
   queueLen: number;
   hasKey: boolean;
 }): Kind | null {
-  const { status, judging, awaitingUser, done, queueLen, hasKey } = args;
+  const { offline, status, judging, awaitingUser, done, queueLen, hasKey } = args;
+  // Connection loss outranks everything: while the socket is down the `status` is
+  // stale (we can't know the real turn state), so surface "Reconnecting…" instead —
+  // even mid-turn — so you're never silently typing into a dead socket.
+  if (offline) return "offline";
   if (status === "busy" || status === "starting") return null; // working / fresh
   if (status === "crashed") return "error";
   if (status === "interrupted") return "interrupted";
@@ -49,6 +55,7 @@ function deriveKind(args: {
 }
 
 const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
+  offline: { color: "warning", label: "Reconnecting…" },
   judging: { color: "info", label: "Judging…" },
   awaiting: { color: "primary", label: "Waiting for your reply" },
   done: { color: "success", label: "Task complete" },
@@ -78,7 +85,22 @@ export function TurnStatusOverlay({
   onFocusComposer: () => void;
   onConfigure: () => void;
 }): React.JSX.Element | null {
+  // Connection loss → a debounced "Reconnecting…" pill. The 600ms debounce keeps a
+  // sub-second blip (the common case on flaky cellular) from flashing the pill; a
+  // real outage still escalates to the shared red ConnectionBanner up top.
+  const connected = useConnected();
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    if (connected) {
+      setOffline(false);
+      return undefined;
+    }
+    const t = globalThis.setTimeout(() => setOffline(true), 600);
+    return () => globalThis.clearTimeout(t);
+  }, [connected]);
+
   const kind = deriveKind({
+    offline,
     status,
     judging,
     awaitingUser,
@@ -353,7 +375,7 @@ export function TurnStatusOverlay({
               ].join(", "),
           }}
         >
-          {kind === "judging" && (
+          {(kind === "judging" || kind === "offline") && (
             <CircularProgress
               size={14}
               thickness={5}
