@@ -831,12 +831,12 @@ export function Composer({
             card; the long-press force-push ring + haptics are preserved. */}
         {busy || starting
           ? (
-            sendable && (
-              <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
+            <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
                 <IconButton
                   ref={queueBtnRef}
                   color="primary"
                   aria-label="queue message"
+                  disabled={!sendable}
                   sx={{
                     ...TOOLBAR_ICON_BTN,
                     transition: "transform .12s",
@@ -884,7 +884,6 @@ export function Composer({
                   </Box>
                 )}
               </Box>
-            )
           )
           : (
             <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
@@ -901,17 +900,17 @@ export function Composer({
               </span>
             </Tooltip>
           )}
-        {/* ⋮ secondary actions (Save draft / keyboard force-push), kept beside the
-            send path so the input overlay no longer carries it. */}
-        {sendable && (
-          <IconButton
-            aria-label="more actions"
-            sx={TOOLBAR_ICON_BTN}
-            onClick={(e): void => setActionsMenu(e.currentTarget)}
-          >
-            <MoreVert fontSize="small" />
-          </IconButton>
-        )}
+        {/* ⋮ secondary actions (Save draft / keyboard force-push). Always rendered
+            (disabled when empty) so the toolbar's icon COUNT never changes with
+            input content — only the busy-state Stop is added/removed. */}
+        <IconButton
+          aria-label="more actions"
+          disabled={!sendable}
+          sx={TOOLBAR_ICON_BTN}
+          onClick={(e): void => setActionsMenu(e.currentTarget)}
+        >
+          <MoreVert fontSize="small" />
+        </IconButton>
         </Stack>
       </Paper>
       {
@@ -1905,6 +1904,7 @@ function PendingRow({
   // tall editor so a long queued message edits comfortably without ballooning the
   // queue panel inline. ONE editor is mounted at a time (inline XOR overlay), both
   // driving the shared `draft` — so there's no uncontrolled-editor desync.
+  const theme = useTheme();
   const [overlayOpen, setOverlayOpen] = useState(false);
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   useLayoutEffect(() => {
@@ -2043,10 +2043,18 @@ function PendingRow({
             cover
             ariaLabel="Edit message"
             onClose={(): void => setOverlayOpen(false)}
+            // Dim the iOS status bar in lockstep with the scrim so the top
+            // safe-area strip doesn't read as an undimmed band above the sheet.
+            surfaceColor={theme.palette.background.default}
             header={
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                Edit message
-              </Typography>
+              // px matches the body's p:1.5 so the title's left edge lines up with
+              // the attachments + editor below (it was flush to the edge before);
+              // pb gives it breathing room under the grab handle.
+              <Box sx={{ px: 1.5, pb: 0.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                  Edit message
+                </Typography>
+              </Box>
             }
             footer={
               <Stack direction="row" justifyContent="flex-end" spacing={1}>
