@@ -91,55 +91,94 @@ if (typeof globalThis.addEventListener === "function") {
   }
 }
 
-function emitChime(c: AudioContext): void {
+// The three things worth a sound, each with a SEMANTICALLY-shaped chime:
+//  - done    : a bright two-note rise that RESOLVES up (A5→E6) — "finished".
+//  - decision: a softer, open two-note rise of a fourth (G5→C6) that doesn't fully
+//              resolve — reads as a question / "your turn".
+//  - error   : a LOW descending pair on a triangle wave (A4→D#4) — darker + buzzier,
+//              unmistakably "something went wrong".
+export type AlertKind = "done" | "decision" | "error";
+
+interface Note {
+  freq: number;
+  type: OscillatorType;
+  at: number; // start offset (s)
+  dur: number; // decay length (s)
+  peak: number; // gain peak
+}
+
+const NOTES: Record<AlertKind, readonly Note[]> = {
+  done: [
+    { freq: 880, type: "sine", at: 0, dur: 0.18, peak: 0.18 },
+    { freq: 1318.5, type: "sine", at: 0.1, dur: 0.18, peak: 0.18 },
+  ],
+  decision: [
+    { freq: 783.99, type: "sine", at: 0, dur: 0.16, peak: 0.15 },
+    { freq: 1046.5, type: "sine", at: 0.12, dur: 0.24, peak: 0.15 },
+  ],
+  error: [
+    { freq: 440, type: "triangle", at: 0, dur: 0.22, peak: 0.14 },
+    { freq: 311.13, type: "triangle", at: 0.15, dur: 0.34, peak: 0.14 },
+  ],
+};
+
+// Vibration rhythm per kind (Android only): a single tap for done, a double "ask"
+// for decision, a longer urgent pattern for error.
+const BUZZ: Record<AlertKind, number | number[]> = {
+  done: 30,
+  decision: [20, 60, 20],
+  error: [55, 40, 55],
+};
+
+function emitChime(c: AudioContext, kind: AlertKind): void {
   const now = c.currentTime;
-  // A gentle two-note rise (A5 → E6), each ~0.18s with a quick attack + decay.
-  for (const [i, freq] of [880, 1318.5].entries()) {
+  for (const n of NOTES[kind]) {
     const osc = c.createOscillator();
     const gain = c.createGain();
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    const start = now + i * 0.1;
+    osc.type = n.type;
+    osc.frequency.value = n.freq;
+    const start = now + n.at;
     gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.18, start + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+    gain.gain.exponentialRampToValueAtTime(n.peak, start + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + n.dur);
     osc.connect(gain).connect(c.destination);
     osc.start(start);
-    osc.stop(start + 0.2);
+    osc.stop(start + n.dur + 0.02);
   }
   scheduleSuspend(c);
 }
 
-function playChime(): void {
+function playChime(kind: AlertKind): void {
   const c = ensureCtx();
   if (!c) return;
   // Resume only to sound the chime; emit AFTER resume resolves so currentTime is
   // valid, then suspend again (scheduleSuspend) to release the session.
   if (c.state === "suspended") {
-    void c.resume().then(() => emitChime(c));
+    void c.resume().then(() => emitChime(c, kind));
   } else {
-    emitChime(c);
+    emitChime(c, kind);
   }
 }
 
 /**
- * Fire the attention alert if enabled: play the chime and, where supported, a
- * short vibration. Called from the store ONLY for the two events that need the
- * user — a finished turn (done) and a permission request (needs confirmation) —
- * never for mid-turn churn.
+ * Fire the attention alert if enabled: play the kind's chime + (Android) its
+ * vibration. Called from the store ONLY for the three things that need the user:
+ * a finished task (`done`), a point where they must decide (`decision` — the judge
+ * saw a question, or a permission request), and an agent problem (`error`). NOT
+ * for mid-turn churn, a plain continue, or a force-push (those produce no verdict).
  */
-export function fireAlert(): void {
+export function fireAlert(kind: AlertKind): void {
   if (!notify.get()) return;
   // Only alert when the user ISN'T actively looking. A turn that finishes while
   // you're watching (e.g. the agent's quick reply right after you hit send) you
   // can already SEE — chiming then is just noise. The alert is for when you've
   // switched away; the tab being hidden is exactly that signal.
   if (globalThis.document?.visibilityState === "visible") return;
-  playChime();
+  playChime(kind);
   // Android only; iOS has no web Vibration API (silent no-op there).
   if (typeof globalThis.navigator?.vibrate === "function") {
     try {
-      globalThis.navigator.vibrate(30);
+      globalThis.navigator.vibrate(BUZZ[kind]);
     } catch {
       /* unsupported / blocked — ignore */
     }

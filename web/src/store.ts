@@ -353,11 +353,13 @@ function handle(msg: Outbound): void {
     }
     case "event": {
       const env = msg.envelope;
-      // Attention alert — ONLY the two events that actually need the user: a
-      // finished turn (done) and a permission request (confirm). These are LIVE
-      // events; snapshot/history replays go through `case "snapshot"`, so past
-      // turns never re-ding. `fireAlert` no-ops when the setting is off.
-      if (env.kind === "turn_end" || env.kind === "permission_request") fireAlert();
+      // Attention alert — a permission request needs a DECISION. A plain `turn_end`
+      // is NOT alerted here: a finished turn might be done, still-working, or a
+      // force-push landing — only the confirm-detect verdict (case "judge_result")
+      // knows which, so the done/decision chimes fire there. These are LIVE events;
+      // snapshot/history replays go through `case "snapshot"`, so past turns never
+      // re-ding. `fireAlert` no-ops when the setting is off / the tab is visible.
+      if (env.kind === "permission_request") fireAlert("decision");
       // The dispatched prompt's user-echo carries the originating client's cmid
       // → CONFIRMS the optimistic chat bubble. Cross-signal: a submit GUESSED as
       // a chat send but actually QUEUED is confirmed here too — so also drop that
@@ -418,6 +420,13 @@ function handle(msg: Outbound): void {
     }
     case "judge_result": {
       setState({ ...state, judgeResults: { ...state.judgeResults, [msg.judge.session_id]: msg.judge } });
+      // The semantic attention alert: the verdict is what makes a turn-end worth a
+      // sound. `done` → the completion chime; `awaiting_user` (the agent asked
+      // something) → the decision chime. A plain continue / a force-push lands here
+      // with both false → no sound. (The provisional hold doesn't send a
+      // judge_result — only a real L1/L2 verdict does.)
+      if (msg.judge.done) fireAlert("done");
+      else if (msg.judge.awaiting_user) fireAlert("decision");
       break;
     }
     case "judge_history": {
@@ -447,6 +456,10 @@ function handle(msg: Outbound): void {
           : { seq: errorSeq, message: msg.message };
       console.warn("cowboy error:", msg.message);
       setState({ ...state, lastError: notice });
+      // Something went wrong with an agent turn → the error chime (only for
+      // session-scoped errors; a bare command rejection isn't a "problem" worth a
+      // sound). `fireAlert` still self-gates on the setting + tab visibility.
+      if (msg.session_id !== undefined) fireAlert("error");
       break;
     }
   }
