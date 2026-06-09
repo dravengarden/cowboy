@@ -28,12 +28,14 @@ export function SegmentedPill<T extends string>({
         p: 0.5,
         borderRadius: 999,
         // Translucent track on the frosted sheet — carries its own light blur so
-        // the page still diffuses through.
+        // the page still diffuses through. Dark: a white tint reads as a clear well.
+        // Light: a 7%-black tint went MUDDY (near-black warmed by the lavender) and
+        // barely defined the control — use a COOL neutral grey well (iOS segmented
+        // control) so it stays crisp + neutral against the warm lilac sheet.
         backgroundColor: (t) =>
-          alpha(
-            t.palette.text.primary,
-            t.palette.mode === "dark" ? 0.12 : 0.07,
-          ),
+          t.palette.mode === "dark"
+            ? alpha(t.palette.text.primary, 0.12)
+            : "rgba(118,118,128,0.13)",
         backdropFilter: "blur(16px) saturate(180%)",
         WebkitBackdropFilter: "blur(16px) saturate(180%)",
         ...sx,
@@ -57,14 +59,17 @@ export function SegmentedPill<T extends string>({
           transform: `translateX(${String(idx * 100)}%)`,
           transition: "transform .26s cubic-bezier(0.22, 1, 0.36, 1)",
           borderRadius: 999,
+          // Light: a CRISP pure-white pill (not the faint lavender `background.paper`,
+          // which barely separated from the sheet) lifted by a soft, DIFFUSE shadow
+          // — cleaner than the old hard 0.16 shadow that read as a dirty smudge.
           backgroundColor: (t) =>
             t.palette.mode === "dark"
               ? alpha(t.palette.common.white, 0.16)
-              : t.palette.background.paper,
+              : "#ffffff",
           boxShadow: (t) =>
             t.palette.mode === "dark"
               ? "0 1px 2px rgba(0,0,0,0.4)"
-              : "0 1px 3px rgba(0,0,0,0.16), 0 1px 1px rgba(0,0,0,0.05)",
+              : "0 2px 7px rgba(60,50,90,0.16), 0 1px 2px rgba(0,0,0,0.04)",
         }}
       />
       {options.map((o) => {
@@ -84,7 +89,13 @@ export function SegmentedPill<T extends string>({
               fontSize: 13.5,
               fontWeight: 600,
               letterSpacing: 0.1,
-              color: active ? "text.primary" : "text.secondary",
+              // Active label: neutral in dark; in light a touch of the brand purple
+              // on the white pill — ties the control to the lilac sheet and reads as
+              // intentional rather than a plain grey switch.
+              color: (t) =>
+                active
+                  ? (t.palette.mode === "dark" ? t.palette.text.primary : t.palette.primary.main)
+                  : t.palette.text.secondary,
               transition: "color .2s",
             }}
           >
