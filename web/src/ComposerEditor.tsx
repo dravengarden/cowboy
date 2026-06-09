@@ -52,10 +52,17 @@ export interface ComposerEditorHandle {
 // Reads whether the editor is in Vim *insert* mode, via the loaded vim module's
 // CM5-compat handle. Lets the Escape keymap (below) decide whether Esc should
 // exit insert mode (vim's job) or bubble up to the app (cancel a running turn).
+// The vim module's CM5-compat handle: enough of it to read insert mode (for the
+// Escape keymap) AND subscribe to `vim-mode-change` (for the NORMAL/INSERT hint
+// surfaced in the composer card).
+type VimModeEvent = { mode?: string; subMode?: string };
+type CmVimHandle = {
+  state?: { vim?: { insertMode?: boolean } };
+  on?: (event: "vim-mode-change", handler: (e: VimModeEvent) => void) => void;
+  off?: (event: "vim-mode-change", handler: (e: VimModeEvent) => void) => void;
+};
 type VimApi = {
-  getCM: (
-    view: EditorView,
-  ) => { state?: { vim?: { insertMode?: boolean } } } | null;
+  getCM: (view: EditorView) => CmVimHandle | null;
 };
 
 // Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
@@ -120,6 +127,9 @@ export const ComposerEditor = forwardRef<
     placeholder?: string;
     disabled?: boolean;
     vim?: boolean;
+    /// Called when the vim mode changes (normal / insert / visual). Drives the
+    /// NORMAL/INSERT hint in the composer card. Only wired when vim is on.
+    onVimMode?: (mode: string) => void;
     // Called on Escape when it should act on the app, not the editor: vim OFF,
     // or vim ON and already in normal/visual mode. Returns true if it consumed
     // the key. In vim insert mode Esc is left to the vim extension (→ normal),
@@ -136,6 +146,9 @@ export const ComposerEditor = forwardRef<
     /// the editor sits INSIDE the composer's outlined Paper card (the card owns the
     /// box) — without this the card border + the editor border would double up.
     borderless?: boolean;
+    /// Expanded mode: a tall fixed editing area (~50vh) instead of the compact
+    /// auto-grow (≤40vh). The Zed-style ↗ toggle in the card drives this.
+    expanded?: boolean;
   }
 >(function ComposerEditor(
   {
@@ -150,10 +163,12 @@ export const ComposerEditor = forwardRef<
     placeholder,
     disabled,
     vim,
+    onVimMode,
     onEscape,
     onPasteFiles,
     endInset = 0,
     borderless = false,
+    expanded = false,
   },
   ref,
 ): React.JSX.Element {
@@ -186,6 +201,25 @@ export const ComposerEditor = forwardRef<
   const vimApiRef = useRef<VimApi | null>(null);
 
   const vimExt = useVimExtension(vim ?? false, vimApiRef);
+
+  // Surface the live vim mode to the card's NORMAL/INSERT hint. Once the lazy
+  // vim module has loaded (vimExt truthy → vimApiRef populated), subscribe to the
+  // CM5-compat `vim-mode-change` event and emit the initial mode. No-op when vim
+  // is off or not yet loaded; cleans up on toggle/unmount.
+  const onVimModeRef = useRef(onVimMode);
+  onVimModeRef.current = onVimMode;
+  useEffect(() => {
+    if (!(vim ?? false) || !vimExt) return undefined;
+    const view = cmRef.current?.view;
+    const cm = view ? vimApiRef.current?.getCM(view) : null;
+    if (!cm?.on) return undefined;
+    const handler = (e: VimModeEvent): void => {
+      onVimModeRef.current?.(e.mode ?? "normal");
+    };
+    cm.on("vim-mode-change", handler);
+    onVimModeRef.current?.(cm.state?.vim?.insertMode ? "insert" : "normal");
+    return (): void => cm.off?.("vim-mode-change", handler);
+  }, [vim, vimExt]);
 
   // A held send-chord that unmounts mid-press must not leave its timer running.
   useEffect(() => (): void => {
@@ -471,8 +505,8 @@ export const ComposerEditor = forwardRef<
         theme="none"
         basicSetup={false}
         extensions={extensions}
-        minHeight="24px"
-        maxHeight="40vh"
+        minHeight={expanded ? "48vh" : "24px"}
+        maxHeight={expanded ? "48vh" : "40vh"}
         indentWithTab={false}
       />
     </Box>

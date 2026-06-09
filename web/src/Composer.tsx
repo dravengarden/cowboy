@@ -43,6 +43,7 @@ import {
   Bolt,
   ChevronRight,
   Close,
+  CloseFullscreen,
   DragIndicator,
   DriveFileMoveOutlined,
   EditNoteOutlined,
@@ -50,6 +51,7 @@ import {
   ExpandMore,
   InsertDriveFileOutlined,
   MoreVert,
+  OpenInFull,
   Refresh,
   Send,
   Stop,
@@ -66,6 +68,7 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
+import { toggleComposerExpanded, useComposerExpanded } from "./composerExpand";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
 import {
@@ -152,6 +155,12 @@ function collapseStore(key: string): Store<boolean> {
 // global MuiIconButton theme override (same as the session-list buttons); this
 // only keeps them from shrinking in the flex toolbar row.
 const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
+// Vim hint colour per mode — insert is the "you can type" green, visual the
+// selection amber; normal/anything else falls back to muted text.
+const VIM_MODE_COLOR: Record<string, string> = {
+  insert: "success.main",
+  visual: "warning.main",
+};
 const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
@@ -341,6 +350,11 @@ export function Composer({
   // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
   // pays for it. The reactive setting is flipped by the Settings toggle.
   const vim = useVimSetting();
+  // Expand toggle (desktop only — gated where rendered). Persisted per device.
+  const expanded = useComposerExpanded();
+  // Live vim mode (normal/insert/visual) for the card hint — only meaningful
+  // when vim is on; ComposerEditor pushes changes via onVimMode.
+  const [vimMode, setVimMode] = useState("normal");
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
@@ -605,6 +619,10 @@ export function Composer({
             onSubmit={submit}
             onSaveDraft={saveDraft}
             borderless
+            expanded={expanded}
+            // Reserve a top-right gutter so no line runs under the ↗/↙ expand
+            // toggle the card overlays at its top-right corner.
+            endInset={36}
             // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
             // long-press opens, anchored to that button.
             holdToForce={busy || starting}
@@ -619,6 +637,7 @@ export function Composer({
               ? "Send to resume this session…"
               : "Message the agent…"}
             vim={vim}
+            onVimMode={setVimMode}
             onPasteFiles={addFiles}
             onEscape={(): boolean => {
               // Esc cancels a running turn (via the confirm modal), but only when a
@@ -632,6 +651,31 @@ export function Composer({
               return false;
             }}
           />
+        )}
+        {/* Expand / collapse toggle (Zed-style), top-right INSIDE the card —
+            desktop only (touch keeps the auto-grow textarea; Step 9 extends it).
+            The editor reserves a right gutter (endInset) so text never runs under
+            it. The taller card flows through the existing --composer-h ResizeObserver
+            so the transcript reservation tracks it automatically. */}
+        {!touchInput && (
+          <Tooltip title={expanded ? "Collapse editor" : "Expand editor"}>
+            <IconButton
+              size="small"
+              aria-label={expanded ? "collapse editor" : "expand editor"}
+              onClick={toggleComposerExpanded}
+              sx={{
+                position: "absolute",
+                top: 2,
+                right: 2,
+                zIndex: 1,
+                color: "text.secondary",
+              }}
+            >
+              {expanded
+                ? <CloseFullscreen sx={{ fontSize: "1.1rem" }} />
+                : <OpenInFull sx={{ fontSize: "1.1rem" }} />}
+            </IconButton>
+          </Tooltip>
         )}
         {/* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
             + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
@@ -649,6 +693,31 @@ export function Composer({
             ...TOOLBAR_MIN_H,
           }}
         >
+        {/* Vim mode hint (Zed touch) at the card's bottom-left — desktop + vim
+            only; tracks i/Esc/v live via ComposerEditor's vim-mode-change. */}
+        {!touchInput && vim && (
+          <Box
+            component="span"
+            aria-label={`vim ${vimMode} mode`}
+            sx={{
+              flexShrink: 0,
+              px: 0.625,
+              py: 0.125,
+              borderRadius: 0.5,
+              bgcolor: "action.hover",
+              fontFamily: "monospace",
+              fontSize: "0.6875rem",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              lineHeight: 1.6,
+              textTransform: "uppercase",
+              userSelect: "none",
+              color: VIM_MODE_COLOR[vimMode] ?? "text.secondary",
+            }}
+          >
+            {vimMode}
+          </Box>
+        )}
         <Tooltip title="Slash command / skill">
           <span>
             <IconButton
