@@ -1560,7 +1560,11 @@ function PendingPanel({
       <Stack
         direction="row"
         alignItems="center"
-        sx={{ pl: 0.5, pr: 0.75, py: 0.25 }}
+        // Pin the header to the SAME 44px as the composer input (ComposerTextarea
+        // `MuiInputBase-root` minHeight) so the "N Drafts" bar and the message box
+        // read as the same-height pair. `py: 0` drops the old extra 8px that made
+        // the bar (a 44px icon button + padding) taller than the input.
+        sx={{ pl: 0.5, pr: 0.75, py: 0, minHeight: 44 }}
       >
         <IconButton
           size="small"
