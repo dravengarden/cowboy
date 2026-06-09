@@ -756,7 +756,7 @@ export function useSkills(): SkillView[] {
 export function setInferenceConfig(provider: string, model: string, params?: unknown): void {
   const next = state.inferenceConfig.some((p) => p.provider === provider)
     ? state.inferenceConfig.map((p) => (p.provider === provider ? { ...p, model } : p))
-    : [...state.inferenceConfig, { provider, model, params: params ?? {}, key_set: false }];
+    : [...state.inferenceConfig, { provider, model, params: params ?? {}, key_set: false, models: [] }];
   setState({ ...state, inferenceConfig: next });
   send({ type: "set_inference_config", provider, model, params });
 }
@@ -766,7 +766,8 @@ export function setInferenceConfig(provider: string, model: string, params?: unk
 export function setInferenceSecret(provider: string, apiKey: string): void {
   const next = state.inferenceConfig.some((p) => p.provider === provider)
     ? state.inferenceConfig.map((p) => (p.provider === provider ? { ...p, key_set: true } : p))
-    : [...state.inferenceConfig, { provider, model: "", params: {}, key_set: true }];
+    // Optimistic stub until the daemon broadcasts the real view (with its models).
+    : [...state.inferenceConfig, { provider, model: "", params: {}, key_set: true, models: [] }];
   setState({ ...state, inferenceConfig: next });
   send({ type: "set_inference_secret", provider, api_key: apiKey });
 }

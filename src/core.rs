@@ -786,6 +786,29 @@ pub struct InferenceView {
     pub model: String,
     pub params: serde_json::Value,
     pub key_set: bool,
+    /// Selectable models (id + human label) for this provider — the UI renders the
+    /// model dropdown from THIS, never hardcoding ids (Step 18). Sourced from the
+    /// provider's `ModelSource`; empty for a provider with no known list.
+    pub models: Vec<ModelOption>,
+}
+
+/// One selectable model for a provider's dropdown (the client-facing form of a
+/// `ModelSource::Static` entry).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelOption {
+    pub id: String,
+    pub label: String,
+}
+
+/// The provider's selectable models as wire options. Reads the provider's
+/// `ModelSource` (dynamic by design — ids churn); empty for an unknown provider.
+/// The `/models`-endpoint hook lives on `ModelSource` for when a provider needs it.
+fn provider_models(provider: &str) -> Vec<ModelOption> {
+    let src = match provider {
+        "deepseek" => crate::inference::deepseek::DeepSeek::model_list(),
+        _ => Vec::new(),
+    };
+    src.into_iter().map(|(id, label)| ModelOption { id, label }).collect()
 }
 
 /// Client-facing, owned view of a registered skill (the static `SkillMeta` has
@@ -1283,8 +1306,21 @@ impl Hub {
                 model: e.model.clone(),
                 params: e.params.clone(),
                 key_set: e.api_key.is_some(),
+                models: provider_models(p),
             })
             .collect();
+        // Always surface deepseek (the judge provider) even before it's configured,
+        // so the Info sheet can render its model dropdown + the "set a key" state on
+        // a fresh install. `key_set:false` until a key is stored.
+        if !v.iter().any(|x| x.provider == "deepseek") {
+            v.push(InferenceView {
+                provider: "deepseek".to_owned(),
+                model: crate::inference::deepseek::DEFAULT_MODEL.to_owned(),
+                params: serde_json::json!({}),
+                key_set: false,
+                models: provider_models("deepseek"),
+            });
+        }
         v.sort_by(|a, b| a.provider.cmp(&b.provider));
         v
     }

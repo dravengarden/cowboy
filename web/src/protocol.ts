@@ -189,6 +189,9 @@ export interface InferenceProviderView {
   model: string;
   params: unknown;
   key_set: boolean;
+  /** Selectable models (id + human label) the daemon offers for this provider —
+   *  the model dropdown renders from this, never hardcoding ids (Step 18). */
+  models: { id: string; label: string }[];
 }
 
 /** A registered skill as the daemon exposes it — the prompt template + extraction

@@ -23,13 +23,6 @@ import {
   useSkills,
 } from "./store";
 
-// Static model list for now — Step 18 makes this a data-driven `ModelSource`
-// (optionally fetched from the provider's /models). Ids are data, not control flow.
-const DEEPSEEK_MODELS = [
-  { id: "deepseek-v4-pro", label: "V4 Pro — thinking, most accurate (default)" },
-  { id: "deepseek-v4-flash", label: "V4 Flash — fast & cheap" },
-];
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
   const units = ["KB", "MB", "GB", "TB"];
@@ -106,7 +99,11 @@ function StorageInfoSection(): React.JSX.Element {
 export function InfoContent(): React.JSX.Element {
   const configs = useInferenceConfig();
   const ds = configs.find((c) => c.provider === "deepseek");
-  const model = ds?.model || "deepseek-v4-pro"; // matches Rust DEFAULT_MODEL
+  // Data-driven: the daemon supplies the selectable models (Step 18). Default to
+  // the stored choice, else the first offered model; the literal is only a
+  // last-resort fallback if the config snapshot hasn't arrived yet.
+  const models = ds?.models ?? [];
+  const model = ds?.model || models[0]?.id || "deepseek-v4-pro";
   const keySet = ds?.key_set ?? false;
   const [keyInput, setKeyInput] = useState("");
   const probe = useLastProbe();
@@ -176,7 +173,7 @@ export function InfoContent(): React.JSX.Element {
               onChange={(e): void => setInferenceConfig("deepseek", e.target.value, ds?.params)}
               fullWidth
             >
-              {DEEPSEEK_MODELS.map((m) => (
+              {models.map((m) => (
                 <MenuItem key={m.id} value={m.id}>
                   {m.label}
                 </MenuItem>
