@@ -455,12 +455,12 @@ export function Composer({
         // tap — an earlier `inset − 20px` let them reach into the indicator /
         // rounded-corner zone, which read as "hard to tap" on iPad. Floored to 10px
         // off-device.
-        pt: { xs: 1, sm: 1.5 },
+        pt: { xs: 0.5, sm: 1 },
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
-        // inset, so we drop to a plain gap.
+        // inset, so we drop to a plain (tight) gap.
         pb: navbarAtBottom
-          ? 0.75
+          ? 0.5
           : { xs: "max(env(safe-area-inset-bottom), 10px)", sm: 1.5 },
         pl: `max(env(safe-area-inset-left), ${padding}px)`,
         pr: `max(env(safe-area-inset-right), ${padding}px)`,
@@ -650,7 +650,7 @@ export function Composer({
         alignItems="center"
         spacing={0.5}
         sx={{
-          mt: 0.75,
+          mt: 0.5,
           ml: navGutterMx("left"),
           mr: navGutterMx("right"),
           ...TOOLBAR_MIN_H,
