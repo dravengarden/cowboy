@@ -62,6 +62,7 @@ import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
+import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
@@ -1141,8 +1142,12 @@ function AttachmentPreviews({
         transform: "translateZ(0)",
       }}
     >
-      {attachments.map((a) => (
-        <Box key={a.id} sx={{ position: "relative", flexShrink: 0 }}>
+      {attachments.map((a, i) => (
+        <Box
+          key={a.id}
+          onClick={(): void => openLightbox(attachments, i)}
+          sx={{ position: "relative", flexShrink: 0, cursor: "pointer" }}
+        >
           {a.isImage && a.previewUrl && !failedIds.has(a.id)
             ? (
               <Box
@@ -1189,21 +1194,26 @@ function AttachmentPreviews({
           <IconButton
             aria-label={`remove ${a.name}`}
             size="small"
-            onClick={(): void =>
-              onRemove(a.id)}
+            // INSIDE the top-right corner (not a negative offset): the strip is
+            // `overflowX: auto`, which forces overflow-y to auto too and clipped
+            // the old `top:-8` button. A dark scrim keeps it legible over the
+            // image; stopPropagation so removing doesn't also open the preview.
+            onClick={(e): void => {
+              e.stopPropagation();
+              onRemove(a.id);
+            }}
             sx={{
               position: "absolute",
-              top: -8,
-              right: -8,
-              width: 22,
-              height: 22,
-              bgcolor: "background.paper",
-              border: 1,
-              borderColor: "divider",
-              "&:hover": { bgcolor: "action.hover" },
+              top: 3,
+              right: 3,
+              width: 20,
+              height: 20,
+              color: "#fff",
+              bgcolor: "rgba(0,0,0,0.55)",
+              "&:hover": { bgcolor: "rgba(0,0,0,0.72)" },
             }}
           >
-            <Close sx={{ fontSize: 14 }} />
+            <Close sx={{ fontSize: 13 }} />
           </IconButton>
         </Box>
       ))}
@@ -1211,26 +1221,65 @@ function AttachmentPreviews({
   );
 }
 
-// Compact, read-only attachment summary for a queued prompt row — a paperclip
-// glyph + count, so a queued message that carries images/files reads as such
-// without re-rendering full thumbnails in the cramped queue list.
+// Read-only attachment preview for a parked draft / queued row: actual mini
+// thumbnails (images) + name chips (files), each tapping into the full-screen
+// lightbox. A parked message now SHOWS what it carries instead of a blind
+// "2 attachments" count. Removal is via editing the row, so no × here.
 function QueuedAttachmentChips({
   attachments,
 }: {
   attachments: Attachment[];
 }): React.JSX.Element {
   return (
-    <Stack
-      direction="row"
-      spacing={0.5}
-      alignItems="center"
-      sx={{ color: "text.secondary", mt: 0.25 }}
-    >
-      <AttachFile sx={{ fontSize: 14 }} />
-      <Typography variant="caption">
-        {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
-      </Typography>
-    </Stack>
+    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
+      {attachments.map((a, i) =>
+        a.isImage && a.previewUrl
+          ? (
+            <Box
+              key={a.id}
+              component="img"
+              src={a.previewUrl}
+              alt={a.name}
+              onClick={(): void => openLightbox(attachments, i)}
+              sx={{
+                width: 38,
+                height: 38,
+                objectFit: "cover",
+                borderRadius: 0.75,
+                border: 1,
+                borderColor: "divider",
+                cursor: "pointer",
+                display: "block",
+              }}
+            />
+          )
+          : (
+            <Stack
+              key={a.id}
+              direction="row"
+              spacing={0.5}
+              alignItems="center"
+              onClick={(): void => openLightbox(attachments, i)}
+              sx={{
+                height: 38,
+                maxWidth: 150,
+                px: 0.75,
+                borderRadius: 0.75,
+                border: 1,
+                borderColor: "divider",
+                bgcolor: "action.hover",
+                color: "text.secondary",
+                cursor: "pointer",
+              }}
+            >
+              <InsertDriveFileOutlined sx={{ fontSize: 15, flexShrink: 0 }} />
+              <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
+                {a.name}
+              </Typography>
+            </Stack>
+          )
+      )}
+    </Box>
   );
 }
 

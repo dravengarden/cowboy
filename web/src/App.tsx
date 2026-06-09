@@ -97,6 +97,7 @@ import { ENTER_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { SegmentedPill } from "./SegmentedPill";
 import { ConfirmSendModal } from "./ConfirmSendModal";
+import { ResourceLightbox } from "./ResourceLightbox";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
@@ -1368,6 +1369,7 @@ export function App({
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
             <ConfirmSendModal />
+            <ResourceLightbox />
             <SettingsShell
                 open={settingsOpen}
                 onClose={(): void => setSettingsOpen(false)}
