@@ -817,6 +817,10 @@ const qMut = {
   // queue, matching where the daemon puts it; its wire frame is `submit` with
   // `force: true`, so the daemon also interrupts the running turn.
   forceQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [a.row, ...v.queue] }),
+  // "Jump to front" (no interrupt): same FRONT placement as forceQueue, but its
+  // wire frame is `submit` with `front: true` — the daemon puts it ahead of the
+  // queue WITHOUT cancelling the running turn (runs next after the current turn).
+  frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => ({ ...v, queue: [a.row, ...v.queue] }),
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
 const qStatus = new Map<string, "pending" | "sending" | "failed">();
@@ -844,8 +848,10 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
               content: contentOf(row.text, row.attachments),
               cmid: m.id,
               // `forceQueue` carries the force flag so a reconnect resend still
-              // force-pushes; `addQueue` omits it (normal queue append).
+              // force-pushes; `frontQueue` carries `front` (jump ahead, no
+              // interrupt); `addQueue` omits both (normal queue append).
               ...(m.name === "forceQueue" && { force: true }),
+              ...(m.name === "frontQueue" && { front: true }),
             },
         );
       },
@@ -926,7 +932,9 @@ function qAdd(
   sessionId: string,
   text: string,
   attachments: Attachment[],
-  force = false,
+  // queue placement: "back" (normal append), "front" (jump ahead, no interrupt),
+  // "force" (jump ahead + interrupt the running turn). Ignored for drafts.
+  mode: "back" | "front" | "force" = "back",
 ): void {
   const cmid = newCmid();
   const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid };
@@ -936,7 +944,13 @@ function qAdd(
   // status. `isConnected()` predicts the send's success (same socket check).
   const sent = isConnected();
   qStatus.set(cmid, sent ? "pending" : "failed");
-  const mutator = target === "drafts" ? "addDraft" : force ? "forceQueue" : "addQueue";
+  const mutator = target === "drafts"
+    ? "addDraft"
+    : mode === "force"
+    ? "forceQueue"
+    : mode === "front"
+    ? "frontQueue"
+    : "addQueue";
   store.mutate(mutator, { row }, cmid);
   if (sent) armQTimers(sessionId, cmid);
 }
@@ -1161,7 +1175,27 @@ export function forcePrompt(sessionId: string, text: string, attachments: Attach
     optimisticMessage(sessionId, trimmed, attachments);
   } else {
     // Busy → optimistic FRONT row + `submit { force: true }` (interrupt + run next).
-    qAdd("queue", sessionId, trimmed, attachments, true);
+    qAdd("queue", sessionId, trimmed, attachments, "force");
+  }
+}
+
+/** "Jump to front of queue" (no interrupt): when a turn is in flight with other
+ *  messages already queued, send this prompt to the FRONT of the queue WITHOUT
+ *  cancelling the running turn — it runs next (after the current turn) ahead of
+ *  the rest of the queue. On an idle / empty-queue session there's nothing to
+ *  jump ahead of, so it's just a normal send. Mirrors forcePrompt minus the
+ *  interrupt. */
+export function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): void {
+  const trimmed = text.trimEnd();
+  if (!trimmed.trim() && attachments.length === 0) return;
+  const sess = state.sessions.find((s) => s.id === sessionId);
+  const dispatchable = sess !== undefined
+    && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
+  const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
+  if (dispatchable && queueEmpty) {
+    optimisticMessage(sessionId, trimmed, attachments);
+  } else {
+    qAdd("queue", sessionId, trimmed, attachments, "front");
   }
 }
 

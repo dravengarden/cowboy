@@ -1037,13 +1037,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             content,
             cmid,
             force,
+            front,
         } => {
             if force {
                 // Long-press send: jump to the front of the queue and interrupt the
                 // running turn so it runs next (same end-state as a queued row's
                 // force-push). force_submit returns true when it queued (vs a direct
                 // idle dispatch); only then, and only on a live turn, do we Cancel.
-                let queued = state.hub.force_submit(&session_id, text, content, cmid);
+                let queued = state.hub.force_submit(&session_id, text, content, cmid, true);
                 if queued
                     && matches!(state.hub.status(&session_id), Some(Status::Busy | Status::Starting))
                 {
@@ -1051,6 +1052,12 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 } else {
                     Ok(())
                 }
+            } else if front {
+                // "Jump to front" without interrupting: front-insert so it runs next
+                // after the current turn, ahead of the rest of the queue. Same
+                // front placement as force, but no Cancel.
+                let _ = state.hub.force_submit(&session_id, text, content, cmid, false);
+                Ok(())
             } else {
                 state.hub.submit(&session_id, text, content, cmid);
                 Ok(())

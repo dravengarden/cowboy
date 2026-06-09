@@ -268,8 +268,18 @@ export type Inbound =
   // `prompt` for a direct, un-queued dispatch.) `content` is the ACP block array
   // (empty ⇒ plain text in `text`). See src/core.rs Inbound.
   // `force` = long-press send: jump to the front of the queue + interrupt the
-  // running turn so it runs next (no-op on an idle session).
-  | { type: "submit"; session_id: string; text?: string; content?: ContentBlock[]; cmid?: string; force?: boolean }
+  // running turn so it runs next (no-op on an idle session). `front` = jump to
+  // the front of the queue WITHOUT interrupting (runs next after the current
+  // turn, ahead of the rest of the queue); no-op on an idle/empty-queue session.
+  | {
+    type: "submit";
+    session_id: string;
+    text?: string;
+    content?: ContentBlock[];
+    cmid?: string;
+    force?: boolean;
+    front?: boolean;
+  }
   | { type: "remove_queued"; session_id: string; id: string }
   | {
       type: "edit_queued";

@@ -59,6 +59,7 @@ import {
   Tune,
   Undo,
   VerticalAlignBottom,
+  VerticalAlignTop,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
@@ -85,6 +86,7 @@ import {
   editDraft,
   editQueued,
   forcePrompt,
+  frontPrompt,
   forcePushQueued,
   moveDraft,
   type QueuedMessage,
@@ -186,6 +188,7 @@ function ComposeBar(
     onSaveDraft,
     onCollapse,
     onForcePush,
+    onJumpFront,
   }: {
     readonly dead: boolean;
     readonly sendable: boolean;
@@ -201,6 +204,9 @@ function ComposeBar(
     readonly onCollapse?: (() => void) | undefined;
     /** Receives the ⋮ button so the caller can anchor its force-push confirm. */
     readonly onForcePush?: ((anchor: HTMLElement) => void) | undefined;
+    /** "Jump to front of queue" (no interrupt) — provided only when there's a
+     *  queue to jump ahead of. */
+    readonly onJumpFront?: (() => void) | undefined;
   },
 ): React.JSX.Element {
   // Config dropdowns fold behind the ⚙ toggle — the bar stays one compact row,
@@ -304,7 +310,21 @@ function ComposeBar(
           </Tooltip>
         )}
         {/* Secondary actions are direct buttons on the bar (not folded behind a
-            ⋮ — the user wanted them visible). Force push only while busy/starting. */}
+            ⋮ — the user wanted them visible). Force push only while busy/starting;
+            jump-to-front only when there's a queue. */}
+        {onJumpFront && (
+          <Tooltip title="Jump to front of queue">
+            <span>
+              <IconButton
+                aria-label="jump to front of queue"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onJumpFront}
+              >
+                <VerticalAlignTop />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         {onForcePush && (
           <Tooltip title="Force push">
             <span>
@@ -624,6 +644,17 @@ export function Composer({
     if (!sendable) return;
     haptic();
     forcePrompt(sessionId, text.trimEnd(), attachments);
+    editorRef.current?.clear();
+    setText("");
+    setAttachments([]);
+  }
+  // "Jump to front of queue" (no interrupt): send the composed prompt to the
+  // FRONT of the queue so it runs next after the current turn, ahead of the rest
+  // of the queue. Only meaningful when there's already a queue to jump ahead of.
+  function jumpToFront(): void {
+    if (!sendable || queue.length === 0) return;
+    haptic();
+    frontPrompt(sessionId, text.trimEnd(), attachments);
     editorRef.current?.clear();
     setText("");
     setAttachments([]);
@@ -1167,6 +1198,19 @@ export function Composer({
           Save as draft
           <Kbd keys={`${DRAFT_LABEL}${ENTER_LABEL}`} />
         </MenuItem>
+        {/* Jump ahead of the rest of the queue WITHOUT interrupting the running
+            turn — only useful when there's already a queue, so disabled when it's
+            empty (or there's nothing to send). */}
+        <MenuItem
+          disabled={!sendable || queue.length === 0}
+          onClick={(): void => {
+            setActionsMenu(null);
+            jumpToFront();
+          }}
+        >
+          <VerticalAlignTop fontSize="small" sx={{ mr: 1 }} />
+          Jump to front of queue
+        </MenuItem>
         {(busy || starting) && (
           <MenuItem
             onClick={(): void => {
@@ -1301,6 +1345,12 @@ export function Composer({
               }}
               onForcePush={busy || starting
                 ? (anchor): void => setForceAnchor(anchor)
+                : undefined}
+              onJumpFront={queue.length > 0
+                ? (): void => {
+                  jumpToFront();
+                  setComposeFs(false);
+                }
                 : undefined}
             />
           }

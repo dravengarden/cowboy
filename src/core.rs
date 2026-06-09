@@ -539,6 +539,12 @@ pub enum Inbound {
         /// — it just sends normally. Old clients omit it (defaults false).
         #[serde(default)]
         force: bool,
+        /// "Jump to front" WITHOUT interrupting: insert at the FRONT of the queue
+        /// (runs next after the current turn, ahead of the rest of the queue) but
+        /// do NOT cancel the running turn. Distinct from `force`. No-op on an
+        /// idle/empty-queue session. Old clients omit it (defaults false).
+        #[serde(default)]
+        front: bool,
     },
     /// Drop one queued prompt.
     RemoveQueued { session_id: String, id: String },
@@ -2415,6 +2421,10 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
+        // `true` = also interrupt the running turn (force push). `false` = just
+        // jump to the front of the queue and let the current turn finish first
+        // ("jump to front" / `submit { front: true }`).
+        interrupt_on_busy: bool,
     ) -> bool {
         let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
         let mut dispatch = None;
@@ -2442,10 +2452,11 @@ impl Hub {
                 dispatch = Some(DispatchReq { session_id: session_id.to_owned(), text, content, cmid });
             } else {
                 // Busy / draining / queued ahead → jump to the FRONT so it runs
-                // next, and ask the caller to interrupt the in-flight turn.
+                // next; ask the caller to interrupt the in-flight turn only when
+                // this is a force push (not a no-interrupt "jump to front").
                 let id = self.next_qid();
                 s.queue.insert(0, QueuedMessage { id, text, content, cmid });
-                interrupt = true;
+                interrupt = interrupt_on_busy;
             }
         }
         if cleared_awaiting {
@@ -2563,7 +2574,7 @@ impl Hub {
             return;
         }
         tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), "retry_turn: re-submitting last prompt");
-        let _ = self.force_submit(session_id, prompt, Vec::new(), None);
+        let _ = self.force_submit(session_id, prompt, Vec::new(), None, true);
     }
 
     /// Move a queued prompt back to drafts.
