@@ -704,10 +704,15 @@ export function Composer({
         <Stack
           direction="row"
           alignItems="center"
-          spacing={0.5}
+          // Compact (mobile) is tight, so spread the icons space-evenly across the
+          // whole row (edge padding included → nothing crammed at the right edge),
+          // and @ folds out below to make room. Desktop keeps the tight left group
+          // + config chips + the right-pinned action cluster.
+          spacing={compact ? 0 : 0.5}
           sx={{
             px: 0.5,
             pb: 0.5,
+            ...(compact && { justifyContent: "space-evenly" }),
             ...TOOLBAR_MIN_H,
           }}
         >
@@ -736,18 +741,22 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Reference a file (@)">
-          <span>
-            <IconButton
-              aria-label="reference a file"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => editorRef.current?.insertTrigger("@")}
-            >
-              <AlternateEmail />
-            </IconButton>
-          </span>
-        </Tooltip>
+        {/* @ folds out on compact (mobile) — the row is too tight, and typing
+            "@" raises the same file picker. Desktop keeps the dedicated button. */}
+        {!compact && (
+          <Tooltip title="Reference a file (@)">
+            <span>
+              <IconButton
+                aria-label="reference a file"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => editorRef.current?.insertTrigger("@")}
+              >
+                <AlternateEmail />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         <Tooltip title="Attach image or file">
           <span>
             <IconButton
@@ -829,9 +838,10 @@ export function Composer({
           </IconButton>
         </Tooltip>
 
-        {/* Spacer → the Stop + the send/queue/⋮ action cluster pin to the card's
-            right edge while the left group (triggers + config) stays left. */}
-        <Box sx={{ flex: 1 }} />
+        {/* Spacer (desktop only) → pins the Stop + send/queue/⋮ cluster to the
+            right edge while the left group stays left. On compact the row is
+            space-evenly instead, so the spacer would defeat the even spread. */}
+        {!compact && <Box sx={{ flex: 1 }} />}
         {/* Stop owns the turn while busy — sits just left of the send path. */}
         {busy && (
           <Tooltip title="Stop">
