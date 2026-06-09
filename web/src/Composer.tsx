@@ -279,24 +279,6 @@ export function Composer({
   // at the safe-area inset so a small padding can't tuck the action-row buttons
   // under the landscape notch / rounded corner.
   const { padding } = useReadingSettings();
-  // The action row is CHROME: its edge buttons must line up with the bottom
-  // navbar (hamburger ↔ slash on the left, gear ↔ send on the right), so they
-  // must NOT drift with the reading `padding` the way the input + transcript
-  // prose do (the reported bug — every padding change re-broke the alignment).
-  // The navbar icons sit at the MUI Toolbar gutter (16px xs / 24px sm) + the
-  // safe-area inset. The composer body is already inset by `padding`, so on the
-  // action row we cancel exactly that and re-apply the navbar gutter — pinning it
-  // to the navbar at every padding value (margin = target − current).
-  const navGutterMx = (side: "left" | "right"): { xs: string; sm: string } => ({
-    xs:
-      `calc(env(safe-area-inset-${side}, 0px) + 16px - max(env(safe-area-inset-${side}, 0px), ${
-        String(padding)
-      }px))`,
-    sm:
-      `calc(env(safe-area-inset-${side}, 0px) + 24px - max(env(safe-area-inset-${side}, 0px), ${
-        String(padding)
-      }px))`,
-  });
 
   const busy = status === "busy";
   const starting = status === "starting";
@@ -309,15 +291,6 @@ export function Composer({
   // thread is never permanently unusable just because its agent process ended.
   // An attachment-only prompt (e.g. just a pasted screenshot) is also sendable.
   const sendable = !!text.trim() || attachments.length > 0;
-  // How many ~38px action buttons overlay the input's right edge, so the text
-  // (endInset) reserves room for exactly them. Idle: Send (+ kebab if sendable).
-  // Busy/starting: Queue + kebab (only when sendable). Stop is NOT here — it lives
-  // back in the toolbar at its original place (the input shows send-path only).
-  const actionBtns = busy || starting
-    ? (sendable ? 2 : 0)
-    : 1 + (sendable ? 1 : 0);
-  const actionInset = actionBtns === 0 ? 0 : actionBtns * 38 + 10;
-
   // Read picked / pasted files into ACP content blocks and stage them. Async
   // (FileReader), so previews appear once each file is encoded; unreadable
   // files are silently dropped (filesToAttachments filters them).
@@ -613,7 +586,6 @@ export function Composer({
               ? "Send to resume this session…"
               : "Message the agent…"}
             onPasteFiles={addFiles}
-            endInset={actionInset}
             borderless
             onEscape={(): boolean => {
               if (busy) {
@@ -632,7 +604,6 @@ export function Composer({
             onChange={setText}
             onSubmit={submit}
             onSaveDraft={saveDraft}
-            endInset={actionInset}
             borderless
             // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
             // long-press opens, anchored to that button.
@@ -662,121 +633,22 @@ export function Composer({
             }}
           />
         )}
-        {/* Overlaid actions at the input's bottom-right (inside the border),
-            mirroring a pending row: primary Send/Queue, Stop while busy, and a ⋮
-            kebab for the secondary actions (Save draft / Force push). */}
-        <Box
+        {/* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
+            + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
+            cluster pinned to the card's right edge. This replaces BOTH the old
+            separate toolbar strip below the input AND the absolute send overlay —
+            one cohesive card. `px`/`pb` (not the nav gutters) inset the row to the
+            card's own edges. */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.5}
           sx={{
-            position: "absolute",
-            right: 4,
-            // Vertically CENTERED in the input (top:0/bottom:0 + center), so on a
-            // single-line message the send button sits on the text's line instead
-            // of dropping to the bottom-right corner.
-            top: 0,
-            bottom: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 0.25,
+            px: 0.5,
+            pb: 0.5,
+            ...TOOLBAR_MIN_H,
           }}
         >
-          {busy || starting
-            ? (
-              <>
-                {sendable && (
-                  <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
-                    <IconButton
-                      ref={queueBtnRef}
-                      size="small"
-                      color="primary"
-                      aria-label="queue message"
-                      sx={{ transition: "transform .12s", ...(holding && { transform: "scale(1.12)" }) }}
-                      onClick={onQueueClick}
-                      onPointerDown={onForcePointerDown}
-                      onPointerMove={onForcePointerMove}
-                      onPointerUp={clearLongPress}
-                      onPointerLeave={clearLongPress}
-                      onPointerCancel={clearLongPress}
-                    >
-                      <Send fontSize="small" />
-                    </IconButton>
-                    {holding && (
-                      <Box
-                        component="svg"
-                        aria-hidden
-                        viewBox="0 0 40 40"
-                        sx={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          pointerEvents: "none",
-                          transform: "rotate(-90deg)",
-                        }}
-                      >
-                        <Box
-                          component="circle"
-                          cx="20"
-                          cy="20"
-                          r="18"
-                          fill="none"
-                          strokeLinecap="round"
-                          sx={{
-                            stroke: "primary.main",
-                            strokeWidth: 2.5,
-                            strokeDasharray: 113,
-                            strokeDashoffset: 113,
-                            animation: "lpfill 450ms linear forwards",
-                            "@keyframes lpfill": { to: { strokeDashoffset: 0 } },
-                          }}
-                        />
-                      </Box>
-                    )}
-                  </Box>
-                )}
-              </>
-            )
-            : (
-              <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
-                <span>
-                  <IconButton
-                    size="small"
-                    color="primary"
-                    aria-label="send"
-                    disabled={!sendable}
-                    onClick={submit}
-                  >
-                    <Send fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-          {sendable && (
-            <IconButton
-              size="small"
-              aria-label="more actions"
-              onClick={(e): void => setActionsMenu(e.currentTarget)}
-            >
-              <MoreVert fontSize="small" />
-            </IconButton>
-          )}
-        </Box>
-      </Paper>
-      {
-        /* Action row below the input: slash-command / @-reference triggers + the
-          agent config (chips on desktop, bottom sheet on touch). The Send / Queue
-          / Stop / draft moved INTO the input overlay above (kebab for secondary). */
-      }
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={0.5}
-        sx={{
-          mt: 0.25,
-          ml: navGutterMx("left"),
-          mr: navGutterMx("right"),
-          ...TOOLBAR_MIN_H,
-        }}
-      >
         <Tooltip title="Slash command / skill">
           <span>
             <IconButton
@@ -904,25 +776,110 @@ export function Composer({
           </IconButton>
         </Tooltip>
 
-        {/* Stop stays in its ORIGINAL place — the toolbar's far right — not in the
-            input overlay (the input shows only the send path). A spacer pushes it
-            to the edge while the agent owns the turn. */}
+        {/* Spacer → the Stop + the send/queue/⋮ action cluster pin to the card's
+            right edge while the left group (triggers + config) stays left. */}
+        <Box sx={{ flex: 1 }} />
+        {/* Stop owns the turn while busy — sits just left of the send path. */}
         {busy && (
-          <>
-            <Box sx={{ flex: 1 }} />
-            <Tooltip title="Stop">
-              <IconButton
-                color="error"
-                aria-label="cancel"
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => setCancelOpen(true)}
-              >
-                <Stop />
-              </IconButton>
-            </Tooltip>
-          </>
+          <Tooltip title="Stop">
+            <IconButton
+              color="error"
+              aria-label="cancel"
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => setCancelOpen(true)}
+            >
+              <Stop />
+            </IconButton>
+          </Tooltip>
         )}
-      </Stack>
+        {/* Primary action: Send (idle) / Queue (busy — long-press → force push).
+            Moved here from the old absolute overlay so the whole composer is one
+            card; the long-press force-push ring + haptics are preserved. */}
+        {busy || starting
+          ? (
+            sendable && (
+              <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
+                <IconButton
+                  ref={queueBtnRef}
+                  color="primary"
+                  aria-label="queue message"
+                  sx={{
+                    ...TOOLBAR_ICON_BTN,
+                    transition: "transform .12s",
+                    ...(holding && { transform: "scale(1.12)" }),
+                  }}
+                  onClick={onQueueClick}
+                  onPointerDown={onForcePointerDown}
+                  onPointerMove={onForcePointerMove}
+                  onPointerUp={clearLongPress}
+                  onPointerLeave={clearLongPress}
+                  onPointerCancel={clearLongPress}
+                >
+                  <Send fontSize="small" />
+                </IconButton>
+                {holding && (
+                  <Box
+                    component="svg"
+                    aria-hidden
+                    viewBox="0 0 40 40"
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      pointerEvents: "none",
+                      transform: "rotate(-90deg)",
+                    }}
+                  >
+                    <Box
+                      component="circle"
+                      cx="20"
+                      cy="20"
+                      r="18"
+                      fill="none"
+                      strokeLinecap="round"
+                      sx={{
+                        stroke: "primary.main",
+                        strokeWidth: 2.5,
+                        strokeDasharray: 113,
+                        strokeDashoffset: 113,
+                        animation: "lpfill 450ms linear forwards",
+                        "@keyframes lpfill": { to: { strokeDashoffset: 0 } },
+                      }}
+                    />
+                  </Box>
+                )}
+              </Box>
+            )
+          )
+          : (
+            <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
+              <span>
+                <IconButton
+                  color="primary"
+                  aria-label="send"
+                  disabled={!sendable}
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={submit}
+                >
+                  <Send fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+        {/* ⋮ secondary actions (Save draft / keyboard force-push), kept beside the
+            send path so the input overlay no longer carries it. */}
+        {sendable && (
+          <IconButton
+            aria-label="more actions"
+            sx={TOOLBAR_ICON_BTN}
+            onClick={(e): void => setActionsMenu(e.currentTarget)}
+          >
+            <MoreVert fontSize="small" />
+          </IconButton>
+        )}
+        </Stack>
+      </Paper>
       {
         /* The input overlay's ⋮ kebab — secondary actions that used to sit in the
           toolbar (Save draft) + the keyboard-only force-push, now discoverable. */
