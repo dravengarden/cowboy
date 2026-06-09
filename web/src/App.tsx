@@ -875,6 +875,11 @@ export function App({
                 borderColor: "divider",
                 flexShrink: 0,
                 gap: 0.5,
+                // Match the right pane's AppBar Toolbar EXACTLY (it overrides the
+                // dense 48px down to 44), so the sidebar header's bottom border lines
+                // up with the chat header's edge instead of sitting 4px lower.
+                minHeight: 44,
+                "@media (min-width: 600px)": { minHeight: 44 },
                 // Installed desktop PWA (manifest `display_override:
                 // window-controls-overlay`): the browser's title bar is gone and
                 // content reaches the window's top edge. macOS overlays its window
