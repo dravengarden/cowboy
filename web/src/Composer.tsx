@@ -930,11 +930,11 @@ export function Composer({
             </Tooltip>
           )}
         {/* ⋮ secondary actions (Save draft / keyboard force-push). Always rendered
-            (disabled when empty) so the toolbar's icon COUNT never changes with
-            input content — only the busy-state Stop is added/removed. */}
+            AND always clickable so the toolbar's icon COUNT never changes with input
+            content — only the busy-state Stop is added/removed. Disable is per-item
+            (inside the menu), not on the ⋮ itself, so the menu always opens. */}
         <IconButton
           aria-label="more actions"
-          disabled={!sendable}
           sx={TOOLBAR_ICON_BTN}
           onClick={(e): void => setActionsMenu(e.currentTarget)}
         >
@@ -956,6 +956,7 @@ export function Composer({
         transformOrigin={{ vertical: "bottom", horizontal: "right" }}
       >
         <MenuItem
+          disabled={!sendable}
           onClick={(): void => {
             saveDraft();
             setActionsMenu(null);
