@@ -284,6 +284,7 @@ function SessionList({
     onRequestInfo,
     onRequestRename,
     autoResumeDefault,
+    loaded,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -293,6 +294,10 @@ function SessionList({
     onRequestInfo: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
     autoResumeDefault: boolean;
+    // True once the first session list has arrived over the WS. Until then the
+    // list is genuinely UNKNOWN (not "empty") — distinguishing the two avoids the
+    // false "No sessions yet." flash on a reload before the snapshot lands.
+    loaded: boolean;
 }): React.JSX.Element {
     // Per-row kebab Menu anchor + target. Standard Material list-row
     // pattern: trailing IconButton with MoreVert opens a Menu containing
@@ -432,7 +437,7 @@ function SessionList({
                         color="text.secondary"
                         sx={{ p: 2, textAlign: "center" }}
                     >
-                        No sessions yet.
+                        {loaded ? "No sessions yet." : "Loading…"}
                     </Typography>
                 )}
             </List>
@@ -845,6 +850,7 @@ export function App({
             onRequestInfo={(s): void => setPendingInfo(s)}
             onRequestRename={(s): void => setPendingRename(s)}
             autoResumeDefault={autoResumeDefaultOn}
+            loaded={sessionsLoaded}
         />
     );
 
@@ -1318,16 +1324,27 @@ export function App({
                                 maxWidth: "calc(100% - 48px)",
                             }}
                         >
-                            <Typography color="text.secondary">
-                                No session selected.
-                            </Typography>
-                            <Button
-                                variant="contained"
-                                startIcon={<Add />}
-                                onClick={(): void => setDialogOpen(true)}
-                            >
-                                New session
-                            </Button>
+                            {sessionsLoaded
+                                ? (
+                                    <>
+                                        <Typography color="text.secondary">
+                                            No session selected.
+                                        </Typography>
+                                        <Button
+                                            variant="contained"
+                                            startIcon={<Add />}
+                                            onClick={(): void => setDialogOpen(true)}
+                                        >
+                                            New session
+                                        </Button>
+                                    </>
+                                )
+                                : (
+                                    // Until the WS snapshot lands, the list is unknown — show
+                                    // "Loading…" not the empty "No session selected." CTA, so a
+                                    // reload never flashes a false "create your first session".
+                                    <Typography color="text.secondary">Loading…</Typography>
+                                )}
                         </Stack>
                     </Box>
                 )}

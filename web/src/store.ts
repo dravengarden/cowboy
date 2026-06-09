@@ -509,6 +509,18 @@ function openSocket(): void {
     // `sync_patch` that follows drops them from pending once confirmed.
     for (const entry of syncClients.values()) entry.resend();
     for (const store of qClients.values()) store.resend();
+    // The daemon pushes the session snapshot exactly once, right after connect.
+    // If that first frame is somehow lost (a WKWebView reload race), the UI would
+    // sit at "Loading…" forever — the socket is open, so no reconnect fires. Net:
+    // if the snapshot hasn't landed a few seconds after open, close to force a
+    // fresh reconnect (→ a fresh snapshot). No-op once any list has arrived.
+    if (!state.sessionsLoaded) {
+      setTimeout(() => {
+        if (socket === ws && ws.readyState === WebSocket.OPEN && !state.sessionsLoaded) {
+          ws.close();
+        }
+      }, 6000);
+    }
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
     try {
