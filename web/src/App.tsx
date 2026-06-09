@@ -93,7 +93,7 @@ import {
 } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
-import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
+import { ConnectionBanner, DetentSheet, ThemeModeControl, useAnyDetentSheetOpen } from "./_shell";
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL } from "./platform";
@@ -704,6 +704,11 @@ export function App({
     // `forceSheet`), so a tablet's bottom navbar gets bottom-up modals too
     // rather than centered dialogs.
     const navbarAtBottom = useNavbarAtBottom();
+    // A full-screen frosted COVER sheet (compose/edit/settings) bleeds the app's
+    // own frosted navbar/composer chrome through it as a bright blob (double
+    // frosting). Fade that chrome out while ANY sheet is open so the cover shows
+    // only the uniformly-dimmed transcript — consistent top color, like Settings.
+    const anySheetOpen = useAnyDetentSheetOpen();
     // Floating-glass bottom (bottom-navbar mode): the composer + navbar float as
     // frosted overlays over a full-height transcript. Publish their measured
     // heights as CSS vars on the column so the transcript reserves that space
@@ -1101,6 +1106,10 @@ export function App({
                         // Bottom mode's strip sits alone at the top, so keep it high.
                         zIndex: navbarAtBottom ? ((t) => t.zIndex.appBar) : 1,
                         pointerEvents: "none",
+                        // Hide under an open cover sheet — else this frosted strip
+                        // bleeds through as a bright band under the status bar.
+                        opacity: anySheetOpen ? 0 : 1,
+                        transition: "opacity 200ms ease",
                         // Frosted / matte glass (磨砂): a milkier tint diffuses the content
                         // rather than showing it clearly; the heavy blur + `saturate` add
                         // the iOS-material vibrancy that reads as thick frosted glass.
@@ -1147,6 +1156,10 @@ export function App({
                                 : "var(--composer-h, 0px)",
                             zIndex: 1,
                             pointerEvents: "none",
+                            // Hide under an open cover sheet — its own frosted surface
+                            // replaces this chrome; leaving it on double-frosts.
+                            opacity: anySheetOpen ? 0 : 1,
+                            transition: "opacity 200ms ease",
                             // Milkier than a clear pane + heavy blur + saturate → thick
                             // iOS frosted material; content scrolling under it diffuses
                             // (not shows) through the blur. Up-shadow + top hairline give
