@@ -1053,8 +1053,12 @@ export function Composer({
       {composeFs && (
         <DetentSheet
           open
-          cover
+          // Solid non-cover sheet (NOT cover/frosted) to match the Settings sheet
+          // exactly — a clean opaque surface that sits below the status bar with a
+          // rounded top, no translucent-bleed boundaries. surfaceColor dims +
+          // restores the status bar like BottomSheet does.
           ariaLabel="Compose message"
+          surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
             // pb lifts the footer above the on-screen keyboard (--kb-inset, set on
@@ -2050,6 +2054,7 @@ function PendingRow({
   // tall editor so a long queued message edits comfortably without ballooning the
   // queue panel inline. ONE editor is mounted at a time (inline XOR overlay), both
   // driving the shared `draft` — so there's no uncontrolled-editor desync.
+  const theme = useTheme();
   const [overlayOpen, setOverlayOpen] = useState(false);
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   useLayoutEffect(() => {
@@ -2192,8 +2197,10 @@ function PendingRow({
         {overlayOpen && (
           <DetentSheet
             open
-            cover
+            // Solid non-cover sheet (matches the compose + Settings sheets) — clean
+            // opaque surface below the status bar, no translucent-bleed boundaries.
             ariaLabel="Edit message"
+            surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
             // phone), so a grab-dismiss abandons the edit rather than dropping to a
