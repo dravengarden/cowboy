@@ -353,19 +353,6 @@ function ComposeBar(
             </span>
           </Tooltip>
         )}
-        {onCollapse && (
-          <Tooltip title="Exit fullscreen">
-            <span>
-              <IconButton
-                aria-label="exit fullscreen"
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onCollapse}
-              >
-                <CloseFullscreen />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
         <Tooltip title="Send">
           <span>
             <IconButton
@@ -379,6 +366,19 @@ function ComposeBar(
             </IconButton>
           </span>
         </Tooltip>
+        {onCollapse && (
+          <Tooltip title="Exit fullscreen">
+            <span>
+              <IconButton
+                aria-label="exit fullscreen"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onCollapse}
+              >
+                <CloseFullscreen />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
       </Stack>
     </Stack>
   );
