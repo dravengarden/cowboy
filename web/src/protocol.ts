@@ -47,6 +47,10 @@ export interface SessionMeta {
   /** True when the last turn was judged as having COMPLETED the task (green "done"
    *  overlay). Transient, never persisted. */
   done?: boolean;
+  /** True while the async confirm-detect L2 judge is in flight for the last turn
+   *  (between the provisional hold and the verdict). Drives the pill's "Judging…"
+   *  loading state. Transient, never persisted. */
+  judging?: boolean;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.

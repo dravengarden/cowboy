@@ -601,6 +601,8 @@ impl SessionRow {
             // precedence, and the next turn re-judges + re-persists.
             awaiting_user: self.awaiting_user,
             done: self.done,
+            // Transient — a restored session is never mid-judge.
+            judging: false,
         }
     }
 }

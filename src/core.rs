@@ -224,6 +224,13 @@ pub struct SessionMeta {
     /// turn starts (a stale value is harmless — busy/crashed take overlay priority).
     #[serde(default)]
     pub done: bool,
+    /// True while the async confirm-detect L2 judge is IN FLIGHT for the last
+    /// turn (between the provisional hold and the verdict landing). Drives the
+    /// pill's "Judging…" loading state so the purple "Waiting for your reply"
+    /// doesn't flash prematurely. Transient — never persisted, resets to false on
+    /// restart; `serde(default)` covers old clients + the restore path.
+    #[serde(default)]
+    pub judging: bool,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -1143,6 +1150,7 @@ impl Hub {
             auto_resume: None, // inherit the global default until overridden
             awaiting_user: false,
             done: false,
+            judging: false,
         };
         {
             let mut sessions = self.inner.sessions.lock().unwrap();
@@ -1399,6 +1407,26 @@ impl Hub {
         }
     }
 
+    /// Mark a session as mid-judge — the async L2 confirm-detect is in flight, so
+    /// the pill shows "Judging…" instead of prematurely flashing the provisional
+    /// "Waiting for your reply". Broadcast-only (transient, not persisted); no-op
+    /// if the flag is unchanged.
+    fn set_judging(&self, session_id: &str, judging: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock().unwrap();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.judging != judging => {
+                    s.meta.judging = judging;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
     /// Apply a confirm-detect verdict under the `judge_seq` stale-guard: set the
     /// hold to `v.awaiting_user` only if no newer turn-end has superseded `seq`.
     /// Broadcasts and resumes the drain when the hold clears.
@@ -1478,9 +1506,12 @@ impl Hub {
             self.set_awaiting(session_id, false);
             return;
         }
-        // Provisional hold while the async L2 judge runs.
+        // Provisional hold while the async L2 judge runs + flag it judging so the
+        // pill shows "Judging…" rather than the provisional "Waiting for your reply".
         self.set_awaiting(session_id, true);
+        self.set_judging(session_id, true);
         let Some(key) = self.inference_key("deepseek") else {
+            self.set_judging(session_id, false); // never dispatched → not judging
             return; // confirm_key_present() gated us in, but be defensive
         };
         let model = self
@@ -1519,10 +1550,12 @@ impl Hub {
                         latency_ms,
                     });
                     hub.apply_verdict(&sid, seq, &o.verdict);
+                    hub.set_judging(&sid, false);
                 }
                 // Error → STAY held (the provisional true stands).
                 Err(e) => {
                     tracing::warn!(session = %sid, error = %e, "confirm-detect judge failed; holding queue");
+                    hub.set_judging(&sid, false);
                 }
             }
         });

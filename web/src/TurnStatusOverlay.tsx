@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { alpha, Box, IconButton, Stack, Typography } from "@mui/material";
+import { alpha, Box, CircularProgress, IconButton, Stack, Typography } from "@mui/material";
 import type { PaletteColor, Theme } from "@mui/material";
 import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
 import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
@@ -14,7 +14,7 @@ import {
 import { openJudgeInspector } from "./JudgeInspector";
 import { haptic } from "./haptic";
 
-type Kind = "awaiting" | "done" | "interrupted" | "error" | "no-key";
+type Kind = "judging" | "awaiting" | "done" | "interrupted" | "error" | "no-key";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
 // The unified "turn status" overlay (replaces the old AwaitingBar): one floating
@@ -28,15 +28,20 @@ type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
 function deriveKind(args: {
   status: Status;
+  judging: boolean;
   awaitingUser: boolean;
   done: boolean;
   queueLen: number;
   hasKey: boolean;
 }): Kind | null {
-  const { status, awaitingUser, done, queueLen, hasKey } = args;
+  const { status, judging, awaitingUser, done, queueLen, hasKey } = args;
   if (status === "busy" || status === "starting") return null; // working / fresh
   if (status === "crashed") return "error";
   if (status === "interrupted") return "interrupted";
+  // The async judge is in flight: show the loading pill INSTEAD of the provisional
+  // "awaiting" (which the daemon sets at the same moment) so it doesn't flash
+  // purple then settle.
+  if (judging) return "judging";
   if (awaitingUser) return "awaiting";
   if (done) return "done";
   if (!hasKey && queueLen > 0) return "no-key"; // queue held, can't judge
@@ -44,6 +49,7 @@ function deriveKind(args: {
 }
 
 const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
+  judging: { color: "info", label: "Judging…" },
   awaiting: { color: "primary", label: "Waiting for your reply" },
   done: { color: "success", label: "Task complete" },
   interrupted: { color: "warning", label: "Turn interrupted" },
@@ -54,6 +60,7 @@ const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
 export function TurnStatusOverlay({
   sessionId,
   status,
+  judging,
   awaitingUser,
   done,
   queue,
@@ -63,6 +70,7 @@ export function TurnStatusOverlay({
 }: {
   sessionId: string;
   status: Status;
+  judging: boolean;
   awaitingUser: boolean;
   done: boolean;
   queue: { id: string }[];
@@ -72,6 +80,7 @@ export function TurnStatusOverlay({
 }): React.JSX.Element | null {
   const kind = deriveKind({
     status,
+    judging,
     awaitingUser,
     done,
     queueLen: queue.length,
@@ -344,6 +353,13 @@ export function TurnStatusOverlay({
               ].join(", "),
           }}
         >
+          {kind === "judging" && (
+            <CircularProgress
+              size={14}
+              thickness={5}
+              sx={{ color: (t) => tone(t).main, flexShrink: 0 }}
+            />
+          )}
           <Typography
             variant="body2"
             sx={{
