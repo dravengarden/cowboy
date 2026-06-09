@@ -58,7 +58,6 @@ import {
   SwapVert,
   Tune,
   Undo,
-  VerticalAlignBottom,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
@@ -68,6 +67,7 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
+import { DetentSheet } from "./_shell";
 import { toggleComposerExpanded, useComposerExpanded } from "./composerExpand";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
@@ -102,7 +102,6 @@ import { useSortable } from "./useSortable";
 import { getDraft, setDraft } from "./draftStore";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
-import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { originLabel } from "./protocol";
 import type {
   AcpUpdate,
@@ -274,11 +273,6 @@ export function Composer({
     { id: string; toId: string; toTitle: string } | null
   >(null);
   const otherSessions = sessions.filter((s) => s.id !== sessionId);
-  // "Stick to bottom" (auto-scroll) state for this session — owned by the
-  // Transcript's scroll engine, surfaced here as a persistent toggle. Active =
-  // following the latest message; tap while inactive scrolls to the bottom and
-  // resumes following, tap while active stops following.
-  const sticky = useSticky(sessionId);
   // When the navbar sits at the bottom it owns the home-indicator safe area and
   // renders BELOW the composer, so the composer must drop its own bottom inset
   // (otherwise a double gap opens above the bar).
@@ -812,38 +806,9 @@ export function Composer({
             </Stack>
           )}
 
-        {
-          /* Sticky / auto-scroll toggle — rightmost of the left utility group,
-            sitting just before the gap that pushes Send to the far edge. Default
-            ON. Active = primary; inactive = muted. Tap while inactive → scroll to
-            bottom + follow again; tap while active → stop following. The
-            Transcript owns the actual scrolling (stickyStore). */
-        }
-        {
-          /* Hover-only tooltip: on touch a tap focuses the button, and the
-            focus/touch listeners would pop the "Auto-scroll: on" bubble every
-            time you toggle — noise on the most-tapped control. Disable both so
-            the tooltip is desktop-hover only; the button still toggles, and the
-            aria-label keeps it labelled for assistive tech. */
-        }
-        <Tooltip
-          title={sticky
-            ? "Auto-scroll: on"
-            : "Auto-scroll: off — tap to follow"}
-          disableFocusListener
-          disableTouchListener
-        >
-          <IconButton
-            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
-            color={sticky ? "primary" : "default"}
-            sx={TOOLBAR_ICON_BTN}
-            onClick={(): void => sticky
-              ? setSticky(sessionId, false)
-              : requestStickToBottom(sessionId)}
-          >
-            <VerticalAlignBottom />
-          </IconButton>
-        </Tooltip>
+        {/* (The auto-scroll toggle moved OUT of the composer to a "jump to latest"
+            pill on the transcript — it controls the transcript, not the input.
+            See Transcript.JumpToLatestPill.) */}
 
         {/* Spacer → the Stop + the send/queue/⋮ action cluster pin to the card's
             right edge while the left group (triggers + config) stays left. */}
@@ -1936,6 +1901,19 @@ function PendingRow({
   // fires first, so the view already exists here. Focusing from here keeps it
   // inside the gesture and pops the keyboard. (@uiw's own autoFocus wouldn't
   // help: it focuses from a passive useEffect — the same late timing.)
+  // Focused edit overlay (Zed-style ↗): a near-full-screen DetentSheet hosting a
+  // tall editor so a long queued message edits comfortably without ballooning the
+  // queue panel inline. ONE editor is mounted at a time (inline XOR overlay), both
+  // driving the shared `draft` — so there's no uncontrolled-editor desync.
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const overlayEditorRef = useRef<ComposerEditorHandle>(null);
+  useLayoutEffect(() => {
+    if (!overlayOpen) return undefined;
+    // Small delay so the sheet has mounted before we focus (desktop pops the
+    // caret; on touch the keyboard may need one tap — acceptable for an edit).
+    const t = globalThis.setTimeout(() => overlayEditorRef.current?.focusEnd(), 60);
+    return () => globalThis.clearTimeout(t);
+  }, [overlayOpen]);
   useLayoutEffect(() => {
     if (!editing) return undefined;
     // focusEnd, not focus: opening an existing draft/queued message should put
@@ -1969,75 +1947,163 @@ function PendingRow({
       });
     };
     return (
-      <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
-        {editAttachments.length > 0 && (
-          <AttachmentPreviews
-            attachments={editAttachments}
-            onRemove={(id): void =>
-              setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
-          />
-        )}
-        {touchInput
-          ? (
-            <ComposerTextarea
-              ref={editorRef}
-              value={draft}
-              onChange={setDraft}
-              onSubmit={save}
-              sessionId={sessionId}
-              commands={commands}
-              placeholder="Edit queued message…"
-              onPasteFiles={addEditFiles}
-              onEscape={(): boolean => {
-                cancel();
-                return true;
-              }}
-            />
-          )
-          : (
-            <ComposerEditor
-              ref={editorRef}
-              // The edit box mounts fresh each time the row enters edit mode (the
-              // read-mode branch has no ComposerEditor), so this seeds the current
-              // text. Uncontrolled thereafter — onChange feeds `draft`, never back
-              // into `value` (mirrors the main composer's latch-avoidance).
-              value={message.text}
-              onChange={setDraft}
-              onSubmit={save}
-              sessionId={sessionId}
-              commands={commands}
-              placeholder="Edit queued message…"
-              onPasteFiles={addEditFiles}
-              onEscape={(): boolean => {
-                cancel();
-                return true;
-              }}
+      <>
+        <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
+          {editAttachments.length > 0 && (
+            <AttachmentPreviews
+              attachments={editAttachments}
+              onRemove={(id): void =>
+                setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
             />
           )}
-        <Stack
-          direction="row"
-          spacing={0.5}
-          justifyContent="flex-end"
-          sx={{ mt: 0.5 }}
-        >
-          <Button
-            size="small"
-            color="inherit"
-            onClick={cancel}
-            sx={{ textTransform: "none" }}
+          {/* Inline editor — hidden while the focused overlay owns the edit so only
+              ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */}
+          {!overlayOpen &&
+            (touchInput
+              ? (
+                <ComposerTextarea
+                  ref={editorRef}
+                  value={draft}
+                  borderless
+                  onChange={setDraft}
+                  onSubmit={save}
+                  sessionId={sessionId}
+                  commands={commands}
+                  placeholder="Edit queued message…"
+                  onPasteFiles={addEditFiles}
+                  onEscape={(): boolean => {
+                    cancel();
+                    return true;
+                  }}
+                />
+              )
+              : (
+                <ComposerEditor
+                  ref={editorRef}
+                  // Seeds from the shared `draft` and re-mounts on overlay close, so
+                  // it reflects edits made in the overlay. Uncontrolled thereafter —
+                  // onChange feeds `draft`, never back into `value`.
+                  value={draft}
+                  borderless
+                  onChange={setDraft}
+                  onSubmit={save}
+                  sessionId={sessionId}
+                  commands={commands}
+                  placeholder="Edit queued message…"
+                  onPasteFiles={addEditFiles}
+                  onEscape={(): boolean => {
+                    cancel();
+                    return true;
+                  }}
+                />
+              ))}
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={0.5}
+            sx={{ mt: 0.5 }}
           >
-            Cancel
-          </Button>
-          <Button
-            size="small"
-            variant="contained"
-            onClick={save}
-            sx={{ textTransform: "none" }}
+            <Tooltip title="Expand editor">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="expand editor"
+                  onClick={(): void => setOverlayOpen(true)}
+                >
+                  <OpenInFull fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Box sx={{ flex: 1 }} />
+            <Button
+              size="small"
+              color="inherit"
+              onClick={cancel}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={save}
+              sx={{ textTransform: "none" }}
+            >
+              Save
+            </Button>
+          </Stack>
+        </Paper>
+        {/* Focused edit overlay (Step 7): a near-full-screen frosted sheet hosting a
+            tall editor for comfortable long-message editing without ballooning the
+            queue panel. Save/Cancel end the row edit; grab-dismiss returns to the
+            inline box (the shared `draft` is preserved). */}
+        {overlayOpen && (
+          <DetentSheet
+            open
+            cover
+            ariaLabel="Edit message"
+            onClose={(): void => setOverlayOpen(false)}
+            header={
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                Edit message
+              </Typography>
+            }
+            footer={
+              <Stack direction="row" justifyContent="flex-end" spacing={1}>
+                <Button
+                  color="inherit"
+                  onClick={(): void => {
+                    cancel();
+                    setOverlayOpen(false);
+                  }}
+                  sx={{ textTransform: "none" }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="contained"
+                  onClick={(): void => {
+                    save();
+                    setOverlayOpen(false);
+                  }}
+                  sx={{ textTransform: "none" }}
+                >
+                  Save
+                </Button>
+              </Stack>
+            }
           >
-            Save
-          </Button>
-        </Stack>
-      </Paper>
+            <Box sx={{ p: 1.5 }}>
+              {editAttachments.length > 0 && (
+                <AttachmentPreviews
+                  attachments={editAttachments}
+                  onRemove={(id): void =>
+                    setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
+                />
+              )}
+              <ComposerEditor
+                ref={overlayEditorRef}
+                value={draft}
+                borderless
+                expanded
+                onChange={setDraft}
+                onSubmit={(): void => {
+                  save();
+                  setOverlayOpen(false);
+                }}
+                sessionId={sessionId}
+                commands={commands}
+                placeholder="Edit message…"
+                onPasteFiles={addEditFiles}
+                onEscape={(): boolean => {
+                  setOverlayOpen(false);
+                  return true;
+                }}
+              />
+            </Box>
+          </DetentSheet>
+        )}
+      </>
     );
   }
   // Secondary actions (everything but the primary Send / Force). Defined once,

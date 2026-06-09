@@ -42,6 +42,7 @@ import {
   ExpandLess,
   ExpandMore,
   Folder,
+  KeyboardArrowDown,
   Psychology,
   Refresh,
   Search,
@@ -63,12 +64,55 @@ import {
 } from "./store";
 import { useReadingSettings } from "./readingSettings";
 import {
+  requestStickToBottom,
   resetSticky,
   setSticky,
   useScrollNonce,
+  useSticky,
 } from "./stickyStore";
 import { ImageLightbox } from "./_shell";
 import { Sheet } from "./Sheet";
+
+// "Jump to latest" pill — the transcript-side replacement for the composer's old
+// sticky/auto-scroll toggle. Shown ONLY when the user has scrolled away from the
+// bottom (stickyStore says not-following); tapping asks the transcript to scroll
+// to the bottom + resume following. Reads the SAME per-session sticky state the
+// scroll handler maintains — no hand-rolled scrollTop math (the column-reverse
+// transcript writes scrollTop only to mean "go to bottom"). Its own tiny component
+// so a sticky toggle re-renders just the pill, not the whole transcript.
+function JumpToLatestPill(
+  { sessionId }: { sessionId: string },
+): React.JSX.Element | null {
+  const sticky = useSticky(sessionId);
+  if (sticky) return null;
+  return (
+    <Box
+      sx={{
+        position: "absolute",
+        // Float just above the composer (it owns --composer-h via App's observer)
+        // so the pill never hides behind the input.
+        bottom: "calc(var(--composer-h, 0px) + 12px)",
+        right: 16,
+        zIndex: 3,
+      }}
+    >
+      <Chip
+        clickable
+        icon={<KeyboardArrowDown fontSize="small" />}
+        label="Jump to latest"
+        onClick={(): void => requestStickToBottom(sessionId)}
+        sx={{
+          bgcolor: "background.paper",
+          border: 1,
+          borderColor: "divider",
+          boxShadow: 3,
+          fontWeight: 500,
+          "&:hover": { bgcolor: "background.paper" },
+        }}
+      />
+    </Box>
+  );
+}
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -1515,8 +1559,10 @@ export function Transcript({
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */}
       <SessionStatusBar status={status} />
-      {/* The "scroll to latest" affordance is now the persistent sticky toggle
-          in the composer (stickyStore + Composer), not a transient Fab here. */}
+      {/* Scroll-to-latest affordance: a floating pill at the transcript's
+          bottom-right, shown only when scrolled away from the bottom (self-gated
+          on the per-session sticky state). Replaces the old composer toggle. */}
+      <JumpToLatestPill sessionId={sessionId} />
       {pendingPermission && (
         <PermissionSheet
           sessionId={sessionId}
