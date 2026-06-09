@@ -207,10 +207,6 @@ function ComposeBar(
   // and tapping ⚙ reveals the dropdowns ABOVE the action row.
   const [configOpen, setConfigOpen] = useState(false);
   const hasConfig = showSkeleton || options.length > 0;
-  // Secondary actions (exit fullscreen / save draft / force push) live in a ⋮
-  // overflow menu so the bar stays compact.
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const hasMenu = Boolean(onCollapse) || Boolean(onSaveDraft) || Boolean(onForcePush);
   return (
     <Stack
       direction="column"
@@ -301,64 +297,50 @@ function ComposeBar(
             </span>
           </Tooltip>
         )}
-        <Box sx={{ flex: 1 }} />
-        {hasMenu && (
-          <>
-            <Tooltip title="More actions">
+        {/* Secondary actions are direct buttons on the bar (not folded behind a
+            ⋮ — the user wanted them visible). Force push only while busy/starting. */}
+        {onForcePush && (
+          <Tooltip title="Force push">
+            <span>
               <IconButton
-                aria-label="more actions"
+                color="primary"
+                aria-label="force push"
                 sx={TOOLBAR_ICON_BTN}
-                onClick={(e): void => setMenuAnchor(e.currentTarget)}
+                onClick={(e): void => onForcePush(e.currentTarget)}
               >
-                <MoreVert />
+                <Bolt />
               </IconButton>
-            </Tooltip>
-            <Menu
-              anchorEl={menuAnchor}
-              open={menuAnchor !== null}
-              onClose={(): void => setMenuAnchor(null)}
-              anchorOrigin={{ vertical: "top", horizontal: "right" }}
-              transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-            >
-              {onCollapse && (
-                <MenuItem
-                  onClick={(): void => {
-                    setMenuAnchor(null);
-                    onCollapse();
-                  }}
-                >
-                  <CloseFullscreen fontSize="small" sx={{ mr: 1 }} />
-                  Exit fullscreen
-                </MenuItem>
-              )}
-              {onSaveDraft && (
-                <MenuItem
-                  onClick={(): void => {
-                    setMenuAnchor(null);
-                    onSaveDraft();
-                  }}
-                >
-                  <EditNoteOutlined fontSize="small" sx={{ mr: 1 }} />
-                  Save as draft
-                </MenuItem>
-              )}
-              {onForcePush && (
-                <MenuItem
-                  onClick={(): void => {
-                    // Keep the ⋮ element to anchor the caller's confirm popover,
-                    // then close the menu.
-                    const anchor = menuAnchor;
-                    setMenuAnchor(null);
-                    if (anchor) onForcePush(anchor);
-                  }}
-                >
-                  <Bolt fontSize="small" sx={{ mr: 1 }} />
-                  Force push
-                </MenuItem>
-              )}
-            </Menu>
-          </>
+            </span>
+          </Tooltip>
         )}
+        {onSaveDraft && (
+          <Tooltip title="Save as draft">
+            <span>
+              <IconButton
+                aria-label="save as draft"
+                disabled={!sendable}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onSaveDraft}
+              >
+                <EditNoteOutlined />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {onCollapse && (
+          <Tooltip title="Exit fullscreen">
+            <span>
+              <IconButton
+                aria-label="exit fullscreen"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onCollapse}
+              >
+                <CloseFullscreen />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        <Box sx={{ flex: 1 }} />
         <Tooltip title="Send">
           <span>
             <IconButton
