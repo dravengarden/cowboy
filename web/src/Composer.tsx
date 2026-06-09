@@ -1117,19 +1117,41 @@ export function Composer({
                   </IconButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Options">
-                <span>
-                  <IconButton
-                    aria-label="options"
-                    disabled={dead}
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={(): void => setSheetOpen(true)}
-                  >
-                    <Tune />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <Box sx={{ flex: 1 }} />
+              {/* Config options inline (model / permission / …): the full-screen
+                  compose footer has the width, so expand them here as a scrollable
+                  row instead of folding into a single ⚙ Options button — "as many
+                  usable buttons as possible". flex:1 makes this the flexible middle
+                  so Send stays pinned to the right edge. */}
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={0.5}
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflowX: "auto",
+                  scrollbarWidth: "thin",
+                  "&::-webkit-scrollbar": { height: 6 },
+                }}
+              >
+                {showSkeleton ? <ConfigChipSkeletons /> : (
+                  options.map((opt) => (
+                    <ConfigOptionChip
+                      key={opt.id}
+                      option={opt}
+                      disabled={dead}
+                      onSelect={(value): void => {
+                        send({
+                          type: "set_config_option",
+                          session_id: sessionId,
+                          config_id: opt.id,
+                          value,
+                        });
+                      }}
+                    />
+                  ))
+                )}
+              </Stack>
               <Tooltip title="Send">
                 <span>
                   <IconButton
