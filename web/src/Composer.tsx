@@ -460,7 +460,7 @@ export function Composer({
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain (tight) gap.
         pb: navbarAtBottom
-          ? 0.5
+          ? 0.25
           : { xs: "max(env(safe-area-inset-bottom), 10px)", sm: 1.5 },
         pl: `max(env(safe-area-inset-left), ${padding}px)`,
         pr: `max(env(safe-area-inset-right), ${padding}px)`,

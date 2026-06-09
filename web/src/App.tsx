@@ -1124,6 +1124,11 @@ export function App({
                             borderBottom: navbarAtBottom ? 0 : 1,
                             borderTop: 0,
                             borderColor: "divider",
+                            // Hug the 44px icon row: the dense Toolbar's 48px min-height
+                            // floated the icons with ~2px above, widening the gap to the
+                            // composer's action row. Let the icons drive the height.
+                            minHeight: 44,
+                            "@media (min-width: 600px)": { minHeight: 44 },
                             // Narrow installed PWA: the sidebar has collapsed to a
                             // drawer, so this bar is full-width and the macOS window
                             // controls now overlay ITS left (the hamburger). Inset
