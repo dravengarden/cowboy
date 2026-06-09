@@ -584,10 +584,20 @@ export function Composer({
           strands IME pinyin on iOS — see ComposerTextarea), CodeMirror on
           desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */
       }
-      {/* Input + overlaid actions: the Send/Queue + Stop + ⋮ kebab sit at the
-          input's bottom-right (inside its border), like a pending row. `endInset`
-          reserves text room so nothing runs under them. */}
-      <Box sx={{ position: "relative" }}>
+      {/* The composer CARD (Zed-style): one outlined Paper owning the box — the
+          editor sits borderless inside, the Send/Queue + Stop + ⋮ kebab overlay
+          its bottom-right (`endInset` reserves text room). Transparent fill so it
+          floats over the frosted bottom slab (a solid paper would hide the glass).
+          A flex column so a later step can pin an inline toolbar to the bottom. */}
+      <Paper
+        variant="outlined"
+        sx={{
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          bgcolor: "transparent",
+        }}
+      >
       {touchInput
         ? (
           <ComposerTextarea
@@ -604,6 +614,7 @@ export function Composer({
               : "Message the agent…"}
             onPasteFiles={addFiles}
             endInset={actionInset}
+            borderless
             onEscape={(): boolean => {
               if (busy) {
                 setCancelOpen(true);
@@ -622,6 +633,7 @@ export function Composer({
             onSubmit={submit}
             onSaveDraft={saveDraft}
             endInset={actionInset}
+            borderless
             // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
             // long-press opens, anchored to that button.
             holdToForce={busy || starting}
@@ -748,7 +760,7 @@ export function Composer({
             </IconButton>
           )}
         </Box>
-      </Box>
+      </Paper>
       {
         /* Action row below the input: slash-command / @-reference triggers + the
           agent config (chips on desktop, bottom sheet on touch). The Send / Queue

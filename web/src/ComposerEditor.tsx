@@ -132,6 +132,10 @@ export const ComposerEditor = forwardRef<
     /// Right padding (px) reserved on the editor content so text never runs under
     /// the action buttons the composer overlays at the input's bottom-right.
     endInset?: number;
+    /// Drop the editor's own notched-outline border + hover/focus ring. Used when
+    /// the editor sits INSIDE the composer's outlined Paper card (the card owns the
+    /// box) — without this the card border + the editor border would double up.
+    borderless?: boolean;
   }
 >(function ComposerEditor(
   {
@@ -149,6 +153,7 @@ export const ComposerEditor = forwardRef<
     onEscape,
     onPasteFiles,
     endInset = 0,
+    borderless = false,
   },
   ref,
 ): React.JSX.Element {
@@ -424,35 +429,37 @@ export const ComposerEditor = forwardRef<
         // Clear the overlaid send/kebab buttons at the bottom-right (base 14 + inset).
         ...(endInset > 0 && { pr: `${String(14 + endInset)}px` }),
         cursor: "text",
-        "&:hover .composer-notch": disabled
+        "&:hover .composer-notch": disabled || borderless
           ? {}
           : { borderColor: "text.primary" },
-        "&:focus-within .composer-notch": {
+        "&:focus-within .composer-notch": borderless ? {} : {
           borderColor: "primary.main",
           borderWidth: "2px",
         },
       }}
     >
-      <Box
-        component="fieldset"
-        aria-hidden="true"
-        className="composer-notch"
-        sx={{
-          position: "absolute",
-          inset: 0,
-          m: 0,
-          p: 0,
-          pointerEvents: "none",
-          borderRadius: "inherit",
-          borderStyle: "solid",
-          borderWidth: "1px",
-          borderColor: disabled ? "action.disabled" : restBorder,
-          transition: theme.transitions.create(
-            ["border-color", "border-width"],
-            { duration: theme.transitions.duration.shorter },
-          ),
-        }}
-      />
+      {!borderless && (
+        <Box
+          component="fieldset"
+          aria-hidden="true"
+          className="composer-notch"
+          sx={{
+            position: "absolute",
+            inset: 0,
+            m: 0,
+            p: 0,
+            pointerEvents: "none",
+            borderRadius: "inherit",
+            borderStyle: "solid",
+            borderWidth: "1px",
+            borderColor: disabled ? "action.disabled" : restBorder,
+            transition: theme.transitions.create(
+              ["border-color", "border-width"],
+              { duration: theme.transitions.duration.shorter },
+            ),
+          }}
+        />
+      )}
       <CodeMirror
         ref={cmRef}
         value={value}

@@ -127,6 +127,9 @@ export const ComposerTextarea = forwardRef<
     /// Right padding (px) reserved on the text so it never runs under the action
     /// buttons the composer overlays at the input's bottom-right. 0 when none.
     endInset?: number;
+    /// Drop the TextField's outlined border so the surrounding composer Paper card
+    /// owns the box (no double border). Mirrors ComposerEditor.borderless.
+    borderless?: boolean;
   }
 >(function ComposerTextarea(
   {
@@ -141,6 +144,7 @@ export const ComposerTextarea = forwardRef<
     onEscape,
     onPasteFiles,
     endInset = 0,
+    borderless = false,
   },
   ref,
 ): React.JSX.Element {
@@ -376,6 +380,13 @@ export const ComposerTextarea = forwardRef<
             // Clear the overlaid send/kebab buttons at the bottom-right.
             ...(endInset > 0 && { paddingRight: `${String(endInset)}px` }),
           },
+          // Inside the composer's outlined Paper card the card draws the box, so
+          // drop the TextField's own outline in all three states (rest/hover/focus).
+          ...(borderless && {
+            "& .MuiOutlinedInput-notchedOutline": { border: "none" },
+            "&:hover .MuiOutlinedInput-notchedOutline": { border: "none" },
+            "& .Mui-focused .MuiOutlinedInput-notchedOutline": { border: "none" },
+          }),
         }}
       />
     </Box>
