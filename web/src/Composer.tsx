@@ -1829,6 +1829,15 @@ function PendingRow({
     setConfirmAnchor(null);
   };
   useConfirmEnter(confirmAnchor !== null, confirmForcePush);
+  // Per-row delete confirm. Dropping a queued message / draft is irreversible, so
+  // the × opens this modal instead of deleting on a single tap.
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const doRemove = (): void => {
+    if (kind === "draft") removeDraft(sessionId, message.id);
+    else removeQueued(sessionId, message.id);
+    setConfirmRemove(false);
+  };
+  useConfirmEnter(confirmRemove, doRemove);
   // "running" is the idle-ready state; "exited"/"crashed"/"interrupted" dispatch
   // a revive. Anything else ("busy"/"starting") has an in-flight turn → force push.
   const dispatchable = status === "running" ||
@@ -1979,7 +1988,7 @@ function PendingRow({
         key: "remove",
         label: "Remove",
         icon: <Close fontSize="small" />,
-        onClick: (): void => removeDraft(sessionId, message.id),
+        onClick: (): void => setConfirmRemove(true),
       },
     ]
     : [
@@ -1999,7 +2008,7 @@ function PendingRow({
         key: "remove",
         label: "Remove",
         icon: <Close fontSize="small" />,
-        onClick: (): void => removeQueued(sessionId, message.id),
+        onClick: (): void => setConfirmRemove(true),
       },
     ];
 
@@ -2146,6 +2155,54 @@ function PendingRow({
           </Menu>
         </Box>
       </Stack>
+      <Dialog
+        open={confirmRemove}
+        onClose={(): void => setConfirmRemove(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>
+          {kind === "draft"
+            ? "Delete this draft?"
+            : "Delete this queued message?"}
+        </DialogTitle>
+        {message.text && (
+          <DialogContent>
+            <DialogContentText
+              sx={{
+                display: "-webkit-box",
+                WebkitLineClamp: 3,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {message.text}
+            </DialogContentText>
+          </DialogContent>
+        )}
+        <DialogActions>
+          <Button
+            color="inherit"
+            onClick={(): void => setConfirmRemove(false)}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+            <Kbd keys="Esc" />
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            autoFocus
+            onClick={doRemove}
+            sx={{ textTransform: "none" }}
+          >
+            Delete
+            <Kbd keys={ENTER_LABEL} />
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 }
