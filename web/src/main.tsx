@@ -63,7 +63,14 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       const checkForUpdate = (): void => {
         if (globalThis.document.visibilityState === "visible") void reg.update();
       };
+      // Phones get backgrounded/foregrounded constantly, so visibilitychange
+      // alone refreshes them. A DESKTOP window (incl. the Tauri shell) often
+      // stays open + focused for hours — visibilitychange never fires, so it
+      // would sit on the old bundle until a manual restart (the reported
+      // "desktop auto-update doesn't work"). Poll too: a tiny sw.js fetch every
+      // 60s that only does anything when VERSION actually changed.
       globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+      globalThis.setInterval(checkForUpdate, 60_000);
       checkForUpdate();
     }).catch(() => {});
   });
