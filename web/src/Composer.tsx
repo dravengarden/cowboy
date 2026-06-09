@@ -663,11 +663,14 @@ export function Composer({
                 right: 2,
                 zIndex: 1,
                 color: "text.secondary",
+                // Size the glyph at the BUTTON level so it beats the global
+                // MuiIconButton override (`& .MuiSvgIcon-root: 1.5rem`) — a
+                // per-icon sx loses that specificity battle. rem so it tracks the
+                // reading font-scale like the rest of the chrome.
+                "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
               }}
             >
-              {expanded
-                ? <CloseFullscreen sx={{ fontSize: "1.1rem" }} />
-                : <OpenInFull sx={{ fontSize: "1.1rem" }} />}
+              {expanded ? <CloseFullscreen /> : <OpenInFull />}
             </IconButton>
           </Tooltip>
         )}
@@ -687,31 +690,8 @@ export function Composer({
             ...TOOLBAR_MIN_H,
           }}
         >
-        {/* Vim mode hint (Zed touch) at the card's bottom-left — desktop + vim
-            only; tracks i/Esc/v live via ComposerEditor's vim-mode-change. */}
-        {!touchInput && vim && (
-          <Box
-            component="span"
-            aria-label={`vim ${vimMode} mode`}
-            sx={{
-              flexShrink: 0,
-              px: 0.625,
-              py: 0.125,
-              borderRadius: 0.5,
-              bgcolor: "action.hover",
-              fontFamily: "monospace",
-              fontSize: "0.6875rem",
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              lineHeight: 1.6,
-              textTransform: "uppercase",
-              userSelect: "none",
-              color: VIM_MODE_COLOR[vimMode] ?? "text.secondary",
-            }}
-          >
-            {vimMode}
-          </Box>
-        )}
+        {/* (Vim mode moved OUT of the toolbar into a Zed-style bottom status bar
+            below — see the StatusBar at the card's bottom edge.) */}
         <Tooltip title="Slash command / skill">
           <span>
             <IconButton
@@ -912,6 +892,43 @@ export function Composer({
           <MoreVert fontSize="small" />
         </IconButton>
         </Stack>
+        {/* Zed-style status bar at the card's bottom edge — DESKTOP ONLY (these
+            statuses aren't shown on mobile). A thin strip for editor state; today
+            it carries the vim mode, laid out as a flex row so more statuses
+            (line:col, language, diagnostics, …) can sit beside it later. Rendered
+            only when vim is on, so it never adds an empty strip otherwise. */}
+        {!touchInput && vim && (
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+              px: 1,
+              py: 0.25,
+              minHeight: 22,
+              borderTop: 1,
+              borderColor: "divider",
+              color: "text.secondary",
+              fontFamily: "monospace",
+              fontSize: "0.6875rem",
+              lineHeight: 1.5,
+              userSelect: "none",
+            }}
+          >
+            <Box
+              component="span"
+              aria-label={`vim ${vimMode} mode`}
+              sx={{
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                color: VIM_MODE_COLOR[vimMode] ?? "text.secondary",
+              }}
+            >
+              {vimMode}
+            </Box>
+          </Box>
+        )}
       </Paper>
       {
         /* The input overlay's ⋮ kebab — secondary actions that used to sit in the
