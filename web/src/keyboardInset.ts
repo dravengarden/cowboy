@@ -21,21 +21,47 @@ export function useKeyboardInset(): void {
     const vv = globalThis.visualViewport;
     if (!vv) return undefined;
     const root = globalThis.document.documentElement;
+    const doc = globalThis.document;
     let raf = 0;
+    let timers: number[] = [];
     const apply = (): void => {
       raf = 0;
       const overlap = Math.max(0, globalThis.innerHeight - (vv.offsetTop + vv.height));
       root.style.setProperty("--kb-inset", `${String(Math.round(overlap))}px`);
     };
-    const onChange = (): void => {
+    const applyNow = (): void => {
       if (raf === 0) raf = globalThis.requestAnimationFrame(apply);
     };
-    vv.addEventListener("resize", onChange);
-    vv.addEventListener("scroll", onChange);
-    apply();
+    const clearTimers = (): void => {
+      for (const t of timers) globalThis.clearTimeout(t);
+      timers = [];
+    };
+    // iOS fires visualViewport `resize` DURING the keyboard's open/close
+    // animation, but the FINAL settled frame is routinely missed — leaving
+    // --kb-inset at a mid-animation (often near-zero) value. A sheet that opens
+    // and focuses its field then renders its footer BEHIND the keyboard until the
+    // next event (the "float bar only appears once you start typing" bug). So on a
+    // keyboard-changing event re-measure NOW and again after the animation settles
+    // (~120/300/550ms). focusin/focusout also re-measure: focusing a field is what
+    // raises the keyboard, and its resize can land before the field settles.
+    const schedule = (): void => {
+      applyNow();
+      clearTimers();
+      timers = [120, 300, 550].map((d) => globalThis.setTimeout(apply, d));
+    };
+    vv.addEventListener("resize", schedule);
+    // `scroll` fires every scroll frame and never changes the keyboard height, so
+    // it only needs the cheap immediate re-measure — not the settle timers.
+    vv.addEventListener("scroll", applyNow);
+    doc.addEventListener("focusin", schedule);
+    doc.addEventListener("focusout", schedule);
+    schedule();
     return () => {
-      vv.removeEventListener("resize", onChange);
-      vv.removeEventListener("scroll", onChange);
+      vv.removeEventListener("resize", schedule);
+      vv.removeEventListener("scroll", applyNow);
+      doc.removeEventListener("focusin", schedule);
+      doc.removeEventListener("focusout", schedule);
+      clearTimers();
       if (raf !== 0) globalThis.cancelAnimationFrame(raf);
       root.style.removeProperty("--kb-inset");
     };
