@@ -62,7 +62,6 @@ import {
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
-import { useKeyboardOpen } from "./keyboardInset";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
@@ -165,14 +164,26 @@ const TOOLBAR_MIN_H = {
 } as const;
 
 // The mobile fullscreen compose/edit docked BAR — ONE shared bar so Compose and
-// Edit look + behave identically (Send, not Cancel/Save). A wrapping row of
-// config chips (they FLOW to multiple lines — no horizontal scroll; the
-// fullscreen sheet has the height) sits above the action row: slash / @ / attach
-// on the left, Send (which submits, or saves the edit) on the right. width:100%
-// + the breakout divider make it a full-width docked bar (the shared sheet
-// footer is justify-end, which otherwise clusters it).
+// Edit look + behave identically (Send, not Cancel/Save). Stacked in the sticky
+// docked footer (above the keyboard): attachment thumbnails, then — only when the
+// ⚙ toggle is open — the config dropdowns (folded by default so the bar stays a
+// single compact row), then the action row: slash / @ / attach / ⚙ on the left,
+// Send (submits, or saves the edit) on the right. width:100% + the breakout
+// divider make it a full-width docked bar (the shared sheet footer is
+// justify-end, which otherwise clusters it).
 function ComposeBar(
-  { dead, sendable, onTrigger, onSend, options = [], showSkeleton = false, onConfig, onAttach }: {
+  {
+    dead,
+    sendable,
+    onTrigger,
+    onSend,
+    options = [],
+    showSkeleton = false,
+    onConfig,
+    onAttach,
+    attachments = [],
+    onRemoveAttachment,
+  }: {
     readonly dead: boolean;
     readonly sendable: boolean;
     readonly onTrigger: (trigger: string) => void;
@@ -181,8 +192,14 @@ function ComposeBar(
     readonly showSkeleton?: boolean;
     readonly onConfig?: ((configId: string, value: string | boolean) => void) | undefined;
     readonly onAttach?: (() => void) | undefined;
+    readonly attachments?: Attachment[];
+    readonly onRemoveAttachment?: ((id: string) => void) | undefined;
   },
 ): React.JSX.Element {
+  // Config dropdowns fold behind the ⚙ toggle — the bar stays one compact row,
+  // and tapping ⚙ reveals the dropdowns ABOVE the action row.
+  const [configOpen, setConfigOpen] = useState(false);
+  const hasConfig = showSkeleton || options.length > 0;
   return (
     <Stack
       direction="column"
@@ -195,7 +212,12 @@ function ComposeBar(
         borderTop: (t) => `1px solid ${t.palette.divider}`,
       }}
     >
-      {(showSkeleton || options.length > 0) && (
+      {/* Attachment thumbnails live in the sticky docked bar (above the action
+          row), NOT in the scrolling editor body, so they stay put while you write. */}
+      {attachments.length > 0 && onRemoveAttachment && (
+        <AttachmentPreviews attachments={attachments} onRemove={onRemoveAttachment} />
+      )}
+      {hasConfig && configOpen && (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
           {showSkeleton ? <ConfigChipSkeletons /> : (
             options.map((opt) => (
@@ -249,6 +271,21 @@ function ComposeBar(
                 onClick={onAttach}
               >
                 <AttachFile />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {hasConfig && (
+          <Tooltip title="Options">
+            <span>
+              <IconButton
+                aria-label="options"
+                disabled={dead}
+                color={configOpen ? "primary" : "default"}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => setConfigOpen((o) => !o)}
+              >
+                <Tune />
               </IconButton>
             </span>
           </Tooltip>
@@ -470,10 +507,6 @@ export function Composer({
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
-  // Drives the mobile fullscreen compose sheet's full-screen ↔ content-height
-  // switch: cover while the keyboard's up (writing canvas), snug content-height
-  // when it's dismissed (no stranded bar over an empty full-screen canvas).
-  const keyboardUp = useKeyboardOpen();
 
   function submit(): void {
     if (!sendable) return;
@@ -1183,9 +1216,11 @@ export function Composer({
           // match). When the keyboard is dismissed, drop to a content-height frosted
           // sheet (still `frosted`) so the bar docks snugly under the text instead
           // of stranding at the bottom of an empty full-screen canvas.
+          // Always full-screen frosted glass (the writing canvas) — does NOT
+          // collapse to content-height when the keyboard's dismissed.
           ariaLabel="Compose message"
           frosted
-          cover={keyboardUp}
+          cover
           surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
@@ -1194,6 +1229,8 @@ export function Composer({
               sendable={sendable}
               options={options}
               showSkeleton={showSkeleton}
+              attachments={attachments}
+              onRemoveAttachment={removeAttachment}
               onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
               onAttach={(): void => fileInputRef.current?.click()}
               onConfig={(configId, value): void => {
@@ -1212,12 +1249,6 @@ export function Composer({
           }
         >
           <Box sx={{ p: 1.5 }}>
-            {attachments.length > 0 && (
-              <AttachmentPreviews
-                attachments={attachments}
-                onRemove={removeAttachment}
-              />
-            )}
             <ComposerTextarea
               ref={editorRef}
               value={text}
@@ -1232,10 +1263,7 @@ export function Composer({
               placeholder="Message the agent…"
               onPasteFiles={addFiles}
               borderless
-              // Tall (min 10 rows) while typing to fill the full-screen canvas;
-              // auto-size to content when the keyboard's down so the sheet stays
-              // snug (content-height) rather than a near-empty full screen.
-              expanded={keyboardUp}
+              expanded
               onEscape={(): boolean => {
                 setComposeFs(false);
                 return true;
@@ -2111,9 +2139,6 @@ function PendingRow({
     status === "interrupted";
   // Touch → native textarea (correct IME); desktop → CodeMirror.
   const touchInput = useTouchComposer();
-  // Full-screen while typing, content-height when the keyboard's dismissed —
-  // same as the compose sheet (see useKeyboardOpen).
-  const keyboardUp = useKeyboardOpen();
   // Focus the editor when the row enters edit mode. useLayoutEffect, NOT
   // useEffect: a passive effect runs after paint, outside the tap's user-
   // activation window, so iOS Safari silently refuses to raise the keyboard for
@@ -2277,11 +2302,10 @@ function PendingRow({
         {overlayOpen && (
           <DetentSheet
             open
-            // Full-screen frosted glass while typing, content-height when the
-            // keyboard's dismissed — matches the compose sheet (see useKeyboardOpen).
+            // Always full-screen frosted glass — matches the compose sheet.
             ariaLabel="Edit message"
             frosted
-            cover={keyboardUp}
+            cover
             surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
@@ -2309,6 +2333,9 @@ function PendingRow({
               <ComposeBar
                 dead={false}
                 sendable={!!draft.trim() || editAttachments.length > 0}
+                attachments={editAttachments}
+                onRemoveAttachment={(id): void =>
+                  setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
                 onTrigger={(t): void => overlayEditorRef.current?.insertTrigger(t)}
                 onSend={(): void => {
                   save();
@@ -2318,18 +2345,11 @@ function PendingRow({
             }
           >
             <Box sx={{ p: 1.5 }}>
-              {editAttachments.length > 0 && (
-                <AttachmentPreviews
-                  attachments={editAttachments}
-                  onRemove={(id): void =>
-                    setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
-                />
-              )}
               <ComposerEditor
                 ref={overlayEditorRef}
                 value={draft}
                 borderless
-                expanded={keyboardUp}
+                expanded
                 onChange={setDraft}
                 onSubmit={(): void => {
                   save();
