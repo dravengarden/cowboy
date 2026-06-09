@@ -91,6 +91,8 @@ import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl } from "./_shell";
 import { Sheet } from "./Sheet";
+import { Kbd, useConfirmEnter } from "./Kbd";
+import { ENTER_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { SegmentedPill } from "./SegmentedPill";
 import { ConfirmSendModal } from "./ConfirmSendModal";
@@ -567,6 +569,7 @@ function NewSessionDialog({
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
+                        <Kbd keys="Esc" />
                     </Button>
                     <Button onClick={create} variant="contained">
                         Create
@@ -1909,8 +1912,9 @@ function DeleteSessionShell({
     onClose: () => void;
     onConfirm: () => void;
 }): React.JSX.Element | null {
-    // Hook before the early return (rules of hooks).
+    // Hooks before the early return (rules of hooks).
     const navbarAtBottom = useNavbarAtBottom();
+    useConfirmEnter(session !== null, onConfirm);
     if (!session) return null;
     const surface = originLabel(session.origin);
     return (
@@ -1923,9 +1927,11 @@ function DeleteSessionShell({
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
+                        <Kbd keys="Esc" />
                     </Button>
                     <Button onClick={onConfirm} color="error" variant="contained" autoFocus>
                         Delete
+                        <Kbd keys={ENTER_LABEL} />
                     </Button>
                 </>
             }
@@ -1983,9 +1989,11 @@ function RenameSessionShell({
                 <>
                     <Button onClick={onClose} color="inherit">
                         Cancel
+                        <Kbd keys="Esc" />
                     </Button>
                     <Button onClick={submit} variant="contained" disabled={!canSave}>
                         Save
+                        <Kbd keys={ENTER_LABEL} />
                     </Button>
                 </>
             }

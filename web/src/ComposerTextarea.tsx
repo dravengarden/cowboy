@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
+import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
 
 // True on touch devices (coarse pointer). Computed once — a device doesn't flip
@@ -53,7 +54,10 @@ function computeTrigger(value: string, caret: number): Trigger | null {
   return null;
 }
 
-async function fetchFileOptions(sessionId: string, query: string): Promise<PickerOption[]> {
+async function fetchFileOptions(
+  sessionId: string,
+  query: string,
+): Promise<PickerOption[]> {
   const url = `/api/sessions/${encodeURIComponent(sessionId)}/files?q=${
     encodeURIComponent(query)
   }&limit=20`;
@@ -74,11 +78,18 @@ async function fetchFileOptions(sessionId: string, query: string): Promise<Picke
   }
 }
 
-function slashOptions(commands: AvailableCommand[], query: string): PickerOption[] {
+function slashOptions(
+  commands: AvailableCommand[],
+  query: string,
+): PickerOption[] {
   const q = query.toLowerCase();
   return commands
     .filter((c) => c.name.toLowerCase().includes(q))
-    .map((c) => ({ apply: `/${c.name} `, primary: `/${c.name}`, secondary: c.description }));
+    .map((c) => ({
+      apply: `/${c.name} `,
+      primary: `/${c.name}`,
+      secondary: c.description,
+    }));
 }
 
 // Native-<textarea> composer for TOUCH devices, exposing the same
@@ -104,6 +115,9 @@ export const ComposerTextarea = forwardRef<
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
+    // ⌃⏎ (mac) / Alt+⏎ — park as a draft. Optional: the queued-message edit box
+    // reuses this textarea and has no draft action, so it omits this.
+    onSaveDraft?: () => void;
     sessionId: string;
     commands: () => AvailableCommand[];
     placeholder?: string;
@@ -112,7 +126,18 @@ export const ComposerTextarea = forwardRef<
     onPasteFiles?: (files: File[]) => void;
   }
 >(function ComposerTextarea(
-  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, onEscape, onPasteFiles },
+  {
+    value,
+    onChange,
+    onSubmit,
+    onSaveDraft,
+    sessionId,
+    commands,
+    placeholder,
+    disabled,
+    onEscape,
+    onPasteFiles,
+  },
   ref,
 ): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -145,7 +170,8 @@ export const ComposerTextarea = forwardRef<
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
-  const sync = (v: string, caret: number): void => setTrigger(computeTrigger(v, caret));
+  const sync = (v: string, caret: number): void =>
+    setTrigger(computeTrigger(v, caret));
 
   useEffect(() => {
     if (!trigger) {
@@ -222,10 +248,11 @@ export const ComposerTextarea = forwardRef<
         // a gap is exactly the room available. clamp keeps a usable floor and
         // never exceeds 40vh on a tall/keyboard-less screen. overflowY:auto then
         // makes every option reachable by scrolling within that bound.
-        maxHeight:
-          anchorTop > 0
-            ? `clamp(120px, calc(${String(anchorTop)}px - env(safe-area-inset-top, 0px) - 12px), 40vh)`
-            : "40vh",
+        maxHeight: anchorTop > 0
+          ? `clamp(120px, calc(${
+            String(anchorTop)
+          }px - env(safe-area-inset-top, 0px) - 12px), 40vh)`
+          : "40vh",
         overflowY: "auto",
         borderRadius: 1.5,
         zIndex: 4,
@@ -257,11 +284,20 @@ export const ComposerTextarea = forwardRef<
             "@media (hover: hover)": { "&:hover": { bgcolor: "action.hover" } },
           }}
         >
-          <Typography variant="body2" noWrap sx={{ fontWeight: 500, flexShrink: 0, maxWidth: "60%" }}>
+          <Typography
+            variant="body2"
+            noWrap
+            sx={{ fontWeight: 500, flexShrink: 0, maxWidth: "60%" }}
+          >
             {o.primary}
           </Typography>
           {o.secondary != null && o.secondary !== "" && (
-            <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              sx={{ flex: 1, minWidth: 0 }}
+            >
               {o.secondary}
             </Typography>
           )}
@@ -278,7 +314,10 @@ export const ComposerTextarea = forwardRef<
         value={value}
         onChange={(e): void => {
           onChange(e.target.value);
-          sync(e.target.value, e.target.selectionStart ?? e.target.value.length);
+          sync(
+            e.target.value,
+            e.target.selectionStart ?? e.target.value.length,
+          );
         }}
         onSelect={(e): void => {
           const ta = e.target as HTMLTextAreaElement;
@@ -290,7 +329,12 @@ export const ComposerTextarea = forwardRef<
             setTrigger(null);
             return;
           }
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+          if (e.key === "Enter" && hasDraftMod(e) && onSaveDraft) {
+            // ⌃⏎ / Alt+⏎ → draft (e.g. an iPad with an external keyboard).
+            e.preventDefault();
+            onSaveDraft();
+          } else if (e.key === "Enter" && hasSendMod(e)) {
+            // ⌘⏎ only — Ctrl+Enter no longer sends (it's the draft chord now).
             e.preventDefault();
             onSubmit();
           } else if (e.key === "Escape" && onEscape?.()) {

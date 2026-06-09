@@ -8,8 +8,12 @@ import {
 } from "react";
 import { Box, useTheme } from "@mui/material";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { EditorView, keymap, placeholder as placeholderExt } from "@codemirror/view";
-import { Prec, type Extension } from "@codemirror/state";
+import {
+  EditorView,
+  keymap,
+  placeholder as placeholderExt,
+} from "@codemirror/view";
+import { type Extension, Prec } from "@codemirror/state";
 import {
   autocompletion,
   completionKeymap,
@@ -17,6 +21,7 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
+import { hasDraftMod, hasSendMod } from "./platform";
 import { deleteTokenBackward, tokenChipPlugin } from "./fileTokenWidget";
 import {
   fileCompletionSource,
@@ -48,7 +53,9 @@ export interface ComposerEditorHandle {
 // CM5-compat handle. Lets the Escape keymap (below) decide whether Esc should
 // exit insert mode (vim's job) or bubble up to the app (cancel a running turn).
 type VimApi = {
-  getCM: (view: EditorView) => { state?: { vim?: { insertMode?: boolean } } } | null;
+  getCM: (
+    view: EditorView,
+  ) => { state?: { vim?: { insertMode?: boolean } } } | null;
 };
 
 // Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
@@ -62,8 +69,7 @@ function useVimExtension(
 ): Extension | null {
   const [ext, setExt] = useState<Extension | null>(null);
   useEffect(() => {
-    const desktop =
-      typeof window !== "undefined" &&
+    const desktop = typeof window !== "undefined" &&
       window.matchMedia("(pointer: fine) and (hover: hover)").matches;
     if (!enabled || !desktop) {
       setExt(null);
@@ -98,6 +104,17 @@ export const ComposerEditor = forwardRef<
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
+    // ⌃⏎ (mac) / Alt+⏎ — park the current text as a draft instead of sending.
+    onSaveDraft?: () => void;
+    // Fired when the send chord (⌘⏎) is HELD past the long-press threshold while
+    // `holdToForce` is set (i.e. the session is busy) — the keyboard analog of
+    // holding the Queue button. Opens the force-push confirm.
+    onForceHold?: () => void;
+    // When true (session busy/starting) the send chord distinguishes a tap
+    // (queue, fired on keyup) from a hold (force, fired by the timer). When false
+    // (idle) the send chord fires onSubmit instantly on keydown — zero latency on
+    // the hot path, no hold semantics.
+    holdToForce?: boolean;
     sessionId: string;
     commands: () => AvailableCommand[];
     placeholder?: string;
@@ -114,7 +131,21 @@ export const ComposerEditor = forwardRef<
     onPasteFiles?: (files: File[]) => void;
   }
 >(function ComposerEditor(
-  { value, onChange, onSubmit, sessionId, commands, placeholder, disabled, vim, onEscape, onPasteFiles },
+  {
+    value,
+    onChange,
+    onSubmit,
+    onSaveDraft,
+    onForceHold,
+    holdToForce,
+    sessionId,
+    commands,
+    placeholder,
+    disabled,
+    vim,
+    onEscape,
+    onPasteFiles,
+  },
   ref,
 ): React.JSX.Element {
   const theme = useTheme();
@@ -123,6 +154,18 @@ export const ComposerEditor = forwardRef<
   // stale without rebuilding the editor state on every keystroke.
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
+  const onSaveDraftRef = useRef(onSaveDraft);
+  onSaveDraftRef.current = onSaveDraft;
+  const onForceHoldRef = useRef(onForceHold);
+  onForceHoldRef.current = onForceHold;
+  const holdToForceRef = useRef(holdToForce);
+  holdToForceRef.current = holdToForce;
+  // Long-press-send timing. `holdTimer` is armed on the first send-chord keydown
+  // while busy; if it survives to the threshold it opens the force confirm
+  // (`forceFired` guards against the keyup then also queuing). 450ms matches the
+  // Queue button's hold.
+  const holdTimer = useRef<number | undefined>(undefined);
+  const forceFired = useRef(false);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
   const onEscapeRef = useRef(onEscape);
@@ -134,6 +177,13 @@ export const ComposerEditor = forwardRef<
   const vimApiRef = useRef<VimApi | null>(null);
 
   const vimExt = useVimExtension(vim ?? false, vimApiRef);
+
+  // A held send-chord that unmounts mid-press must not leave its timer running.
+  useEffect(() => (): void => {
+    if (holdTimer.current !== undefined) {
+      globalThis.clearTimeout(holdTimer.current);
+    }
+  }, []);
 
   // On touch devices the composer is pinned to the bottom edge and the on-screen
   // keyboard overlays the layout viewport WITHOUT shrinking it. CM measures space
@@ -171,7 +221,9 @@ export const ComposerEditor = forwardRef<
     clear: (): void => {
       const view = cmRef.current?.view;
       if (!view) return;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+      });
       // iOS repaint nudge. A keystroke makes WebKit repaint the contenteditable,
       // but this PROGRAMMATIC empty doesn't — so after Send the just-sent text
       // lingers on screen even though the doc is now empty (the .cm-content
@@ -254,18 +306,60 @@ export const ComposerEditor = forwardRef<
         icons: false,
         aboveCursor,
       }),
-      // Cmd/Ctrl+Enter sends, at highest precedence so it beats vim's and the
-      // default Enter binding. Plain Enter stays a newline.
+      // Modified-Enter chords. Handled as raw DOM events (not a CM keymap) so we
+      // get keyUP + the OS auto-repeat flag — needed to tell a send TAP from a
+      // long-press FORCE. Plain Enter is untouched here, so the completion picker
+      // and newline behaviour fall through to the keymaps below.
+      //   ⌘⏎ (send chord): idle → submit instantly on keydown; busy → start a
+      //     hold timer, fire force at the threshold, else queue on keyup.
+      //   ⌃⏎ / Alt+⏎ (draft chord): save the current text as a draft.
       Prec.highest(
-        keymap.of([
-          {
-            key: "Mod-Enter",
-            run: (): boolean => {
-              onSubmitRef.current();
+        EditorView.domEventHandlers({
+          keydown: (e): boolean => {
+            if (e.key !== "Enter" || e.shiftKey || e.isComposing) return false;
+            if (hasDraftMod(e)) {
+              e.preventDefault();
+              onSaveDraftRef.current?.();
               return true;
-            },
+            }
+            if (!hasSendMod(e)) return false;
+            e.preventDefault();
+            if (!holdToForceRef.current) {
+              // Idle: instant send. Ignore auto-repeats from a held key.
+              if (!e.repeat) onSubmitRef.current();
+              return true;
+            }
+            // Busy: the first press arms the long-press timer; repeats are ignored
+            // (the timer, not the repeat, decides). Tap vs hold resolves on keyup.
+            if (e.repeat) return true;
+            forceFired.current = false;
+            if (holdTimer.current !== undefined) {
+              globalThis.clearTimeout(holdTimer.current);
+            }
+            holdTimer.current = globalThis.setTimeout(() => {
+              holdTimer.current = undefined;
+              forceFired.current = true;
+              onForceHoldRef.current?.();
+            }, 450);
+            return true;
           },
-        ]),
+          keyup: (e): boolean => {
+            // Releasing the chord before the threshold is a TAP → queue. We watch
+            // the MODIFIER keyup (Meta/Control), not just Enter: macOS suppresses a
+            // key's keyup while ⌘ is held, so the Enter keyup may never arrive — but
+            // the ⌘ (Meta) keyup always does. Without this every ⌘⏎ tap would sit
+            // until the timer fired and wrongly open the force confirm.
+            if (e.key !== "Enter" && e.key !== "Meta" && e.key !== "Control") {
+              return false;
+            }
+            if (holdTimer.current !== undefined) {
+              globalThis.clearTimeout(holdTimer.current);
+              holdTimer.current = undefined;
+              if (!forceFired.current) onSubmitRef.current();
+            }
+            return false;
+          },
+        }),
       ),
       // Backspace removes a whole `@path` / `/skill` chip in one press (above
       // the default char-delete).
@@ -280,7 +374,8 @@ export const ComposerEditor = forwardRef<
           {
             key: "Escape",
             run: (view): boolean => {
-              const insert = vimApiRef.current?.getCM(view)?.state?.vim?.insertMode ?? false;
+              const insert =
+                vimApiRef.current?.getCM(view)?.state?.vim?.insertMode ?? false;
               if (insert) return false;
               return onEscapeRef.current?.() ?? false;
             },
@@ -301,10 +396,9 @@ export const ComposerEditor = forwardRef<
   // positioned `<fieldset>` (MUI's "notched outline" technique) using MUI's own
   // tokens — rest rgba(…,.23), hover text.primary, focus primary.main at 2px —
   // so the 1px→2px focus transition costs no reflow, identical to MUI.
-  const restBorder =
-    theme.palette.mode === "light"
-      ? "rgba(0, 0, 0, 0.23)"
-      : "rgba(255, 255, 255, 0.23)";
+  const restBorder = theme.palette.mode === "light"
+    ? "rgba(0, 0, 0, 0.23)"
+    : "rgba(255, 255, 255, 0.23)";
   return (
     <Box
       onMouseDown={(e): void => {

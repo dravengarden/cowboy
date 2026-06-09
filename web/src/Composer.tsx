@@ -1,4 +1,11 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   alpha,
   Box,
@@ -53,6 +60,8 @@ import {
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
+import { Kbd, useConfirmEnter } from "./Kbd";
+import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
@@ -67,6 +76,7 @@ import {
   discardQueued,
   editDraft,
   editQueued,
+  forcePrompt,
   forcePushQueued,
   moveDraft,
   type QueuedMessage,
@@ -76,7 +86,6 @@ import {
   reorderDrafts,
   reorderQueue,
   requestSendQueued,
-  forcePrompt,
   retryQueued,
   send,
   setQueueEditing,
@@ -100,7 +109,11 @@ import type {
   Status,
 } from "./protocol";
 import { Sheet } from "./Sheet";
-import { persisted, type Store, useStore as usePrefStore } from "./_store/mod.ts";
+import {
+  persisted,
+  type Store,
+  useStore as usePrefStore,
+} from "./_store/mod.ts";
 
 // Per-panel-kind collapse pref (app-level, per-device, never synced). One
 // persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
@@ -109,7 +122,10 @@ const collapseStores = new Map<string, Store<boolean>>();
 function collapseStore(key: string): Store<boolean> {
   let s = collapseStores.get(key);
   if (s === undefined) {
-    s = persisted(key, false, { serialize: (v) => (v ? "1" : "0"), deserialize: (raw) => raw === "1" });
+    s = persisted(key, false, {
+      serialize: (v) => (v ? "1" : "0"),
+      deserialize: (raw) => raw === "1",
+    });
     collapseStores.set(key, s);
   }
   return s;
@@ -185,24 +201,29 @@ export function Composer({
   const draftList = drafts.get(sessionId) ?? [];
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
-  const plan = useMemo(() => latestPlan(timelines.get(sessionId) ?? []), [timelines, sessionId]);
+  const plan = useMemo(() => latestPlan(timelines.get(sessionId) ?? []), [
+    timelines,
+    sessionId,
+  ]);
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
   // Show the plan unless (a) the user dismissed this exact plan, or (b) it's
   // fully complete AND the user has already moved on to a new turn — ACP never
   // signals "plan done", so a finished plan would otherwise linger forever.
-  const showPlan =
-    plan !== null &&
+  const showPlan = plan !== null &&
     plan.key !== dismissedPlanKey &&
-    !(plan.supersededByUserTurn && plan.entries.every((e) => e.status === "completed"));
+    !(plan.supersededByUserTurn &&
+      plan.entries.every((e) => e.status === "completed"));
   // The active session's metadata, surfaced read-only inside the options
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
   // in the always-visible sidebar, so the sheet — and this lookup — only
   // matters on the compact tier.
   const session = sessions.find((s) => s.id === sessionId);
   const inferenceConfig = useInferenceConfig();
-  const hasJudgeKey = inferenceConfig.some((c) => c.provider === "deepseek" && c.key_set);
+  const hasJudgeKey = inferenceConfig.some((c) =>
+    c.provider === "deepseek" && c.key_set
+  );
   const theme = useTheme();
   // Touch tier collapses the agent config into a single Tune button — tapping
   // it opens a BottomSheet with the session info + every config option in one
@@ -221,6 +242,9 @@ export function Composer({
   // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
   const [holding, setHolding] = useState(false);
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
+  // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
+  // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
+  const queueBtnRef = useRef<HTMLButtonElement | null>(null);
   const lpTimer = useRef<number | undefined>(undefined);
   // Set when the hold crosses the threshold, so the trailing click (pointerup
   // fires onClick) is suppressed instead of also queuing the message.
@@ -259,16 +283,22 @@ export function Composer({
   // action row we cancel exactly that and re-apply the navbar gutter — pinning it
   // to the navbar at every padding value (margin = target − current).
   const navGutterMx = (side: "left" | "right"): { xs: string; sm: string } => ({
-    xs: `calc(env(safe-area-inset-${side}, 0px) + 16px - max(env(safe-area-inset-${side}, 0px), ${String(padding)}px))`,
-    sm: `calc(env(safe-area-inset-${side}, 0px) + 24px - max(env(safe-area-inset-${side}, 0px), ${String(padding)}px))`,
+    xs:
+      `calc(env(safe-area-inset-${side}, 0px) + 16px - max(env(safe-area-inset-${side}, 0px), ${
+        String(padding)
+      }px))`,
+    sm:
+      `calc(env(safe-area-inset-${side}, 0px) + 24px - max(env(safe-area-inset-${side}, 0px), ${
+        String(padding)
+      }px))`,
   });
 
   const busy = status === "busy";
   const starting = status === "starting";
   // Interrupted is a dead/resumable state too (a turn cut off by a daemon
   // restart) — the composer treats it like exited/crashed: "send to resume".
-  const dead =
-    status === "exited" || status === "crashed" || status === "interrupted";
+  const dead = status === "exited" || status === "crashed" ||
+    status === "interrupted";
   // A dead session is still sendable: sending resumes it (the daemon revives
   // the agent via session/load — see supervisor.rs). Matches Zed, where a
   // thread is never permanently unusable just because its agent process ended.
@@ -308,7 +338,8 @@ export function Composer({
   // brief window after status flips to `running` but before the agent's
   // first `config_option_update` arrives (otherwise the action row pops
   // empty for ~1 frame and then re-flows when the chips appear).
-  const showSkeleton = !dead && options.length === 0 && (starting || status === "running");
+  const showSkeleton = !dead && options.length === 0 &&
+    (starting || status === "running");
 
   // Slash skills + `@` file references are handled inside the editor now, via
   // CodeMirror autocomplete (see ComposerEditor + composerCompletions): no more
@@ -371,7 +402,9 @@ export function Composer({
   function onForcePointerMove(e: ReactPointerEvent<HTMLButtonElement>): void {
     const s = lpStart.current;
     // A finger that drifts is a scroll/drag, not a press — cancel the hold.
-    if (s !== null && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 10) clearLongPress();
+    if (s !== null && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 10) {
+      clearLongPress();
+    }
   }
   function onQueueClick(): void {
     // A completed long-press already opened the confirm; swallow the trailing
@@ -391,6 +424,10 @@ export function Composer({
     setText("");
     setAttachments([]);
   }
+  // Enter confirms the force-push popover (it doesn't autofocus a button the way
+  // the Dialogs do). Held-⌘⏎ repeats are ignored inside the hook, so the still-
+  // down Enter that opened it can't self-confirm — a fresh press does.
+  useConfirmEnter(forceAnchor !== null, confirmForce);
   useEffect(() => (): void => {
     if (lpTimer.current !== undefined) globalThis.clearTimeout(lpTimer.current);
   }, []);
@@ -433,28 +470,40 @@ export function Composer({
         // the blur and redraw the very seam we removed. Top mode: the composer IS
         // the bottom glass (nothing scrolls under it), so it keeps the full frosted
         // recipe — milkier tint + heavy blur + saturate + top hairline + up-shadow.
-        ...(navbarAtBottom
-          ? { bgcolor: "transparent", borderTop: 0 }
-          : {
-              borderTop: 1,
-              bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.72 : 0.76),
-              backdropFilter: "blur(30px) saturate(200%)",
-              WebkitBackdropFilter: "blur(30px) saturate(200%)",
-              boxShadow: (t) => `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
-            }),
+        ...(navbarAtBottom ? { bgcolor: "transparent", borderTop: 0 } : {
+          borderTop: 1,
+          bgcolor: (t) =>
+            alpha(
+              t.palette.background.default,
+              t.palette.mode === "dark" ? 0.72 : 0.76,
+            ),
+          backdropFilter: "blur(30px) saturate(200%)",
+          WebkitBackdropFilter: "blur(30px) saturate(200%)",
+          boxShadow: (t) =>
+            `0 -1px 24px ${
+              t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"
+            }`,
+        }),
         position: "relative", // anchor for Popper portal placement
       }}
     >
-      {/* Agent plan (very top): a pinned, collapsible progress summary so the
+      {
+        /* Agent plan (very top): a pinned, collapsible progress summary so the
           task's plan stays visible above the queue without scrolling. Hidden
           when there's no plan, when dismissed, or when a finished plan has been
-          superseded by a new turn (see showPlan). */}
+          superseded by a new turn (see showPlan). */
+      }
       {showPlan && plan && (
-        <PlanDock entries={plan.entries} onDismiss={(): void => setDismissedPlanKey(plan.key)} />
+        <PlanDock
+          entries={plan.entries}
+          onDismiss={(): void => setDismissedPlanKey(plan.key)}
+        />
       )}
-      {/* Confirm-detect: the unified turn-status overlay (floats above the
+      {
+        /* Confirm-detect: the unified turn-status overlay (floats above the
           composer). It decides its own visibility — awaiting / done / interrupted
-          / error / no-key, hidden while working — so it's rendered unconditionally. */}
+          / error / no-key, hidden while working — so it's rendered unconditionally. */
+      }
       <TurnStatusOverlay
         sessionId={sessionId}
         status={status}
@@ -465,8 +514,10 @@ export function Composer({
         onFocusComposer={(): void => editorRef.current?.focus()}
         onConfigure={onOpenInfo}
       />
-      {/* Queued prompts (top): while the agent is busy, messages stack here and
-          drain one per turn-end. Hidden when empty. */}
+      {
+        /* Queued prompts (top): while the agent is busy, messages stack here and
+          drain one per turn-end. Hidden when empty. */
+      }
       {queue.length > 0 && (
         <PendingPanel
           kind="queued"
@@ -476,8 +527,10 @@ export function Composer({
           commands={(): AvailableCommand[] => availableCommands}
         />
       )}
-      {/* Drafts (below the queue, above the input): parked messages the user
-          holds and activates on demand. Persisted across reloads. */}
+      {
+        /* Drafts (below the queue, above the input): parked messages the user
+          holds and activates on demand. Persisted across reloads. */
+      }
       {draftList.length > 0 && (
         <PendingPanel
           kind="draft"
@@ -486,19 +539,26 @@ export function Composer({
           status={status}
           commands={(): AvailableCommand[] => availableCommands}
           // Only offer "move" when there's somewhere to move to.
-          onMoveDraft={
-            otherSessions.length > 0 ? (id: string): void => setMoveSrcId(id) : undefined
-          }
+          onMoveDraft={otherSessions.length > 0
+            ? (id: string): void => setMoveSrcId(id)
+            : undefined}
         />
       )}
-      {/* Staged attachments (image thumbnails / file chips) sit above the editor
-          so they read as "what will be sent with this message". */}
+      {
+        /* Staged attachments (image thumbnails / file chips) sit above the editor
+          so they read as "what will be sent with this message". */
+      }
       {attachments.length > 0 && (
-        <AttachmentPreviews attachments={attachments} onRemove={removeAttachment} />
+        <AttachmentPreviews
+          attachments={attachments}
+          onRemove={removeAttachment}
+        />
       )}
-      {/* Hidden multi-file picker driven by the paperclip button. `accept` is
+      {
+        /* Hidden multi-file picker driven by the paperclip button. `accept` is
           left open so any file type can be attached (images embed inline, other
-          files ride as ACP resource blocks — see attachments.ts). */}
+          files ride as ACP resource blocks — see attachments.ts). */
+      }
       <input
         ref={fileInputRef}
         type="file"
@@ -513,62 +573,87 @@ export function Composer({
           // keyboard regardless (platform limit); the user taps to resume.
         }}
       />
-      {/* Input tier: native textarea on touch (CodeMirror's contenteditable
+      {
+        /* Input tier: native textarea on touch (CodeMirror's contenteditable
           strands IME pinyin on iOS — see ComposerTextarea), CodeMirror on
-          desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */}
-      {touchInput ? (
-        <ComposerTextarea
-          ref={editorRef}
-          // Controlled by `text` (a native textarea handles IME under control).
-          value={text}
-          onChange={setText}
-          onSubmit={submit}
-          sessionId={sessionId}
-          commands={(): AvailableCommand[] => availableCommands}
-          placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
-          onPasteFiles={addFiles}
-          onEscape={(): boolean => {
-            if (busy) {
-              setCancelOpen(true);
-              return true;
-            }
-            return false;
-          }}
-        />
-      ) : (
-        <ComposerEditor
-          ref={editorRef}
-          // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
-          value={initialDraftText.current}
-          onChange={setText}
-          onSubmit={submit}
-          sessionId={sessionId}
-          commands={(): AvailableCommand[] => availableCommands}
-          placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
-          vim={vim}
-          onPasteFiles={addFiles}
-          onEscape={(): boolean => {
-            // Esc cancels a running turn (via the confirm modal), but only when a
-            // turn is actually in flight — otherwise leave Esc to the editor. In
-            // vim, ComposerEditor only calls this once we're already in normal
-            // mode, so insert-mode Esc still just exits to normal.
-            if (busy) {
-              setCancelOpen(true);
-              return true;
-            }
-            return false;
-          }}
-        />
-      )}
-      {/* Action row below the input: slash-command / @-reference triggers on
+          desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */
+      }
+      {touchInput
+        ? (
+          <ComposerTextarea
+            ref={editorRef}
+            // Controlled by `text` (a native textarea handles IME under control).
+            value={text}
+            onChange={setText}
+            onSubmit={submit}
+            onSaveDraft={saveDraft}
+            sessionId={sessionId}
+            commands={(): AvailableCommand[] => availableCommands}
+            placeholder={dead
+              ? "Send to resume this session…"
+              : "Message the agent…"}
+            onPasteFiles={addFiles}
+            onEscape={(): boolean => {
+              if (busy) {
+                setCancelOpen(true);
+                return true;
+              }
+              return false;
+            }}
+          />
+        )
+        : (
+          <ComposerEditor
+            ref={editorRef}
+            // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
+            value={initialDraftText.current}
+            onChange={setText}
+            onSubmit={submit}
+            onSaveDraft={saveDraft}
+            // Hold ⌘⏎ while busy → the same force-push confirm the Queue button's
+            // long-press opens, anchored to that button.
+            holdToForce={busy || starting}
+            onForceHold={(): void => {
+              if (!sendable || queueBtnRef.current === null) return;
+              haptic();
+              setForceAnchor(queueBtnRef.current);
+            }}
+            sessionId={sessionId}
+            commands={(): AvailableCommand[] => availableCommands}
+            placeholder={dead
+              ? "Send to resume this session…"
+              : "Message the agent…"}
+            vim={vim}
+            onPasteFiles={addFiles}
+            onEscape={(): boolean => {
+              // Esc cancels a running turn (via the confirm modal), but only when a
+              // turn is actually in flight — otherwise leave Esc to the editor. In
+              // vim, ComposerEditor only calls this once we're already in normal
+              // mode, so insert-mode Esc still just exits to normal.
+              if (busy) {
+                setCancelOpen(true);
+                return true;
+              }
+              return false;
+            }}
+          />
+        )}
+      {
+        /* Action row below the input: slash-command / @-reference triggers on
           the left, then the agent config (inline chips on desktop, the bottom
           sheet on touch), then the send button. Buttons are 40px on touch so
-          the side safe-area floor keeps them off the iPhone corner radius. */}
+          the side safe-area floor keeps them off the iPhone corner radius. */
+      }
       <Stack
         direction="row"
         alignItems="center"
         spacing={0.5}
-        sx={{ mt: 0.75, ml: navGutterMx("left"), mr: navGutterMx("right"), ...TOOLBAR_MIN_H }}
+        sx={{
+          mt: 0.75,
+          ml: navGutterMx("left"),
+          mr: navGutterMx("right"),
+          ...TOOLBAR_MIN_H,
+        }}
       >
         <Tooltip title="Slash command / skill">
           <span>
@@ -578,11 +663,16 @@ export function Composer({
               sx={TOOLBAR_ICON_BTN}
               onClick={(): void => editorRef.current?.insertTrigger("/")}
             >
-              {/* rem, NOT px: the global font scale (useGlobalFontScale) grows
+              {
+                /* rem, NOT px: the global font scale (useGlobalFontScale) grows
                   the app via the root font-size, so the sibling SvgIcons (rem)
                   scale but a px glyph wouldn't. 1.375rem = the old 22px at 100%,
-                  tracking the ~1.5rem medium icons next to it. */}
-              <Box component="span" sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}>
+                  tracking the ~1.5rem medium icons next to it. */
+              }
+              <Box
+                component="span"
+                sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
+              >
                 /
               </Box>
             </IconButton>
@@ -612,65 +702,71 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {compact ? (
-          <Tooltip title="Options">
-            <span>
-              <IconButton
-                aria-label="options"
-                disabled={dead}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => setSheetOpen(true)}
-              >
-                <Tune />
-              </IconButton>
-            </span>
-          </Tooltip>
-        ) : (
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={0.5}
-            sx={{
-              minWidth: 0,
-              overflowX: "auto",
-              scrollbarWidth: "thin",
-              "&::-webkit-scrollbar": { height: 6 },
-            }}
-          >
-            {showSkeleton ? (
-              <ConfigChipSkeletons />
-            ) : (
-              options.map((opt) => (
-                <ConfigOptionChip
-                  key={opt.id}
-                  option={opt}
+        {compact
+          ? (
+            <Tooltip title="Options">
+              <span>
+                <IconButton
+                  aria-label="options"
                   disabled={dead}
-                  onSelect={(value): void => {
-                    send({
-                      type: "set_config_option",
-                      session_id: sessionId,
-                      config_id: opt.id,
-                      value,
-                    });
-                  }}
-                />
-              ))
-            )}
-          </Stack>
-        )}
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={(): void => setSheetOpen(true)}
+                >
+                  <Tune />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )
+          : (
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.5}
+              sx={{
+                minWidth: 0,
+                overflowX: "auto",
+                scrollbarWidth: "thin",
+                "&::-webkit-scrollbar": { height: 6 },
+              }}
+            >
+              {showSkeleton ? <ConfigChipSkeletons /> : (
+                options.map((opt) => (
+                  <ConfigOptionChip
+                    key={opt.id}
+                    option={opt}
+                    disabled={dead}
+                    onSelect={(value): void => {
+                      send({
+                        type: "set_config_option",
+                        session_id: sessionId,
+                        config_id: opt.id,
+                        value,
+                      });
+                    }}
+                  />
+                ))
+              )}
+            </Stack>
+          )}
 
-        {/* Sticky / auto-scroll toggle — rightmost of the left utility group,
+        {
+          /* Sticky / auto-scroll toggle — rightmost of the left utility group,
             sitting just before the gap that pushes Send to the far edge. Default
             ON. Active = primary; inactive = muted. Tap while inactive → scroll to
             bottom + follow again; tap while active → stop following. The
-            Transcript owns the actual scrolling (stickyStore). */}
-        {/* Hover-only tooltip: on touch a tap focuses the button, and the
+            Transcript owns the actual scrolling (stickyStore). */
+        }
+        {
+          /* Hover-only tooltip: on touch a tap focuses the button, and the
             focus/touch listeners would pop the "Auto-scroll: on" bubble every
             time you toggle — noise on the most-tapped control. Disable both so
             the tooltip is desktop-hover only; the button still toggles, and the
-            aria-label keeps it labelled for assistive tech. */}
+            aria-label keeps it labelled for assistive tech. */
+        }
         <Tooltip
-          title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
+          title={sticky
+            ? "Auto-scroll: on"
+            : "Auto-scroll: off — tap to follow"}
           disableFocusListener
           disableTouchListener
         >
@@ -678,10 +774,9 @@ export function Composer({
             aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
             color={sticky ? "primary" : "default"}
             sx={TOOLBAR_ICON_BTN}
-            onClick={(): void =>
-              sticky
-                ? setSticky(sessionId, false)
-                : requestStickToBottom(sessionId)}
+            onClick={(): void => sticky
+              ? setSticky(sessionId, false)
+              : requestStickToBottom(sessionId)}
           >
             <VerticalAlignBottom />
           </IconButton>
@@ -695,15 +790,19 @@ export function Composer({
             color="text.disabled"
             sx={{ whiteSpace: "nowrap", fontSize: 11, flexShrink: 0, mr: 0.5 }}
           >
-            ⌘/Ctrl + Enter = {busy || starting ? "queue" : "send"}
+            {busy || starting
+              ? `${MOD_LABEL}${ENTER_LABEL} queue · hold → force`
+              : `${MOD_LABEL}${ENTER_LABEL} send · ${DRAFT_LABEL}${ENTER_LABEL} draft`}
           </Typography>
         )}
 
-        {/* Draft: park the current message in the Drafts panel (persisted) to
+        {
+          /* Draft: park the current message in the Drafts panel (persisted) to
             send later, instead of sending/queuing now. Shown only when there's
-            something to save. */}
+            something to save. */
+        }
         {sendable && (
-          <Tooltip title="Save as draft">
+          <Tooltip title={`Save as draft (${DRAFT_LABEL}${ENTER_LABEL})`}>
             <IconButton
               aria-label="save as draft"
               sx={TOOLBAR_ICON_BTN}
@@ -714,121 +813,172 @@ export function Composer({
           </Tooltip>
         )}
 
-        {/* Busy: the agent owns the turn, so the primary button is Stop. A
+        {
+          /* Busy: the agent owns the turn, so the primary button is Stop. A
             secondary "queue" button appears once there's text to stack, so the
             enqueue affordance is visible (not just ⌘/Ctrl+Enter). Idle: a single
-            Send button, the unchanged fast path. */}
-        {busy || starting ? (
-          <>
-            {sendable && (
-              <Tooltip title="Queue · hold to force-push">
-                <Box component="span" sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
-                  <IconButton
-                    color="primary"
-                    aria-label="queue message"
-                    sx={{ ...TOOLBAR_ICON_BTN, transition: "transform .12s", ...(holding && { transform: "scale(1.12)" }) }}
-                    onClick={onQueueClick}
-                    onPointerDown={onForcePointerDown}
-                    onPointerMove={onForcePointerMove}
-                    onPointerUp={clearLongPress}
-                    onPointerLeave={clearLongPress}
-                    onPointerCancel={clearLongPress}
+            Send button, the unchanged fast path. */
+        }
+        {busy || starting
+          ? (
+            <>
+              {sendable && (
+                <Tooltip title="Queue · hold to force-push">
+                  <Box
+                    component="span"
+                    sx={{
+                      position: "relative",
+                      display: "inline-flex",
+                      flexShrink: 0,
+                    }}
                   >
-                    <Send />
-                  </IconButton>
-                  {/* Fill ring: a CSS-keyframe sweep over the hold window — pure
-                      compositor (no per-frame React render). Mounts on hold,
-                      unmounts when the threshold fires the confirm. */}
-                  {holding && (
-                    <Box
-                      component="svg"
-                      aria-hidden
-                      viewBox="0 0 40 40"
+                    <IconButton
+                      ref={queueBtnRef}
+                      color="primary"
+                      aria-label="queue message"
                       sx={{
-                        position: "absolute",
-                        inset: 0,
-                        width: "100%",
-                        height: "100%",
-                        pointerEvents: "none",
-                        transform: "rotate(-90deg)",
+                        ...TOOLBAR_ICON_BTN,
+                        transition: "transform .12s",
+                        ...(holding && { transform: "scale(1.12)" }),
                       }}
+                      onClick={onQueueClick}
+                      onPointerDown={onForcePointerDown}
+                      onPointerMove={onForcePointerMove}
+                      onPointerUp={clearLongPress}
+                      onPointerLeave={clearLongPress}
+                      onPointerCancel={clearLongPress}
                     >
+                      <Send />
+                    </IconButton>
+                    {
+                      /* Fill ring: a CSS-keyframe sweep over the hold window — pure
+                      compositor (no per-frame React render). Mounts on hold,
+                      unmounts when the threshold fires the confirm. */
+                    }
+                    {holding && (
                       <Box
-                        component="circle"
-                        cx="20"
-                        cy="20"
-                        r="18"
-                        fill="none"
-                        strokeLinecap="round"
+                        component="svg"
+                        aria-hidden
+                        viewBox="0 0 40 40"
                         sx={{
-                          stroke: "primary.main",
-                          strokeWidth: 2.5,
-                          // 2π·18 ≈ 113 — full circumference, swept to 0.
-                          strokeDasharray: 113,
-                          strokeDashoffset: 113,
-                          animation: "lpfill 450ms linear forwards",
-                          "@keyframes lpfill": { to: { strokeDashoffset: 0 } },
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          pointerEvents: "none",
+                          transform: "rotate(-90deg)",
                         }}
-                      />
-                    </Box>
-                  )}
-                </Box>
-              </Tooltip>
-            )}
-            {busy && (
-              <Tooltip title="Stop">
+                      >
+                        <Box
+                          component="circle"
+                          cx="20"
+                          cy="20"
+                          r="18"
+                          fill="none"
+                          strokeLinecap="round"
+                          sx={{
+                            stroke: "primary.main",
+                            strokeWidth: 2.5,
+                            // 2π·18 ≈ 113 — full circumference, swept to 0.
+                            strokeDasharray: 113,
+                            strokeDashoffset: 113,
+                            animation: "lpfill 450ms linear forwards",
+                            "@keyframes lpfill": {
+                              to: { strokeDashoffset: 0 },
+                            },
+                          }}
+                        />
+                      </Box>
+                    )}
+                  </Box>
+                </Tooltip>
+              )}
+              {busy && (
+                <Tooltip title="Stop">
+                  <IconButton
+                    color="error"
+                    aria-label="cancel"
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={(): void => setCancelOpen(true)}
+                  >
+                    <Stop />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </>
+          )
+          : (
+            <Tooltip title={`Send (${MOD_LABEL}${ENTER_LABEL})`}>
+              <span>
                 <IconButton
-                  color="error"
-                  aria-label="cancel"
+                  color="primary"
+                  aria-label="send"
+                  disabled={!sendable}
                   sx={TOOLBAR_ICON_BTN}
-                  onClick={(): void => setCancelOpen(true)}
+                  onClick={submit}
                 >
-                  <Stop />
+                  <Send />
                 </IconButton>
-              </Tooltip>
-            )}
-          </>
-        ) : (
-          <Tooltip title="Send (⌘/Ctrl + Enter)">
-            <span>
-              <IconButton
-                color="primary"
-                aria-label="send"
-                disabled={!sendable}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={submit}
-              >
-                <Send />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
+              </span>
+            </Tooltip>
+          )}
       </Stack>
-      {/* Force-push confirm — opened by a completed long-press on Queue. Anchored
+      {
+        /* Force-push confirm — opened by a completed long-press on Queue. Anchored
           to the button, rising above it. Confirm interrupts the running turn and
-          runs this prompt next (skipping the queue). */}
+          runs this prompt next (skipping the queue). */
+      }
       <Popover
         open={forceAnchor !== null}
         anchorEl={forceAnchor}
         onClose={(): void => setForceAnchor(null)}
         anchorOrigin={{ vertical: "top", horizontal: "center" }}
         transformOrigin={{ vertical: "bottom", horizontal: "center" }}
-        slotProps={{ paper: { sx: { mt: -1, maxWidth: 268, borderRadius: 2 } } }}
+        slotProps={{
+          paper: { sx: { mt: -1, maxWidth: 268, borderRadius: 2 } },
+        }}
       >
         <Box sx={{ p: 1.5 }}>
-          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            alignItems="center"
+            sx={{ mb: 0.5 }}
+          >
             <Bolt fontSize="small" color="primary" />
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Force push</Typography>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              Force push
+            </Typography>
           </Stack>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.5 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", lineHeight: 1.5 }}
+          >
             Interrupt the current turn and run this now, skipping the queue.
           </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1.5 }}>
-            <Button size="small" color="inherit" onClick={(): void => setForceAnchor(null)}>
+          <Stack
+            direction="row"
+            justifyContent="flex-end"
+            spacing={1}
+            sx={{ mt: 1.5 }}
+          >
+            <Button
+              size="small"
+              color="inherit"
+              onClick={(): void => setForceAnchor(null)}
+            >
               Cancel
+              <Kbd keys="Esc" />
             </Button>
-            <Button size="small" variant="contained" startIcon={<Bolt />} onClick={confirmForce}>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<Bolt />}
+              onClick={confirmForce}
+            >
               Force push
+              <Kbd keys={ENTER_LABEL} />
             </Button>
           </Stack>
         </Box>
@@ -851,10 +1001,12 @@ export function Composer({
           }}
         />
       )}
-      {/* Confirm before stopping a running turn. The Stop button is destructive
+      {
+        /* Confirm before stopping a running turn. The Stop button is destructive
           (the in-flight turn ends), so a single click/Esc shouldn't trigger it.
           The Stop action is autoFocused so Enter confirms; Esc dismisses (MUI
-          Dialog default), so a stray second Esc backs out rather than cancelling. */}
+          Dialog default), so a stray second Esc backs out rather than cancelling. */
+      }
       <Dialog
         open={cancelOpen}
         onClose={(): void => setCancelOpen(false)}
@@ -875,6 +1027,7 @@ export function Composer({
             sx={{ textTransform: "none" }}
           >
             Keep running
+            <Kbd keys="Esc" />
           </Button>
           <Button
             color="error"
@@ -887,12 +1040,15 @@ export function Composer({
             sx={{ textTransform: "none" }}
           >
             Stop
+            <Kbd keys={ENTER_LABEL} />
           </Button>
         </DialogActions>
       </Dialog>
-      {/* Move-draft destination picker + undo snackbar. Owned here (not in the
+      {
+        /* Move-draft destination picker + undo snackbar. Owned here (not in the
           drafts panel) so the snackbar survives when moving the LAST draft
-          unmounts that panel. */}
+          unmounts that panel. */
+      }
       <Sheet
         open={moveSrcId !== null}
         onClose={(): void => setMoveSrcId(null)}
@@ -987,48 +1143,54 @@ function AttachmentPreviews({
     >
       {attachments.map((a) => (
         <Box key={a.id} sx={{ position: "relative", flexShrink: 0 }}>
-          {a.isImage && a.previewUrl && !failedIds.has(a.id) ? (
-            <Box
-              component="img"
-              src={a.previewUrl}
-              alt={a.name}
-              onError={(): void =>
-                setFailedIds((prev) => new Set(prev).add(a.id))}
-              sx={{
-                width: 56,
-                height: 56,
-                objectFit: "cover",
-                borderRadius: 1,
-                border: 1,
-                borderColor: "divider",
-                display: "block",
-              }}
-            />
-          ) : (
-            <Stack
-              direction="row"
-              spacing={0.75}
-              alignItems="center"
-              sx={{
-                height: 56,
-                maxWidth: 180,
-                px: 1,
-                borderRadius: 1,
-                border: 1,
-                borderColor: "divider",
-                bgcolor: "action.hover",
-              }}
-            >
-              <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.secondary", flexShrink: 0 }} />
-              <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
-                {a.name}
-              </Typography>
-            </Stack>
-          )}
+          {a.isImage && a.previewUrl && !failedIds.has(a.id)
+            ? (
+              <Box
+                component="img"
+                src={a.previewUrl}
+                alt={a.name}
+                onError={(): void =>
+                  setFailedIds((prev) => new Set(prev).add(a.id))}
+                sx={{
+                  width: 56,
+                  height: 56,
+                  objectFit: "cover",
+                  borderRadius: 1,
+                  border: 1,
+                  borderColor: "divider",
+                  display: "block",
+                }}
+              />
+            )
+            : (
+              <Stack
+                direction="row"
+                spacing={0.75}
+                alignItems="center"
+                sx={{
+                  height: 56,
+                  maxWidth: 180,
+                  px: 1,
+                  borderRadius: 1,
+                  border: 1,
+                  borderColor: "divider",
+                  bgcolor: "action.hover",
+                }}
+              >
+                <InsertDriveFileOutlined
+                  fontSize="small"
+                  sx={{ color: "text.secondary", flexShrink: 0 }}
+                />
+                <Typography variant="caption" noWrap sx={{ minWidth: 0 }}>
+                  {a.name}
+                </Typography>
+              </Stack>
+            )}
           <IconButton
             aria-label={`remove ${a.name}`}
             size="small"
-            onClick={(): void => onRemove(a.id)}
+            onClick={(): void =>
+              onRemove(a.id)}
             sx={{
               position: "absolute",
               top: -8,
@@ -1058,7 +1220,12 @@ function QueuedAttachmentChips({
   attachments: Attachment[];
 }): React.JSX.Element {
   return (
-    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ color: "text.secondary", mt: 0.25 }}>
+    <Stack
+      direction="row"
+      spacing={0.5}
+      alignItems="center"
+      sx={{ color: "text.secondary", mt: 0.25 }}
+    >
       <AttachFile sx={{ fontSize: 14 }} />
       <Typography variant="caption">
         {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
@@ -1101,13 +1268,14 @@ function OptimisticDraftRow({
         bgcolor: failed
           ? alpha(t.palette.error.main, 0.06)
           : sending
-            ? alpha(t.palette.primary.main, 0.05)
-            : "background.paper",
+          ? alpha(t.palette.primary.main, 0.05)
+          : "background.paper",
         // Coloured leading edge marks the row's state at a glance: red = failed,
         // primary = in flight (mirrors the failed affordance so "sending" reads
         // as clearly as "failed", not as a near-invisible text shimmer).
         ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
-        ...(sending && !failed && { borderLeft: `3px solid ${t.palette.primary.main}` }),
+        ...(sending && !failed &&
+          { borderLeft: `3px solid ${t.palette.primary.main}` }),
       })}
     >
       {sending && (
@@ -1128,7 +1296,8 @@ function OptimisticDraftRow({
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
             ...(sending && {
-              background: `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
+              background:
+                `linear-gradient(90deg, ${t.palette.text.secondary} 0%, ${t.palette.text.secondary} 35%, ${t.palette.primary.main} 50%, ${t.palette.text.secondary} 65%, ${t.palette.text.secondary} 100%)`,
               backgroundSize: "200% 100%",
               WebkitBackgroundClip: "text",
               backgroundClip: "text",
@@ -1197,6 +1366,11 @@ function ConfirmButton({
   onConfirm: () => void;
 }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const confirm = (): void => {
+    onConfirm();
+    setAnchor(null);
+  };
+  useConfirmEnter(anchor !== null, confirm);
   return (
     <>
       <Button
@@ -1231,18 +1405,17 @@ function ConfirmButton({
               sx={{ textTransform: "none" }}
             >
               Cancel
+              <Kbd keys="Esc" />
             </Button>
             <Button
               size="small"
               variant="contained"
               color={confirmColor}
-              onClick={(): void => {
-                onConfirm();
-                setAnchor(null);
-              }}
+              onClick={confirm}
               sx={{ textTransform: "none" }}
             >
               {confirmLabel}
+              <Kbd keys={ENTER_LABEL} />
             </Button>
           </Stack>
         </Box>
@@ -1310,15 +1483,18 @@ function PendingPanel({
   const sortable = useSortable({
     ids: items.map((m) => m.id),
     onReorder: (order) =>
-      kind === "queued" ? reorderQueue(sessionId, order) : reorderDrafts(sessionId, order),
-    onDragStart:
       kind === "queued"
-        ? (): void => {
-            const head = items[0];
-            if (head) setQueueEditing(sessionId, head.id);
-          }
-        : undefined,
-    onDragEnd: kind === "queued" ? (): void => setQueueEditing(sessionId, null) : undefined,
+        ? reorderQueue(sessionId, order)
+        : reorderDrafts(sessionId, order),
+    onDragStart: kind === "queued"
+      ? (): void => {
+        const head = items[0];
+        if (head) setQueueEditing(sessionId, head.id);
+      }
+      : undefined,
+    onDragEnd: kind === "queued"
+      ? (): void => setQueueEditing(sessionId, null)
+      : undefined,
   });
   const noun = kind === "queued" ? "Queued Message" : "Draft";
   return (
@@ -1340,24 +1516,33 @@ function PendingPanel({
         containerName: "pendingPanel",
       }}
     >
-      <Stack direction="row" alignItems="center" sx={{ pl: 0.5, pr: 0.75, py: 0.25 }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        sx={{ pl: 0.5, pr: 0.75, py: 0.25 }}
+      >
         <IconButton
           size="small"
           aria-label={collapsed ? "expand" : "collapse"}
           onClick={toggleCollapsed}
           sx={{ flexShrink: 0 }}
         >
-          {collapsed ? <ChevronRight fontSize="small" /> : <ExpandMore fontSize="small" />}
+          {collapsed
+            ? <ChevronRight fontSize="small" />
+            : <ExpandMore fontSize="small" />}
         </IconButton>
         <Typography
           variant="caption"
           sx={{ fontWeight: 600, flex: 1, minWidth: 0, cursor: "pointer" }}
           onClick={toggleCollapsed}
         >
-          {count} {noun}{count === 1 ? "" : "s"}
+          {count} {noun}
+          {count === 1 ? "" : "s"}
         </Typography>
-        {/* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
-            only shown) with 2+ rows. Primary-tinted while active. */}
+        {
+          /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
+            only shown) with 2+ rows. Primary-tinted while active. */
+        }
         {count >= 2 && (
           <IconButton
             size="small"
@@ -1382,11 +1567,9 @@ function PendingPanel({
         )}
         <ConfirmButton
           label="Clear All"
-          message={
-            kind === "queued"
-              ? `Clear all ${String(count)} queued messages?`
-              : `Clear all ${String(count)} drafts?`
-          }
+          message={kind === "queued"
+            ? `Clear all ${String(count)} queued messages?`
+            : `Clear all ${String(count)} drafts?`}
           confirmLabel="Clear all"
           confirmColor="error"
           muted
@@ -1423,11 +1606,13 @@ function PendingPanel({
                 alignItems="center"
                 spacing={0.5}
               >
-                {/* Leading grip — only in reorder mode (off by default so rows
+                {
+                  /* Leading grip — only in reorder mode (off by default so rows
                     reclaim the width), and never on the row being edited (the edit
                     field owns the row then) nor on an optimistic row. A real
                     IconButton so the drag area stays a fixed tap target even as
-                    the glyph scales with the font. */}
+                    the glyph scales with the font. */
+                }
                 {reordering && editingId !== m.id && !optimistic && (
                   <IconButton
                     {...sortable.handleProps(m.id)}
@@ -1438,21 +1623,23 @@ function PendingPanel({
                   </IconButton>
                 )}
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  {optimistic ? (
-                    <OptimisticDraftRow sessionId={sessionId} message={m} />
-                  ) : (
-                    <PendingRow
-                      kind={kind}
-                      sessionId={sessionId}
-                      message={m}
-                      status={status}
-                      commands={commands}
-                      editing={editingId === m.id}
-                      onEdit={(): void => setEditingId(m.id)}
-                      onEditDone={(): void => setEditingId(null)}
-                      onMove={onMoveDraft ? (): void => onMoveDraft(m.id) : undefined}
-                    />
-                  )}
+                  {optimistic
+                    ? <OptimisticDraftRow sessionId={sessionId} message={m} />
+                    : (
+                      <PendingRow
+                        kind={kind}
+                        sessionId={sessionId}
+                        message={m}
+                        status={status}
+                        commands={commands}
+                        editing={editingId === m.id}
+                        onEdit={(): void => setEditingId(m.id)}
+                        onEditDone={(): void => setEditingId(null)}
+                        onMove={onMoveDraft
+                          ? (): void => onMoveDraft(m.id)
+                          : undefined}
+                      />
+                    )}
                 </Box>
               </Stack>
             );
@@ -1479,7 +1666,8 @@ function ClampedText({ text }: { text: string }): React.JSX.Element {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || expanded) return undefined;
-    const measure = (): void => setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    const measure = (): void =>
+      setOverflowing(el.scrollHeight > el.clientHeight + 1);
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -1493,14 +1681,12 @@ function ClampedText({ text }: { text: string }): React.JSX.Element {
           typography: "body2",
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
-          ...(expanded
-            ? {}
-            : {
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }),
+          ...(expanded ? {} : {
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }),
         }}
       >
         {text}
@@ -1589,10 +1775,14 @@ function PendingRow({
   const rowRef = useRef<HTMLDivElement>(null);
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
+  const confirmForcePush = (): void => {
+    forcePushQueued(sessionId, message.id);
+    setConfirmAnchor(null);
+  };
+  useConfirmEnter(confirmAnchor !== null, confirmForcePush);
   // "running" is the idle-ready state; "exited"/"crashed"/"interrupted" dispatch
   // a revive. Anything else ("busy"/"starting") has an in-flight turn → force push.
-  const dispatchable =
-    status === "running" ||
+  const dispatchable = status === "running" ||
     status === "exited" ||
     status === "crashed" ||
     status === "interrupted";
@@ -1623,8 +1813,9 @@ function PendingRow({
   }, [editing]);
   if (editing) {
     const save = (): void => {
-      if (kind === "draft") editDraft(sessionId, message.id, draft, editAttachments);
-      else editQueued(sessionId, message.id, draft, editAttachments);
+      if (kind === "draft") {
+        editDraft(sessionId, message.id, draft, editAttachments);
+      } else editQueued(sessionId, message.id, draft, editAttachments);
       onEditDone();
     };
     const cancel = (): void => {
@@ -1647,42 +1838,49 @@ function PendingRow({
               setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
           />
         )}
-        {touchInput ? (
-          <ComposerTextarea
-            ref={editorRef}
-            value={draft}
-            onChange={setDraft}
-            onSubmit={save}
-            sessionId={sessionId}
-            commands={commands}
-            placeholder="Edit queued message…"
-            onPasteFiles={addEditFiles}
-            onEscape={(): boolean => {
-              cancel();
-              return true;
-            }}
-          />
-        ) : (
-          <ComposerEditor
-            ref={editorRef}
-            // The edit box mounts fresh each time the row enters edit mode (the
-            // read-mode branch has no ComposerEditor), so this seeds the current
-            // text. Uncontrolled thereafter — onChange feeds `draft`, never back
-            // into `value` (mirrors the main composer's latch-avoidance).
-            value={message.text}
-            onChange={setDraft}
-            onSubmit={save}
-            sessionId={sessionId}
-            commands={commands}
-            placeholder="Edit queued message…"
-            onPasteFiles={addEditFiles}
-            onEscape={(): boolean => {
-              cancel();
-              return true;
-            }}
-          />
-        )}
-        <Stack direction="row" spacing={0.5} justifyContent="flex-end" sx={{ mt: 0.5 }}>
+        {touchInput
+          ? (
+            <ComposerTextarea
+              ref={editorRef}
+              value={draft}
+              onChange={setDraft}
+              onSubmit={save}
+              sessionId={sessionId}
+              commands={commands}
+              placeholder="Edit queued message…"
+              onPasteFiles={addEditFiles}
+              onEscape={(): boolean => {
+                cancel();
+                return true;
+              }}
+            />
+          )
+          : (
+            <ComposerEditor
+              ref={editorRef}
+              // The edit box mounts fresh each time the row enters edit mode (the
+              // read-mode branch has no ComposerEditor), so this seeds the current
+              // text. Uncontrolled thereafter — onChange feeds `draft`, never back
+              // into `value` (mirrors the main composer's latch-avoidance).
+              value={message.text}
+              onChange={setDraft}
+              onSubmit={save}
+              sessionId={sessionId}
+              commands={commands}
+              placeholder="Edit queued message…"
+              onPasteFiles={addEditFiles}
+              onEscape={(): boolean => {
+                cancel();
+                return true;
+              }}
+            />
+          )}
+        <Stack
+          direction="row"
+          spacing={0.5}
+          justifyContent="flex-end"
+          sx={{ mt: 0.5 }}
+        >
           <Button
             size="small"
             color="inherit"
@@ -1691,7 +1889,12 @@ function PendingRow({
           >
             Cancel
           </Button>
-          <Button size="small" variant="contained" onClick={save} sx={{ textTransform: "none" }}>
+          <Button
+            size="small"
+            variant="contained"
+            onClick={save}
+            sx={{ textTransform: "none" }}
+          >
             Save
           </Button>
         </Stack>
@@ -1707,40 +1910,49 @@ function PendingRow({
     label: string;
     icon: React.JSX.Element;
     onClick: () => void;
-  }[] =
-    kind === "draft"
-      ? [
-          { key: "edit", label: "Edit", icon: <EditOutlined fontSize="small" />, onClick: onEdit },
-          ...(onMove
-            ? [{
-                key: "move",
-                label: "Move to another session…",
-                icon: <DriveFileMoveOutlined fontSize="small" />,
-                onClick: onMove,
-              }]
-            : []),
-          {
-            key: "remove",
-            label: "Remove",
-            icon: <Close fontSize="small" />,
-            onClick: (): void => removeDraft(sessionId, message.id),
-          },
-        ]
-      : [
-          {
-            key: "return",
-            label: "Return to drafts",
-            icon: <Undo fontSize="small" />,
-            onClick: (): void => queuedToDraft(sessionId, message.id),
-          },
-          { key: "edit", label: "Edit", icon: <EditOutlined fontSize="small" />, onClick: onEdit },
-          {
-            key: "remove",
-            label: "Remove",
-            icon: <Close fontSize="small" />,
-            onClick: (): void => removeQueued(sessionId, message.id),
-          },
-        ];
+  }[] = kind === "draft"
+    ? [
+      {
+        key: "edit",
+        label: "Edit",
+        icon: <EditOutlined fontSize="small" />,
+        onClick: onEdit,
+      },
+      ...(onMove
+        ? [{
+          key: "move",
+          label: "Move to another session…",
+          icon: <DriveFileMoveOutlined fontSize="small" />,
+          onClick: onMove,
+        }]
+        : []),
+      {
+        key: "remove",
+        label: "Remove",
+        icon: <Close fontSize="small" />,
+        onClick: (): void => removeDraft(sessionId, message.id),
+      },
+    ]
+    : [
+      {
+        key: "return",
+        label: "Return to drafts",
+        icon: <Undo fontSize="small" />,
+        onClick: (): void => queuedToDraft(sessionId, message.id),
+      },
+      {
+        key: "edit",
+        label: "Edit",
+        icon: <EditOutlined fontSize="small" />,
+        onClick: onEdit,
+      },
+      {
+        key: "remove",
+        label: "Remove",
+        icon: <Close fontSize="small" />,
+        onClick: (): void => removeQueued(sessionId, message.id),
+      },
+    ];
 
   // Primary action — always inline. Drafts always Send (send-or-queue); a queued
   // row Sends now when the session's free, else Force-pushes (confirm popover).
@@ -1787,7 +1999,10 @@ function PendingRow({
     );
   }
   return (
-    <Paper variant="outlined" sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+    <Paper
+      variant="outlined"
+      sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}
+    >
       <Box sx={{ flex: 1, minWidth: 0 }}>
         {message.text && <ClampedText text={message.text} />}
         {message.attachments.length > 0 && (
@@ -1818,19 +2033,18 @@ function PendingRow({
                   sx={{ textTransform: "none" }}
                 >
                   Cancel
+                  <Kbd keys="Esc" />
                 </Button>
                 <Button
                   size="small"
                   variant="contained"
                   color="warning"
                   startIcon={<Bolt />}
-                  onClick={(): void => {
-                    forcePushQueued(sessionId, message.id);
-                    setConfirmAnchor(null);
-                  }}
+                  onClick={confirmForcePush}
                   sx={{ textTransform: "none" }}
                 >
                   Force push
+                  <Kbd keys={ENTER_LABEL} />
                 </Button>
               </Stack>
             </Box>
@@ -1855,7 +2069,9 @@ function PendingRow({
           <Tooltip title="More">
             <IconButton
               size="small"
-              aria-label={kind === "draft" ? "draft actions" : "message actions"}
+              aria-label={kind === "draft"
+                ? "draft actions"
+                : "message actions"}
               onClick={(e): void => setMenuAnchor(e.currentTarget)}
             >
               <MoreVert fontSize="small" />
@@ -1921,7 +2137,7 @@ function ConfigOptionChip({
   const current = useMemo(
     () =>
       option.options.find((o) => o.value === option.currentValue) ??
-      option.options[0],
+        option.options[0],
     [option.options, option.currentValue],
   );
   return (
@@ -2014,32 +2230,36 @@ function ComposerSheet({
             >
               Agent
             </Typography>
-            {loading ? (
-              <Stack
-                direction="row"
-                spacing={1.5}
-                alignItems="center"
-                sx={{ py: 1, color: "text.secondary" }}
-              >
-                <CircularProgress size={16} />
-                <Typography variant="body2">Loading agent options…</Typography>
-              </Stack>
-            ) : (
-              // Selecting a value does NOT close the sheet — mode, model, and
-              // effort are commonly changed together, and each <Select> already
-              // closes its own menu on pick. The user dismisses the sheet by
-              // tapping outside once they're done.
-              <Stack spacing={2} sx={{ mt: 1.5 }}>
-                {options.map((opt) => (
-                  <ConfigSheetDropdown
-                    key={opt.id}
-                    option={opt}
-                    disabled={dead}
-                    onSelect={(value): void => onSelectOption(opt.id, value)}
-                  />
-                ))}
-              </Stack>
-            )}
+            {loading
+              ? (
+                <Stack
+                  direction="row"
+                  spacing={1.5}
+                  alignItems="center"
+                  sx={{ py: 1, color: "text.secondary" }}
+                >
+                  <CircularProgress size={16} />
+                  <Typography variant="body2">
+                    Loading agent options…
+                  </Typography>
+                </Stack>
+              )
+              : (
+                // Selecting a value does NOT close the sheet — mode, model, and
+                // effort are commonly changed together, and each <Select> already
+                // closes its own menu on pick. The user dismisses the sheet by
+                // tapping outside once they're done.
+                <Stack spacing={2} sx={{ mt: 1.5 }}>
+                  {options.map((opt) => (
+                    <ConfigSheetDropdown
+                      key={opt.id}
+                      option={opt}
+                      disabled={dead}
+                      onSelect={(value): void => onSelectOption(opt.id, value)}
+                    />
+                  ))}
+                </Stack>
+              )}
           </Box>
         </>
       )}
@@ -2180,11 +2400,13 @@ function latestAvailableCommands(timeline: Envelope[]): AvailableCommand[] {
     const env = timeline[i];
     if (env && env.kind === "update") {
       const u = env.update as AcpUpdate;
-      if (u.sessionUpdate === "available_commands_update" && Array.isArray(u.availableCommands)) {
+      if (
+        u.sessionUpdate === "available_commands_update" &&
+        Array.isArray(u.availableCommands)
+      ) {
         return u.availableCommands;
       }
     }
   }
   return [];
 }
-
