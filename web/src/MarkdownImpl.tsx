@@ -169,6 +169,11 @@ function CodeBlock({
           right: 6,
           height: 32,
           minWidth: 32,
+          // Explicit width to OVERRIDE the global MuiIconButton `width: 44` —
+          // without it the button is locked at 44px and the morphed "Copied" label
+          // overflows / gets clipped at the code block's right edge. Resting: a
+          // 32px square; copied: `auto` so it grows to fit "✓ Copied".
+          width: copied ? "auto" : 32,
           // Resting: a compact frosted square (opt out of the global 44px icon
           // button). On success it MORPHS into a labelled green pill — an
           // icon-only swap is too easy to miss; "Copied" is unmistakable. The
