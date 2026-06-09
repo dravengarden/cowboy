@@ -3,6 +3,7 @@ import { alpha, Box, IconButton, Stack, Typography } from "@mui/material";
 import type { PaletteColor, Theme } from "@mui/material";
 import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
 import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
+import Close from "@mui/icons-material/Close";
 import type { Status } from "./protocol";
 import {
   dismissAwaiting,
@@ -84,12 +85,11 @@ export function TurnStatusOverlay({
     setHidden(false);
     setExpanded(false);
   }, [kind]);
-  // The green "done" pill is just a confirmation — auto-fade after a few seconds.
-  useEffect(() => {
-    if (kind !== "done") return undefined;
-    const t = setTimeout(() => setHidden(true), 4000);
-    return () => clearTimeout(t);
-  }, [kind]);
+  // "done" used to auto-fade after 4s — but the judge's own latency (~5–10s) made
+  // the green pill appear LATE and vanish before it could register, and returning
+  // to a finished session then showed nothing. It now PERSISTS like "awaiting":
+  // cleared when the next turn supersedes it (status → busy resets `kind`) or via
+  // the × dismiss, so "the agent finished" is actually legible.
 
   // Publish the pill height so the transcript reserves it (sticky-not-covering).
   const measureRef = useRef<HTMLDivElement | null>(null);
@@ -145,7 +145,7 @@ export function TurnStatusOverlay({
   }
   // Symmetric padding (centred text) when there's no trailing control; otherwise
   // tighten the right so the button sits in.
-  const hasTrailing = showExpand || action !== undefined;
+  const hasTrailing = showExpand || action !== undefined || kind === "done";
 
   return (
     <Box
@@ -345,6 +345,23 @@ export function TurnStatusOverlay({
               }}
             >
               {action.icon ?? action.label}
+            </IconButton>
+          )}
+          {
+            /* "done" has no primary action — give the now-persistent green pill a
+              × so it can be cleared without sending the next message. */
+          }
+          {kind === "done" && (
+            <IconButton
+              size="small"
+              aria-label="dismiss"
+              onClick={(e): void => {
+                e.stopPropagation();
+                setHidden(true);
+              }}
+              sx={{ color: "text.secondary", width: 26, height: 26 }}
+            >
+              <Close sx={{ fontSize: 16 }} />
             </IconButton>
           )}
         </Stack>
