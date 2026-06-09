@@ -1074,8 +1074,24 @@ export function Composer({
           onClose={(): void => setComposeFs(false)}
           footer={
             // The shared cover sheet lifts itself above the keyboard, so the footer
-            // needs no kb-inset pad of its own.
-            <Stack direction="row" alignItems="center" spacing={0.5}>
+            // needs no kb-inset pad of its own. width:100% + a hairline top divider
+            // make it a proper full-width DOCKED bar: the shared footer is
+            // justify-end, so without the width the icons clustered in the
+            // lower-right — stranded + ugly when the keyboard is down and the bar
+            // sits at the screen bottom. Full width spreads triggers left / Send
+            // right; the divider separates the bar from the empty writing canvas.
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.5}
+              sx={{
+                width: "100%",
+                mx: -2,
+                px: 2,
+                pt: 1,
+                borderTop: (t) => `1px solid ${t.palette.divider}`,
+              }}
+            >
               <Tooltip title="Slash command / skill">
                 <span>
                   <IconButton
