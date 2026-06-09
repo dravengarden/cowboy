@@ -33,6 +33,7 @@ import {
     Bolt,
     Check as CheckIcon,
     Circle,
+    Close as CloseIcon,
     DeleteOutline,
     DragIndicator,
     DriveFileRenameOutline,
@@ -1583,25 +1584,28 @@ function SettingsShell({
         <Sheet
             open={open}
             onClose={onClose}
-            title={
-                // Center the pill in the header. The sheet's close button (40px) +
-                // its 8px gap sit to the right, so a 48px left pad balances them →
-                // the pill lands at the sheet's true centre, not shoved against the
-                // left edge. Desktop renders the title in a full-width DialogTitle
-                // (no sibling X), so it needs no balance.
-                <Box
-                    sx={{ display: "flex", justifyContent: "center", width: "100%", pl: { xs: "48px", lg: 0 } }}
-                >
-                    <SegmentedPill
-                        value={tab}
-                        onChange={setTab}
-                        options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
-                    />
-                </Box>
-            }
             forceSheet={navbarAtBottom}
             cover
         >
+            {/* Tab switcher + close, rendered in the BODY rather than the shared
+                sheet title row. That row pairs the title with a fixed 40px close
+                button, so its height + padding forced an over-tall header with too
+                much space above/below the pill; here cowboy owns the spacing. The
+                flex:1 spacers either side keep the pill dead-centred with the close
+                at the trailing edge; mt/mb tune the top/bottom whitespace directly. */}
+            <Box sx={{ display: "flex", alignItems: "center", mt: 0.25, mb: 1.5 }}>
+                <Box sx={{ flex: 1 }} />
+                <SegmentedPill
+                    value={tab}
+                    onChange={setTab}
+                    options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
+                />
+                <Box sx={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+                    <IconButton aria-label="close settings" onClick={onClose} sx={{ width: 36, height: 36 }}>
+                        <CloseIcon fontSize="small" />
+                    </IconButton>
+                </Box>
+            </Box>
             {tab === "info" ? <InfoContent /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
