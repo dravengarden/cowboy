@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 // Publish the on-screen keyboard's overlap of the layout viewport as the
 // `--kb-inset` CSS var (px). The composer column lifts by this so it clears the
@@ -66,4 +66,54 @@ export function useKeyboardInset(): void {
       root.style.removeProperty("--kb-inset");
     };
   }, []);
+}
+
+// Reactive "is the on-screen keyboard open?" — true when it overlaps the layout
+// viewport by more than a flicker threshold. Drives the compose sheet's
+// full-screen ↔ content-height switch: full-screen while typing, snug when the
+// keyboard is dismissed (no stranded bar over an empty canvas). Re-measures on
+// the same signals as useKeyboardInset, incl. focus changes + the settle timers,
+// so it flips the moment the keyboard finishes animating.
+export function useKeyboardOpen(): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const vv = globalThis.visualViewport;
+    if (!vv) return undefined;
+    const doc = globalThis.document;
+    let raf = 0;
+    let timers: number[] = [];
+    const apply = (): void => {
+      raf = 0;
+      const overlap = globalThis.innerHeight - (vv.offsetTop + vv.height);
+      // ≥120px so a stray inset (notch toolbar, rubber-band) never reads as a
+      // keyboard; a real keyboard overlaps far more.
+      setOpen(overlap > 120);
+    };
+    const applyNow = (): void => {
+      if (raf === 0) raf = globalThis.requestAnimationFrame(apply);
+    };
+    const clearTimers = (): void => {
+      for (const t of timers) globalThis.clearTimeout(t);
+      timers = [];
+    };
+    const schedule = (): void => {
+      applyNow();
+      clearTimers();
+      timers = [120, 300, 550].map((d) => globalThis.setTimeout(apply, d));
+    };
+    vv.addEventListener("resize", schedule);
+    vv.addEventListener("scroll", applyNow);
+    doc.addEventListener("focusin", schedule);
+    doc.addEventListener("focusout", schedule);
+    schedule();
+    return () => {
+      vv.removeEventListener("resize", schedule);
+      vv.removeEventListener("scroll", applyNow);
+      doc.removeEventListener("focusin", schedule);
+      doc.removeEventListener("focusout", schedule);
+      clearTimers();
+      if (raf !== 0) globalThis.cancelAnimationFrame(raf);
+    };
+  }, []);
+  return open;
 }

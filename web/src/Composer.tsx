@@ -62,6 +62,7 @@ import {
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
+import { useKeyboardOpen } from "./keyboardInset";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
@@ -361,6 +362,10 @@ export function Composer({
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
+  // Drives the mobile fullscreen compose sheet's full-screen ↔ content-height
+  // switch: cover while the keyboard's up (writing canvas), snug content-height
+  // when it's dismissed (no stranded bar over an empty full-screen canvas).
+  const keyboardUp = useKeyboardOpen();
 
   function submit(): void {
     if (!sendable) return;
@@ -1065,11 +1070,14 @@ export function Composer({
         <DetentSheet
           open
           // Full-screen frosted glass (cover), the primary mobile writing canvas.
-          // The shared DetentSheet cover is now keyboard-aware (lifts above the
-          // keyboard via --kb-inset + shrinks its height to match), so the field +
-          // footer stay visible — no consumer-side keyboard hack needed.
+          // Full-screen frosted glass WHILE the keyboard is up (the writing canvas,
+          // keyboard-aware: the shared cover lifts above the keyboard + shrinks to
+          // match). When the keyboard is dismissed, drop to a content-height frosted
+          // sheet (still `frosted`) so the bar docks snugly under the text instead
+          // of stranding at the bottom of an empty full-screen canvas.
           ariaLabel="Compose message"
-          cover
+          frosted
+          cover={keyboardUp}
           surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
@@ -1208,7 +1216,10 @@ export function Composer({
               placeholder="Message the agent…"
               onPasteFiles={addFiles}
               borderless
-              expanded
+              // Tall (min 10 rows) while typing to fill the full-screen canvas;
+              // auto-size to content when the keyboard's down so the sheet stays
+              // snug (content-height) rather than a near-empty full screen.
+              expanded={keyboardUp}
               onEscape={(): boolean => {
                 setComposeFs(false);
                 return true;
@@ -2084,6 +2095,9 @@ function PendingRow({
     status === "interrupted";
   // Touch → native textarea (correct IME); desktop → CodeMirror.
   const touchInput = useTouchComposer();
+  // Full-screen while typing, content-height when the keyboard's dismissed —
+  // same as the compose sheet (see useKeyboardOpen).
+  const keyboardUp = useKeyboardOpen();
   // Focus the editor when the row enters edit mode. useLayoutEffect, NOT
   // useEffect: a passive effect runs after paint, outside the tap's user-
   // activation window, so iOS Safari silently refuses to raise the keyboard for
@@ -2240,11 +2254,11 @@ function PendingRow({
         {overlayOpen && (
           <DetentSheet
             open
-            // Full-screen frosted glass (cover) — matches the compose sheet. The
-            // shared cover is keyboard-aware (lifts above the keyboard + shrinks), so
-            // the editor + Save/Cancel stay visible with the keyboard up.
+            // Full-screen frosted glass while typing, content-height when the
+            // keyboard's dismissed — matches the compose sheet (see useKeyboardOpen).
             ariaLabel="Edit message"
-            cover
+            frosted
+            cover={keyboardUp}
             surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
@@ -2302,7 +2316,7 @@ function PendingRow({
                 ref={overlayEditorRef}
                 value={draft}
                 borderless
-                expanded
+                expanded={keyboardUp}
                 onChange={setDraft}
                 onSubmit={(): void => {
                   save();
