@@ -190,9 +190,22 @@ export function hasDiff(content: unknown): boolean {
   return asBlocks(content).some((b) => b.type === "diff");
 }
 
-/** Render a tool's `content` array. Diff blocks → DiffView; text blocks → code
- *  (when `lang` is given, e.g. a file read) or a plain <pre>; anything else is
- *  skipped (the Raw escape hatch in the shell still shows it verbatim). */
+// A tool's text content is ALREADY markdown as the agent sent it — a Read result
+// is a ```-fenced code block, a sub-agent's result is prose, etc. So render it
+// THROUGH Markdown verbatim; the old code wrapped it in ANOTHER ```lang fence,
+// which double-fenced a Read: the agent's inner ``` immediately closed the outer
+// fence, leaving an empty block (React rendered `String(undefined)` → the literal
+// "undefined") and dumping the code below it as plain prose. When we DO know the
+// language (a file read) and the agent's leading fence is bare (```), inject it so
+// the block highlights instead of rendering plain.
+function withFenceLang(text: string, lang?: string): string {
+  if (!lang) return text;
+  return text.replace(/^```[ \t]*(\r?\n)/, "```" + lang + "$1");
+}
+
+/** Render a tool's `content` array. Diff blocks → DiffView; text blocks → the
+ *  agent's markdown (verbatim, lang injected for a bare code fence); anything else
+ *  is skipped (the Raw escape hatch in the shell still shows it verbatim). */
 export function OutputBlocks({ content, lang }: { content: unknown; lang?: string }): React.JSX.Element | null {
   const blocks = asBlocks(content);
   const rendered: ReactNode[] = [];
@@ -203,7 +216,13 @@ export function OutputBlocks({ content, lang }: { content: unknown; lang?: strin
       return;
     }
     const text = b.type === "content" ? (b as TextBlock).content?.text ?? "" : (b as { text?: string }).text ?? "";
-    if (text) rendered.push(lang ? <CodeView key={i} code={text} lang={lang} /> : <PreBlock key={i} text={text} />);
+    if (text) {
+      rendered.push(
+        <Collapsible key={i} maxHeight={300}>
+          <Markdown text={withFenceLang(text, lang)} />
+        </Collapsible>,
+      );
+    }
   });
   if (rendered.length === 0) return null;
   return <Stack spacing={1}>{rendered}</Stack>;
