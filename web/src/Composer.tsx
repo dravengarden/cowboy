@@ -164,6 +164,114 @@ const TOOLBAR_MIN_H = {
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
 
+// The mobile fullscreen compose/edit docked BAR — ONE shared bar so Compose and
+// Edit look + behave identically (Send, not Cancel/Save). A wrapping row of
+// config chips (they FLOW to multiple lines — no horizontal scroll; the
+// fullscreen sheet has the height) sits above the action row: slash / @ / attach
+// on the left, Send (which submits, or saves the edit) on the right. width:100%
+// + the breakout divider make it a full-width docked bar (the shared sheet
+// footer is justify-end, which otherwise clusters it).
+function ComposeBar(
+  { dead, sendable, onTrigger, onSend, options = [], showSkeleton = false, onConfig, onAttach }: {
+    readonly dead: boolean;
+    readonly sendable: boolean;
+    readonly onTrigger: (trigger: string) => void;
+    readonly onSend: () => void;
+    readonly options?: ConfigOption[];
+    readonly showSkeleton?: boolean;
+    readonly onConfig?: ((configId: string, value: string | boolean) => void) | undefined;
+    readonly onAttach?: (() => void) | undefined;
+  },
+): React.JSX.Element {
+  return (
+    <Stack
+      direction="column"
+      spacing={0.75}
+      sx={{
+        width: "100%",
+        mx: -2,
+        px: 2,
+        pt: 1,
+        borderTop: (t) => `1px solid ${t.palette.divider}`,
+      }}
+    >
+      {(showSkeleton || options.length > 0) && (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+          {showSkeleton ? <ConfigChipSkeletons /> : (
+            options.map((opt) => (
+              <ConfigOptionChip
+                key={opt.id}
+                option={opt}
+                disabled={dead}
+                onSelect={(value): void => onConfig?.(opt.id, value)}
+              />
+            ))
+          )}
+        </Box>
+      )}
+      <Stack direction="row" alignItems="center" spacing={0.5}>
+        <Tooltip title="Slash command / skill">
+          <span>
+            <IconButton
+              aria-label="slash command"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => onTrigger("/")}
+            >
+              <Box
+                component="span"
+                sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
+              >
+                /
+              </Box>
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Reference a file (@)">
+          <span>
+            <IconButton
+              aria-label="reference a file"
+              disabled={dead}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => onTrigger("@")}
+            >
+              <AlternateEmail />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {onAttach && (
+          <Tooltip title="Attach image or file">
+            <span>
+              <IconButton
+                aria-label="attach image or file"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onAttach}
+              >
+                <AttachFile />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        <Box sx={{ flex: 1 }} />
+        <Tooltip title="Send">
+          <span>
+            <IconButton
+              color="primary"
+              aria-label="send"
+              disabled={!sendable}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={onSend}
+            >
+              <Send />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Stack>
+    </Stack>
+  );
+}
+
 export function Composer({
   sessionId,
   status,
@@ -1081,118 +1189,26 @@ export function Composer({
           surfaceColor={theme.palette.background.default}
           onClose={(): void => setComposeFs(false)}
           footer={
-            // The shared cover sheet lifts itself above the keyboard, so the footer
-            // needs no kb-inset pad of its own. width:100% + a hairline top divider
-            // make it a proper full-width DOCKED bar: the shared footer is
-            // justify-end, so without the width the icons clustered in the
-            // lower-right — stranded + ugly when the keyboard is down and the bar
-            // sits at the screen bottom. Full width spreads triggers left / Send
-            // right; the divider separates the bar from the empty writing canvas.
-            <Stack
-              direction="row"
-              alignItems="center"
-              spacing={0.5}
-              sx={{
-                width: "100%",
-                mx: -2,
-                px: 2,
-                pt: 1,
-                borderTop: (t) => `1px solid ${t.palette.divider}`,
+            <ComposeBar
+              dead={dead}
+              sendable={sendable}
+              options={options}
+              showSkeleton={showSkeleton}
+              onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
+              onAttach={(): void => fileInputRef.current?.click()}
+              onConfig={(configId, value): void => {
+                send({
+                  type: "set_config_option",
+                  session_id: sessionId,
+                  config_id: configId,
+                  value,
+                });
               }}
-            >
-              <Tooltip title="Slash command / skill">
-                <span>
-                  <IconButton
-                    aria-label="slash command"
-                    disabled={dead}
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={(): void => editorRef.current?.insertTrigger("/")}
-                  >
-                    <Box
-                      component="span"
-                      sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
-                    >
-                      /
-                    </Box>
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <Tooltip title="Reference a file (@)">
-                <span>
-                  <IconButton
-                    aria-label="reference a file"
-                    disabled={dead}
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={(): void => editorRef.current?.insertTrigger("@")}
-                  >
-                    <AlternateEmail />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <Tooltip title="Attach image or file">
-                <span>
-                  <IconButton
-                    aria-label="attach image or file"
-                    disabled={dead}
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={(): void => fileInputRef.current?.click()}
-                  >
-                    <AttachFile />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              {/* Config options inline (model / permission / …): the full-screen
-                  compose footer has the width, so expand them here as a scrollable
-                  row instead of folding into a single ⚙ Options button — "as many
-                  usable buttons as possible". flex:1 makes this the flexible middle
-                  so Send stays pinned to the right edge. */}
-              <Stack
-                direction="row"
-                alignItems="center"
-                spacing={0.5}
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  overflowX: "auto",
-                  scrollbarWidth: "thin",
-                  "&::-webkit-scrollbar": { height: 6 },
-                }}
-              >
-                {showSkeleton ? <ConfigChipSkeletons /> : (
-                  options.map((opt) => (
-                    <ConfigOptionChip
-                      key={opt.id}
-                      option={opt}
-                      disabled={dead}
-                      onSelect={(value): void => {
-                        send({
-                          type: "set_config_option",
-                          session_id: sessionId,
-                          config_id: opt.id,
-                          value,
-                        });
-                      }}
-                    />
-                  ))
-                )}
-              </Stack>
-              <Tooltip title="Send">
-                <span>
-                  <IconButton
-                    color="primary"
-                    aria-label="send"
-                    disabled={!sendable}
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={(): void => {
-                      submit();
-                      setComposeFs(false);
-                    }}
-                  >
-                    <Send />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Stack>
+              onSend={(): void => {
+                submit();
+                setComposeFs(false);
+              }}
+            />
           }
         >
           <Box sx={{ p: 1.5 }}>
@@ -2127,6 +2143,13 @@ function PendingRow({
     // overlay — no cramped inline edit on a phone (the mobile fullscreen-first
     // design). Desktop keeps the inline edit + the ↗ to expand.
     if (touchInput) {
+      // Raise the keyboard IN this gesture's tick (the editing→overlay layout
+      // effect runs synchronously in the Edit tap's task, before paint — same
+      // window the inline focus below relies on). The overlay's later focusEnd
+      // only transfers focus between inputs; iOS won't raise the keyboard from
+      // that passive timer, so without this the fullscreen edit opened with the
+      // keyboard DOWN (it should default to the typing state, like compose).
+      claimKeyboard();
       setOverlayOpen(true);
       return undefined;
     }
@@ -2278,30 +2301,20 @@ function PendingRow({
               </Box>
             }
             footer={
-              // The shared cover sheet lifts itself above the keyboard — no
-              // consumer-side kb-inset pad needed.
-              <Stack direction="row" justifyContent="flex-end" spacing={1}>
-                <Button
-                  color="inherit"
-                  onClick={(): void => {
-                    cancel();
-                    setOverlayOpen(false);
-                  }}
-                  sx={{ textTransform: "none" }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="contained"
-                  onClick={(): void => {
-                    save();
-                    setOverlayOpen(false);
-                  }}
-                  sx={{ textTransform: "none" }}
-                >
-                  Save
-                </Button>
-              </Stack>
+              // Same docked bar as the compose sheet (the user asked Edit to match
+              // the input): Send saves the edit; grab-dismiss / the close ×
+              // cancels (onClose → cancel). No Cancel/Save text buttons. Config
+              // chips are session-level (not available per-row here), so the edit
+              // bar is just the triggers + Send.
+              <ComposeBar
+                dead={false}
+                sendable={!!draft.trim() || editAttachments.length > 0}
+                onTrigger={(t): void => overlayEditorRef.current?.insertTrigger(t)}
+                onSend={(): void => {
+                  save();
+                  setOverlayOpen(false);
+                }}
+              />
             }
           >
             <Box sx={{ p: 1.5 }}>
