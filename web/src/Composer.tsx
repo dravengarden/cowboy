@@ -1,5 +1,6 @@
 import {
   type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -70,7 +71,13 @@ import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
 import { DetentSheet } from "./_shell";
-import { toggleComposerExpanded, useComposerExpanded } from "./composerExpand";
+import {
+  setComposerExpanded,
+  setComposerHeight,
+  toggleComposerExpanded,
+  useComposerExpanded,
+  useComposerHeight,
+} from "./composerExpand";
 import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
@@ -663,6 +670,42 @@ export function Composer({
   const vim = useVimSetting();
   // Expand toggle (desktop only — gated where rendered). Persisted per device.
   const expanded = useComposerExpanded();
+  const composerHeight = useComposerHeight();
+  // Drag-to-resize the editor (desktop), VSCode-terminal style: a top-edge handle
+  // grows/shrinks the editor; dragging below RESIZE_MIN auto-collapses to the
+  // compact auto-grow editor, dragging back up auto-expands. `editorAreaRef`
+  // measures the live editor height to seed the drag from the compact state.
+  const editorAreaRef = useRef<HTMLDivElement>(null);
+  const RESIZE_MIN = 96;
+  const onResizeStart = useCallback((e: ReactPointerEvent): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = expanded
+      ? (composerHeight > 0 ? composerHeight : Math.round(globalThis.innerHeight * 0.48))
+      : (editorAreaRef.current?.clientHeight ?? RESIZE_MIN);
+    const maxH = Math.round(globalThis.innerHeight * 0.82);
+    const doc = globalThis.document;
+    const move = (ev: PointerEvent): void => {
+      const next = startH + (startY - ev.clientY); // drag up → taller
+      if (next < RESIZE_MIN) {
+        setComposerExpanded(false); // snap to the compact auto-grow editor
+      } else {
+        setComposerExpanded(true);
+        setComposerHeight(Math.min(next, maxH));
+      }
+    };
+    const end = (): void => {
+      globalThis.removeEventListener("pointermove", move);
+      globalThis.removeEventListener("pointerup", end);
+      doc.body.style.cursor = "";
+      doc.body.style.userSelect = "";
+    };
+    globalThis.addEventListener("pointermove", move);
+    globalThis.addEventListener("pointerup", end);
+    doc.body.style.cursor = "ns-resize";
+    doc.body.style.userSelect = "none";
+  }, [expanded, composerHeight]);
   // Auto-scroll / stick-to-bottom state for the toolbar's scroll-to-bottom toggle.
   const sticky = useSticky(sessionId);
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
@@ -910,6 +953,42 @@ export function Composer({
           bgcolor: "transparent",
         }}
       >
+      {/* Top-edge resize handle (desktop): drag to grow/shrink the editor; dragging
+          past the bottom threshold auto-collapses to the compact auto-grow editor,
+          dragging up auto-expands (VSCode-terminal feel). Hidden on touch — the
+          fullscreen sheet covers that. */}
+      {!touchInput && !composeFs && (
+        <Box
+          onPointerDown={onResizeStart}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize editor"
+          sx={{
+            position: "absolute",
+            top: -4,
+            left: 0,
+            right: 0,
+            height: 9,
+            cursor: "ns-resize",
+            zIndex: 4,
+            // A subtle grip that brightens on hover.
+            "&::after": {
+              content: "\"\"",
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              width: 32,
+              height: 3,
+              borderRadius: 2,
+              bgcolor: "text.disabled",
+              opacity: 0,
+              transition: "opacity .15s",
+            },
+            "&:hover::after": { opacity: 0.8 },
+          }}
+        />
+      )}
       {!composeFs && (touchInput
         ? (
           <ComposerTextarea
@@ -937,6 +1016,12 @@ export function Composer({
           />
         )
         : (
+          // Wrapper measures the live editor height so a resize drag from the
+          // compact state seeds at the right size.
+          <Box
+            ref={editorAreaRef}
+            sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}
+          >
           <ComposerEditor
             ref={editorRef}
             // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
@@ -946,6 +1031,7 @@ export function Composer({
             onSaveDraft={saveDraft}
             borderless
             expanded={expanded}
+            heightPx={composerHeight}
             // Reserve a top-right gutter so no line runs under the ↗/↙ expand
             // toggle the card overlays at its top-right corner.
             endInset={36}
@@ -977,6 +1063,7 @@ export function Composer({
               return false;
             }}
           />
+          </Box>
         ))}
         {/* Expand toggle, top-right INSIDE the card. DESKTOP: Zed-style inline
             expand — toggles a taller editor in place (flows through the

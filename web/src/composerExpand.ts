@@ -22,3 +22,23 @@ export function setComposerExpanded(on: boolean): void {
 export function toggleComposerExpanded(): void {
   expanded.set(!expanded.get());
 }
+
+// Drag-resized height of the EXPANDED editor (px), persisted per device. 0 = "no
+// custom height yet" → fall back to the 48vh default. The top-edge resize handle
+// (VSCode-terminal style) writes it; ComposerEditor reads it when expanded. Drag
+// math + the collapse/expand auto-switch live in the Composer.
+const height = persisted("cowboy:composer-height", 0, {
+  serialize: (px) => String(Math.round(px)),
+  deserialize: (s) => {
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  },
+});
+
+export function useComposerHeight(): number {
+  return useStore(height);
+}
+
+export function setComposerHeight(px: number): void {
+  height.set(Math.round(px));
+}

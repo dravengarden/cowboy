@@ -149,6 +149,9 @@ export const ComposerEditor = forwardRef<
     /// Expanded mode: a tall fixed editing area (~50vh) instead of the compact
     /// auto-grow (≤40vh). The Zed-style ↗ toggle in the card drives this.
     expanded?: boolean;
+    /// Drag-resized expanded height (px). 0 → the 48vh default. Only honoured when
+    /// `expanded`; the top-edge resize handle writes it (composerExpand store).
+    heightPx?: number;
   }
 >(function ComposerEditor(
   {
@@ -169,10 +172,14 @@ export const ComposerEditor = forwardRef<
     endInset = 0,
     borderless = false,
     expanded = false,
+    heightPx = 0,
   },
   ref,
 ): React.JSX.Element {
   const theme = useTheme();
+  // The fixed expanded height: the drag-resized px if set, else the 48vh default.
+  // Clamp via CSS so a px persisted on a taller viewport can't overflow a short one.
+  const expandedHeight = heightPx > 0 ? `min(${String(heightPx)}px, 82vh)` : "48vh";
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   // Keep latest callbacks/data in refs so the (memoized) extensions never go
   // stale without rebuilding the editor state on every keystroke.
@@ -508,8 +515,8 @@ export const ComposerEditor = forwardRef<
         theme="none"
         basicSetup={false}
         extensions={extensions}
-        minHeight={expanded ? "48vh" : "24px"}
-        maxHeight={expanded ? "48vh" : "40vh"}
+        minHeight={expanded ? expandedHeight : "24px"}
+        maxHeight={expanded ? expandedHeight : "40vh"}
         indentWithTab={false}
       />
     </Box>
