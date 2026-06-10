@@ -63,7 +63,7 @@ import {
   VerticalAlignTop,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
-import { ComposerTextarea, useTouchComposer } from "./ComposerTextarea";
+import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
@@ -1037,43 +1037,20 @@ export function Composer({
           }}
         />
       )}
-      {!composeFs && (touchInput
-        ? (
-          <ComposerTextarea
-            ref={editorRef}
-            // Controlled by `text` (a native textarea handles IME under control).
-            value={text}
-            onChange={setText}
-            onSubmit={submit}
-            onSaveDraft={saveDraft}
-            sessionId={sessionId}
-            commands={(): AvailableCommand[] => availableCommands}
-            placeholder={dead
-              ? "Send to resume this session…"
-              : "Message the agent…"}
-            onPasteFiles={addFiles}
-            borderless
-            endInset={36}
-            onEscape={(): boolean => {
-              if (busy) {
-                setCancelOpen(true);
-                return true;
-              }
-              return false;
-            }}
-          />
-        )
-        : (
-          // Wrapper measures the live editor height so a resize drag from the
-          // compact state seeds at the right size.
+      {!composeFs && (
+          // ONE editor on every surface now: CodeMirror 6 + the mdlive markdown
+          // live-preview engine. Touch used to fall back to a native <textarea>
+          // (CM6 contenteditable historically stranded iOS pinyin); v1 of the
+          // live-preview work moves touch onto the same CM6 editor, sans vim — the
+          // engine reveals raw markers on the cursor's line, so IME composes on
+          // plain text. The wrapper measures the live height for the desktop
+          // resize drag (harmless on touch). column mode fills it (desktop split).
           <Box
             ref={editorAreaRef}
             sx={{
               display: "flex",
               flexDirection: "column",
               minHeight: 0,
-              // Column mode: the wrapper fills the card so the editor (fill) can
-              // stretch to the column's remaining height.
               ...(column && { flex: 1 }),
             }}
           >
@@ -1106,7 +1083,10 @@ export function Composer({
             placeholder={dead
               ? "Send to resume this session…"
               : "Message the agent…"}
-            vim={vim}
+            // Vim is desktop-only — never load it on touch (no physical keyboard /
+            // modal editing). ComposerEditor also gates the actual vim import on a
+            // fine pointer, so this is belt-and-suspenders.
+            vim={touchInput ? false : vim}
             onVimMode={setVimMode}
             onPasteFiles={addFiles}
             onEscape={(): boolean => {
@@ -1122,7 +1102,7 @@ export function Composer({
             }}
           />
           </Box>
-        ))}
+        )}
         {/* Expand toggle, top-right INSIDE the card. DESKTOP: Zed-style inline
             expand — toggles a taller editor in place (flows through the
             --composer-h ResizeObserver). MOBILE: space is tight inline, so ↗ goes
@@ -1642,8 +1622,13 @@ export function Composer({
               (a tap-anywhere writing canvas) instead of sitting 10 rows tall with
               an ugly blank gap down to the toolbar. */}
           <Box sx={{ p: 1.5, height: "100%", display: "flex", flexDirection: "column" }}>
-            <ComposerTextarea
+            <ComposerEditor
               ref={editorRef}
+              // Fullscreen mobile compose, now the same CM6 + mdlive live-preview
+              // editor as everywhere else (no vim on touch). `fill` stretches it to
+              // the sheet's full height — a tap-anywhere writing canvas. Mounts fresh
+              // when fullscreen opens, seeding from the CURRENT text (like the edit
+              // overlay), so in-progress inline text carries in; onChange feeds `text`.
               value={text}
               onChange={setText}
               onSubmit={(): void => {
@@ -1656,7 +1641,8 @@ export function Composer({
               placeholder="Message the agent…"
               onPasteFiles={addFiles}
               borderless
-              expanded
+              fill
+              vim={false}
               onEscape={(): boolean => {
                 setComposeFs(false);
                 return true;
@@ -2681,47 +2667,29 @@ function PendingRow({
         <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
           {/* Inline editor — hidden while the focused overlay owns the edit so only
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */}
-          {!overlayOpen &&
-            (touchInput
-              ? (
-                <ComposerTextarea
-                  ref={editorRef}
-                  value={draft}
-                  borderless
-                  onChange={setDraft}
-                  onSubmit={save}
-                  sessionId={sessionId}
-                  commands={commands}
-                  placeholder="Edit message…"
-                  onPasteFiles={addEditFiles}
-                  onEscape={(): boolean => {
-                    save();
-                    return true;
-                  }}
-                />
-              )
-              : (
-                <ComposerEditor
-                  ref={editorRef}
-                  // Seeds from the shared `draft` and re-mounts on overlay close, so
-                  // it reflects edits made in the overlay. Uncontrolled thereafter —
-                  // onChange feeds `draft`, never back into `value`.
-                  value={draft}
-                  borderless
-                  vim={vim}
-                  onVimMode={setVimMode}
-                  onChange={setDraft}
-                  onSubmit={save}
-                  sessionId={sessionId}
-                  commands={commands}
-                  placeholder="Edit message…"
-                  onPasteFiles={addEditFiles}
-                  onEscape={(): boolean => {
-                    save();
-                    return true;
-                  }}
-                />
-              ))}
+          {!overlayOpen && (
+            <ComposerEditor
+              ref={editorRef}
+              // Seeds from the shared `draft` and re-mounts on overlay close, so
+              // it reflects edits made in the overlay. Uncontrolled thereafter —
+              // onChange feeds `draft`, never back into `value`. Same CM6 +
+              // live-preview editor on every surface now (vim desktop-only).
+              value={draft}
+              borderless
+              vim={touchInput ? false : vim}
+              onVimMode={setVimMode}
+              onChange={setDraft}
+              onSubmit={save}
+              sessionId={sessionId}
+              commands={commands}
+              placeholder="Edit message…"
+              onPasteFiles={addEditFiles}
+              onEscape={(): boolean => {
+                save();
+                return true;
+              }}
+            />
+          )}
           {!overlayOpen && editBar}
         </Paper>
         {/* Focused edit overlay (Step 7): a near-full-screen frosted sheet hosting a

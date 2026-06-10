@@ -3,6 +3,8 @@
   "specifiers": {
     "npm:@codemirror/autocomplete@^6.18.0": "6.20.2",
     "npm:@codemirror/commands@^6.7.0": "6.10.3",
+    "npm:@codemirror/lang-markdown@^6.3.0": "6.5.0",
+    "npm:@codemirror/language@^6.10.0": "6.12.3",
     "npm:@codemirror/state@^6.5.0": "6.6.0",
     "npm:@codemirror/view@^6.36.0": "6.43.0",
     "npm:@emotion/react@^11.13.0": "11.14.0_react@19.2.6",
@@ -15,6 +17,8 @@
     "npm:@fontsource/atkinson-hyperlegible@^5.2.8": "5.2.8",
     "npm:@fontsource/noto-sans-sc@^5.2.9": "5.2.9",
     "npm:@fontsource/noto-serif-sc@^5.2.9": "5.2.9",
+    "npm:@lezer/common@^1.2.0": "1.5.2",
+    "npm:@lezer/highlight@^1.2.0": "1.2.3",
     "npm:@mui/icons-material@7": "7.3.11_@mui+material@7.3.11__@emotion+react@11.14.0___react@19.2.6__@emotion+styled@11.14.1___@emotion+react@11.14.0____react@19.2.6___react@19.2.6__@types+react@19.2.15__react@19.2.6__react-dom@19.2.6___react@19.2.6_@types+react@19.2.15_react@19.2.6_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@mui/material@7": "7.3.11_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_@types+react@19.2.15_react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@replit/codemirror-vim@^6.3.0": "6.3.0_@codemirror+commands@6.10.3_@codemirror+language@6.12.3_@codemirror+search@6.7.0_@codemirror+state@6.6.0_@codemirror+view@6.43.0",
@@ -191,6 +195,54 @@
         "@codemirror/state",
         "@codemirror/view",
         "@lezer/common"
+      ]
+    },
+    "@codemirror/lang-css@6.3.1": {
+      "integrity": "sha512-kr5fwBGiGtmz6l0LSJIbno9QrifNMUusivHbnA1H6Dmqy4HZFte3UAICix1VuKo0lMPKQr2rqB+0BkKi/S3Ejg==",
+      "dependencies": [
+        "@codemirror/autocomplete",
+        "@codemirror/language",
+        "@codemirror/state",
+        "@lezer/common",
+        "@lezer/css"
+      ]
+    },
+    "@codemirror/lang-html@6.4.11": {
+      "integrity": "sha512-9NsXp7Nwp891pQchI7gPdTwBuSuT3K65NGTHWHNJ55HjYcHLllr0rbIZNdOzas9ztc1EUVBlHou85FFZS4BNnw==",
+      "dependencies": [
+        "@codemirror/autocomplete",
+        "@codemirror/lang-css",
+        "@codemirror/lang-javascript",
+        "@codemirror/language",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@lezer/common",
+        "@lezer/css",
+        "@lezer/html"
+      ]
+    },
+    "@codemirror/lang-javascript@6.2.5": {
+      "integrity": "sha512-zD4e5mS+50htS7F+TYjBPsiIFGanfVqg4HyUz6WNFikgOPf2BgKlx+TQedI1w6n/IqRBVBbBWmGFdLB/7uxO4A==",
+      "dependencies": [
+        "@codemirror/autocomplete",
+        "@codemirror/language",
+        "@codemirror/lint",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@lezer/common",
+        "@lezer/javascript"
+      ]
+    },
+    "@codemirror/lang-markdown@6.5.0": {
+      "integrity": "sha512-0K40bZ35jpHya6FriukbgaleaqzBLZfOh7HuzqbMxBXkbYMJDxfF39c23xOgxFezR+3G+tR2/Mup+Xk865OMvw==",
+      "dependencies": [
+        "@codemirror/autocomplete",
+        "@codemirror/lang-html",
+        "@codemirror/language",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@lezer/common",
+        "@lezer/markdown"
       ]
     },
     "@codemirror/language@6.12.3": {
@@ -521,16 +573,47 @@
     "@lezer/common@1.5.2": {
       "integrity": "sha512-sxQE460fPZyU3sdc8lafxiPwJHBzZRy/udNFynGQky1SePYBdhkBl1kOagA9uT3pxR8K09bOrmTUqA9wb/PjSQ=="
     },
+    "@lezer/css@1.3.3": {
+      "integrity": "sha512-RzBo8r+/6QJeow7aPHIpGVIH59xTcJXp399820gZoMo9noQDRVpJLheIBUicYwKcsbOYoBRoLZlf2720dG/4Tg==",
+      "dependencies": [
+        "@lezer/common",
+        "@lezer/highlight",
+        "@lezer/lr"
+      ]
+    },
     "@lezer/highlight@1.2.3": {
       "integrity": "sha512-qXdH7UqTvGfdVBINrgKhDsVTJTxactNNxLk7+UMwZhU13lMHaOBlJe9Vqp907ya56Y3+ed2tlqzys7jDkTmW0g==",
       "dependencies": [
         "@lezer/common"
       ]
     },
+    "@lezer/html@1.3.13": {
+      "integrity": "sha512-oI7n6NJml729m7pjm9lvLvmXbdoMoi2f+1pwSDJkl9d68zGr7a9Btz8NdHTGQZtW2DA25ybeuv/SyDb9D5tseg==",
+      "dependencies": [
+        "@lezer/common",
+        "@lezer/highlight",
+        "@lezer/lr"
+      ]
+    },
+    "@lezer/javascript@1.5.4": {
+      "integrity": "sha512-vvYx3MhWqeZtGPwDStM2dwgljd5smolYD2lR2UyFcHfxbBQebqx8yjmFmxtJ/E6nN6u1D9srOiVWm3Rb4tmcUA==",
+      "dependencies": [
+        "@lezer/common",
+        "@lezer/highlight",
+        "@lezer/lr"
+      ]
+    },
     "@lezer/lr@1.4.10": {
       "integrity": "sha512-rnCpTIBafOx4mRp43xOxDJbFipJm/c0cia/V5TiGlhmMa+wsSdoGmUN3w5Bqrks/09Q/D4tNAmWaT8p6NRi77A==",
       "dependencies": [
         "@lezer/common"
+      ]
+    },
+    "@lezer/markdown@1.6.4": {
+      "integrity": "sha512-N0SxazMj4k65DBfaf1azqtMZd6u7MqluP84/NZnB/io8Td9aleFmAhz9hcbvSfsxT5tdYlJ5qgv5aMJGY4zEtA==",
+      "dependencies": [
+        "@lezer/common",
+        "@lezer/highlight"
       ]
     },
     "@marijn/find-cluster-break@1.0.2": {
@@ -2229,6 +2312,8 @@
       "dependencies": [
         "npm:@codemirror/autocomplete@^6.18.0",
         "npm:@codemirror/commands@^6.7.0",
+        "npm:@codemirror/lang-markdown@^6.3.0",
+        "npm:@codemirror/language@^6.10.0",
         "npm:@codemirror/state@^6.5.0",
         "npm:@codemirror/view@^6.36.0",
         "npm:@emotion/react@^11.13.0",
@@ -2241,6 +2326,8 @@
         "npm:@fontsource/atkinson-hyperlegible@^5.2.8",
         "npm:@fontsource/noto-sans-sc@^5.2.9",
         "npm:@fontsource/noto-serif-sc@^5.2.9",
+        "npm:@lezer/common@^1.2.0",
+        "npm:@lezer/highlight@^1.2.0",
         "npm:@mui/icons-material@7",
         "npm:@mui/material@7",
         "npm:@replit/codemirror-vim@^6.3.0",

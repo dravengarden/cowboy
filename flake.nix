@@ -26,7 +26,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
-        depsHash = "sha256-LarY7smNT1Kcp6ycOcBOYu2ZW123+zfdQcVxay8uWrQ=";
+        depsHash = "sha256-ojWbuguLD2wr1YIvWXi86zuVZL9KI7cWu3R6f+lUIeA=";
       };
 
       # The Rust binary, embedding the built SPA via rust-embed

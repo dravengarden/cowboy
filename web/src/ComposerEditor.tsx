@@ -21,6 +21,7 @@ import {
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
+import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { deleteTokenBackward, tokenChipPlugin } from "./fileTokenWidget";
 import {
@@ -444,6 +445,11 @@ export const ComposerEditor = forwardRef<
       // completionKeymap first so Enter/Tab/arrows drive the picker when it's
       // open, falling through to newline/normal editing when it's closed.
       keymap.of([...completionKeymap, ...historyKeymap, ...defaultKeymap]),
+      // Markdown live-preview engine (mdlive). Placed AFTER the ⌘⏎/⌃⏎ chord
+      // handler (Prec.highest, earlier in this array) so the send/draft chords
+      // keep precedence; the engine's own Prec.highest Enter then drives tight-
+      // list continuation on a PLAIN Enter. Markdown stays the literal value.
+      ...livePreviewExtensions(),
       ...(vimExt ? [vimExt] : []),
     ],
     [theme, sessionId, placeholder, vimExt, aboveCursor],
