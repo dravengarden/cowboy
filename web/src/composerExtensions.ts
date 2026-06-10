@@ -13,15 +13,12 @@ import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
 import {
-  drawSelection,
-  dropCursor,
   EditorView,
   highlightActiveLine,
   highlightSpecialChars,
   keymap,
-  rectangularSelection,
 } from "@codemirror/view";
-import { EditorState, type Extension } from "@codemirror/state";
+import type { Extension } from "@codemirror/state";
 import {
   atomicEditorTheme,
   atomicMarkdownSyntax,
@@ -49,14 +46,8 @@ export function livePreviewExtensions(
   opts: LivePreviewOptions = {},
 ): Extension[] {
   return [
-    // --- Selection / cursor / editor behavior (the atomic theme styles
-    // `.cm-cursor`/`.cm-dropCursor`/`.cm-activeLine`, and drawSelection fixes
-    // native-selection glitches across the live-preview decorations/widgets) ---
+    // Editor chrome that does NOT touch the native selection (safe on touch).
     highlightSpecialChars(),
-    drawSelection(),
-    dropCursor(),
-    EditorState.allowMultipleSelections.of(true),
-    rectangularSelection(),
     highlightActiveLine(),
     indentOnInput(),
     // --- Obsidian-style bracket / emphasis / code-fence pairing ---
@@ -65,29 +56,26 @@ export function livePreviewExtensions(
     autoCloseCodeFence,
     // Find-in-document (Mod-f), top panel — useful in the fullscreen long-form editor.
     search({ top: true }),
-    // --- The markdown language + GFM, the source of the syntax tree the engine
-    // reads (Task / Strikethrough / autolinks need `base: markdownLanguage`) ---
+    // --- markdown language + GFM (source of the engine's syntax tree) ---
     markdown({ base: markdownLanguage, codeLanguages: [] }),
-    // Extend closeBrackets to markdown's symmetric delimiters — typing `*`/`_`/`` ` ``
-    // auto-pairs, and extendEmphasisPair grows the pair as you type inside it.
     markdownLanguage.data.of({
       closeBrackets: { brackets: ["(", "[", "{", "'", '"', "*", "_", "`"] },
     }),
     atomicMarkdownSyntax,
     atomicEditorTheme,
-    // closeBrackets/search/markdown keybindings + Tab-indent. NOT history/default
-    // keymaps — cowboy's ComposerEditor base already registers those (+ its own
-    // completion keymap and send-chord); duplicating history would split undo.
-    keymap.of([
-      ...closeBracketsKeymap,
-      ...searchKeymap,
-      ...markdownKeymap,
-      indentWithTab,
-    ]),
-    // The live-preview decorations themselves (+ the markdown-aware Enter).
+    keymap.of([...closeBracketsKeymap, ...searchKeymap, ...markdownKeymap, indentWithTab]),
     inlinePreview(opts),
     EditorView.lineWrapping,
   ];
+  // DROPPED — drawSelection() / dropCursor() / rectangularSelection() /
+  // allowMultipleSelections: these replace the native caret/selection with a
+  // CM-drawn one, which kills iOS's long-press "Paste / Select" menu (a CONFIRMED
+  // regression — the native edit menu needs the native selection). cowboy already
+  // styles the caret via cmTheme (+ vim's block cursor). The visual-glitch fix
+  // they'd bring on desktop isn't worth losing mobile paste; revisit desktop-only
+  // if needed. Also still out (strong reasons): history/default/historyKeymap
+  // (cowboy base provides — a 2nd history splits undo), tables/image-blocks/
+  // wiki-links (the contenteditable IME surfaces), initialRevealField (no use case).
   // DROPPED from atomic's composition, each with a strong reason:
   //   • history() / historyKeymap / defaultKeymap — cowboy's ComposerEditor base
   //     already provides them; a second history() splits undo.
