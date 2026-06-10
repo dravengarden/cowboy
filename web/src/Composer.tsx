@@ -234,16 +234,14 @@ function ComposeBar(
       {attachments.length > 0 && onRemoveAttachment && (
         <AttachmentPreviews attachments={attachments} onRemove={onRemoveAttachment} />
       )}
-      {/* All actions evenly distributed across the row (same proven layout as the
-          inline mobile toolbar) — no flex spacer / overflow-scroll / negative-margin
-          breakout, which were clipping the leftmost icon + pushing Send off. Every
-          item, Send included, is an evenly-spaced cell, so nothing overflows. */}
+      {/* LEFT-aligned with a fixed gap (not space-evenly — a few icons shouldn't
+          stretch across the whole width; reads cleaner next to the attachment
+          thumbnail), wrapping to a second row when they don't all fit one line. No
+          flex spacer / overflow-scroll / breakout, so nothing clips or pushes off. */}
       <Stack
         direction="row"
         alignItems="center"
-        // Wrap to a second row when the icons don't fit one (e.g. busy + a queue
-        // shows force-push AND jump-front) — each row stays space-evenly.
-        sx={{ justifyContent: "space-evenly", flexWrap: "wrap", rowGap: 0.5 }}
+        sx={{ justifyContent: "flex-start", flexWrap: "wrap", gap: 0.5 }}
       >
         <Tooltip title="Slash command / skill">
           <span>
