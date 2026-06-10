@@ -453,6 +453,11 @@ export function Composer({
   // the sheet pattern wins on every sub-desktop viewport. Desktop keeps the
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
+  // Roomy enough (≥ sm — tablets, landscape) to show the secondary actions
+  // (save-draft / jump-front / force-push) INLINE rather than folded into the ⋮.
+  // They + the core icons all fit well under sm's width, so this never truncates;
+  // only the narrow phone tier (< sm) keeps the ⋮ fold.
+  const roomy = useMediaQuery(theme.breakpoints.up("sm"));
   const [sheetOpen, setSheetOpen] = useState(false);
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
@@ -1160,17 +1165,63 @@ export function Composer({
               </span>
             </Tooltip>
           )}
-        {/* ⋮ secondary actions (Save draft / keyboard force-push). Always rendered
-            AND always clickable so the toolbar's icon COUNT never changes with input
-            content — only the busy-state Stop is added/removed. Disable is per-item
-            (inside the menu), not on the ⋮ itself, so the menu always opens. */}
-        <IconButton
-          aria-label="more actions"
-          sx={TOOLBAR_ICON_BTN}
-          onClick={(e): void => setActionsMenu(e.currentTarget)}
-        >
-          <MoreVert fontSize="small" />
-        </IconButton>
+        {/* Secondary actions: shown INLINE when there's room (≥ sm), folded into
+            the ⋮ on the narrow phone tier. Save-draft is always present; jump-front
+            only with a queue, force-push only while busy/starting. */}
+        {roomy
+          ? (
+            <>
+              <Tooltip title="Save as draft">
+                <span>
+                  <IconButton
+                    aria-label="save as draft"
+                    disabled={!sendable}
+                    sx={TOOLBAR_ICON_BTN}
+                    onClick={saveDraft}
+                  >
+                    <EditNoteOutlined fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              {queue.length > 0 && (
+                <Tooltip title="Jump to front of queue">
+                  <span>
+                    <IconButton
+                      aria-label="jump to front of queue"
+                      disabled={!sendable}
+                      sx={TOOLBAR_ICON_BTN}
+                      onClick={jumpToFront}
+                    >
+                      <VerticalAlignTop fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+              {(busy || starting) && (
+                <Tooltip title="Force push">
+                  <span>
+                    <IconButton
+                      color="primary"
+                      aria-label="force push"
+                      sx={TOOLBAR_ICON_BTN}
+                      onClick={(e): void => setForceAnchor(e.currentTarget)}
+                    >
+                      <Bolt fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+            </>
+          )
+          : (
+            <IconButton
+              aria-label="more actions"
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(e): void => setActionsMenu(e.currentTarget)}
+            >
+              <MoreVert fontSize="small" />
+            </IconButton>
+          )}
         </Stack>
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}
