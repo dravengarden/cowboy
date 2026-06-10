@@ -141,6 +141,22 @@ here says otherwise.
    `nix build .#cowboy-web --option sandbox false` to capture the new `depsHash`.
    (See the columbus memory `deno-vite-fod-dns-sandbox`.)
 
+9. **Controlled `value={text}` corrupts IME + bounces the caret ("状态错乱") —
+   the composer editors MUST be uncontrolled (fixed v168).** `@uiw/react-codemirror`
+   reconciles the doc whenever the `value` prop changes. Feeding the LIVE state
+   (`value={text}`, where `onChange` also sets `text`) means every keystroke — and
+   every IME composition update — re-applies the value into the editor: it dispatches
+   a doc change mid-composition (corrupting pinyin) and bounces the iOS caret. The
+   inline composer always knew this (`value={initialDraftText.current}`, a frozen
+   seed ref); the FullscreenComposer regressed by passing `value={text}` and was the
+   recurring "状态错乱". **Rule: BOTH composer surfaces are uncontrolled** — seed the
+   editor from a one-shot ref captured at mount (`useRef(value).current` /
+   `initialDraftText`), let text flow OUT via `onChange` only, and empty the doc with
+   the imperative `clear()` handle (never via `value=""`). They remount on every
+   open/collapse, so the frozen seed is always the current text; the parent syncs
+   `initialDraftText.current = text` on collapse to carry edits back. NEVER pass live
+   state as `value` to either editor.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

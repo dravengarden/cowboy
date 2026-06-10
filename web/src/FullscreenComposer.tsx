@@ -71,6 +71,17 @@ export function FullscreenComposer({
   const theme = useTheme();
   const editorRef = useRef<ComposerEditorHandle>(null);
 
+  // UNCONTROLLED, exactly like the inline composer: freeze the open-time text as a
+  // one-shot seed and let `onChange` flow text OUT only. Passing the live
+  // `value={text}` (what we used to do) makes @uiw/react-codemirror reconcile the
+  // doc on EVERY keystroke — and worse, on every IME composition update — which
+  // bounces the iOS caret and corrupts mid-composition pinyin ("状态错乱"). The
+  // inline editor's own comment warns against `value={text}` for exactly this; the
+  // fullscreen surface must follow the same rule. This component remounts on each
+  // open (parent gates it behind `composeFs`), so the frozen seed is always the
+  // current in-progress text at open time; on close the parent syncs it back.
+  const seed = useRef(value).current;
+
   // Raise the keyboard on open. iOS can drop a single early focus while the
   // overlay is still painting, so focus a few times across the first frames
   // (cheap, idempotent) — the editor lands focused with the caret at the end.
@@ -211,7 +222,7 @@ export function FullscreenComposer({
       <Box sx={{ flex: 1, minHeight: 0, p: 1.5, display: "flex", flexDirection: "column" }}>
         <ComposerEditor
           ref={editorRef}
-          value={value}
+          value={seed}
           onChange={onChange}
           onSubmit={onSubmit}
           onSaveDraft={onSaveDraft}
