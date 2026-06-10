@@ -11,6 +11,12 @@ This is an **app-agnostic** CM6 extension package. It lives in cowboy's tree for
 now but has no cowboy dependencies, so it can graduate to `@shared-utils/ui`
 unchanged.
 
+> ⚠️ **Before touching the composer editor, read [`PITFALLS.md`](./PITFALLS.md).**
+> The CM6 markdown editor on iOS WebKit has a field of *coupled* pitfalls (IME ↔
+> caret ↔ the native paste menu ↔ widget render ↔ cowboy's compositing hack).
+> PITFALLS.md is the map + the Obsidian-alignment contract + the "do NOT
+> whack-a-mole" rule + the full verification matrix to run after any change.
+
 ## Public API (`./index.ts`)
 
 All factories return CM6 `Extension`s.

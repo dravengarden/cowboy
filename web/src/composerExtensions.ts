@@ -12,7 +12,13 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
-import { EditorView, highlightActiveLine, keymap } from "@codemirror/view";
+import {
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  keymap,
+} from "@codemirror/view";
 import { type Extension, Prec } from "@codemirror/state";
 import {
   atomicEditorTheme,
@@ -46,7 +52,16 @@ export function livePreviewExtensions(
     // a tiny broken-image DOT. visibility:hidden kills the dot while keeping the
     // element's 0-width layout box, so cursor positioning around widgets is intact.
     EditorView.theme({ ".cm-widgetBuffer": { visibility: "hidden" } }),
-    // Editor chrome that does NOT touch the native selection (safe on touch).
+    // Obsidian's caret: CM draws the cursor + selection itself (drawSelection),
+    // immune to the iOS-WebKit "native caret blinks out under a translateZ(0)
+    // compositing layer" glitch (cowboy's cmTheme promotes the scroller) — that's
+    // the "光标经常消失，尤其上下移动时". dropCursor = the drag-drop caret. The
+    // earlier removal blamed a paste-menu regression, but that was a MISDIAGNOSIS:
+    // no `user-select`/`touch-callout` touches the editable text, and drawSelection
+    // only OVERLAYS the native selection the iOS menu attaches to (Obsidian runs it
+    // with working paste). See PITFALLS.md #2/#3.
+    drawSelection(),
+    dropCursor(),
     highlightActiveLine(),
     indentOnInput(),
     // --- Obsidian-style bracket / emphasis / code-fence pairing ---
@@ -72,20 +87,19 @@ export function livePreviewExtensions(
     inlinePreview(opts),
     EditorView.lineWrapping,
   ];
-  // DROPPED — drawSelection() / dropCursor() / rectangularSelection() /
-  // allowMultipleSelections: these replace the native caret/selection with a
-  // CM-drawn one, which kills iOS's long-press "Paste / Select" menu (a CONFIRMED
-  // regression — the native edit menu needs the native selection). cowboy already
-  // styles the caret via cmTheme (+ vim's block cursor). The visual-glitch fix
-  // they'd bring on desktop isn't worth losing mobile paste; revisit desktop-only
-  // if needed. Also still out (strong reasons): history/default/historyKeymap
-  // (cowboy base provides — a 2nd history splits undo), tables/image-blocks/
-  // wiki-links (the contenteditable IME surfaces), initialRevealField (no use case).
+  // Every add/drop here, and every iOS pitfall it touches, is documented in
+  // web/src/mdlive/PITFALLS.md — READ IT before changing this set. The cardinal
+  // rule: these CM6 extensions are COUPLED on iOS WebKit (caret ↔ IME ↔ the
+  // native paste menu ↔ widget render). Do NOT toggle one to chase a single
+  // symptom; align with Obsidian and re-verify the WHOLE iOS matrix.
+  //
   // DROPPED from atomic's composition, each with a strong reason:
   //   • history() / historyKeymap / defaultKeymap — cowboy's ComposerEditor base
   //     already provides them; a second history() splits undo.
   //   • table-widget / image-blocks / wiki-links — the only contenteditable
   //     surfaces (the IME risk) and out of v1 scope. See mdlive/SYNC.md.
+  //   • rectangularSelection() / allowMultipleSelections — desktop multi-cursor;
+  //     re-add desktop-only if ever wanted (PITFALLS.md inventory).
   //   • initialRevealField — a React-wrapper-local StateField for revealing an
   //     initial range on open (a search/deep-link use case cowboy doesn't have).
 }
