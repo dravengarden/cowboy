@@ -1,8 +1,9 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   AppBar,
   Box,
+  Divider,
   IconButton,
   Stack,
   Toolbar,
@@ -12,16 +13,22 @@ import {
 import {
   AlternateEmail,
   AttachFile,
+  CheckBoxOutlined,
   CloseFullscreen,
   Code,
+  DataObject,
   FormatBold,
   FormatItalic,
   FormatListBulleted,
+  FormatListNumbered,
   FormatQuote,
   InsertLink,
+  Redo,
   Send,
+  StrikethroughS,
   Tag,
   Title,
+  Undo,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import type { AvailableCommand } from "./protocol";
@@ -63,8 +70,6 @@ export function FullscreenComposer({
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<ComposerEditorHandle>(null);
-  // The toolbar swaps INSERT actions (no selection) ↔ WRAP actions (selection).
-  const [hasSelection, setHasSelection] = useState(false);
 
   // Raise the keyboard on open. iOS can drop a single early focus while the
   // overlay is still painting, so focus a few times across the first frames
@@ -81,55 +86,67 @@ export function FullscreenComposer({
     fn();
   };
 
-  // Each action keeps the keyboard up (the handle methods re-focus the editor).
-  const insertActions = (
+  // A FIXED, comprehensive Obsidian-style toolbar (no selection-swap). The
+  // wrap/inline actions work with OR without a selection (the handle inserts an
+  // empty marker pair at the caret when nothing is selected). Scrolls
+  // horizontally on a narrow phone. Each action re-focuses the editor (keyboard
+  // stays up). A thin divider groups history / format / block / insert.
+  const e = (): ComposerEditorHandle | null => editorRef.current;
+  const sep = (
+    <Divider orientation="vertical" flexItem sx={{ my: 0.75, mx: 0.25 }} />
+  );
+  const actions = (
     <>
-      <ToolBtn title="Heading" onClick={act(() => editorRef.current?.cycleHeading())}>
+      <ToolBtn title="Undo" onClick={act(() => e()?.undo())}>
+        <Undo />
+      </ToolBtn>
+      <ToolBtn title="Redo" onClick={act(() => e()?.redo())}>
+        <Redo />
+      </ToolBtn>
+      {sep}
+      <ToolBtn title="Heading" onClick={act(() => e()?.cycleHeading())}>
         <Title />
       </ToolBtn>
-      <ToolBtn
-        title="Bulleted list"
-        onClick={act(() => editorRef.current?.toggleLinePrefix("- "))}
-      >
-        <FormatListBulleted />
+      <ToolBtn title="Bold" onClick={act(() => e()?.wrap("**", "**"))}>
+        <FormatBold />
       </ToolBtn>
-      <ToolBtn
-        title="Quote"
-        onClick={act(() => editorRef.current?.toggleLinePrefix("> "))}
-      >
-        <FormatQuote />
+      <ToolBtn title="Italic" onClick={act(() => e()?.wrap("*", "*"))}>
+        <FormatItalic />
       </ToolBtn>
-      <ToolBtn title="Inline code" onClick={act(() => editorRef.current?.wrap("`", "`"))}>
+      <ToolBtn title="Strikethrough" onClick={act(() => e()?.wrap("~~", "~~"))}>
+        <StrikethroughS />
+      </ToolBtn>
+      <ToolBtn title="Inline code" onClick={act(() => e()?.wrap("`", "`"))}>
         <Code />
       </ToolBtn>
-      <ToolBtn title="Mention" onClick={act(() => editorRef.current?.insertTrigger("@"))}>
+      <ToolBtn title="Link" onClick={act(() => e()?.insertLink())}>
+        <InsertLink />
+      </ToolBtn>
+      {sep}
+      <ToolBtn title="Bulleted list" onClick={act(() => e()?.toggleLinePrefix("- "))}>
+        <FormatListBulleted />
+      </ToolBtn>
+      <ToolBtn title="Numbered list" onClick={act(() => e()?.toggleLinePrefix("1. "))}>
+        <FormatListNumbered />
+      </ToolBtn>
+      <ToolBtn title="Checklist" onClick={act(() => e()?.toggleLinePrefix("- [ ] "))}>
+        <CheckBoxOutlined />
+      </ToolBtn>
+      <ToolBtn title="Quote" onClick={act(() => e()?.toggleLinePrefix("> "))}>
+        <FormatQuote />
+      </ToolBtn>
+      <ToolBtn title="Code block" onClick={act(() => e()?.insertCodeBlock())}>
+        <DataObject />
+      </ToolBtn>
+      {sep}
+      <ToolBtn title="Mention" onClick={act(() => e()?.insertTrigger("@"))}>
         <AlternateEmail />
       </ToolBtn>
-      <ToolBtn
-        title="Slash command"
-        onClick={act(() => editorRef.current?.insertTrigger("/"))}
-      >
+      <ToolBtn title="Slash command" onClick={act(() => e()?.insertTrigger("/"))}>
         <Tag />
       </ToolBtn>
       <ToolBtn title="Attach" onClick={act(onAttach)}>
         <AttachFile />
-      </ToolBtn>
-    </>
-  );
-
-  const wrapActions = (
-    <>
-      <ToolBtn title="Bold" onClick={act(() => editorRef.current?.wrap("**", "**"))}>
-        <FormatBold />
-      </ToolBtn>
-      <ToolBtn title="Italic" onClick={act(() => editorRef.current?.wrap("*", "*"))}>
-        <FormatItalic />
-      </ToolBtn>
-      <ToolBtn title="Inline code" onClick={act(() => editorRef.current?.wrap("`", "`"))}>
-        <Code />
-      </ToolBtn>
-      <ToolBtn title="Link" onClick={act(() => editorRef.current?.insertLink())}>
-        <InsertLink />
       </ToolBtn>
     </>
   );
@@ -202,7 +219,6 @@ export function FullscreenComposer({
           commands={commands}
           placeholder={placeholder}
           onPasteFiles={onPasteFiles}
-          onSelectionChange={setHasSelection}
           borderless
           fill
           vim={false}
@@ -213,13 +229,12 @@ export function FullscreenComposer({
         />
       </Box>
 
-      {/* Selection-aware markdown toolbar, pinned just above the keyboard. Insert
-          actions with no selection (H/list/quote/code/@//attach), wrap actions
-          when text is selected (bold/italic/code/link). */}
+      {/* Fixed Obsidian-style markdown toolbar, pinned just above the keyboard;
+          scrolls horizontally on a narrow phone. */}
       <Stack
         direction="row"
         alignItems="center"
-        spacing={0.5}
+        spacing={0.25}
         sx={{
           px: 1,
           py: 0.5,
@@ -227,11 +242,10 @@ export function FullscreenComposer({
           borderColor: "divider",
           bgcolor: "background.paper",
           overflowX: "auto",
-          // Don't let the row wrap; let it scroll on a narrow phone.
           flexWrap: "nowrap",
         }}
       >
-        {hasSelection ? wrapActions : insertActions}
+        {actions}
       </Stack>
     </Box>,
     document.body,

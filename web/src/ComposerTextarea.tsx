@@ -252,6 +252,9 @@ export const ComposerTextarea = forwardRef<
     toggleLinePrefix: (): void => undefined,
     cycleHeading: (): void => undefined,
     insertLink: (): void => undefined,
+    insertCodeBlock: (): void => undefined,
+    undo: (): void => undefined,
+    redo: (): void => undefined,
   }));
 
   const popup = trigger && options.length > 0 && (

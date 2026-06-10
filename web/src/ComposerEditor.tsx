@@ -19,7 +19,7 @@ import {
   completionKeymap,
   startCompletion,
 } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
@@ -59,6 +59,11 @@ export interface ComposerEditorHandle {
   cycleHeading: () => void;
   /// Insert a `[selection](url)` link with `url` pre-selected for typing.
   insertLink: () => void;
+  /// Wrap the selection (or the caret) in a fenced ``` code block.
+  insertCodeBlock: () => void;
+  /// Undo / redo (the toolbar's history buttons).
+  undo: () => void;
+  redo: () => void;
 }
 
 // Reads whether the editor is in Vim *insert* mode, via the loaded vim module's
@@ -380,6 +385,31 @@ export const ComposerEditor = forwardRef<
         selection: { anchor: urlAt, head: urlAt + 3 }, // select "url" to overtype
       });
       view.focus();
+    },
+    insertCodeBlock: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      const sel = view.state.sliceDoc(from, to);
+      view.dispatch({
+        changes: { from, to, insert: `\`\`\`\n${sel}\n\`\`\`` },
+        selection: { anchor: from + 4 + sel.length }, // end of the content line
+      });
+      view.focus();
+    },
+    undo: (): void => {
+      const view = cmRef.current?.view;
+      if (view) {
+        undo(view);
+        view.focus();
+      }
+    },
+    redo: (): void => {
+      const view = cmRef.current?.view;
+      if (view) {
+        redo(view);
+        view.focus();
+      }
     },
   }));
 
