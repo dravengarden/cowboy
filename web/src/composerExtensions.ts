@@ -13,7 +13,7 @@ import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
 import { EditorView, highlightActiveLine, keymap } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import { type Extension, Prec } from "@codemirror/state";
 import {
   atomicEditorTheme,
   atomicMarkdownSyntax,
@@ -62,7 +62,13 @@ export function livePreviewExtensions(
     }),
     atomicMarkdownSyntax,
     atomicEditorTheme,
-    keymap.of([...closeBracketsKeymap, ...searchKeymap, ...markdownKeymap, indentWithTab]),
+    // closeBracketsKeymap's Backspace deletes an EMPTY pair as a unit (`*|*`,
+    // `**|**`, `` `|` ``, `(|)`, …) — Obsidian's "delete front removes back too".
+    // It MUST out-rank cowboy's defaultKeymap `deleteCharBackward` (which only
+    // deletes one char, orphaning the closer), so wrap it Prec.high. (cowboy's
+    // own Prec.high token-Backspace runs first but no-ops outside a token.)
+    Prec.high(keymap.of(closeBracketsKeymap)),
+    keymap.of([...searchKeymap, ...markdownKeymap, indentWithTab]),
     inlinePreview(opts),
     EditorView.lineWrapping,
   ];
