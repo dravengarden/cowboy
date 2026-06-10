@@ -241,15 +241,18 @@ function ComposeBar(
       <Stack
         direction="row"
         alignItems="center"
-        // Left-aligned, tight gap, and COMPACT icons (38px vs the global 44px) so
-        // the full action set (up to 9 when busy + queued) fits one row on a phone
-        // — avoids the ugly lone-icon-on-a-second-row wrap. Still wraps as a last
-        // resort on the very narrowest widths.
+        // Left-aligned, ZERO inter-icon gap, and COMPACT icons (36px vs the global
+        // 44px) so the full action set (up to 9 when busy + queued — incl. the
+        // trailing Exit-fullscreen) fits ONE row even on a 375pt phone. The 36px
+        // buttons still have internal padding, so gap:0 reads as a tight-but-spaced
+        // toolbar, not glyphs touching. This is what keeps Exit-fullscreen inline
+        // next to Send instead of orphaning onto a lonely second row. Still wraps
+        // as a last resort on the very narrowest widths.
         sx={{
           justifyContent: "flex-start",
           flexWrap: "wrap",
-          gap: 0.25,
-          "& .MuiIconButton-root": { width: 38, height: 38 },
+          gap: 0,
+          "& .MuiIconButton-root": { width: 36, height: 36 },
           "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
         }}
       >
@@ -263,7 +266,7 @@ function ComposeBar(
             >
               <Box
                 component="span"
-                sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
+                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
               >
                 /
               </Box>
@@ -979,7 +982,7 @@ export function Composer({
               }
               <Box
                 component="span"
-                sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1 }}
+                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
               >
                 /
               </Box>
