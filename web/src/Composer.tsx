@@ -466,12 +466,18 @@ export function Composer({
   // inline expand instead (composeFs is never set true there).
   const [composeFs, setComposeFs] = useState(false);
   // Focus the fullscreen editor when it opens (the inline one just unmounted, so
-  // the shared editorRef now points here). Small delay so the sheet has mounted;
-  // on touch the keyboard may need one tap if it lands outside the gesture window.
+  // the shared editorRef now points here). Re-focus across the sheet's slide-in
+  // (~320ms): a single early focus intermittently gets dropped by iOS while the
+  // cover is mid-transform (the "input doesn't show / no cursor" bug), so retry
+  // at a few points up to past the settle. focusEnd is idempotent once it holds.
   useEffect(() => {
     if (!composeFs) return undefined;
-    const t = globalThis.setTimeout(() => editorRef.current?.focusEnd(), 60);
-    return () => globalThis.clearTimeout(t);
+    const timers = [60, 200, 400].map((d) =>
+      globalThis.setTimeout(() => editorRef.current?.focusEnd(), d)
+    );
+    return () => {
+      for (const t of timers) globalThis.clearTimeout(t);
+    };
   }, [composeFs]);
   // Stopping a running turn is confirmed through a modal (Enter confirms, Esc
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
