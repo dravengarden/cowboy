@@ -953,10 +953,12 @@ export function Composer({
           bgcolor: "transparent",
         }}
       >
-      {/* Top-edge resize handle (desktop): drag to grow/shrink the editor; dragging
-          past the bottom threshold auto-collapses to the compact auto-grow editor,
-          dragging up auto-expands (VSCode-terminal feel). Hidden on touch — the
-          fullscreen sheet covers that. */}
+      {/* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
+          bottom threshold auto-collapses to the compact auto-grow editor, dragging
+          up auto-expands (VSCode-terminal feel). A bigger hit area + an always-
+          visible grab-pill so it's findable. Shown unless this is the fullscreen
+          sheet (composeFs). Desktop only — the resizable ComposerEditor is the
+          !touchInput branch; touch uses the compact editor + the fullscreen ↗. */}
       {!touchInput && !composeFs && (
         <Box
           onPointerDown={onResizeStart}
@@ -965,27 +967,28 @@ export function Composer({
           aria-label="Resize editor"
           sx={{
             position: "absolute",
-            top: -4,
+            top: -9,
             left: 0,
             right: 0,
-            height: 9,
+            height: 18,
             cursor: "ns-resize",
-            zIndex: 4,
-            // A subtle grip that brightens on hover.
+            touchAction: "none",
+            zIndex: 6,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            // An always-faintly-visible grab-pill (brightens on hover) so it reads
+            // as draggable instead of an invisible hot-zone.
             "&::after": {
               content: "\"\"",
-              position: "absolute",
-              left: "50%",
-              top: "50%",
-              transform: "translate(-50%, -50%)",
-              width: 32,
-              height: 3,
+              width: 44,
+              height: 4,
               borderRadius: 2,
               bgcolor: "text.disabled",
-              opacity: 0,
-              transition: "opacity .15s",
+              opacity: 0.45,
+              transition: "opacity .15s, background-color .15s, width .15s",
             },
-            "&:hover::after": { opacity: 0.8 },
+            "&:hover::after": { opacity: 0.95, bgcolor: "text.secondary", width: 56 },
           }}
         />
       )}
