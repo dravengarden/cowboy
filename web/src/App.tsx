@@ -1570,6 +1570,18 @@ function AutoResumeSettings(): React.JSX.Element {
     const [draft, setDraft] = useState(saved);
     const dirty = draft !== saved;
     const preview = interpolateTemplate(draft, AUTO_RESUME_SAMPLE);
+    // This disclosure sits near the bottom of the settings sheet, so expanding it
+    // reveals the editor BELOW the fold. Pull the revealed content into view (next
+    // frame, after it's laid out) so you don't have to hand-scroll. `block: "end"`
+    // brings the bottom (the Save row) up; `nearest` would only reveal the top.
+    const editorRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!editorOpen) return undefined;
+        const id = requestAnimationFrame(() => {
+            editorRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+        });
+        return () => cancelAnimationFrame(id);
+    }, [editorOpen]);
     return (
         <Stack spacing={1}>
             <Typography variant="overline" color="text.secondary">
@@ -1605,7 +1617,7 @@ function AutoResumeSettings(): React.JSX.Element {
                 Customize continuation message
             </Button>
             {editorOpen && (
-                <Stack spacing={1}>
+                <Stack ref={editorRef} spacing={1}>
                     <Typography variant="caption" color="text.secondary">
                         Variables: {"{{partial}}"} produced so far · {"{{prompt}}"} original
                         prompt · {"{{cwd}}"} working directory
