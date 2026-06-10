@@ -24,6 +24,8 @@ export function useKeyboardInset(): void {
     const doc = globalThis.document;
     let raf = 0;
     let timers: number[] = [];
+    let poll = 0;
+    let lastInset = -1;
     const apply = (): void => {
       raf = 0;
       // Keyboard overlap = layout-viewport height − visual-viewport height. We do
@@ -32,8 +34,13 @@ export function useKeyboardInset(): void {
       // an overscroll / rubber-band as the visual viewport pans, which inflated the
       // inset and left the sheet lifted too high above the keyboard with a stale gap
       // ("有时候滚动过头"). vv.height stays constant under that pan, so this is stable.
-      const overlap = Math.max(0, globalThis.innerHeight - vv.height);
-      root.style.setProperty("--kb-inset", `${String(Math.round(overlap))}px`);
+      const overlap = Math.round(Math.max(0, globalThis.innerHeight - vv.height));
+      // Only write on change — the focus poll below runs apply() every 300ms, and
+      // a same-value setProperty would still be a needless style touch each tick.
+      if (overlap !== lastInset) {
+        lastInset = overlap;
+        root.style.setProperty("--kb-inset", `${String(overlap)}px`);
+      }
     };
     const applyNow = (): void => {
       if (raf === 0) raf = globalThis.requestAnimationFrame(apply);
@@ -55,19 +62,46 @@ export function useKeyboardInset(): void {
       clearTimers();
       timers = [120, 300, 550].map((d) => globalThis.setTimeout(apply, d));
     };
+    // Poll WHILE a field is focused. iOS changes the keyboard's height — the
+    // IME candidate / predictive bar appearing or disappearing as you type, a
+    // layout switch — WITHOUT reliably firing a visualViewport `resize`, so
+    // --kb-inset goes stale (too big) and the cover sheet sits with a gap above the
+    // keyboard ("还是有一定概率出现"). A 300ms re-measure while focused self-corrects
+    // any untracked change; the change-guard above keeps idle ticks free.
+    const startPoll = (): void => {
+      if (poll === 0) poll = globalThis.setInterval(apply, 300);
+    };
+    const stopPoll = (): void => {
+      if (poll !== 0) {
+        globalThis.clearInterval(poll);
+        poll = 0;
+      }
+    };
+    const onFocusIn = (): void => {
+      schedule();
+      startPoll();
+    };
+    const onFocusOut = (): void => {
+      schedule();
+      stopPoll();
+    };
     vv.addEventListener("resize", schedule);
     // `scroll` fires every scroll frame and never changes the keyboard height, so
     // it only needs the cheap immediate re-measure — not the settle timers.
     vv.addEventListener("scroll", applyNow);
-    doc.addEventListener("focusin", schedule);
-    doc.addEventListener("focusout", schedule);
+    doc.addEventListener("focusin", onFocusIn);
+    doc.addEventListener("focusout", onFocusOut);
     schedule();
+    // A field may already be focused before this effect mounts (the sheet auto-
+    // focuses its editor on open).
+    if (doc.activeElement !== null && doc.activeElement !== doc.body) startPoll();
     return () => {
       vv.removeEventListener("resize", schedule);
       vv.removeEventListener("scroll", applyNow);
-      doc.removeEventListener("focusin", schedule);
-      doc.removeEventListener("focusout", schedule);
+      doc.removeEventListener("focusin", onFocusIn);
+      doc.removeEventListener("focusout", onFocusOut);
       clearTimers();
+      stopPoll();
       if (raf !== 0) globalThis.cancelAnimationFrame(raf);
       root.style.removeProperty("--kb-inset");
     };
