@@ -2024,6 +2024,9 @@ function PendingPanel({
   const collapse = collapseStore(`cowboy:${kind}-collapsed`);
   const collapsed = usePrefStore(collapse);
   const toggleCollapsed = (): void => {
+    // Explicit haptic: the collapse/expand header is a custom clickable row, NOT a
+    // MuiButtonBase, so the global delegation doesn't see it. Light disclosure tap.
+    haptic();
     collapse.set(!collapsed);
   };
   const [editingId, setEditingId] = useState<string | null>(null);
