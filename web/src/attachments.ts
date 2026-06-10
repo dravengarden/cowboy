@@ -322,17 +322,27 @@ export function buildContentBlocks(
   const tokens = imageTokensInText(text);
   if (tokens.length > 0) {
     const byId = new Map(attachments.map((a) => [a.id, a]));
+    const seen = new Set<string>();
     const blocks: ContentBlock[] = [];
     let cursor = 0;
     for (const t of tokens) {
       const seg = text.slice(cursor, t.from);
       if (seg.trim()) blocks.push({ type: "text", text: seg });
       const att = byId.get(t.id);
-      if (att) blocks.push(att.block);
+      if (att) {
+        blocks.push(att.block);
+        seen.add(att.id);
+      }
       cursor = t.to;
     }
     const tail = text.slice(cursor);
     if (tail.trim()) blocks.push({ type: "text", text: tail });
+    // Any attachment WITHOUT an inline token (a non-image file kept in the tray, or
+    // one added via a flow that didn't write a token) must still be sent — append
+    // it so it's never silently dropped.
+    for (const a of attachments) {
+      if (!seen.has(a.id)) blocks.push(a.block);
+    }
     return blocks.length > 0 ? blocks : null;
   }
   if (attachments.length === 0) return null;

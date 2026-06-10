@@ -39,6 +39,21 @@ export function forgetInlineAttachment(id: string): void {
   registry.delete(id);
 }
 
+/// Turn the composer's `![name](cowboy-att:id)` tokens into REAL markdown images
+/// (`![name](previewUrl)`) for any read-only display (transcript bubble, queue /
+/// draft previews) so MarkdownImpl renders the actual picture + lightbox instead
+/// of a broken `cowboy-att:` src. A token whose bytes aren't registered on this
+/// device (e.g. synced history after a reload) is dropped — clean text, no broken
+/// image. Use this anywhere a sent/queued/draft message's text is rendered.
+export function inlineTokensToMarkdown(text: string): string {
+  return text.replace(IMG_TOKEN_RE, (_full, id: string) => {
+    const att = registry.get(id);
+    return att?.previewUrl !== undefined && att.isImage
+      ? `![${att.name}](${att.previewUrl})`
+      : "";
+  });
+}
+
 class InlineImageWidget extends WidgetType {
   constructor(
     private readonly id: string,
@@ -81,21 +96,33 @@ class InlineImageWidget extends WidgetType {
   }
 }
 
+// One image == one BLOCK line (Obsidian-style): the token is inserted alone on
+// its own line, and the whole line is replaced by a block widget. Block (not
+// inline) so a tall image never grows the surrounding line box — the caret on the
+// text lines above/below stays a normal text-height bar (an inline image made the
+// caret as tall as the picture: "光标好丑"). Lines that AREN'T a lone token are
+// left untouched (a token accidentally mid-line just stays literal — rare).
+const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
+
 function buildImageDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
+  const { doc } = view.state;
   for (const { from, to } of view.visibleRanges) {
-    const text = view.state.doc.sliceString(from, to);
-    for (const m of text.matchAll(IMG_TOKEN_RE)) {
-      const id = m[1];
-      if (id === undefined) continue;
-      const start = from + (m.index ?? 0);
-      const end = start + m[0].length;
-      const name = /!\[([^\]]*)\]/.exec(m[0])?.[1] ?? "";
-      builder.add(
-        start,
-        end,
-        Decoration.replace({ widget: new InlineImageWidget(id, name) }),
-      );
+    let pos = from;
+    while (pos <= to) {
+      const line = doc.lineAt(pos);
+      const m = LONE_TOKEN_RE.exec(line.text);
+      if (m?.[2] !== undefined) {
+        builder.add(
+          line.from,
+          line.to,
+          Decoration.replace({
+            widget: new InlineImageWidget(m[2], m[1] ?? ""),
+            block: true,
+          }),
+        );
+      }
+      pos = line.to + 1;
     }
   }
   return builder.finish();
@@ -129,15 +156,15 @@ export const inlineImagePlugin = ViewPlugin.fromClass(
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image": {
-    display: "inline-block",
-    verticalAlign: "bottom",
-    maxWidth: "min(100%, 220px)",
-    maxHeight: "160px",
-    borderRadius: "8px",
-    margin: "2px 2px",
+    display: "block",
+    maxWidth: "min(100%, 360px)",
+    maxHeight: "320px",
+    width: "auto",
+    height: "auto",
+    borderRadius: "10px",
+    margin: "4px 0",
     cursor: "zoom-in",
-    // Hint the lightbox affordance; the chip fallback reuses .cm-token-chip.
-    boxShadow: "0 1px 4px rgba(0,0,0,0.18)",
+    boxShadow: "0 1px 6px rgba(0,0,0,0.22)",
   },
 });
 
@@ -146,8 +173,13 @@ export const inlineImageTheme = EditorView.theme({
 /// from gluing to following text and lands the caret after it to keep typing.
 export function insertImageToken(view: EditorView, a: Attachment): void {
   registerInlineAttachment(a);
-  const pos = view.state.selection.main.head;
-  const insert = `![${a.name}](cowboy-att:${a.id}) `;
+  const { state } = view;
+  const pos = state.selection.main.head;
+  // Put the image alone on its OWN line so it block-renders (see the decoration).
+  // Lead with a newline unless we're already at line start; always trail with one,
+  // landing the caret on a fresh line below the image, ready to keep typing.
+  const atLineStart = pos === state.doc.lineAt(pos).from;
+  const insert = `${atLineStart ? "" : "\n"}![${a.name}](cowboy-att:${a.id})\n`;
   view.dispatch({
     changes: { from: pos, insert },
     selection: { anchor: pos + insert.length },
@@ -164,7 +196,10 @@ export function deleteImageTokenBackward(view: EditorView): boolean {
   if (!range.empty) return false;
   const head = range.head;
   const before = state.doc.sliceString(Math.max(0, head - 600), head);
-  const m = /!\[[^\]]*\]\(cowboy-att:([^)]+)\) ?$/.exec(before);
+  // The token lives alone on its own line (insertImageToken). Consume the token
+  // plus the surrounding newlines so one Backspace removes the whole image line
+  // and rejoins the text around it.
+  const m = /\n?!\[[^\]]*\]\(cowboy-att:([^)]+)\)\n?$/.exec(before);
   if (m === null) return false;
   const from = head - m[0].length;
   if (m[1] !== undefined) forgetInlineAttachment(m[1]);

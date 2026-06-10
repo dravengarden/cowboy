@@ -50,6 +50,7 @@ import {
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
+import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
@@ -518,7 +519,7 @@ function OptimisticUserBubble({
           ...(failed && { borderColor: "error.main" }),
         }}
       >
-        <Markdown text={message.text || "📎 attachment"} invert />
+        <Markdown text={inlineTokensToMarkdown(message.text) || "📎 attachment"} invert />
         {sending && (
           <Box
             aria-hidden

@@ -83,7 +83,7 @@ import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
-import { type Attachment, filesToAttachments } from "./attachments";
+import { type Attachment, filesToAttachments, stripImageTokens } from "./attachments";
 import { registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
 import {
   activateAllDrafts,
@@ -2492,9 +2492,13 @@ function PendingRow({
   // Local attachments while editing, seeded from the queued message. The edit
   // box is the SAME ComposerEditor as the main composer, so a queued prompt can
   // gain/lose images here too (pasted screenshots, picked files).
-  const [editAttachments, setEditAttachments] = useState<Attachment[]>(
-    message.attachments,
-  );
+  const [editAttachments, setEditAttachments] = useState<Attachment[]>(() => {
+    // Seed the inline-image registry so this message's `cowboy-att:` tokens render
+    // as thumbnails in the edit box (the same ComposerEditor + plugin), including
+    // queued items synced from another terminal.
+    seedInlineAttachments(message.attachments);
+    return message.attachments;
+  });
   const editorRef = useRef<ComposerEditorHandle>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
@@ -2859,7 +2863,9 @@ function PendingRow({
       sx={{ p: 0.75, display: "flex", alignItems: "flex-start", gap: 0.5 }}
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        {message.text && <ClampedText text={message.text} onTextClick={onEdit} />}
+        {stripImageTokens(message.text).trim() !== "" && (
+          <ClampedText text={stripImageTokens(message.text)} onTextClick={onEdit} />
+        )}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
         )}
@@ -2975,7 +2981,7 @@ function PendingRow({
                 wordBreak: "break-word",
               }}
             >
-              {message.text}
+              {stripImageTokens(message.text)}
             </DialogContentText>
           </DialogContent>
         )}
