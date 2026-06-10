@@ -2048,7 +2048,6 @@ function SettingsShell({
                         inputProps={{ "aria-label": "Sound alert" }}
                     />
                 </Stack>
-                <Divider />
                 <Stack
                     direction="row"
                     alignItems="center"
@@ -2239,19 +2238,25 @@ function LoadingState({ compact = false }: { compact?: boolean }): React.JSX.Ele
     return (
         <Stack
             spacing={2}
-            sx={{ width: "100%", maxWidth: 720, mx: "auto", px: 2, py: 3 }}
+            // EXPLICIT width (not width:100%): this renders inside a
+            // `width: max-content` centred container, where width:100% +
+            // intrinsic-less skeletons collapse to a thin sliver (the reported
+            // "thin line" bug). A fixed min(720, 90vw) gives the parent a definite
+            // width so the bubbles fill it.
+            sx={{ width: "min(720px, 90vw)", px: 2, py: 3 }}
             aria-label="Loading conversation"
         >
             {[0, 1, 2].map((row) => (
-                <Stack key={row} spacing={0.75} sx={{ opacity: 1 - row * 0.22 }}>
+                <Stack key={row} spacing={0.75} sx={{ width: "100%", opacity: 1 - row * 0.2 }}>
                     <Skeleton
                         variant="text"
-                        width={row % 2 === 0 ? "36%" : "28%"}
+                        width={row % 2 === 0 ? 180 : 130}
                         animation="wave"
-                        sx={{ fontSize: "0.8rem" }}
+                        sx={{ fontSize: "0.85rem" }}
                     />
                     <Skeleton
                         variant="rounded"
+                        width="100%"
                         height={row % 2 === 0 ? 72 : 52}
                         animation="wave"
                         sx={{ borderRadius: 2 }}
