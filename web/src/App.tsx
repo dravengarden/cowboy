@@ -74,7 +74,7 @@ import {
     useStore,
 } from "./store";
 import { useSortable } from "./useSortable";
-import { setNotifySetting, useNotifySetting } from "./turnNotify";
+import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
@@ -1768,6 +1768,7 @@ function SettingsShell({
     }, [open, initialTab]);
     const vim = useVimSetting();
     const notify = useNotifySetting();
+    const vibrate = useVibrateSetting();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
     // screen); the collapsed summary still shows the current face. Resets to
@@ -2036,15 +2037,35 @@ function SettingsShell({
                     spacing={2}
                 >
                     <Stack>
-                        <Typography variant="body2">Attention alert</Typography>
+                        <Typography variant="body2">Sound alert</Typography>
                         <Typography variant="caption" color="text.secondary">
-                            Sound + vibration when an agent finishes or needs you
+                            Chime when an agent finishes or needs you
                         </Typography>
                     </Stack>
                     <Switch
                         checked={notify}
                         onChange={(e): void => setNotifySetting(e.target.checked)}
-                        inputProps={{ "aria-label": "Turn-complete alert" }}
+                        inputProps={{ "aria-label": "Sound alert" }}
+                    />
+                </Stack>
+                <Divider />
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    spacing={2}
+                >
+                    <Stack>
+                        <Typography variant="body2">Vibration alert</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                            Vibrate when an agent finishes or needs you (native on
+                            iPhone, no-op on devices without a vibration motor)
+                        </Typography>
+                    </Stack>
+                    <Switch
+                        checked={vibrate}
+                        onChange={(e): void => setVibrateSetting(e.target.checked)}
+                        inputProps={{ "aria-label": "Vibration alert" }}
                     />
                 </Stack>
                 {mobile && (

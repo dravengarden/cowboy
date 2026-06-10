@@ -24,6 +24,29 @@ export function setNotifySetting(on: boolean): void {
   notify.set(on);
 }
 
+// Vibration alert — INDEPENDENT of the sound, same default-ON "1"/"0" shape. Gates
+// the native OS haptic on turn-end (store.ts, foreground) AND the Android vibrate
+// in fireAlert (backgrounded). So sound and vibration can each be on/off on their
+// own. iOS has no web Vibration API — the buzz there is the native haptics plugin
+// (notifyHaptic), which only fires while the app is foreground.
+const vibrate = persisted("cowboy:notify-vibrate", true, {
+  serialize: (on) => (on ? "1" : "0"),
+  deserialize: (s) => s !== "0",
+});
+
+export function useVibrateSetting(): boolean {
+  return useStore(vibrate);
+}
+
+export function setVibrateSetting(on: boolean): void {
+  vibrate.set(on);
+}
+
+/** Non-reactive read for the store's turn-end haptic gate. */
+export function vibrateAlertOn(): boolean {
+  return vibrate.get();
+}
+
 // --- Sound (Web Audio) ------------------------------------------------------
 //
 // A synthesized chime (no asset to ship/decode).
@@ -168,15 +191,19 @@ function playChime(kind: AlertKind): void {
  * for mid-turn churn, a plain continue, or a force-push (those produce no verdict).
  */
 export function fireAlert(kind: AlertKind): void {
-  if (!notify.get()) return;
+  const wantSound = notify.get();
+  const wantVibrate = vibrate.get();
+  if (!wantSound && !wantVibrate) return;
   // Only alert when the user ISN'T actively looking. A turn that finishes while
   // you're watching (e.g. the agent's quick reply right after you hit send) you
   // can already SEE — chiming then is just noise. The alert is for when you've
-  // switched away; the tab being hidden is exactly that signal.
+  // switched away; the tab being hidden is exactly that signal. (The foreground
+  // native haptic is fired separately in the store, not here.)
   if (globalThis.document?.visibilityState === "visible") return;
-  playChime(kind);
-  // Android only; iOS has no web Vibration API (silent no-op there).
-  if (typeof globalThis.navigator?.vibrate === "function") {
+  if (wantSound) playChime(kind);
+  // Android only; iOS has no web Vibration API (its buzz is the native haptics
+  // plugin, fired foreground from the store). Gated on the vibration setting.
+  if (wantVibrate && typeof globalThis.navigator?.vibrate === "function") {
     try {
       globalThis.navigator.vibrate(BUZZ[kind]);
     } catch {
