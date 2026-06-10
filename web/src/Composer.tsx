@@ -2060,9 +2060,9 @@ function PendingPanel({
         ? reorderQueue(sessionId, order)
         : reorderDrafts(sessionId, order),
     onDragStart: (): void => {
-      haptic(); // light — "grabbed", reorder is now active (standard iOS feel)
+      // Pickup haptic is fired centrally in useSortable (covers every list). Here
+      // we only need the QUEUE-specific hold: holding the head pauses the drain.
       if (kind === "queued") {
-        // For the QUEUE, holding the head pauses the drain until the drop.
         const head = items[0];
         if (head) setQueueEditing(sessionId, head.id);
       }
