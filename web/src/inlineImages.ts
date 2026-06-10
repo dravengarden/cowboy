@@ -29,9 +29,11 @@ const registry = new Map<string, Attachment>();
 // image id + its DOM node (to anchor the popover). Falls back to opening the
 // lightbox directly when no host has registered (e.g. a stray mount). Single
 // module-level slot is fine: only one composer surface is mounted at a time.
-let imageTapHandler: ((id: string, el: HTMLElement) => void) | null = null;
+let imageTapHandler:
+  | ((id: string, el: HTMLElement, x: number, y: number) => void)
+  | null = null;
 export function setImageTapHandler(
-  fn: ((id: string, el: HTMLElement) => void) | null,
+  fn: ((id: string, el: HTMLElement, x: number, y: number) => void) | null,
 ): void {
   imageTapHandler = fn;
 }
@@ -68,17 +70,23 @@ class InlineImageWidget extends WidgetType {
   constructor(
     private readonly id: string,
     private readonly name: string,
+    // True when the doc selection covers this image's block line (Backspace-armed
+    // delete, or a range select) — draws the selection ring.
+    private readonly selected: boolean,
   ) {
     super();
   }
   override eq(other: InlineImageWidget): boolean {
-    return other.id === this.id && other.name === this.name;
+    return other.id === this.id && other.name === this.name &&
+      other.selected === this.selected;
   }
   override toDOM(): HTMLElement {
     const att = registry.get(this.id);
     if (att?.previewUrl !== undefined && att.isImage) {
       const img = document.createElement("img");
-      img.className = "cm-inline-image";
+      img.className = this.selected
+        ? "cm-inline-image cm-inline-image-selected"
+        : "cm-inline-image";
       img.src = att.previewUrl;
       img.alt = att.name;
       img.draggable = false;
@@ -89,7 +97,9 @@ class InlineImageWidget extends WidgetType {
       img.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (imageTapHandler !== null) imageTapHandler(id, img);
+        // Hand the tap point to the host so the popover opens at the finger, not
+        // anchored to this (possibly tall) image's bottom edge.
+        if (imageTapHandler !== null) imageTapHandler(id, img, e.clientX, e.clientY);
         else openLightbox([att], 0);
       });
       return img;
@@ -120,15 +130,19 @@ const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const { doc } = state;
+  const sel = state.selection.main;
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
     const m = LONE_TOKEN_RE.exec(line.text);
     if (m?.[2] !== undefined) {
+      // Selected when a non-empty selection fully contains this image's block line
+      // (set by the two-stage Backspace below, or a manual range select).
+      const selected = !sel.empty && sel.from <= line.from && sel.to >= line.to;
       builder.add(
         line.from,
         line.to,
         Decoration.replace({
-          widget: new InlineImageWidget(m[2], m[1] ?? ""),
+          widget: new InlineImageWidget(m[2], m[1] ?? "", selected),
           block: true,
         }),
       );
@@ -145,7 +159,10 @@ function buildImageDecorations(state: EditorState): DecorationSet {
 /// the decorations and the atomic ranges (arrow keys skip an image as one unit).
 export const inlineImageField = StateField.define<DecorationSet>({
   create: (state) => buildImageDecorations(state),
-  update: (value, tr) => (tr.docChanged ? buildImageDecorations(tr.state) : value),
+  // Rebuild on doc OR selection change — the selection drives the "armed for
+  // delete" ring (the two-stage Backspace below selects before it deletes).
+  update: (value, tr) =>
+    tr.docChanged || tr.selection ? buildImageDecorations(tr.state) : value,
   provide: (f) => [
     EditorView.decorations.from(f),
     EditorView.atomicRanges.of(
@@ -218,22 +235,38 @@ export function removeImageTokenById(view: EditorView, id: string): void {
   }
 }
 
-/// Backspace that removes a whole inline-image token in one press (caret just
-/// after `…(cowboy-att:…)` or its trailing space). Returns false otherwise so the
-/// normal / @-token Backspace still runs. Wire it BEFORE deleteTokenBackward.
+// `\n?` token `\n?` — a whole image block line (token + its surrounding newlines).
+const IMG_BLOCK_RE = /\n?!\[[^\]]*\]\(cowboy-att:([^)]+)\)\n?$/;
+
+/// TWO-STAGE Backspace for inline images, so a stray keypress can't wipe a picture:
+///   • caret right after an image block → SELECT it (don't delete) + ring it;
+///   • that image block already selected → DELETE it (token + newlines) + forget.
+/// Returns false otherwise so the normal / @-token Backspace still runs. Wire it
+/// BEFORE deleteTokenBackward.
 export function deleteImageTokenBackward(view: EditorView): boolean {
   const { state } = view;
   const range = state.selection.main;
-  if (!range.empty) return false;
+
+  // Stage 2: an image block is the current selection → delete it.
+  if (!range.empty) {
+    const sel = state.sliceDoc(range.from, range.to);
+    const m = /^\n?!\[[^\]]*\]\(cowboy-att:([^)]+)\)\n?$/.exec(sel);
+    if (m === null) return false; // a normal selection → default Backspace
+    if (m[1] !== undefined) forgetInlineAttachment(m[1]);
+    view.dispatch({
+      changes: { from: range.from, to: range.to },
+      selection: { anchor: range.from },
+    });
+    return true;
+  }
+
+  // Stage 1: caret just after an image block → select it (a second Backspace, or
+  // the popover's Delete, confirms). The selection drives the ring via the field.
   const head = range.head;
   const before = state.doc.sliceString(Math.max(0, head - 600), head);
-  // The token lives alone on its own line (insertImageToken). Consume the token
-  // plus the surrounding newlines so one Backspace removes the whole image line
-  // and rejoins the text around it.
-  const m = /\n?!\[[^\]]*\]\(cowboy-att:([^)]+)\)\n?$/.exec(before);
+  const m = IMG_BLOCK_RE.exec(before);
   if (m === null) return false;
   const from = head - m[0].length;
-  if (m[1] !== undefined) forgetInlineAttachment(m[1]);
-  view.dispatch({ changes: { from, to: head }, selection: { anchor: from } });
+  view.dispatch({ selection: { anchor: from, head } });
   return true;
 }

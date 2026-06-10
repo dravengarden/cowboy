@@ -599,9 +599,9 @@ export function Composer({
   // Inline-image selection popover. Tapping an inline image opens a small popover
   // (Preview / Delete) anchored to its <img>, ringed while open. The image widget
   // lives outside React, so it calls a module-level tap handler we register here.
-  const [imgSel, setImgSel] = useState<{ id: string; el: HTMLElement } | null>(
-    null,
-  );
+  const [imgSel, setImgSel] = useState<
+    { id: string; el: HTMLElement; x: number; y: number } | null
+  >(null);
   const closeImgSel = (): void => {
     setImgSel((cur) => {
       cur?.el.classList.remove("cm-inline-image-selected");
@@ -609,11 +609,11 @@ export function Composer({
     });
   };
   useEffect(() => {
-    setImageTapHandler((id, el) => {
+    setImageTapHandler((id, el, x, y) => {
       setImgSel((prev) => {
         prev?.el.classList.remove("cm-inline-image-selected");
         el.classList.add("cm-inline-image-selected");
-        return { id, el };
+        return { id, el, x, y };
       });
     });
     return (): void => setImageTapHandler(null);
@@ -1604,11 +1604,14 @@ export function Composer({
           the tapped <img>, which is ringed via .cm-inline-image-selected. */}
       <Popover
         open={imgSel !== null}
-        anchorEl={imgSel?.el ?? null}
+        anchorReference="anchorPosition"
+        anchorPosition={imgSel !== null
+          ? { top: imgSel.y, left: imgSel.x }
+          : undefined}
         onClose={closeImgSel}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-        transformOrigin={{ vertical: "top", horizontal: "center" }}
-        slotProps={{ paper: { sx: { mt: 0.5, borderRadius: 2 } } }}
+        anchorOrigin={{ vertical: "center", horizontal: "center" }}
+        transformOrigin={{ vertical: "center", horizontal: "center" }}
+        slotProps={{ paper: { sx: { borderRadius: 3 } } }}
       >
         <Stack direction="row" sx={{ p: 0.5 }} spacing={0.25}>
           <Button
