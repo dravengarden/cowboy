@@ -671,6 +671,10 @@ export function Composer({
 
   function submit(): void {
     if (!sendable) return;
+    // Light tap confirming the prompt committed (sent or queued). This is THE
+    // send path — Send button, Enter-to-send, and the Queue short-tap
+    // (onQueueClick) all route here, so one haptic covers them all.
+    haptic();
     const trimmed = text.trimEnd();
     // The daemon decides: dispatch straight through when the session can take a
     // turn now, else stack the prompt on the (server-owned) queue.
@@ -1149,8 +1153,11 @@ export function Composer({
             aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
             color={sticky ? "primary" : "default"}
             sx={TOOLBAR_ICON_BTN}
-            onClick={(): void =>
-              sticky ? setSticky(sessionId, false) : requestStickToBottom(sessionId)}
+            onClick={(): void => {
+              haptic(); // light — confirm the toggle flipped
+              if (sticky) setSticky(sessionId, false);
+              else requestStickToBottom(sessionId);
+            }}
           >
             <VerticalAlignBottom />
           </IconButton>
@@ -1539,6 +1546,7 @@ export function Composer({
             variant="contained"
             autoFocus
             onClick={(): void => {
+              haptic(24); // medium — interrupting a running turn is significant
               send({ type: "cancel", session_id: sessionId });
               setCancelOpen(false);
             }}
@@ -1877,7 +1885,10 @@ function OptimisticDraftRow({
             <IconButton
               size="small"
               aria-label="retry send"
-              onClick={(): void => retryQueued(sessionId, cmid)}
+              onClick={(): void => {
+                haptic(); // light — recovery action
+                retryQueued(sessionId, cmid);
+              }}
             >
               <Refresh fontSize="small" />
             </IconButton>
@@ -1886,7 +1897,10 @@ function OptimisticDraftRow({
             <IconButton
               size="small"
               aria-label="discard"
-              onClick={(): void => discardQueued(sessionId, cmid)}
+              onClick={(): void => {
+                haptic(24); // medium — discarding a failed message
+                discardQueued(sessionId, cmid);
+              }}
             >
               <Close fontSize="small" />
             </IconButton>
@@ -1920,6 +1934,9 @@ function ConfirmButton({
 }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const confirm = (): void => {
+    // Confirming a destructive action (error color, e.g. Clear All) gets a firmer
+    // medium tap; a benign bulk confirm (Send all) a light one.
+    haptic(confirmColor === "error" ? 24 : 12);
     onConfirm();
     setAnchor(null);
   };
@@ -2039,12 +2056,14 @@ function PendingPanel({
       kind === "queued"
         ? reorderQueue(sessionId, order)
         : reorderDrafts(sessionId, order),
-    onDragStart: kind === "queued"
-      ? (): void => {
+    onDragStart: (): void => {
+      haptic(); // light — "grabbed", reorder is now active (standard iOS feel)
+      if (kind === "queued") {
+        // For the QUEUE, holding the head pauses the drain until the drop.
         const head = items[0];
         if (head) setQueueEditing(sessionId, head.id);
       }
-      : undefined,
+    },
     onDragEnd: kind === "queued"
       ? (): void => setQueueEditing(sessionId, null)
       : undefined,
@@ -2112,7 +2131,11 @@ function PendingPanel({
             aria-label={reordering ? "done reordering" : "reorder"}
             title={reordering ? "Done" : "Reorder"}
             color={reordering ? "primary" : "default"}
-            onClick={(): void => setReordering((r) => !r)}
+            onClick={(): void =>
+              setReordering((r) => {
+                if (!r) haptic(); // light — entering reorder mode (grips now live)
+                return !r;
+              })}
             sx={{ flexShrink: 0, [ROW_ACTIONS_INLINE]: { display: "none" } }}
           >
             <SwapVert fontSize="small" />
@@ -2360,6 +2383,7 @@ function PendingRow({
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
   const doRemove = (): void => {
+    haptic(24); // medium — confirming an irreversible delete
     if (kind === "draft") removeDraft(sessionId, message.id);
     else removeQueued(sessionId, message.id);
     setConfirmRemove(false);

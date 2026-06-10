@@ -20,6 +20,7 @@ import {
 import { idbListKeys, idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
+import { notifyHaptic } from "./haptic";
 import { fireAlert } from "./turnNotify";
 import type {
   ConfigOption,
@@ -425,8 +426,17 @@ function handle(msg: Outbound): void {
       // something) → the decision chime. A plain continue / a force-push lands here
       // with both false → no sound. (The provisional hold doesn't send a
       // judge_result — only a real L1/L2 verdict does.)
-      if (msg.judge.done) fireAlert("done");
-      else if (msg.judge.awaiting_user) fireAlert("decision");
+      // Haptic on the SAME semantic turn-end the chime fires on (fired
+      // unconditionally — unlike fireAlert which self-gates on tab-hidden — since a
+      // native haptic only registers while the app is foreground anyway, and that's
+      // exactly when the "it finished / it needs you" buzz is wanted).
+      if (msg.judge.done) {
+        fireAlert("done");
+        notifyHaptic("success");
+      } else if (msg.judge.awaiting_user) {
+        fireAlert("decision");
+        notifyHaptic("warning");
+      }
       break;
     }
     case "judge_history": {
@@ -459,7 +469,10 @@ function handle(msg: Outbound): void {
       // Something went wrong with an agent turn → the error chime (only for
       // session-scoped errors; a bare command rejection isn't a "problem" worth a
       // sound). `fireAlert` still self-gates on the setting + tab visibility.
-      if (msg.session_id !== undefined) fireAlert("error");
+      if (msg.session_id !== undefined) {
+        fireAlert("error");
+        notifyHaptic("error");
+      }
       break;
     }
   }
