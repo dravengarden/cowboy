@@ -152,6 +152,11 @@ export const ComposerEditor = forwardRef<
     /// Drag-resized expanded height (px). 0 → the 48vh default. Only honoured when
     /// `expanded`; the top-edge resize handle writes it (composerExpand store).
     heightPx?: number;
+    /// Fill mode (two-column desktop layout): the editor stretches to fill its
+    /// flex parent's height instead of the vh-bounded compact/expanded sizes. The
+    /// column height IS the size, so there's no compact↔expand toggle here.
+    /// Overrides `expanded`/`heightPx`.
+    fill?: boolean;
   }
 >(function ComposerEditor(
   {
@@ -173,6 +178,7 @@ export const ComposerEditor = forwardRef<
     borderless = false,
     expanded = false,
     heightPx = 0,
+    fill = false,
   },
   ref,
 ): React.JSX.Element {
@@ -467,6 +473,10 @@ export const ComposerEditor = forwardRef<
         // Transparent like a real MUI OutlinedInput — inherits the composer
         // bar's surface so there's never a background mismatch.
         bgcolor: "transparent",
+        // Fill mode (column layout): stretch to the flex parent's height and let
+        // the inner CodeMirror own the scroll. `minHeight: 0` lets it shrink
+        // below content inside the flex column so the scroller, not the page, grows.
+        ...(fill && { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }),
         // OutlinedInput small content padding.
         px: "14px",
         py: "8.5px",
@@ -515,8 +525,16 @@ export const ComposerEditor = forwardRef<
         theme="none"
         basicSetup={false}
         extensions={extensions}
-        minHeight={expanded ? expandedHeight : "24px"}
-        maxHeight={expanded ? expandedHeight : "40vh"}
+        // Fill: height:100% so the editor stretches to the (flex:1) wrapper above,
+        // which itself fills the column — the `style` flex:1/minHeight:0 makes the
+        // ReactCodeMirror wrapper div participate so .cm-editor's 100% resolves.
+        {...(fill
+          ? { height: "100%", minHeight: "0" }
+          : {
+            minHeight: expanded ? expandedHeight : "24px",
+            maxHeight: expanded ? expandedHeight : "40vh",
+          })}
+        style={fill ? { flex: 1, minHeight: 0 } : undefined}
         indentWithTab={false}
       />
     </Box>

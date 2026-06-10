@@ -75,6 +75,12 @@ import {
 } from "./store";
 import { useSortable } from "./useSortable";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
+import {
+    clampComposerColWidth,
+    composerColWidthStore,
+    setDesktopLayout,
+    useDesktopLayout,
+} from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
     FONT_SCALE_PRESETS,
@@ -887,6 +893,33 @@ export function App({
             body.style.userSelect = prevSelect;
         };
     }, [resizing]);
+    // Two-column (Zed-style) split layout — desktop-only, opt-in. Active only when
+    // the setting is "split" AND this is a real desktop: a fine pointer (not a
+    // touch tablet) and ≥lg so the session list is a column (not a Drawer) — i.e.
+    // there's room for THREE columns (sessions | composer | chat). Otherwise the
+    // single-column overlay renders and the setting is a no-op (mobile unaffected).
+    const splitLayout = useDesktopLayout();
+    const pointerFine = useMediaQuery("(pointer: fine) and (hover: hover)");
+    const splitActive = splitLayout === "split" && !mobile && pointerFine;
+    // Composer-column width + live-drag, mirroring the sidebar splitter: a local
+    // value during the drag (persisted on release, not per-pixel) backed by the
+    // global composer-col-width store. `colResizing` drives the body drag cursor.
+    const [colWidth, setColWidth] = useState<number>(composerColWidthStore.get);
+    const [colResizing, setColResizing] = useState(false);
+    const colWidthRef = useRef(colWidth);
+    colWidthRef.current = colWidth;
+    useEffect(() => {
+        if (!colResizing) return undefined;
+        const { body } = document;
+        const prevCursor = body.style.cursor;
+        const prevSelect = body.style.userSelect;
+        body.style.cursor = "col-resize";
+        body.style.userSelect = "none";
+        return (): void => {
+            body.style.cursor = prevCursor;
+            body.style.userSelect = prevSelect;
+        };
+    }, [colResizing]);
     // Session targeted for deletion; non-null = the dialog is open. Held in
     // App so the dialog is a single instance instead of one per row, and so
     // its mobile vs desktop shell can react to `bottomSheet` from useMediaQuery.
@@ -966,6 +999,32 @@ export function App({
             el.removeEventListener("pointerup", onUp);
             setResizing(false);
             sidebarWidthStore.set(widthRef.current);
+        };
+        el.addEventListener("pointermove", onMove);
+        el.addEventListener("pointerup", onUp);
+    }
+
+    // Splitter between the composer column (left) and the transcript (right) in
+    // split mode. Same mechanics as startResize: pointer-capture so a fast drag
+    // never drops, clamp each move, persist once on release. Drag right → the
+    // composer column grows.
+    function startColResize(e: React.PointerEvent<HTMLDivElement>): void {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = colWidthRef.current;
+        const el = e.currentTarget;
+        el.setPointerCapture(e.pointerId);
+        setColResizing(true);
+        const onMove = (ev: PointerEvent): void => {
+            setColWidth(clampComposerColWidth(startWidth + (ev.clientX - startX)));
+        };
+        const onUp = (): void => {
+            el.releasePointerCapture(e.pointerId);
+            el.removeEventListener("pointermove", onMove);
+            el.removeEventListener("pointerup", onUp);
+            setColResizing(false);
+            composerColWidthStore.set(colWidthRef.current);
         };
         el.addEventListener("pointermove", onMove);
         el.addEventListener("pointerup", onUp);
@@ -1166,7 +1225,10 @@ export function App({
                     mode (desktop): a full navbar-height slab — the frosted glass BEHIND
                     the (now transparent) top AppBar, so the transcript diffuses under the
                     navbar exactly like the mobile bottom bar. Height tracks the measured
-                    --navbar-h. pointer-events:none so taps reach the (lifted) navbar. */}
+                    --navbar-h. pointer-events:none so taps reach the (lifted) navbar.
+                    DROPPED in split mode: nothing scrolls under the AppBar (the transcript
+                    is an in-flow column below it), so the bar just sits on the app surface. */}
+                {!splitActive && (
                 <Box
                     aria-hidden
                     sx={{
@@ -1203,6 +1265,7 @@ export function App({
                         }),
                     }}
                 />
+                )}
                 {/* ONE frosted-glass slab behind BOTH the composer and the navbar,
                     so they read as a single piece of glass — not two stacked panes
                     with a seam. Its height is exactly the measured panel height
@@ -1216,7 +1279,10 @@ export function App({
                     continuous slab — they share the bottom edge). Top mode (desktop):
                     covers the composer only (the navbar is its own slab at the top), so
                     the composer/action bar floats as frosted glass with the transcript
-                    diffusing under it. Height tracks the measured vars per mode. */}
+                    diffusing under it. Height tracks the measured vars per mode.
+                    DROPPED in split mode: the composer is a real left column, not a float,
+                    so there's no glass to lay behind it. */}
+                {!splitActive && (
                 <Box
                     aria-hidden
                     sx={{
@@ -1246,6 +1312,7 @@ export function App({
                                 `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
                     }}
                 />
+                )}
                 <AppBar
                     ref={appBarRef}
                     position="static"
@@ -1273,6 +1340,10 @@ export function App({
                         position: "relative",
                         zIndex: 2,
                         color: "text.primary",
+                        // Split mode: the frosted slab that drew the bar's bottom
+                        // hairline is dropped, so the bar owns its own divider here
+                        // (it's a solid top bar above the two columns, not a float).
+                        ...(splitActive && { borderBottom: 1, borderColor: "divider" }),
                         // Bottom mode (mobile, navbar-pos=bottom): flex `order` puts
                         // the bar at the VERY bottom — below the transcript (0) AND
                         // the composer (1) — for a mobile-browser bottom-bar feel.
@@ -1414,6 +1485,104 @@ export function App({
                 </AppBar>
 
                 {active ? (
+                    splitActive ? (
+                        // ===== Two-column split layout (desktop opt-in) =====
+                        // A flex ROW below the in-flow AppBar (order 1): composer column
+                        // (left, fixed width) | drag splitter | transcript (right, flex:1).
+                        // The transcript is a normal in-flow column here — NOT the absolute
+                        // overlay — so it reserves no --composer-h and the composer no longer
+                        // floats over it. The AppStatusBar is a full-width footer (order 2).
+                        <>
+                            <Box
+                                sx={{
+                                    order: 1,
+                                    flex: 1,
+                                    minHeight: 0,
+                                    display: "flex",
+                                    flexDirection: "row",
+                                    position: "relative",
+                                }}
+                            >
+                                {/* Composer column (left) */}
+                                <Box
+                                    sx={{
+                                        width: colWidth,
+                                        flexShrink: 0,
+                                        minWidth: 0,
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        minHeight: 0,
+                                    }}
+                                >
+                                    <Composer
+                                        key={active.id}
+                                        sessionId={active.id}
+                                        status={active.status}
+                                        onOpenInfo={(): void => openSettings("info")}
+                                        variant="column"
+                                    />
+                                </Box>
+                                {/* Vertical splitter — straddles the column edge so its
+                                    6px hit area centres on the 1px divider line. */}
+                                <Box
+                                    role="separator"
+                                    aria-orientation="vertical"
+                                    aria-label="Resize composer column"
+                                    onPointerDown={startColResize}
+                                    sx={{
+                                        flex: "0 0 auto",
+                                        alignSelf: "stretch",
+                                        width: "1px",
+                                        bgcolor: "divider",
+                                        position: "relative",
+                                        cursor: "col-resize",
+                                        touchAction: "none",
+                                        zIndex: 3,
+                                        // Invisible wide hit area centred on the line.
+                                        "&::after": {
+                                            content: '""',
+                                            position: "absolute",
+                                            top: 0,
+                                            bottom: 0,
+                                            left: "-4px",
+                                            right: "-4px",
+                                        },
+                                        "&:hover": { bgcolor: "primary.main" },
+                                        ...(colResizing && { bgcolor: "primary.main" }),
+                                    }}
+                                />
+                                {/* Transcript column (right) */}
+                                <Box
+                                    sx={{
+                                        flex: 1,
+                                        minWidth: 0,
+                                        position: "relative",
+                                        display: "flex",
+                                        flexDirection: "column",
+                                    }}
+                                >
+                                    <Transcript
+                                        sessionId={active.id}
+                                        timeline={timelines.get(active.id) ?? []}
+                                        status={active.status}
+                                        provider={active.provider}
+                                        cwd={active.cwd}
+                                        loading={!hydrated.has(active.id)}
+                                        connected={connected}
+                                        // No floating chrome over this column: the AppBar is
+                                        // in-flow above it and the composer is a sibling
+                                        // column, so neither inset reserves anything.
+                                        topInset="0px"
+                                        bottomInset="0px"
+                                    />
+                                </Box>
+                            </Box>
+                            {/* Full-width status-bar footer spanning both columns. */}
+                            <Box sx={{ order: 2, position: "relative", zIndex: 2 }}>
+                                <AppStatusBar />
+                            </Box>
+                        </>
+                    ) : (
                     <>
                         {/* BOTH modes → the transcript is the FULL-height background
                             layer (absolute, zIndex 0) and the navbar + composer float
@@ -1487,6 +1656,7 @@ export function App({
                             <AppStatusBar />
                         </Box>
                     </>
+                    )
                 ) : (
                     // Empty state: relative parent + absolutely-positioned content
                     // centered to the geometric middle of the *whole* right pane
@@ -1769,6 +1939,7 @@ function SettingsShell({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
+    const desktopLayout = useDesktopLayout();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
     // screen); the collapsed summary still shows the current face. Resets to
@@ -2128,6 +2299,35 @@ function SettingsShell({
                                     setVimSetting(e.target.checked)
                                 }
                                 inputProps={{ "aria-label": "Vim keybindings" }}
+                            />
+                        </Stack>
+                        <Stack
+                            direction="row"
+                            alignItems="center"
+                            justifyContent="space-between"
+                            spacing={2}
+                        >
+                            <Stack>
+                                <Typography variant="body2">
+                                    Two-column layout
+                                </Typography>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                >
+                                    Composer beside the chat (Zed-style); wide
+                                    screens only
+                                </Typography>
+                            </Stack>
+                            <Switch
+                                checked={desktopLayout === "split"}
+                                onChange={(e): void =>
+                                    setDesktopLayout(
+                                        e.target.checked ? "split" : "overlay",
+                                    )}
+                                inputProps={{
+                                    "aria-label": "Two-column layout",
+                                }}
                             />
                         </Stack>
                     </>

@@ -486,11 +486,23 @@ export function Composer({
   sessionId,
   status,
   onOpenInfo,
+  variant = "overlay",
 }: {
   sessionId: string;
   status: Status;
   onOpenInfo: () => void;
+  /// "overlay" (default): the composer floats over the transcript at the bottom
+  /// (single-column / mobile). "column": the desktop two-column layout — the
+  /// composer is a full-height left column (queued + drafts scroll at the top,
+  /// the editor card fills the rest), so it does NOT float and the
+  /// compact↔expand toggle + drag-resize handle are dropped (the column height
+  /// IS the editor size). See desktopLayout.ts.
+  variant?: "overlay" | "column";
 }): React.JSX.Element {
+  // Two-column (desktop split) mode — gates every overlay-specific affordance
+  // (float padding, --composer-h reservation lives in App, expand toggle, resize
+  // handle) off and turns the root into a fill-height flex column instead.
+  const column = variant === "column";
   // Draft state is seeded from the per-session draft store and persisted back to
   // it (see the effect below). The Composer is remounted per session (key in
   // App), so these initializers read the right session's draft on mount and a
@@ -861,6 +873,19 @@ export function Composer({
         bgcolor: "transparent",
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
+        // Column mode: a fill-height flex column (queued/drafts on top, the editor
+        // card flex:1 below) instead of a bottom-floating stack. No safe-area
+        // bottom inset (the AppStatusBar footer owns the column's bottom edge) and
+        // overflow hidden so each region scrolls internally, never the column.
+        ...(column && {
+          height: "100%",
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          pt: 1,
+          pb: 1,
+        }),
       }}
     >
       {
@@ -967,6 +992,9 @@ export function Composer({
           display: "flex",
           flexDirection: "column",
           bgcolor: "transparent",
+          // Column mode: the card fills the column's remaining height (below the
+          // queued/drafts panels) so the editor is always in its tall form.
+          ...(column && { flex: 1, minHeight: 0 }),
         }}
       >
       {/* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
@@ -974,8 +1002,9 @@ export function Composer({
           up auto-expands (VSCode-terminal feel). A bigger hit area + an always-
           visible grab-pill so it's findable. Shown unless this is the fullscreen
           sheet (composeFs). Desktop only — the resizable ComposerEditor is the
-          !touchInput branch; touch uses the compact editor + the fullscreen ↗. */}
-      {!touchInput && !composeFs && (
+          !touchInput branch; touch uses the compact editor + the fullscreen ↗.
+          Dropped in column mode — the column height IS the editor size. */}
+      {!touchInput && !composeFs && !column && (
         <Box
           onPointerDown={onResizeStart}
           role="separator"
@@ -1039,7 +1068,14 @@ export function Composer({
           // compact state seeds at the right size.
           <Box
             ref={editorAreaRef}
-            sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              // Column mode: the wrapper fills the card so the editor (fill) can
+              // stretch to the column's remaining height.
+              ...(column && { flex: 1 }),
+            }}
           >
           <ComposerEditor
             ref={editorRef}
@@ -1051,6 +1087,9 @@ export function Composer({
             borderless
             expanded={expanded}
             heightPx={composerHeight}
+            // Column layout: stretch to fill the column instead of the vh-bounded
+            // compact/expanded sizes (overrides expanded/heightPx).
+            fill={column}
             // Reserve a top-right gutter so no line runs under the ↗/↙ expand
             // toggle the card overlays at its top-right corner.
             endInset={36}
@@ -1091,7 +1130,9 @@ export function Composer({
             future-markdown editor). The editor reserves a right gutter (endInset)
             so text never runs under it. Glyph sized at the BUTTON level so it
             beats the global MuiIconButton `& .MuiSvgIcon-root: 1.5rem` override
-            (a per-icon sx loses that specificity); rem so it tracks the font scale. */}
+            (a per-icon sx loses that specificity); rem so it tracks the font scale.
+            Dropped in column mode — the editor already fills the column. */}
+        {!column && (
         <Tooltip
           title={touchInput
             ? "Fullscreen editor"
@@ -1123,6 +1164,7 @@ export function Composer({
             {!touchInput && expanded ? <CloseFullscreen /> : <OpenInFull />}
           </IconButton>
         </Tooltip>
+        )}
         {/* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
             + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
             cluster pinned to the card's right edge. This replaces BOTH the old
