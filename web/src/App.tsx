@@ -17,6 +17,7 @@ import {
     Menu,
     MenuItem,
     Select,
+    Skeleton,
     Snackbar,
     Stack,
     Switch,
@@ -293,7 +294,7 @@ function AutoResumeBadge({
     meta: SessionMeta;
     defaultOn: boolean;
 }): React.JSX.Element | null {
-    const effective = (meta.auto_resume ?? null) ?? defaultOn;
+    const effective = meta.auto_resume ?? defaultOn;
     if (!effective) return null;
     if (meta.status === "interrupted") {
         return (
@@ -2086,40 +2087,73 @@ function DeleteSessionShell({
 // or unchanged (server-side also rejects empty). The rename + compose sheets both
 // raise the keyboard in-gesture via `claimKeyboard` (see ./keyboardClaim).
 
-// The connecting/loading placeholder — a soft spinner instead of bare "Loading…".
+// The connecting/loading placeholder — SKELETONS that mirror the real layout
+// (a settling list of items in the sidebar, a settling transcript in the main
+// pane) instead of a bare spinner: it reads as "content arriving", not "stuck".
 // If the WS snapshot still hasn't landed after a stall (a wedged socket / SW), it
-// reveals a manual reload so a desktop session never sits dead on "Loading…"
-// forever. NOT auto-reload: an auto-loop could spin if the reload also stalls.
+// reveals a manual reload so a session never sits dead forever. NOT auto-reload:
+// an auto-loop could spin if the reload also stalls.
 function LoadingState({ compact = false }: { compact?: boolean }): React.JSX.Element {
     const [stalled, setStalled] = useState(false);
     useEffect(() => {
         const t = globalThis.setTimeout(() => setStalled(true), 8000);
         return () => globalThis.clearTimeout(t);
     }, []);
+    const reloadButton = stalled
+        ? (
+            <Button
+                size="small"
+                variant="outlined"
+                onClick={(): void => globalThis.location.reload()}
+                sx={{ alignSelf: compact ? "stretch" : "center", mt: 0.5, textTransform: "none" }}
+            >
+                Taking a while — reload
+            </Button>
+        )
+        : null;
+    // Sidebar: a short stack of rounded rows standing in for session items, fading
+    // down so the list reads as "settling" rather than a wall of identical bars.
+    if (compact) {
+        return (
+            <Stack spacing={0.75} sx={{ px: 1, py: 1 }} aria-label="Loading sessions">
+                {[0, 1, 2, 3, 4].map((i) => (
+                    <Skeleton
+                        key={i}
+                        variant="rounded"
+                        height={36}
+                        animation="wave"
+                        sx={{ borderRadius: 1.5, opacity: 1 - i * 0.16 }}
+                    />
+                ))}
+                {reloadButton}
+            </Stack>
+        );
+    }
+    // Main pane: a few transcript-shaped blocks (a short label + a message bubble),
+    // alternating width + fading down, so it previews the conversation layout.
     return (
         <Stack
-            alignItems="center"
-            spacing={compact ? 1 : 1.5}
-            sx={{ color: "text.secondary", ...(compact && { py: 3 }) }}
+            spacing={2}
+            sx={{ width: "100%", maxWidth: 720, mx: "auto", px: 2, py: 3 }}
+            aria-label="Loading conversation"
         >
-            <CircularProgress
-                size={compact ? 16 : 24}
-                thickness={4}
-                sx={{ color: "primary.main", opacity: 0.65 }}
-            />
-            <Typography variant={compact ? "caption" : "body2"} color="text.secondary">
-                Connecting…
-            </Typography>
-            {stalled && (
-                <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={(): void => globalThis.location.reload()}
-                    sx={{ mt: 0.5, textTransform: "none" }}
-                >
-                    Taking a while — reload
-                </Button>
-            )}
+            {[0, 1, 2].map((row) => (
+                <Stack key={row} spacing={0.75} sx={{ opacity: 1 - row * 0.22 }}>
+                    <Skeleton
+                        variant="text"
+                        width={row % 2 === 0 ? "36%" : "28%"}
+                        animation="wave"
+                        sx={{ fontSize: "0.8rem" }}
+                    />
+                    <Skeleton
+                        variant="rounded"
+                        height={row % 2 === 0 ? 72 : 52}
+                        animation="wave"
+                        sx={{ borderRadius: 2 }}
+                    />
+                </Stack>
+            ))}
+            {reloadButton}
         </Stack>
     );
 }

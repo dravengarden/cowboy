@@ -510,17 +510,31 @@ function connect(): void {
     return;
   }
   didHydrate = true;
+  // The hydrate is ONLY a cache-paint optimisation (last-known titles/order before
+  // the first server byte); the socket must NEVER wait on it. A blocked IndexedDB
+  // — e.g. another tab still holding an older DB version right after a deploy
+  // reload — makes the open request HANG rather than reject, so a bare `await`
+  // here would strand the app on "Connecting…" forever with no socket EVER
+  // attempted (the symptom: app shell renders, WS never opens, no reconnect since
+  // reconnect is driven by socket.onclose and there's no socket). So race the
+  // hydrate against a short grace and open the socket on whichever finishes first.
+  let opened = false;
+  const openOnce = (): void => {
+    if (opened) return;
+    opened = true;
+    openSocket();
+  };
+  const grace = setTimeout(openOnce, 1500);
   void (async (): Promise<void> => {
-    // Best-effort: a blocked/absent IndexedDB must never delay the socket. Each
-    // hydrate already degrades errors internally; the Promise.all is belt-and-
-    // suspenders so one rejection can't skip openSocket().
     try {
       await Promise.all([...syncClients.values()].map((e) => e.hydrate()));
       await hydrateCachedQueues();
     } catch (err) {
       console.warn("sync hydrate failed", err);
+    } finally {
+      clearTimeout(grace);
+      openOnce();
     }
-    openSocket();
   })();
 }
 
@@ -528,7 +542,18 @@ function openSocket(): void {
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws`);
   socket = ws;
+  // A socket wedged in CONNECTING (a half-open proxy / network that completes the
+  // TCP handshake but never the WS upgrade) fires NEITHER onopen NOR onclose, so
+  // without this it strands the UI on "Connecting…" forever with no reconnect.
+  // Force it closed after a grace → onclose → scheduleReconnect. Cleared the moment
+  // it opens or closes on its own.
+  const connectGuard = setTimeout(() => {
+    if (socket === ws && ws.readyState === WebSocket.CONNECTING) {
+      ws.close();
+    }
+  }, 8000);
   ws.onopen = (): void => {
+    clearTimeout(connectGuard);
     setState({ ...state, connected: true });
     // Clears the failure count, flashes green if an outage was surfaced, and
     // probes /version for a redeploy (banner state lives in `conn`).
@@ -567,6 +592,7 @@ function openSocket(): void {
     }
   };
   ws.onclose = (): void => {
+    clearTimeout(connectGuard);
     setState({ ...state, connected: false });
     // Raises the red banner past the failure threshold and hands back the
     // exponential-backoff delay to wait before retrying (banner lives in `conn`).
