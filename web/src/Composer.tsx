@@ -214,6 +214,15 @@ function ComposeBar(
   // The ⚙ opens the config POPUP (the labeled Mode/Model/Effort dropdowns live in
   // that sheet — see ComposerSheet — not inline on the bar).
   const hasConfig = showSkeleton || options.length > 0;
+  // Secondary actions (Save-draft / Jump-to-front / Force-push) sit inline on a
+  // roomy (≥ sm) bar, but fold into a ⋮ overflow on the narrow phone tier — so the
+  // PRIMARY buttons keep their full, app-consistent tap target instead of shrinking
+  // to cram the whole set onto one row (and Exit-fullscreen never orphans below).
+  const theme = useTheme();
+  const roomy = useMediaQuery(theme.breakpoints.up("sm"));
+  const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const hasSecondary = Boolean(onSaveDraft || onJumpFront || onForcePush);
   return (
     <Stack
       direction="column"
@@ -241,18 +250,15 @@ function ComposeBar(
       <Stack
         direction="row"
         alignItems="center"
-        // Left-aligned, ZERO inter-icon gap, and COMPACT icons (36px vs the global
-        // 44px) so the full action set (up to 9 when busy + queued — incl. the
-        // trailing Exit-fullscreen) fits ONE row even on a 375pt phone. The 36px
-        // buttons still have internal padding, so gap:0 reads as a tight-but-spaced
-        // toolbar, not glyphs touching. This is what keeps Exit-fullscreen inline
-        // next to Send instead of orphaning onto a lonely second row. Still wraps
-        // as a last resort on the very narrowest widths.
+        // Left-aligned with a comfortable gap. Buttons keep their FULL, default tap
+        // target (no width/height shrink) so the bar matches every other icon button
+        // in the app — usability over cramming. Overflow is handled by folding the
+        // secondary actions into the ⋮ (see below), not by shrinking. Still wraps as
+        // a last resort on the very narrowest widths.
         sx={{
           justifyContent: "flex-start",
           flexWrap: "wrap",
-          gap: 0,
-          "& .MuiIconButton-root": { width: 36, height: 36 },
+          gap: 0.25,
           "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
         }}
       >
@@ -313,51 +319,69 @@ function ComposeBar(
             </span>
           </Tooltip>
         )}
-        {/* Secondary actions are direct buttons on the bar (not folded behind a
-            ⋮ — the user wanted them visible). Force push only while busy/starting;
-            jump-to-front only when there's a queue. */}
-        {onJumpFront && (
-          <Tooltip title="Jump to front of queue">
-            <span>
-              <IconButton
-                aria-label="jump to front of queue"
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onJumpFront}
-              >
-                <VerticalAlignTop />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
-        {onForcePush && (
-          <Tooltip title="Force push">
-            <span>
-              <IconButton
-                color="primary"
-                aria-label="force push"
-                disabled={!sendable}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(e): void => onForcePush(e.currentTarget)}
-              >
-                <Bolt />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
-        {onSaveDraft && (
-          <Tooltip title="Save as draft">
-            <span>
-              <IconButton
-                aria-label="save as draft"
-                disabled={!sendable}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={onSaveDraft}
-              >
-                <EditNoteOutlined />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
+        {/* Secondary actions: inline on a roomy (≥ sm) bar, folded into the ⋮ on the
+            narrow phone tier so the primary buttons keep their full tap size. Force
+            push only while busy/starting; jump-to-front only when there's a queue. */}
+        {hasSecondary &&
+          (roomy
+            ? (
+              <>
+                {onJumpFront && (
+                  <Tooltip title="Jump to front of queue">
+                    <span>
+                      <IconButton
+                        aria-label="jump to front of queue"
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={onJumpFront}
+                      >
+                        <VerticalAlignTop />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+                {onForcePush && (
+                  <Tooltip title="Force push">
+                    <span>
+                      <IconButton
+                        color="primary"
+                        aria-label="force push"
+                        disabled={!sendable}
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={(e): void => onForcePush(e.currentTarget)}
+                      >
+                        <Bolt />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+                {onSaveDraft && (
+                  <Tooltip title="Save as draft">
+                    <span>
+                      <IconButton
+                        aria-label="save as draft"
+                        disabled={!sendable}
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={onSaveDraft}
+                      >
+                        <EditNoteOutlined />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+              </>
+            )
+            : (
+              <Tooltip title="More actions">
+                <IconButton
+                  ref={moreRef}
+                  aria-label="more actions"
+                  sx={TOOLBAR_ICON_BTN}
+                  onClick={(e): void => setMoreMenu(e.currentTarget)}
+                >
+                  <MoreVert />
+                </IconButton>
+              </Tooltip>
+            ))}
         <Tooltip title="Send">
           <span>
             <IconButton
@@ -385,6 +409,52 @@ function ComposeBar(
           </Tooltip>
         )}
       </Stack>
+      {/* Narrow-tier overflow for the secondary actions (folded out of the row
+          above when !roomy). Force-push anchors its confirm popover to the ⋮ button
+          (moreRef) since the menu item itself unmounts on select. */}
+      <Menu
+        anchorEl={moreMenu}
+        open={moreMenu !== null}
+        onClose={(): void => setMoreMenu(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+      >
+        {onSaveDraft && (
+          <MenuItem
+            disabled={!sendable}
+            onClick={(): void => {
+              setMoreMenu(null);
+              onSaveDraft();
+            }}
+          >
+            <EditNoteOutlined fontSize="small" sx={{ mr: 1 }} />
+            Save as draft
+          </MenuItem>
+        )}
+        {onJumpFront && (
+          <MenuItem
+            onClick={(): void => {
+              setMoreMenu(null);
+              onJumpFront();
+            }}
+          >
+            <VerticalAlignTop fontSize="small" sx={{ mr: 1 }} />
+            Jump to front of queue
+          </MenuItem>
+        )}
+        {onForcePush && (
+          <MenuItem
+            disabled={!sendable}
+            onClick={(): void => {
+              setMoreMenu(null);
+              if (moreRef.current) onForcePush(moreRef.current);
+            }}
+          >
+            <Bolt fontSize="small" sx={{ mr: 1 }} />
+            Force push
+          </MenuItem>
+        )}
+      </Menu>
     </Stack>
   );
 }
@@ -2354,6 +2424,36 @@ function PendingRow({
     }, 350);
     return () => globalThis.clearTimeout(t);
   }, [editing, touchInput]);
+  // Real-time save (touch only): while editing on a phone, debounce-persist the
+  // in-progress edit back to the queued/draft item so nothing is lost if the sheet
+  // is grab-dismissed or the app is backgrounded mid-edit. Persist-only (no
+  // onEditDone) — the editor stays open. Scoped to touch because desktop keeps an
+  // explicit Cancel that must still revert; on touch dismiss==save, so streaming
+  // every change is consistent. Skipped until the content diverges from the stored
+  // message, so merely opening an edit fires no redundant write; it converges
+  // (after a write, message.text catches up and the guard goes quiet).
+  useEffect(() => {
+    if (!editing || !touchInput) return undefined;
+    const sameAttachments = editAttachments.length === message.attachments.length &&
+      editAttachments.every((a, i) => a.id === message.attachments[i]?.id);
+    if (draft === message.text && sameAttachments) return undefined;
+    const t = globalThis.setTimeout(() => {
+      if (kind === "draft") {
+        editDraft(sessionId, message.id, draft, editAttachments);
+      } else editQueued(sessionId, message.id, draft, editAttachments);
+    }, 500);
+    return () => globalThis.clearTimeout(t);
+  }, [
+    editing,
+    touchInput,
+    draft,
+    editAttachments,
+    kind,
+    sessionId,
+    message.id,
+    message.text,
+    message.attachments,
+  ]);
   if (editing) {
     const save = (): void => {
       if (kind === "draft") {
@@ -2473,10 +2573,11 @@ function PendingRow({
             surfaceColor={theme.palette.background.default}
             // Desktop: dismiss returns to the inline edit (the overlay is an
             // optional expand). Touch: the overlay IS the edit (no inline card on a
-            // phone), so a grab-dismiss abandons the edit rather than dropping to a
-            // cramped inline box.
+            // phone), so a grab-dismiss AUTO-SAVES the edit (the user asked Edit to
+            // save on collapse, not discard) — and the live-persist effect has been
+            // streaming it the whole time anyway, so save() just commits + closes.
             onClose={touchInput
-              ? cancel
+              ? save
               : (): void => setOverlayOpen(false)}
             header={
               // px matches the body's p:1.5 so the title's left edge lines up with
