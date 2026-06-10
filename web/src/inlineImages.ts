@@ -24,6 +24,18 @@ import { openLightbox } from "./ResourceLightbox";
 
 const registry = new Map<string, Attachment>();
 
+// Bridge from the (non-React) image widget to the host's selection popover. The
+// host (Composer) registers a handler; a tap on an inline image calls it with the
+// image id + its DOM node (to anchor the popover). Falls back to opening the
+// lightbox directly when no host has registered (e.g. a stray mount). Single
+// module-level slot is fine: only one composer surface is mounted at a time.
+let imageTapHandler: ((id: string, el: HTMLElement) => void) | null = null;
+export function setImageTapHandler(
+  fn: ((id: string, el: HTMLElement) => void) | null,
+): void {
+  imageTapHandler = fn;
+}
+
 /// Register an attachment's bytes/preview so its inline token renders. Call this
 /// BEFORE inserting the token (insertImageToken does it for you), and re-seed the
 /// whole set when restoring a draft so its tokens render on mount.
@@ -70,12 +82,15 @@ class InlineImageWidget extends WidgetType {
       img.src = att.previewUrl;
       img.alt = att.name;
       img.draggable = false;
+      const id = this.id;
       // mousedown (not click): beat CM's own pointer handling and stop the press
-      // from moving the caret into the atomic widget; open the shared lightbox.
+      // from moving the caret into the atomic widget. Hand off to the host's
+      // selection popover (preview / delete); fall back to the lightbox directly.
       img.addEventListener("mousedown", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openLightbox([att], 0);
+        if (imageTapHandler !== null) imageTapHandler(id, img);
+        else openLightbox([att], 0);
       });
       return img;
     }
@@ -149,8 +164,13 @@ export const inlineImageTheme = EditorView.theme({
     height: "auto",
     borderRadius: "10px",
     margin: "4px 0",
-    cursor: "zoom-in",
+    cursor: "pointer",
     boxShadow: "0 1px 6px rgba(0,0,0,0.22)",
+  },
+  // Selection ring while the host's preview/delete popover is open for this image.
+  ".cm-inline-image.cm-inline-image-selected": {
+    outline: "2px solid var(--atomic-editor-accent-bright, #a78bfa)",
+    outlineOffset: "2px",
   },
 });
 
@@ -171,6 +191,27 @@ export function insertImageToken(view: EditorView, a: Attachment): void {
     selection: { anchor: pos + insert.length },
   });
   view.focus();
+}
+
+/// Remove a specific image (by id) from the doc — the popover's Delete action.
+/// Finds the lone-token line, deletes it plus its trailing newline, and forgets
+/// the bytes. No-op if the token isn't present.
+export function removeImageTokenById(view: EditorView, id: string): void {
+  const { doc } = view.state;
+  for (let i = 1; i <= doc.lines; i++) {
+    const line = doc.line(i);
+    const m = LONE_TOKEN_RE.exec(line.text);
+    if (m?.[2] === id) {
+      forgetInlineAttachment(id);
+      const from = line.from;
+      const to = Math.min(doc.length, line.to + 1);
+      view.dispatch({
+        changes: { from, to },
+        selection: { anchor: Math.min(from, view.state.doc.length) },
+      });
+      return;
+    }
+  }
 }
 
 /// Backspace that removes a whole inline-image token in one press (caret just

@@ -248,6 +248,7 @@ export const ComposerTextarea = forwardRef<
     // no-op keeps the shared handle satisfied. Touch paths that hit this fallback
     // keep the legacy tray behaviour for their attachments.
     insertImage: (): void => undefined,
+    deleteImage: (): void => undefined,
     // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
     // ComposerEditor, never this textarea). No-ops here just satisfy the shared
     // ComposerEditorHandle — this component is retained solely as the documented

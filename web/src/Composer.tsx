@@ -45,6 +45,7 @@ import {
   ChevronRight,
   Close,
   CloseFullscreen,
+  DeleteOutline,
   DragIndicator,
   DriveFileMoveOutlined,
   EditNoteOutlined,
@@ -61,6 +62,7 @@ import {
   Undo,
   VerticalAlignBottom,
   VerticalAlignTop,
+  Visibility,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -84,7 +86,11 @@ import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments, stripImageTokens } from "./attachments";
-import { registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
+import {
+  registerInlineAttachment,
+  seedInlineAttachments,
+  setImageTapHandler,
+} from "./inlineImages";
 import {
   activateAllDrafts,
   activateDraft,
@@ -590,6 +596,28 @@ export function Composer({
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
   // inline expand instead (composeFs is never set true there).
   const [composeFs, setComposeFs] = useState(false);
+  // Inline-image selection popover. Tapping an inline image opens a small popover
+  // (Preview / Delete) anchored to its <img>, ringed while open. The image widget
+  // lives outside React, so it calls a module-level tap handler we register here.
+  const [imgSel, setImgSel] = useState<{ id: string; el: HTMLElement } | null>(
+    null,
+  );
+  const closeImgSel = (): void => {
+    setImgSel((cur) => {
+      cur?.el.classList.remove("cm-inline-image-selected");
+      return null;
+    });
+  };
+  useEffect(() => {
+    setImageTapHandler((id, el) => {
+      setImgSel((prev) => {
+        prev?.el.classList.remove("cm-inline-image-selected");
+        el.classList.add("cm-inline-image-selected");
+        return { id, el };
+      });
+    });
+    return (): void => setImageTapHandler(null);
+  }, []);
   // Focus the fullscreen editor when it opens (the inline one just unmounted, so
   // the shared editorRef now points here). Re-focus across the sheet's slide-in
   // (~320ms): a single early focus intermittently gets dropped by iOS while the
@@ -1571,6 +1599,45 @@ export function Composer({
             </Button>
           </Stack>
         </Box>
+      </Popover>
+      {/* Inline-image selection popover: Preview (lightbox) / Delete. Anchored to
+          the tapped <img>, which is ringed via .cm-inline-image-selected. */}
+      <Popover
+        open={imgSel !== null}
+        anchorEl={imgSel?.el ?? null}
+        onClose={closeImgSel}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        transformOrigin={{ vertical: "top", horizontal: "center" }}
+        slotProps={{ paper: { sx: { mt: 0.5, borderRadius: 2 } } }}
+      >
+        <Stack direction="row" sx={{ p: 0.5 }} spacing={0.25}>
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<Visibility />}
+            onClick={(): void => {
+              const att = attachments.find((a) => a.id === imgSel?.id);
+              if (att) openLightbox([att], 0);
+              closeImgSel();
+            }}
+          >
+            Preview
+          </Button>
+          <Button
+            size="small"
+            color="error"
+            startIcon={<DeleteOutline />}
+            onClick={(): void => {
+              if (imgSel) {
+                editorRef.current?.deleteImage(imgSel.id);
+                setAttachments((prev) => prev.filter((a) => a.id !== imgSel.id));
+              }
+              closeImgSel();
+            }}
+          >
+            Delete
+          </Button>
+        </Stack>
       </Popover>
       {compact && (
         <ComposerSheet

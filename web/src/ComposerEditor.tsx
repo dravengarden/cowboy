@@ -29,6 +29,7 @@ import {
   inlineImageField,
   inlineImageTheme,
   insertImageToken,
+  removeImageTokenById,
 } from "./inlineImages";
 import type { Attachment } from "./attachments";
 import {
@@ -49,6 +50,9 @@ export interface ComposerEditorHandle {
   // Insert an image at the caret as an inline `![](cowboy-att:id)` token (the host
   // adds the bytes to `attachments[]`; this renders it as an inline thumbnail).
   insertImage: (a: Attachment) => void;
+  // Remove a specific inline image (by id) from the doc — the selection popover's
+  // Delete action.
+  deleteImage: (id: string) => void;
   // Clear the document imperatively. Submit can't rely on the controlled
   // `value=""` prop to empty the editor: @uiw/react-codemirror (≥4.24) holds a
   // 200ms "typing latch" and DEFERS external value-prop changes while you're
@@ -311,6 +315,11 @@ export const ComposerEditor = forwardRef<
       const view = cmRef.current?.view;
       if (!view) return;
       insertImageToken(view, a);
+    },
+    deleteImage: (id: string): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      removeImageTokenById(view, id);
     },
     clear: (): void => {
       const view = cmRef.current?.view;
