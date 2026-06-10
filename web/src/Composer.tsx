@@ -63,6 +63,7 @@ import {
   VerticalAlignTop,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { FullscreenComposer } from "./FullscreenComposer";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -1577,79 +1578,35 @@ export function Composer({
           attachments; the inline editor is hidden while this is open (xor), so the
           shared editorRef points at the one mounted here. */}
       {composeFs && (
-        <DetentSheet
-          open
-          // Always full-screen frosted glass — the primary mobile writing canvas
-          // (does not collapse to content-height when the keyboard is dismissed).
-          ariaLabel="Compose message"
-          frosted
-          cover
-          surfaceColor={theme.palette.background.default}
-          onClose={(): void => setComposeFs(false)}
-          footer={
-            <ComposeBar
-              dead={dead}
-              sendable={sendable}
-              options={options}
-              showSkeleton={showSkeleton}
-              attachments={attachments}
-              onRemoveAttachment={removeAttachment}
-              onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
-              onAttach={(): void => fileInputRef.current?.click()}
-              onOpenConfig={(): void => setSheetOpen(true)}
-              onSend={(): void => {
-                submit();
-                setComposeFs(false);
-              }}
-              onCollapse={(): void => setComposeFs(false)}
-              onSaveDraft={(): void => {
-                saveDraft();
-                setComposeFs(false);
-              }}
-              onForcePush={busy || starting
-                ? (anchor): void => setForceAnchor(anchor)
-                : undefined}
-              onJumpFront={queue.length > 0
-                ? (): void => {
-                  jumpToFront();
-                  setComposeFs(false);
-                }
-                : undefined}
-            />
-          }
-        >
-          {/* height:100% + flex column so the editor FILLS the full-screen sheet
-              (a tap-anywhere writing canvas) instead of sitting 10 rows tall with
-              an ugly blank gap down to the toolbar. */}
-          <Box sx={{ p: 1.5, height: "100%", display: "flex", flexDirection: "column" }}>
-            <ComposerEditor
-              ref={editorRef}
-              // Fullscreen mobile compose, now the same CM6 + mdlive live-preview
-              // editor as everywhere else (no vim on touch). `fill` stretches it to
-              // the sheet's full height — a tap-anywhere writing canvas. Mounts fresh
-              // when fullscreen opens, seeding from the CURRENT text (like the edit
-              // overlay), so in-progress inline text carries in; onChange feeds `text`.
-              value={text}
-              onChange={setText}
-              onSubmit={(): void => {
-                submit();
-                setComposeFs(false);
-              }}
-              onSaveDraft={saveDraft}
-              sessionId={sessionId}
-              commands={(): AvailableCommand[] => availableCommands}
-              placeholder="Message the agent…"
-              onPasteFiles={addFiles}
-              borderless
-              fill
-              vim={false}
-              onEscape={(): boolean => {
-                setComposeFs(false);
-                return true;
-              }}
-            />
-          </Box>
-        </DetentSheet>
+        <FullscreenComposer
+          // Mounts fresh on open, seeding from the CURRENT in-progress text (like
+          // the edit overlay) so inline text carries in; markdown stays literal.
+          value={text}
+          onChange={setText}
+          onSubmit={(): void => {
+            submit();
+            setComposeFs(false);
+          }}
+          onSaveDraft={(): void => {
+            saveDraft();
+            setComposeFs(false);
+          }}
+          onCollapse={(): void => setComposeFs(false)}
+          onAttach={(): void => fileInputRef.current?.click()}
+          onPasteFiles={addFiles}
+          sessionId={sessionId}
+          commands={(): AvailableCommand[] => availableCommands}
+          placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
+          sendable={sendable}
+          attachmentsSlot={attachments.length > 0
+            ? (
+              <AttachmentPreviews
+                attachments={attachments}
+                onRemove={removeAttachment}
+              />
+            )
+            : undefined}
+        />
       )}
       {
         /* Confirm before stopping a running turn. The Stop button is destructive

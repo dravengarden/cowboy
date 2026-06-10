@@ -244,6 +244,14 @@ export const ComposerTextarea = forwardRef<
       });
     },
     clear: (): void => undefined,
+    // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
+    // ComposerEditor, never this textarea). No-ops here just satisfy the shared
+    // ComposerEditorHandle — this component is retained solely as the documented
+    // iOS-IME fallback for the collapsed mobile input (see plan Risks).
+    wrap: (): void => undefined,
+    toggleLinePrefix: (): void => undefined,
+    cycleHeading: (): void => undefined,
+    insertLink: (): void => undefined,
   }));
 
   const popup = trigger && options.length > 0 && (

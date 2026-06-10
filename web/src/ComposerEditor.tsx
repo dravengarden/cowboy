@@ -48,6 +48,17 @@ export interface ComposerEditorHandle {
   // message already sent. Dispatching straight to the view bypasses the latch
   // and clears now.
   clear: () => void;
+  // Markdown toolbar actions (the fullscreen keyboard toolbar). All dispatch CM6
+  // transactions on the literal doc — live-preview re-renders automatically.
+  /// Wrap the selection (or insert the marker pair at the caret) — bold `**`,
+  /// italic `*`, inline code `` ` ``.
+  wrap: (before: string, after: string) => void;
+  /// Toggle a line-start prefix on the caret's line — list `- `, quote `> `.
+  toggleLinePrefix: (prefix: string) => void;
+  /// Cycle the caret line's heading level: none → `# ` → `## ` → `### ` → none.
+  cycleHeading: () => void;
+  /// Insert a `[selection](url)` link with `url` pre-selected for typing.
+  insertLink: () => void;
 }
 
 // Reads whether the editor is in Vim *insert* mode, via the loaded vim module's
@@ -140,6 +151,9 @@ export const ComposerEditor = forwardRef<
     // a copied image). When it handles them the editor swallows the paste so
     // no stray base64 / filename text lands in the document.
     onPasteFiles?: (files: File[]) => void;
+    /// Fired on every selection/doc change with whether a non-empty range is
+    /// selected — drives the fullscreen keyboard toolbar's insert↔wrap action swap.
+    onSelectionChange?: (hasSelection: boolean) => void;
     /// Right padding (px) reserved on the editor content so text never runs under
     /// the action buttons the composer overlays at the input's bottom-right.
     endInset?: number;
@@ -175,6 +189,7 @@ export const ComposerEditor = forwardRef<
     onVimMode,
     onEscape,
     onPasteFiles,
+    onSelectionChange,
     endInset = 0,
     borderless = false,
     expanded = false,
@@ -198,6 +213,8 @@ export const ComposerEditor = forwardRef<
   onForceHoldRef.current = onForceHold;
   const holdToForceRef = useRef(holdToForce);
   holdToForceRef.current = holdToForce;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
   // Long-press-send timing. `holdTimer` is armed on the first send-chord keydown
   // while busy; if it survives to the threshold it opens the force confirm
   // (`forceFired` guards against the keyup then also queuing). 450ms matches the
@@ -294,11 +311,75 @@ export const ComposerEditor = forwardRef<
         content.style.opacity = "";
       });
     },
+    wrap: (before: string, after: string): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      const sel = view.state.sliceDoc(from, to);
+      view.dispatch({
+        changes: { from, to, insert: before + sel + after },
+        // Empty selection → caret between the markers (start typing inside).
+        // Non-empty → re-select the wrapped text so a second tap can toggle.
+        selection: from === to
+          ? { anchor: from + before.length }
+          : {
+            anchor: from + before.length,
+            head: from + before.length + sel.length,
+          },
+      });
+      view.focus();
+    },
+    toggleLinePrefix: (prefix: string): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      const has = line.text.startsWith(prefix);
+      view.dispatch({
+        changes: has
+          ? { from: line.from, to: line.from + prefix.length, insert: "" }
+          : { from: line.from, insert: prefix },
+      });
+      view.focus();
+    },
+    cycleHeading: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      const m = /^(#{1,6})\s/.exec(line.text);
+      const level = m?.[1]?.length ?? 0;
+      const next = level >= 3 ? 0 : level + 1; // none → # → ## → ### → none
+      const stripLen = m?.[0]?.length ?? 0;
+      const insert = next === 0 ? "" : `${"#".repeat(next)} `;
+      view.dispatch({
+        changes: { from: line.from, to: line.from + stripLen, insert },
+      });
+      view.focus();
+    },
+    insertLink: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      const label = view.state.sliceDoc(from, to) || "text";
+      const md = `[${label}](url)`;
+      const urlAt = from + 1 + label.length + 2; // past "](" → start of "url"
+      view.dispatch({
+        changes: { from, to, insert: md },
+        selection: { anchor: urlAt, head: urlAt + 3 }, // select "url" to overtype
+      });
+      view.focus();
+    },
   }));
 
   const extensions = useMemo<Extension[]>(
     () => [
       EditorView.lineWrapping,
+      // Publish selection-empty state to the fullscreen keyboard toolbar so it can
+      // swap insert↔wrap actions. Ref-routed so the memo never rebuilds for it.
+      EditorView.updateListener.of((u): void => {
+        if (u.selectionSet || u.docChanged) {
+          onSelectionChangeRef.current?.(!u.state.selection.main.empty);
+        }
+      }),
       // Clipboard paste of image / file blobs (a screenshot, a copied image)
       // is lifted out to the composer as attachments; only a files-bearing
       // paste is swallowed, so plain-text paste keeps CodeMirror's behaviour.
