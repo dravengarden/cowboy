@@ -26,7 +26,13 @@ export function useKeyboardInset(): void {
     let timers: number[] = [];
     const apply = (): void => {
       raf = 0;
-      const overlap = Math.max(0, globalThis.innerHeight - (vv.offsetTop + vv.height));
+      // Keyboard overlap = layout-viewport height − visual-viewport height. We do
+      // NOT add vv.offsetTop: the body is position:fixed + locked (standalone PWA /
+      // Tauri shell, no URL bar), so offsetTop is 0 at rest — but it SPIKES during
+      // an overscroll / rubber-band as the visual viewport pans, which inflated the
+      // inset and left the sheet lifted too high above the keyboard with a stale gap
+      // ("有时候滚动过头"). vv.height stays constant under that pan, so this is stable.
+      const overlap = Math.max(0, globalThis.innerHeight - vv.height);
       root.style.setProperty("--kb-inset", `${String(Math.round(overlap))}px`);
     };
     const applyNow = (): void => {
@@ -84,7 +90,9 @@ export function useKeyboardOpen(): boolean {
     let timers: number[] = [];
     const apply = (): void => {
       raf = 0;
-      const overlap = globalThis.innerHeight - (vv.offsetTop + vv.height);
+      // See useKeyboardInset: drop vv.offsetTop so an overscroll/rubber-band pan
+      // doesn't spike the reading.
+      const overlap = globalThis.innerHeight - vv.height;
       // ≥120px so a stray inset (notch toolbar, rubber-band) never reads as a
       // keyboard; a real keyboard overlaps far more.
       setOpen(overlap > 120);
