@@ -1572,7 +1572,22 @@ export function Transcript({
                 <Box
                   key={item.key}
                   data-key={item.key}
-                  sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
+                  sx={{
+                    py: 0.625,
+                    display: "flex",
+                    flexDirection: "column",
+                    // Skip layout+paint for rows scrolled off-screen. The whole
+                    // transcript reflows whenever the composer height changes (a
+                    // draft expands → --composer-h → the reserved padding-bottom),
+                    // and repainting every heavy markdown/code row on that reflow is
+                    // the stutter. content-visibility bounds that work to the visible
+                    // viewport; `auto` in contain-intrinsic-size makes each row
+                    // remember its real height after first render, so scrolling back
+                    // up through history doesn't jump. The streaming bottom row is on
+                    // screen, so it renders normally (this only affects off-screen).
+                    contentVisibility: "auto",
+                    containIntrinsicSize: "auto 96px",
+                  }}
                 >
                   <ItemView item={item} streaming={working && i === lastIdx} />
                 </Box>
