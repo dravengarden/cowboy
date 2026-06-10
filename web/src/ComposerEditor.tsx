@@ -332,26 +332,39 @@ export const ComposerEditor = forwardRef<
     toggleLinePrefix: (prefix: string): void => {
       const view = cmRef.current?.view;
       if (!view) return;
-      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
       const has = line.text.startsWith(prefix);
-      view.dispatch({
-        changes: has
-          ? { from: line.from, to: line.from + prefix.length, insert: "" }
-          : { from: line.from, insert: prefix },
-      });
+      // Move the caret WITH the marker so you keep typing the line's content
+      // after it (without this, inserting `> `/`- ` left the caret before the
+      // marker — "光标跑到 > 前面").
+      view.dispatch(
+        has
+          ? {
+            changes: { from: line.from, to: line.from + prefix.length, insert: "" },
+            selection: { anchor: Math.max(line.from, head - prefix.length) },
+          }
+          : {
+            changes: { from: line.from, insert: prefix },
+            selection: { anchor: head + prefix.length },
+          },
+      );
       view.focus();
     },
     cycleHeading: (): void => {
       const view = cmRef.current?.view;
       if (!view) return;
-      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
       const m = /^(#{1,6})\s/.exec(line.text);
       const level = m?.[1]?.length ?? 0;
       const next = level >= 3 ? 0 : level + 1; // none → # → ## → ### → none
       const stripLen = m?.[0]?.length ?? 0;
       const insert = next === 0 ? "" : `${"#".repeat(next)} `;
+      // Shift the caret by the marker's length change so it stays with the text.
       view.dispatch({
         changes: { from: line.from, to: line.from + stripLen, insert },
+        selection: { anchor: Math.max(line.from, head + insert.length - stripLen) },
       });
       view.focus();
     },
