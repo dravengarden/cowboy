@@ -194,6 +194,7 @@ function ComposeBar(
     onRemoveAttachment,
     onSaveDraft,
     onCollapse,
+    onExpand,
     onForcePush,
     onJumpFront,
   }: {
@@ -211,6 +212,8 @@ function ComposeBar(
     readonly onRemoveAttachment?: ((id: string) => void) | undefined;
     readonly onSaveDraft?: (() => void) | undefined;
     readonly onCollapse?: (() => void) | undefined;
+    /** Expand the inline editor to the fullscreen sheet (↗) — mirror of onCollapse. */
+    readonly onExpand?: (() => void) | undefined;
     /** Receives the ⋮ button so the caller can anchor its force-push confirm. */
     readonly onForcePush?: ((anchor: HTMLElement) => void) | undefined;
     /** "Jump to front of queue" (no interrupt) — provided only when there's a
@@ -411,6 +414,19 @@ function ComposeBar(
                 onClick={onCollapse}
               >
                 <CloseFullscreen />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {onExpand && (
+          <Tooltip title="Expand editor">
+            <span>
+              <IconButton
+                aria-label="expand editor"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onExpand}
+              >
+                <OpenInFull />
               </IconButton>
             </span>
           </Tooltip>
@@ -2508,6 +2524,9 @@ function PendingRow({
   // queue panel inline. ONE editor is mounted at a time (inline XOR overlay), both
   // driving the shared `draft` — so there's no uncontrolled-editor desync.
   const theme = useTheme();
+  // Same vim setting as the composer — editing a queued/draft message uses the same
+  // editor surface, so it gets vim too.
+  const vim = useVimSetting();
   const [overlayOpen, setOverlayOpen] = useState(false);
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
@@ -2546,16 +2565,14 @@ function PendingRow({
     }, 350);
     return () => globalThis.clearTimeout(t);
   }, [editing, touchInput]);
-  // Real-time save (touch only): while editing on a phone, debounce-persist the
-  // in-progress edit back to the queued/draft item so nothing is lost if the sheet
-  // is grab-dismissed or the app is backgrounded mid-edit. Persist-only (no
-  // onEditDone) — the editor stays open. Scoped to touch because desktop keeps an
-  // explicit Cancel that must still revert; on touch dismiss==save, so streaming
-  // every change is consistent. Skipped until the content diverges from the stored
-  // message, so merely opening an edit fires no redundant write; it converges
-  // (after a write, message.text catches up and the guard goes quiet).
+  // Real-time save: while editing (desktop OR touch), debounce-persist the
+  // in-progress edit back to the queued/draft item — editing is now live like the
+  // composer's own draft (no Save/Cancel; closing just leaves the saved edit).
+  // Persist-only (no onEditDone) — the editor stays open. Skipped until the content
+  // diverges from the stored message, so merely opening an edit fires no redundant
+  // write; it converges (after a write, message.text catches up, guard goes quiet).
   useEffect(() => {
-    if (!editing || !touchInput) return undefined;
+    if (!editing) return undefined;
     const sameAttachments = editAttachments.length === message.attachments.length &&
       editAttachments.every((a, i) => a.id === message.attachments[i]?.id);
     if (draft === message.text && sameAttachments) return undefined;
@@ -2567,7 +2584,6 @@ function PendingRow({
     return () => globalThis.clearTimeout(t);
   }, [
     editing,
-    touchInput,
     draft,
     editAttachments,
     kind,
@@ -2583,27 +2599,44 @@ function PendingRow({
       } else editQueued(sessionId, message.id, draft, editAttachments);
       onEditDone();
     };
-    const cancel = (): void => {
-      setDraft(message.text);
-      setEditAttachments(message.attachments);
-      onEditDone();
-    };
     const addEditFiles = (files: File[]): void => {
       if (files.length === 0) return;
       void filesToAttachments(files).then((added) => {
         if (added.length > 0) setEditAttachments((prev) => [...prev, ...added]);
       });
     };
+    // Editing IS the composer surface now: the same editor (vim + completions), the
+    // shared ComposeBar (attachments + triggers + ↗ expand), and live-persist (the
+    // effect above) in place of Save. No Save/Cancel buttons — closing keeps the
+    // live-saved edit; ➤ / Esc just finish (a final commit + done, no revert).
+    const editBar = (
+      <ComposeBar
+        dead={false}
+        sendable={!!draft.trim() || editAttachments.length > 0}
+        attachments={editAttachments}
+        onRemoveAttachment={(id): void =>
+          setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
+        onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
+        onAttach={(): void => editFileInputRef.current?.click()}
+        onSend={save}
+        onExpand={(): void => setOverlayOpen(true)}
+      />
+    );
     return (
       <>
+        {/* One file input for BOTH the inline edit and the overlay's attach button. */}
+        <input
+          ref={editFileInputRef}
+          type="file"
+          accept="image/*,text/*,application/pdf,.md,.json,.csv,.log"
+          multiple
+          hidden
+          onChange={(e): void => {
+            addEditFiles(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
         <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
-          {editAttachments.length > 0 && (
-            <AttachmentPreviews
-              attachments={editAttachments}
-              onRemove={(id): void =>
-                setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
-            />
-          )}
           {/* Inline editor — hidden while the focused overlay owns the edit so only
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */}
           {!overlayOpen &&
@@ -2617,10 +2650,10 @@ function PendingRow({
                   onSubmit={save}
                   sessionId={sessionId}
                   commands={commands}
-                  placeholder="Edit queued message…"
+                  placeholder="Edit message…"
                   onPasteFiles={addEditFiles}
                   onEscape={(): boolean => {
-                    cancel();
+                    save();
                     return true;
                   }}
                 />
@@ -2633,53 +2666,21 @@ function PendingRow({
                   // onChange feeds `draft`, never back into `value`.
                   value={draft}
                   borderless
+                  vim={vim}
+                  onVimMode={setVimMode}
                   onChange={setDraft}
                   onSubmit={save}
                   sessionId={sessionId}
                   commands={commands}
-                  placeholder="Edit queued message…"
+                  placeholder="Edit message…"
                   onPasteFiles={addEditFiles}
                   onEscape={(): boolean => {
-                    cancel();
+                    save();
                     return true;
                   }}
                 />
               ))}
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={0.5}
-            sx={{ mt: 0.5 }}
-          >
-            <Tooltip title="Expand editor">
-              <span>
-                <IconButton
-                  size="small"
-                  aria-label="expand editor"
-                  onClick={(): void => setOverlayOpen(true)}
-                >
-                  <OpenInFull fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Box sx={{ flex: 1 }} />
-            <Button
-              size="small"
-              color="inherit"
-              onClick={cancel}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={save}
-              sx={{ textTransform: "none" }}
-            >
-              Save
-            </Button>
-          </Stack>
+          {!overlayOpen && editBar}
         </Paper>
         {/* Focused edit overlay (Step 7): a near-full-screen frosted sheet hosting a
             tall editor for comfortable long-message editing without ballooning the
@@ -2733,24 +2734,14 @@ function PendingRow({
               />
             }
           >
-            <input
-              ref={editFileInputRef}
-              type="file"
-              accept="image/*,text/*,application/pdf,.md,.json,.csv,.log"
-              multiple
-              hidden
-              onChange={(e): void => {
-                const files = Array.from(e.target.files ?? []);
-                addEditFiles(files);
-                e.target.value = "";
-              }}
-            />
             <Box sx={{ p: 1.5 }}>
               <ComposerEditor
                 ref={overlayEditorRef}
                 value={draft}
                 borderless
                 expanded
+                vim={vim}
+                onVimMode={setVimMode}
                 onChange={setDraft}
                 onSubmit={(): void => {
                   save();
