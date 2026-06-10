@@ -168,9 +168,13 @@ export const inlineImageTheme = EditorView.theme({
     boxShadow: "0 1px 6px rgba(0,0,0,0.22)",
   },
   // Selection ring while the host's preview/delete popover is open for this image.
+  // INSET (outline-offset negative) so the ring is drawn just inside the image's
+  // own edges — an OUTSET ring (positive offset) gets clipped on the sides by the
+  // editor's overflow container ("选中边框残/缺"). Modern WebKit rounds the outline
+  // to the image's border-radius, so it tracks the rounded corners.
   ".cm-inline-image.cm-inline-image-selected": {
-    outline: "2px solid var(--atomic-editor-accent-bright, #a78bfa)",
-    outlineOffset: "2px",
+    outline: "2.5px solid var(--atomic-editor-accent-bright, #a78bfa)",
+    outlineOffset: "-3px",
   },
 });
 
