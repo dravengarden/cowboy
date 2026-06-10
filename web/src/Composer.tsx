@@ -241,7 +241,9 @@ function ComposeBar(
       <Stack
         direction="row"
         alignItems="center"
-        sx={{ justifyContent: "space-evenly" }}
+        // Wrap to a second row when the icons don't fit one (e.g. busy + a queue
+        // shows force-push AND jump-front) — each row stays space-evenly.
+        sx={{ justifyContent: "space-evenly", flexWrap: "wrap", rowGap: 0.5 }}
       >
         <Tooltip title="Slash command / skill">
           <span>
