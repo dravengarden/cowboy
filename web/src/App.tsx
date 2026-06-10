@@ -5,6 +5,7 @@ import {
     AppBar,
     Box,
     Button,
+    ButtonBase,
     Chip,
     CircularProgress,
     Divider,
@@ -119,41 +120,112 @@ import { persisted } from "./_store/mod.ts";
 // later. Reads the live mode from vimModeStore, which ComposerEditor writes. Lives
 // inside the composer's measured wrapper so the transcript's `--composer-h`
 // reservation includes it automatically.
+// One segment of the status bar (VSCode-style). A plain colored label by default;
+// pass `onClick` to make it an interactive segment — a ButtonBase, so it gets the
+// material hover/ripple AND is picked up by the global haptic delegation for free.
+// `icon` slots a small leading glyph. This is the reusable unit the bar is built
+// from as more states land.
+function StatusItem({
+    label,
+    color,
+    icon,
+    tooltip,
+    onClick,
+    mono = false,
+}: {
+    label: string;
+    color?: string;
+    icon?: React.ReactNode;
+    tooltip?: string;
+    onClick?: () => void;
+    mono?: boolean;
+}): React.JSX.Element {
+    const sx: SxProps<Theme> = {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.5,
+        px: 1,
+        height: "100%",
+        fontSize: "0.6875rem",
+        fontWeight: 600,
+        letterSpacing: "0.04em",
+        lineHeight: 1,
+        whiteSpace: "nowrap",
+        color: color ?? "text.secondary",
+        ...(mono && { fontFamily: "monospace" }),
+        ...(onClick && {
+            transition: "background-color .12s, color .12s",
+            "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+        }),
+    };
+    const inner = (
+        <>
+            {icon}
+            <Box component="span">{label}</Box>
+        </>
+    );
+    const el = onClick
+        ? (
+            <ButtonBase sx={sx} onClick={onClick}>
+                {inner}
+            </ButtonBase>
+        )
+        : <Box sx={sx}>{inner}</Box>;
+    return tooltip ? <Tooltip title={tooltip}>{el}</Tooltip> : el;
+}
+
+// The app's bottom status bar (Zed/VSCode-style). A full-width strip with a LEFT
+// and a RIGHT item group and a flexible spacer between — built from StatusItems so
+// new states (session/agent status, token counts, connection, cwd, …) drop into
+// `left`/`right` with no layout work. Desktop-only (inside the composer's measured
+// wrapper, so the transcript's --composer-h reservation includes it). Renders
+// nothing until at least one item exists.
 function AppStatusBar(): React.JSX.Element | null {
     const vim = useVimSetting();
     const vimMode = useVimMode();
     const touchInput = useTouchComposer();
-    if (touchInput || !vim) return null;
+    if (touchInput) return null;
+
+    const left: React.ReactNode[] = [];
+    const right: React.ReactNode[] = [];
+
+    if (vim) {
+        left.push(
+            <StatusItem
+                key="vim"
+                label={vimMode.toUpperCase()}
+                color={VIM_MODE_COLOR[vimMode] ?? "text.secondary"}
+                tooltip={`Vim — ${vimMode} mode`}
+                mono
+            />,
+        );
+    }
+
+    if (left.length === 0 && right.length === 0) return null;
+
     return (
         <Box
             sx={{
                 display: "flex",
-                alignItems: "center",
-                gap: 1.5,
-                px: 1.5,
-                py: 0.25,
-                minHeight: 22,
+                alignItems: "stretch",
+                height: 24,
+                minHeight: 24,
                 borderTop: 1,
                 borderColor: "divider",
+                // A whisper of fill so the bar reads as its own surface (material)
+                // without fighting the frosted slab the composer floats on.
+                bgcolor: (t) => alpha(t.palette.text.primary, 0.025),
                 color: "text.secondary",
-                fontFamily: "monospace",
-                fontSize: "0.6875rem",
-                lineHeight: 1.5,
                 userSelect: "none",
             }}
         >
-            <Box
-                component="span"
-                aria-label={`vim ${vimMode} mode`}
-                sx={{
-                    fontWeight: 700,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: VIM_MODE_COLOR[vimMode] ?? "text.secondary",
-                }}
-            >
-                {vimMode}
-            </Box>
+            <Stack direction="row" alignItems="stretch">
+                {left}
+            </Stack>
+            <Box sx={{ flex: 1 }} />
+            <Stack direction="row" alignItems="stretch">
+                {right}
+            </Stack>
         </Box>
     );
 }
