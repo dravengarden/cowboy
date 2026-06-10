@@ -676,6 +676,26 @@ function ToolCard({
   // Raw escape hatch: any card can flip to the verbatim input/output JSON,
   // regardless of how the friendly renderer formatted it.
   const [raw, setRaw] = useState(false);
+  // On expand, pull the card's TOP into view. In the column-reverse (bottom-
+  // anchored) transcript a growing card shifts its top UP — often behind the
+  // frosted AppBar — so the start of the output is hidden. `nearest` + the
+  // container's scrollPaddingTop reveals the top below the bar; it no-ops when the
+  // card is already fully visible (no yank). Double-rAF so it runs AFTER the resize
+  // settles and the transcript's own anchor logic has had its frame.
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        cardRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [open]);
   const hasDetail = item.rawInput !== undefined || item.content !== undefined;
   const running = item.status === "in_progress" || item.status === "pending";
   // The header shows only the first line of the title — a Bash title IS the whole
@@ -693,6 +713,7 @@ function ToolCard({
   };
   return (
     <Paper
+      ref={cardRef}
       elevation={0}
       sx={{
         alignSelf: "stretch",
@@ -1516,6 +1537,9 @@ export function Transcript({
           // and growing pb only reflows the scroll RANGE (no container reflow), so
           // the panel can grow (drafts expand) with the newest pinned just above it.
           pt: topInset ? `calc(${topInset} + 8px)` : { xs: 1, sm: 1.5 },
+          // So scrollIntoView (e.g. a ToolCard expanding) aligns a row BELOW the
+          // frosted AppBar, not under it — content scrolls under the bar otherwise.
+          scrollPaddingTop: topInset ? `calc(${topInset} + 8px)` : 8,
           // `--awaiting-h` (set by TurnStatusOverlay, 0 when absent) RESERVES the
           // floating status pill's height so the newest message clears it at rest
           // while the pill stays pinned above the composer (sticky-not-covering).
