@@ -62,6 +62,41 @@ export function livePreviewExtensions(
     // with working paste). See PITFALLS.md #2/#3.
     drawSelection(),
     dropCursor(),
+    // Composition-aware caret — the drawSelection ↔ iOS IME fix. drawSelection
+    // hides the native caret (its `hideNativeSelection` facet forces
+    // `.cm-content`/`.cm-line { caret-color: transparent !important }`) and draws
+    // its own `.cm-cursor`. But CM6 deliberately does NOT re-measure mid-
+    // composition (to avoid disrupting the IME), so the drawn caret FREEZES at the
+    // pre-composition spot while the IME's marked text (pinyin "ni…") renders
+    // AFTER it — the caret ends up to the LEFT of what you're typing ("光标位置很
+    //奇怪"). Fix: for the duration of a composition, REVEAL the native caret (it
+    // tracks marked text natively, in the same layer) and HIDE the stale drawn
+    // one; restore on commit. The `.cm-composing` class is toggled by the handlers
+    // just below. The selectors out-specify drawSelection's `.cm-content`/`.cm-line`
+    // (which is how they win over its `!important`). See mdlive/PITFALLS.md #2.
+    EditorView.theme({
+      "&.cm-composing .cm-content, &.cm-composing .cm-line": {
+        caretColor: "var(--atomic-editor-accent-bright, #a78bfa) !important",
+      },
+      "&.cm-composing .cm-cursorLayer": { visibility: "hidden" },
+    }),
+    EditorView.domEventHandlers({
+      compositionstart: (_e, view): boolean => {
+        view.dom.classList.add("cm-composing");
+        return false;
+      },
+      compositionend: (_e, view): boolean => {
+        view.dom.classList.remove("cm-composing");
+        return false;
+      },
+      // A composition can be interrupted WITHOUT a compositionend (focus loss, the
+      // native photo picker stealing focus mid-pinyin). A blur always tears the
+      // composition styling down so the caret can't get stuck in the native state.
+      blur: (_e, view): boolean => {
+        view.dom.classList.remove("cm-composing");
+        return false;
+      },
+    }),
     highlightActiveLine(),
     indentOnInput(),
     // --- Obsidian-style bracket / emphasis / code-fence pairing ---

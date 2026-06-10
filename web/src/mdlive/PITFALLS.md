@@ -83,6 +83,23 @@ here says otherwise.
    off-phase — burst-shoot to confirm). **Do NOT "fix" the caret by removing the
    compositing hack** (it exists so typed text repaints inside `position:fixed`).
 
+   **2a — drawSelection ↔ iOS IME: the drawn caret freezes during pinyin
+   composition (v166 regression, fixed v167).** drawSelection's `hideNativeSelection`
+   facet forces `.cm-content`/`.cm-line { caret-color: transparent !important }` and
+   draws its own `.cm-cursor`. CM6 deliberately does NOT re-measure mid-composition
+   (so it won't disrupt the IME), so the drawn caret FREEZES at the pre-composition
+   position while the marked text ("ni…") renders after it — caret ends up to the
+   LEFT of what you're typing ("光标位置很奇怪/UI太丑"). **Fix (composerExtensions.ts):
+   composition-aware caret** — a `.cm-composing` class (toggled on
+   compositionstart/end + blur self-heal) whose CSS reveals the NATIVE caret
+   (`caret-color: accent`, it tracks marked text in the same layer) and hides the
+   stale drawn `.cm-cursorLayer` for the duration of the composition; restored on
+   commit. The selectors out-specify drawSelection's (0,3,1 > 0,1,0) so they win
+   over its `!important`. This is the holistic verify pitfall #1 demands — caret +
+   IME must be tested TOGETHER (v166 fixed the caret-move case but shipped before
+   IME was checked, hence 2a). Real-IME caret tracking is iOS-WebKit-only; confirm
+   on a device, not the Simulator.
+
 3. **iOS long-press "Paste / Select" menu — was suspected drawSelection-broken,
    but that was a MISDIAGNOSIS.** The real cause of a missing web-editor edit menu
    on iOS is almost always `-webkit-user-select` / `-webkit-touch-callout` on the
