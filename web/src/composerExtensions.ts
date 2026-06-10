@@ -3,20 +3,25 @@
 // literal editor value; the mdlive engine renders it inline and reveals raw
 // markers on the active line (see web/src/mdlive/README.md).
 //
-// This is a faithful port of atomic-editor's `AtomicCodeMirrorEditor` extension
-// composition (the "Obsidian feel" lives in the EDITING extensions, not just the
-// decorations): bracket/emphasis auto-pairing, code-fence auto-close, the
-// markdown keymap (list/quote continuation on Enter), indent-on-input, and the
-// cursor/active-line visuals the atomic theme styles. We OMIT only what cowboy's
-// ComposerEditor base already provides (`history`, `lineWrapping`, its own
-// `historyKeymap`/`defaultKeymap`/completion keymaps + send-chord handler) and
-// what v1 excludes (tables, image blocks, wiki-links, find-in-document, and the
-// React-wrapper-only `initialRevealField`).
+// FAITHFUL port of atomic-editor's `AtomicCodeMirrorEditor` extension
+// composition — the "Obsidian feel" lives in the EDITING + selection extensions,
+// not just the decorations. We include everything it does EXCEPT items with a
+// strong reason to drop (noted at the bottom).
 import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { indentOnInput } from "@codemirror/language";
-import { EditorView, keymap } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import { indentWithTab } from "@codemirror/commands";
+import { search, searchKeymap } from "@codemirror/search";
+import {
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  highlightSpecialChars,
+  keymap,
+  rectangularSelection,
+} from "@codemirror/view";
+import { EditorState, type Extension } from "@codemirror/state";
 import {
   atomicEditorTheme,
   atomicMarkdownSyntax,
@@ -36,22 +41,30 @@ export interface LivePreviewOptions {
   onLinkClick?: (url: string) => void;
 }
 
-// Returns the live-preview + markdown-editing extensions in mount order, matching
-// atomic-editor's composition. Append AFTER the host's own base extensions; the
-// engine self-manages decoration precedence (its Enter handler is `Prec.highest`,
-// so it beats `markdownKeymap`'s Enter for tight-list continuation, then falls
-// through). `codeLanguages: []` = no embedded fenced-code grammars in v1.
+// Returns the live-preview + markdown-editing extensions, mirroring atomic-editor.
+// Append AFTER the host's own base extensions; the engine self-manages decoration
+// precedence (its Enter handler is `Prec.highest`, owning list continuation, then
+// falling through). `codeLanguages: []` = no embedded fenced-code grammars in v1.
 export function livePreviewExtensions(
   opts: LivePreviewOptions = {},
 ): Extension[] {
   return [
-    // Auto-indent on input (e.g. continuing an indented list block).
+    // --- Selection / cursor / editor behavior (the atomic theme styles
+    // `.cm-cursor`/`.cm-dropCursor`/`.cm-activeLine`, and drawSelection fixes
+    // native-selection glitches across the live-preview decorations/widgets) ---
+    highlightSpecialChars(),
+    drawSelection(),
+    dropCursor(),
+    EditorState.allowMultipleSelections.of(true),
+    rectangularSelection(),
+    highlightActiveLine(),
     indentOnInput(),
-    // --- Obsidian-style bracket / emphasis / code-fence pairing (the editing
-    // "logic" the look-alike decorations alone don't provide) ---
+    // --- Obsidian-style bracket / emphasis / code-fence pairing ---
     closeBrackets(),
     extendEmphasisPair,
     autoCloseCodeFence,
+    // Find-in-document (Mod-f), top panel — useful in the fullscreen long-form editor.
+    search({ top: true }),
     // --- The markdown language + GFM, the source of the syntax tree the engine
     // reads (Task / Strikethrough / autolinks need `base: markdownLanguage`) ---
     markdown({ base: markdownLanguage, codeLanguages: [] }),
@@ -62,22 +75,24 @@ export function livePreviewExtensions(
     }),
     atomicMarkdownSyntax,
     atomicEditorTheme,
-    // closeBrackets (Backspace-over-pair) + markdown keybindings. NOT history/
-    // default keymaps (cowboy's base already registers those), and NOT
-    // `indentWithTab` — Tab is the completion-accept / focus key in this chat box,
-    // not an indent key.
-    keymap.of([...closeBracketsKeymap, ...markdownKeymap]),
-    // The live-preview decorations themselves (+ the markdown-aware Enter, which
-    // is Prec.highest so it owns list continuation, beating markdownKeymap's Enter).
+    // closeBrackets/search/markdown keybindings + Tab-indent. NOT history/default
+    // keymaps — cowboy's ComposerEditor base already registers those (+ its own
+    // completion keymap and send-chord); duplicating history would split undo.
+    keymap.of([
+      ...closeBracketsKeymap,
+      ...searchKeymap,
+      ...markdownKeymap,
+      indentWithTab,
+    ]),
+    // The live-preview decorations themselves (+ the markdown-aware Enter).
     inlinePreview(opts),
     EditorView.lineWrapping,
   ];
-  // DELIBERATELY NOT ported from atomic-editor's AtomicCodeMirrorEditor here:
-  //   drawSelection() / dropCursor() / highlightActiveLine() /
-  //   allowMultipleSelections — these are cursor/selection CHROME, not editing
-  //   logic. drawSelection in particular replaces the native caret, which is
-  //   exactly the kind of change that historically stranded iOS pinyin IME (the
-  //   project's hard constraint), and cowboy already styles the caret via cmTheme
-  //   (+ the vim block cursor). search()/tables/imageBlocks/initialRevealField are
-  //   excluded too (v1 scope / not a chat-composer need). See mdlive/SYNC.md.
+  // DROPPED from atomic's composition, each with a strong reason:
+  //   • history() / historyKeymap / defaultKeymap — cowboy's ComposerEditor base
+  //     already provides them; a second history() splits undo.
+  //   • table-widget / image-blocks / wiki-links — the only contenteditable
+  //     surfaces (the IME risk) and out of v1 scope. See mdlive/SYNC.md.
+  //   • initialRevealField — a React-wrapper-local StateField for revealing an
+  //     initial range on open (a search/deep-link use case cowboy doesn't have).
 }
