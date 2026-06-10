@@ -25,6 +25,13 @@ import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { deleteTokenBackward, tokenChipPlugin } from "./fileTokenWidget";
 import {
+  deleteImageTokenBackward,
+  inlineImagePlugin,
+  inlineImageTheme,
+  insertImageToken,
+} from "./inlineImages";
+import type { Attachment } from "./attachments";
+import {
   fileCompletionSource,
   slashCompletionSource,
 } from "./composerCompletions";
@@ -39,6 +46,9 @@ export interface ComposerEditorHandle {
   // Insert a trigger char (`/` or `@`) at the caret + open the picker — used by
   // the action-row buttons. Mirrors the old `appendToken` + focus behavior.
   insertTrigger: (ch: string) => void;
+  // Insert an image at the caret as an inline `![](cowboy-att:id)` token (the host
+  // adds the bytes to `attachments[]`; this renders it as an inline thumbnail).
+  insertImage: (a: Attachment) => void;
   // Clear the document imperatively. Submit can't rely on the controlled
   // `value=""` prop to empty the editor: @uiw/react-codemirror (≥4.24) holds a
   // 200ms "typing latch" and DEFERS external value-prop changes while you're
@@ -297,6 +307,11 @@ export const ComposerEditor = forwardRef<
       view.focus();
       startCompletion(view);
     },
+    insertImage: (a: Attachment): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      insertImageToken(view, a);
+    },
     clear: (): void => {
       const view = cmRef.current?.view;
       if (!view) return;
@@ -501,6 +516,11 @@ export const ComposerEditor = forwardRef<
       // a dep of this memo, so toggling vim rebuilds the theme.
       cmTheme(theme, !!vimExt),
       tokenChipPlugin,
+      // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
+      // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
+      // IME-safe like the @-chip. See inlineImages.ts.
+      inlineImagePlugin,
+      inlineImageTheme,
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
@@ -567,7 +587,12 @@ export const ComposerEditor = forwardRef<
       ),
       // Backspace removes a whole `@path` / `/skill` chip in one press (above
       // the default char-delete).
-      Prec.high(keymap.of([{ key: "Backspace", run: deleteTokenBackward }])),
+      Prec.high(keymap.of([
+        // Inline-image token delete runs first (its token contains spaces, so the
+        // @-token regex can't match it), then the @/​/ token delete.
+        { key: "Backspace", run: deleteImageTokenBackward },
+        { key: "Backspace", run: deleteTokenBackward },
+      ])),
       // Escape: in vim insert mode, yield (return false) so the vim extension
       // takes it as exit-to-normal — the SECOND Esc, now in normal mode, reaches
       // onEscape. With vim off, or already in normal/visual, Esc goes straight to

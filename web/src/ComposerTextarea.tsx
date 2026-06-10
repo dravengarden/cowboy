@@ -244,6 +244,10 @@ export const ComposerTextarea = forwardRef<
       });
     },
     clear: (): void => undefined,
+    // Inline images are CM6-only (the textarea fallback can't host widgets); a
+    // no-op keeps the shared handle satisfied. Touch paths that hit this fallback
+    // keep the legacy tray behaviour for their attachments.
+    insertImage: (): void => undefined,
     // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
     // ComposerEditor, never this textarea). No-ops here just satisfy the shared
     // ComposerEditorHandle — this component is retained solely as the documented

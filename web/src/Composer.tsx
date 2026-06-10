@@ -84,6 +84,7 @@ import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments } from "./attachments";
+import { registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
 import {
   activateAllDrafts,
   activateDraft,
@@ -249,10 +250,13 @@ function ComposeBar(
         transform: "translateZ(0)",
       }}
     >
-      {/* Attachment thumbnails live in the sticky docked bar (above the action
-          row), NOT in the scrolling editor body, so they stay put while you write. */}
-      {attachments.length > 0 && onRemoveAttachment && (
-        <AttachmentPreviews attachments={attachments} onRemove={onRemoveAttachment} />
+      {/* IMAGES render inline in the editor (Obsidian-style); the docked tray now
+          carries only NON-image files (code, etc.), which have no inline form. */}
+      {attachments.some((a) => !a.isImage) && onRemoveAttachment && (
+        <AttachmentPreviews
+          attachments={attachments.filter((a) => !a.isImage)}
+          onRemove={onRemoveAttachment}
+        />
       )}
       {/* LEFT-aligned with a fixed gap (not space-evenly — a few icons shouldn't
           stretch across the whole width; reads cleaner next to the attachment
@@ -518,11 +522,16 @@ export function Composer({
   // onChange keeps `text` in sync for send / sendable / draft; clear() empties
   // the doc imperatively on submit.
   const initialDraftText = useRef<string>(getDraft(sessionId).text);
-  // Staged image / file attachments — previewed above the editor and sent as
-  // ACP content blocks alongside the text (see attachments.ts). Cleared on send.
-  const [attachments, setAttachments] = useState<Attachment[]>(
-    () => getDraft(sessionId).attachments,
-  );
+  // Staged image / file attachments — the byte/preview store + ACP content blocks
+  // (see attachments.ts). Images render INLINE in the editor (Obsidian-style) via
+  // `![](cowboy-att:id)` tokens; this array stays the bytes/send source. Seed the
+  // inline-image registry from the persisted draft so its tokens render as
+  // thumbnails on mount. Cleared on send.
+  const [attachments, setAttachments] = useState<Attachment[]>(() => {
+    const seeded = getDraft(sessionId).attachments;
+    seedInlineAttachments(seeded);
+    return seeded;
+  });
   // Persist the in-progress draft per session so switching away and back
   // restores it, and so it never bleeds into another session. Runs on mount too
   // (idempotent re-write of the seed); on submit, text/attachments go empty and
@@ -653,7 +662,16 @@ export function Composer({
   function addFiles(files: File[]): void {
     if (files.length === 0) return;
     void filesToAttachments(files).then((added) => {
-      if (added.length > 0) setAttachments((prev) => [...prev, ...added]);
+      if (added.length === 0) return;
+      // Register bytes BEFORE inserting the tokens so the inline-image decoration
+      // resolves each preview synchronously on the docChange the insert triggers
+      // (no React-render race). attachments[] stays the send/persist source.
+      added.forEach(registerInlineAttachment);
+      setAttachments((prev) => [...prev, ...added]);
+      // Drop each image into the editor at the caret as an inline thumbnail token
+      // (Obsidian-style). The shared editorRef points at whichever surface (inline
+      // or fullscreen) is mounted. Non-image files keep the inline chip too.
+      added.forEach((a) => editorRef.current?.insertImage(a));
     });
   }
 
@@ -948,12 +966,12 @@ export function Composer({
         />
       )}
       {
-        /* Staged attachments (image thumbnails / file chips) sit above the editor
-          so they read as "what will be sent with this message". */
+        /* Staged NON-image files sit above the editor ("what will be sent"). Images
+          are not here — they render inline in the editor (Obsidian-style). */
       }
-      {attachments.length > 0 && (
+      {attachments.some((a) => !a.isImage) && (
         <AttachmentPreviews
-          attachments={attachments}
+          attachments={attachments.filter((a) => !a.isImage)}
           onRemove={removeAttachment}
         />
       )}
@@ -1607,10 +1625,10 @@ export function Composer({
           commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
           sendable={sendable}
-          attachmentsSlot={attachments.length > 0
+          attachmentsSlot={attachments.some((a) => !a.isImage)
             ? (
               <AttachmentPreviews
-                attachments={attachments}
+                attachments={attachments.filter((a) => !a.isImage)}
                 onRemove={removeAttachment}
               />
             )

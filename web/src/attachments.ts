@@ -278,14 +278,63 @@ export function blocksToAttachments(blocks: readonly ContentBlock[]): Attachment
   return out;
 }
 
-/// Build the ACP `content` block array for a prompt: the attachment blocks
-/// first (so the agent has the visual / file context before the instruction),
-/// then a trailing text block when there's any text. Returns null when there's
-/// nothing to attach — callers then use the plain text-only prompt path.
+/// The inline-image token the composer writes into the literal doc at the paste
+/// position: `![name](cowboy-att:<id>)`. The bytes live in the host's
+/// `attachments[]` / the inline-image registry (see inlineImages.ts) — the doc
+/// only carries this marker, which a decoration renders as a thumbnail. The `id`
+/// matches an `Attachment.id`. Global flag for repeated `.exec`; callers MUST
+/// reset `.lastIndex` (or use `String.matchAll`) before scanning.
+export const IMG_TOKEN_RE = /!\[[^\]]*\]\(cowboy-att:([^)]+)\)/g;
+
+/// Ordered (id, span) of every inline-image token in `text`, document order.
+export function imageTokensInText(
+  text: string,
+): { id: string; from: number; to: number }[] {
+  const out: { id: string; from: number; to: number }[] = [];
+  for (const m of text.matchAll(IMG_TOKEN_RE)) {
+    if (m[1] !== undefined) {
+      out.push({ id: m[1], from: m.index, to: m.index + m[0].length });
+    }
+  }
+  return out;
+}
+
+/// Drop every inline-image token from `text` (for any plain-text view — the
+/// stored message `text` field / row previews must never show a raw token).
+/// Collapses the double space a removed mid-line token leaves behind.
+export function stripImageTokens(text: string): string {
+  return text.replace(IMG_TOKEN_RE, "").replace(/ {2,}/g, " ");
+}
+
+/// Build the ACP `content` block array for a prompt.
+///   • With inline tokens (Obsidian-style images): walk the doc and emit blocks
+///     in DOCUMENT ORDER — text segment, image block, text segment, … — so the
+///     agent sees images positioned exactly where the user placed them (Zed-
+///     consistent). Tokens are stripped from the text segments; an image is
+///     resolved by id from `attachments`, skipped if absent.
+///   • No tokens (legacy path): attachment blocks first, then a trailing text
+///     block — so the agent has the visual/file context before the instruction.
+/// Returns null when there's nothing to send (callers use the text-only path).
 export function buildContentBlocks(
   text: string,
   attachments: readonly Attachment[],
 ): ContentBlock[] | null {
+  const tokens = imageTokensInText(text);
+  if (tokens.length > 0) {
+    const byId = new Map(attachments.map((a) => [a.id, a]));
+    const blocks: ContentBlock[] = [];
+    let cursor = 0;
+    for (const t of tokens) {
+      const seg = text.slice(cursor, t.from);
+      if (seg.trim()) blocks.push({ type: "text", text: seg });
+      const att = byId.get(t.id);
+      if (att) blocks.push(att.block);
+      cursor = t.to;
+    }
+    const tail = text.slice(cursor);
+    if (tail.trim()) blocks.push({ type: "text", text: tail });
+    return blocks.length > 0 ? blocks : null;
+  }
   if (attachments.length === 0) return null;
   const blocks: ContentBlock[] = attachments.map((a) => a.block);
   const trimmed = text.trim();
