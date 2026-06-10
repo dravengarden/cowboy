@@ -1489,7 +1489,10 @@ export function Composer({
             />
           }
         >
-          <Box sx={{ p: 1.5 }}>
+          {/* height:100% + flex column so the editor FILLS the full-screen sheet
+              (a tap-anywhere writing canvas) instead of sitting 10 rows tall with
+              an ugly blank gap down to the toolbar. */}
+          <Box sx={{ p: 1.5, height: "100%", display: "flex", flexDirection: "column" }}>
             <ComposerTextarea
               ref={editorRef}
               value={text}

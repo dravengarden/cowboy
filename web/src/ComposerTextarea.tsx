@@ -320,7 +320,15 @@ export const ComposerTextarea = forwardRef<
   );
 
   return (
-    <Box sx={{ position: "relative" }}>
+    <Box
+      sx={{
+        position: "relative",
+        // `expanded` (fullscreen compose / edit sheet): fill the sheet so the
+        // textarea is a full-height writing canvas, not a fixed block with blank
+        // space below it.
+        ...(expanded && { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }),
+      }}
+    >
       {popup}
       <TextField
         inputRef={inputRef}
@@ -370,11 +378,15 @@ export const ComposerTextarea = forwardRef<
         size="small"
         fullWidth
         sx={{
+          // `expanded` fills the sheet; the textarea is forced to 100% height (the
+          // !important overrides MUI's autosize inline height) and scrolls within.
+          ...(expanded && { flex: 1, minHeight: 0, display: "flex" }),
           // Keep a usable tap target even when a small font scale shrinks the
           // text. The textarea still grows from here as you type (top-aligned).
           "& .MuiInputBase-root": {
             minHeight: 44,
-            alignItems: "flex-start",
+            alignItems: expanded ? "stretch" : "flex-start",
+            ...(expanded && { height: "100%" }),
           },
           // `1rem` so the input tracks the reading font-size setting both up and
           // down; line-height follows the reading line-height var. No 16px floor
@@ -384,6 +396,7 @@ export const ComposerTextarea = forwardRef<
             lineHeight: "var(--cowboy-reading-line-height, 1.5)",
             // Clear the overlaid send/kebab buttons at the bottom-right.
             ...(endInset > 0 && { paddingRight: `${String(endInset)}px` }),
+            ...(expanded && { height: "100% !important", overflowY: "auto !important" }),
           },
           // Inside the composer's outlined Paper card the card draws the box, so
           // drop the TextField's own outline in all three states (rest/hover/focus).
