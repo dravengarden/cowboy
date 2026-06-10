@@ -157,6 +157,24 @@ here says otherwise.
    `initialDraftText.current = text` on collapse to carry edits back. NEVER pass live
    state as `value` to either editor.
 
+10. **IME marked text is "swallowed" (invisible) during composition — the two
+    compositing-layer fixes fight each other (fixed v169).** Two coupled iOS hacks
+    in `ComposerEditor.tsx` / `cmTheme.ts`: (a) `.cm-scroller { transform: translateZ(0) }`
+    is a compositing layer that forces WebKit to repaint the editable on every input
+    (the `position: fixed` body otherwise leaves typed text invisible until a later
+    edit); (b) `compositionstart` sets `transform: none` to stop iOS mis-placing the
+    pinyin marked-text overlay relative to that promoted layer. The conflict: with the
+    layer OFF during composition, the repaint bug from (a) returns — the marked text
+    paints to nowhere and looks SWALLOWED. It manifests "只有前面有图片时" because an
+    attachment chip's reflow leaves the editor's paint rect stale; the tell is that
+    typing a few **direct** keys (spaces) "unblocks" it — a direct keystroke forces a
+    repaint, IME composition does not. **Fix:** on `compositionupdate`, nudge the
+    **scroller's** opacity for one frame to force the repaint (so marked text stays
+    visible while `transform: none` keeps it positioned). Nudge the SCROLLER, never the
+    contentDOM — contentDOM is the contenteditable host and mutating its style mid-
+    composition risks the IME aborting. The sim can't verify this (no reliable IME);
+    confirm on a device.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

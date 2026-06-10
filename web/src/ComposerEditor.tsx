@@ -452,6 +452,26 @@ export const ComposerEditor = forwardRef<
           view.scrollDOM.style.transform = "none";
           return false;
         },
+        // The flip side of dropping the compositing layer above. With
+        // `transform: none` the marked text positions correctly, but the
+        // `position: fixed` body's "editable won't repaint on input" bug is back
+        // for the duration of the composition — so the pinyin you're typing paints
+        // to nowhere and looks SWALLOWED. It's worst right after an attachment chip
+        // appears (its reflow leaves the editor's paint rect stale); a direct
+        // keystroke would force a repaint, which is why typing a few spaces
+        // "unblocks" it. Force that repaint ourselves on every composition update so
+        // the marked text stays visible. Nudge the SCROLLER's opacity, NOT the
+        // contentDOM's: contentDOM is the contenteditable host, and mutating the
+        // host's style mid-composition risks the IME aborting; the scroller is its
+        // non-editable parent, so toggling it repaints the subtree (marked text
+        // included) without touching the composition. Paint-only, one frame.
+        compositionupdate: (_event, view): boolean => {
+          view.scrollDOM.style.opacity = "0.999";
+          requestAnimationFrame(() => {
+            view.scrollDOM.style.opacity = "";
+          });
+          return false;
+        },
         compositionend: (_event, view): boolean => {
           view.scrollDOM.style.transform = "";
           const content = view.contentDOM;
