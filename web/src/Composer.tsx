@@ -2510,6 +2510,7 @@ function PendingRow({
   const theme = useTheme();
   const [overlayOpen, setOverlayOpen] = useState(false);
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;
     // Small delay so the sheet has mounted before we focus (desktop pops the
@@ -2723,13 +2724,27 @@ function PendingRow({
                 onRemoveAttachment={(id): void =>
                   setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
                 onTrigger={(t): void => overlayEditorRef.current?.insertTrigger(t)}
+                onAttach={(): void => editFileInputRef.current?.click()}
                 onSend={(): void => {
                   save();
                   setOverlayOpen(false);
                 }}
+                onCollapse={touchInput ? save : (): void => setOverlayOpen(false)}
               />
             }
           >
+            <input
+              ref={editFileInputRef}
+              type="file"
+              accept="image/*,text/*,application/pdf,.md,.json,.csv,.log"
+              multiple
+              hidden
+              onChange={(e): void => {
+                const files = Array.from(e.target.files ?? []);
+                addEditFiles(files);
+                e.target.value = "";
+              }}
+            />
             <Box sx={{ p: 1.5 }}>
               <ComposerEditor
                 ref={overlayEditorRef}
