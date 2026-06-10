@@ -1591,7 +1591,16 @@ export function Composer({
             saveDraft();
             setComposeFs(false);
           }}
-          onCollapse={(): void => setComposeFs(false)}
+          onCollapse={(): void => {
+            // Carry fullscreen edits back to the inline editor. The inline editor
+            // REMOUNTS on close (it only renders while !composeFs) and seeds from
+            // initialDraftText (its uncontrolled seed) — so refresh that ref to the
+            // current text first, else closing reverts to the pre-expand text
+            // ("展开/收缩 state 不同步"). Can't feed `text` as the inline value: it'd
+            // re-apply on every keystroke and bounce the iOS caret (see line ~500).
+            initialDraftText.current = text;
+            setComposeFs(false);
+          }}
           onAttach={(): void => fileInputRef.current?.click()}
           onPasteFiles={addFiles}
           sessionId={sessionId}
