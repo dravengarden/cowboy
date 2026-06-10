@@ -16,11 +16,9 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
-  ViewPlugin,
-  type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { type EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
 import { type Attachment, IMG_TOKEN_RE } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 
@@ -104,54 +102,42 @@ class InlineImageWidget extends WidgetType {
 // left untouched (a token accidentally mid-line just stays literal — rare).
 const LONE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
 
-function buildImageDecorations(view: EditorView): DecorationSet {
+function buildImageDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const { doc } = view.state;
-  for (const { from, to } of view.visibleRanges) {
-    let pos = from;
-    while (pos <= to) {
-      const line = doc.lineAt(pos);
-      const m = LONE_TOKEN_RE.exec(line.text);
-      if (m?.[2] !== undefined) {
-        builder.add(
-          line.from,
-          line.to,
-          Decoration.replace({
-            widget: new InlineImageWidget(m[2], m[1] ?? ""),
-            block: true,
-          }),
-        );
-      }
-      pos = line.to + 1;
+  const { doc } = state;
+  for (let i = 1; i <= doc.lines; i++) {
+    const line = doc.line(i);
+    const m = LONE_TOKEN_RE.exec(line.text);
+    if (m?.[2] !== undefined) {
+      builder.add(
+        line.from,
+        line.to,
+        Decoration.replace({
+          widget: new InlineImageWidget(m[2], m[1] ?? ""),
+          block: true,
+        }),
+      );
     }
   }
   return builder.finish();
 }
 
-/// The inline-image decoration plugin — render `cowboy-att:` tokens as atomic
-/// thumbnails. Mirrors `tokenChipPlugin`'s shape (ViewPlugin + atomicRanges); a
-/// token insert/delete is a docChange, which rebuilds. No `selectionSet` trigger:
-/// images render the same on/off the active line (no raw-marker reveal).
-export const inlineImagePlugin = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    constructor(view: EditorView) {
-      this.decorations = buildImageDecorations(view);
-    }
-    update(u: ViewUpdate): void {
-      if (u.docChanged || u.viewportChanged) {
-        this.decorations = buildImageDecorations(u.view);
-      }
-    }
-  },
-  {
-    decorations: (v) => v.decorations,
-    provide: (plugin) =>
-      EditorView.atomicRanges.of(
-        (view) => view.plugin(plugin)?.decorations ?? Decoration.none,
-      ),
-  },
-);
+/// The inline-image decoration — render `cowboy-att:` tokens as atomic, BLOCK
+/// thumbnails (one image per line). MUST be a StateField, not a ViewPlugin: CM6
+/// throws "Block decorations may not be specified via plugins" for `block: true`
+/// decorations from a plugin (that regressed image paste in v171). Rebuilds on any
+/// docChange (the composer is small, so a full-doc scan is cheap); provides both
+/// the decorations and the atomic ranges (arrow keys skip an image as one unit).
+export const inlineImageField = StateField.define<DecorationSet>({
+  create: (state) => buildImageDecorations(state),
+  update: (value, tr) => (tr.docChanged ? buildImageDecorations(tr.state) : value),
+  provide: (f) => [
+    EditorView.decorations.from(f),
+    EditorView.atomicRanges.of(
+      (view) => view.state.field(f, false) ?? Decoration.none,
+    ),
+  ],
+});
 
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({

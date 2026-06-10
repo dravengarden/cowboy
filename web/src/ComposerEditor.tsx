@@ -26,7 +26,7 @@ import { hasDraftMod, hasSendMod } from "./platform";
 import { deleteTokenBackward, tokenChipPlugin } from "./fileTokenWidget";
 import {
   deleteImageTokenBackward,
-  inlineImagePlugin,
+  inlineImageField,
   inlineImageTheme,
   insertImageToken,
 } from "./inlineImages";
@@ -519,7 +519,7 @@ export const ComposerEditor = forwardRef<
       // Obsidian-style inline images: render `![](cowboy-att:id)` tokens as atomic
       // thumbnails in the text flow (click → lightbox). Atomic + read-only, so
       // IME-safe like the @-chip. See inlineImages.ts.
-      inlineImagePlugin,
+      inlineImageField,
       inlineImageTheme,
       autocompletion({
         override: [
