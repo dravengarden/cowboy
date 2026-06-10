@@ -181,7 +181,7 @@ function ComposeBar(
     onSend,
     options = [],
     showSkeleton = false,
-    onConfig,
+    onOpenConfig,
     onAttach,
     attachments = [],
     onRemoveAttachment,
@@ -196,7 +196,9 @@ function ComposeBar(
     readonly onSend: () => void;
     readonly options?: ConfigOption[];
     readonly showSkeleton?: boolean;
-    readonly onConfig?: ((configId: string, value: string | boolean) => void) | undefined;
+    /** Open the config popup (the ⚙ button) — the labeled Mode/Model/Effort
+     *  dropdowns live in that sheet, not inline on the bar. */
+    readonly onOpenConfig?: (() => void) | undefined;
     readonly onAttach?: (() => void) | undefined;
     readonly attachments?: Attachment[];
     readonly onRemoveAttachment?: ((id: string) => void) | undefined;
@@ -209,9 +211,8 @@ function ComposeBar(
     readonly onJumpFront?: (() => void) | undefined;
   },
 ): React.JSX.Element {
-  // Config dropdowns fold behind the ⚙ toggle — the bar stays one compact row,
-  // and tapping ⚙ reveals the dropdowns ABOVE the action row.
-  const [configOpen, setConfigOpen] = useState(false);
+  // The ⚙ opens the config POPUP (the labeled Mode/Model/Effort dropdowns live in
+  // that sheet — see ComposerSheet — not inline on the bar).
   const hasConfig = showSkeleton || options.length > 0;
   return (
     <Stack
@@ -227,20 +228,6 @@ function ComposeBar(
           row), NOT in the scrolling editor body, so they stay put while you write. */}
       {attachments.length > 0 && onRemoveAttachment && (
         <AttachmentPreviews attachments={attachments} onRemove={onRemoveAttachment} />
-      )}
-      {hasConfig && configOpen && (
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-          {showSkeleton ? <ConfigChipSkeletons /> : (
-            options.map((opt) => (
-              <ConfigOptionChip
-                key={opt.id}
-                option={opt}
-                disabled={dead}
-                onSelect={(value): void => onConfig?.(opt.id, value)}
-              />
-            ))
-          )}
-        </Box>
       )}
       {/* All actions evenly distributed across the row (same proven layout as the
           inline mobile toolbar) — no flex spacer / overflow-scroll / negative-margin
@@ -294,15 +281,14 @@ function ComposeBar(
             </span>
           </Tooltip>
         )}
-        {hasConfig && (
+        {hasConfig && onOpenConfig && (
           <Tooltip title="Options">
             <span>
               <IconButton
                 aria-label="options"
                 disabled={dead}
-                color={configOpen ? "primary" : "default"}
                 sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => setConfigOpen((o) => !o)}
+                onClick={onOpenConfig}
               >
                 <Tune />
               </IconButton>
@@ -1332,14 +1318,7 @@ export function Composer({
               onRemoveAttachment={removeAttachment}
               onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
               onAttach={(): void => fileInputRef.current?.click()}
-              onConfig={(configId, value): void => {
-                send({
-                  type: "set_config_option",
-                  session_id: sessionId,
-                  config_id: configId,
-                  value,
-                });
-              }}
+              onOpenConfig={(): void => setSheetOpen(true)}
               onSend={(): void => {
                 submit();
                 setComposeFs(false);
