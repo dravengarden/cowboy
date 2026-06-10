@@ -343,7 +343,7 @@ function ComposeBar(
                   <Tooltip title="Force push">
                     <span>
                       <IconButton
-                        color="primary"
+                        color="warning"
                         aria-label="force push"
                         disabled={!sendable}
                         sx={TOOLBAR_ICON_BTN}
@@ -450,7 +450,7 @@ function ComposeBar(
               if (moreRef.current) onForcePush(moreRef.current);
             }}
           >
-            <Bolt fontSize="small" sx={{ mr: 1 }} />
+            <Bolt fontSize="small" color="warning" sx={{ mr: 1 }} />
             Force push
           </MenuItem>
         )}
@@ -1290,7 +1290,7 @@ export function Composer({
                 <Tooltip title="Force push">
                   <span>
                     <IconButton
-                      color="primary"
+                      color="warning"
                       aria-label="force push"
                       disabled={!sendable}
                       sx={TOOLBAR_ICON_BTN}
@@ -1359,7 +1359,7 @@ export function Composer({
               if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
             }}
           >
-            <Bolt fontSize="small" sx={{ mr: 1 }} />
+            <Bolt fontSize="small" color="warning" sx={{ mr: 1 }} />
             Force push
           </MenuItem>
         )}
@@ -1386,7 +1386,7 @@ export function Composer({
             alignItems="center"
             sx={{ mb: 0.5 }}
           >
-            <Bolt fontSize="small" color="primary" />
+            <Bolt fontSize="small" color="warning" />
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
               Force push
             </Typography>
@@ -1415,6 +1415,7 @@ export function Composer({
             <Button
               size="small"
               variant="contained"
+              color="warning"
               startIcon={<Bolt />}
               onClick={confirmForce}
             >
