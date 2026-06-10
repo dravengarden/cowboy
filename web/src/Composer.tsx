@@ -324,6 +324,7 @@ function ComposeBar(
               <IconButton
                 color="primary"
                 aria-label="force push"
+                disabled={!sendable}
                 sx={TOOLBAR_ICON_BTN}
                 onClick={(e): void => onForcePush(e.currentTarget)}
               >
@@ -1203,6 +1204,7 @@ export function Composer({
                     <IconButton
                       color="primary"
                       aria-label="force push"
+                      disabled={!sendable}
                       sx={TOOLBAR_ICON_BTN}
                       onClick={(e): void => setForceAnchor(e.currentTarget)}
                     >
@@ -1263,6 +1265,7 @@ export function Composer({
         </MenuItem>
         {(busy || starting) && (
           <MenuItem
+            disabled={!sendable}
             onClick={(): void => {
               setActionsMenu(null);
               if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
