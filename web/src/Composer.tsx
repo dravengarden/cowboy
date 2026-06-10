@@ -222,6 +222,11 @@ function ComposeBar(
         width: "100%",
         pt: 1,
         borderTop: (t) => `1px solid ${t.palette.divider}`,
+        // iOS repaint fix (same as the attachment previews + editor): inside the
+        // position:fixed, transformed cover sheet, WebKit sometimes fails to paint
+        // this freshly-inserted bar on open — it shows up faded / half-painted. A
+        // GPU layer forces an immediate paint.
+        transform: "translateZ(0)",
       }}
     >
       {/* Attachment thumbnails live in the sticky docked bar (above the action
