@@ -241,7 +241,17 @@ function ComposeBar(
       <Stack
         direction="row"
         alignItems="center"
-        sx={{ justifyContent: "flex-start", flexWrap: "wrap", gap: 0.5 }}
+        // Left-aligned, tight gap, and COMPACT icons (38px vs the global 44px) so
+        // the full action set (up to 9 when busy + queued) fits one row on a phone
+        // — avoids the ugly lone-icon-on-a-second-row wrap. Still wraps as a last
+        // resort on the very narrowest widths.
+        sx={{
+          justifyContent: "flex-start",
+          flexWrap: "wrap",
+          gap: 0.25,
+          "& .MuiIconButton-root": { width: 38, height: 38 },
+          "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+        }}
       >
         <Tooltip title="Slash command / skill">
           <span>
