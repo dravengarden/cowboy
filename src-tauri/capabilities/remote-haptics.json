@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-haptics",
+  "description": "Allow the remote cowboy UI (loaded over the tailnet from cowboy.hawk.thundersparrow.top) to trigger native OS haptics on DetentSheet open. Scoped to the haptics plugin only — the remote origin gains no other IPC. iOS Safari/PWA has no reliable web haptic, so this native path is the only way to make sheets buzz.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://cowboy.hawk.thundersparrow.top"]
+  },
+  "permissions": ["haptics:default"]
+}

@@ -33,3 +33,8 @@ tauri = { version = "2", features = [] }
 # opener routes `app-settings:` through UIApplication.open; a no-op everywhere the
 # loader's error card never shows (desktop/Android).
 tauri-plugin-opener = "2"
+# Native OS haptics (UIImpactFeedbackGenerator on iOS). The remote cowboy UI calls
+# `plugin:haptics|impact_feedback` on DetentSheet open — iOS Safari/PWA has no
+# reliable web haptic, so this is the only way to make sheets buzz. Granted to the
+# remote origin via capabilities/remote-haptics.json.
+tauri-plugin-haptics = "2"
