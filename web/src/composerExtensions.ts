@@ -12,12 +12,7 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
-import {
-  EditorView,
-  highlightActiveLine,
-  highlightSpecialChars,
-  keymap,
-} from "@codemirror/view";
+import { EditorView, highlightActiveLine, keymap } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import {
   atomicEditorTheme,
@@ -46,8 +41,12 @@ export function livePreviewExtensions(
   opts: LivePreviewOptions = {},
 ): Extension[] {
   return [
+    // iOS WebKit renders CM6's srcless `<img class="cm-widgetBuffer">` (the buffer
+    // CM puts around widgets — the placeholder, and every hidden-marker widget) as
+    // a tiny broken-image DOT. visibility:hidden kills the dot while keeping the
+    // element's 0-width layout box, so cursor positioning around widgets is intact.
+    EditorView.theme({ ".cm-widgetBuffer": { visibility: "hidden" } }),
     // Editor chrome that does NOT touch the native selection (safe on touch).
-    highlightSpecialChars(),
     highlightActiveLine(),
     indentOnInput(),
     // --- Obsidian-style bracket / emphasis / code-fence pairing ---
