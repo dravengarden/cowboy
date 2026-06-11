@@ -39,6 +39,7 @@ export function FullscreenComposer({
   sendable,
   attachmentsSlot,
   editorRef,
+  autoFocus = true,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -57,6 +58,12 @@ export function FullscreenComposer({
   // token into nobody (the parent's inline editor is unmounted while fullscreen is
   // open), so the image attaches + sends but shows NO inline thumbnail.
   editorRef: RefObject<ComposerEditorHandle | null>;
+  // Whether to programmatically focus the editor on open (timers below). The main
+  // composer's expand focuses IN the user tap (flushSync) so it can leave this
+  // FALSE — a programmatic focus there would re-focus over the armed one and could
+  // disarm the iOS long-press menu. The row-edit overlay (opened from an effect,
+  // not directly in a tap) still relies on this.
+  autoFocus?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
 
@@ -75,11 +82,15 @@ export function FullscreenComposer({
   // overlay is still painting, so focus a few times across the first frames
   // (cheap, idempotent) — the editor lands focused with the caret at the end.
   useEffect(() => {
+    // The main composer focuses IN the opening user tap (flushSync) → skip the
+    // programmatic timers, which would re-focus over the armed editor and could
+    // disarm the iOS long-press menu. The row-edit overlay still uses them.
+    if (!autoFocus) return undefined;
     const timers = [0, 120, 320].map((d) =>
       globalThis.setTimeout(() => editorRef.current?.focusEnd(), d)
     );
     return (): void => timers.forEach((t) => globalThis.clearTimeout(t));
-  }, []);
+  }, [autoFocus]);
 
   const act = (fn: () => void): (() => void) => () => {
     haptic();

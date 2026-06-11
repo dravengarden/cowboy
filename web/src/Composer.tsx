@@ -65,6 +65,7 @@ import {
   Visibility,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
@@ -1172,11 +1173,18 @@ export function Composer({
               : (expanded ? "collapse editor" : "expand editor")}
             onClick={touchInput
               ? (): void => {
-                // Claim the keyboard IN-gesture (iOS) so it's already up when the
-                // sheet's editor mounts + focuses; else the focus lands outside the
-                // gesture window and the keyboard stays down (you'd have to tap).
-                claimKeyboard();
-                setComposeFs(true);
+                // Mount the fullscreen editor SYNCHRONOUSLY inside this user tap
+                // (flushSync), then focus it IN-gesture. iOS only ARMS the native
+                // text interaction (the long-press Paste/Select menu) for a
+                // USER-initiated focus of the contenteditable. The old path
+                // (claimKeyboard a hidden input → a timer transfers focus to the
+                // editor) left the editor focus PROGRAMMATIC, so the menu stayed
+                // disarmed until you manually tapped the editor — the root cause of
+                // "长按空白没菜单, 点一下输入框才有". flushSync makes editorRef.current
+                // the just-mounted fullscreen editor, so focusEnd() runs in the same
+                // user gesture → armed + keyboard up (no claim/timer needed).
+                flushSync(() => setComposeFs(true));
+                editorRef.current?.focusEnd();
               }
               : toggleComposerExpanded}
             sx={{
@@ -1671,6 +1679,10 @@ export function Composer({
           // fullscreen editor while it's mounted (the inline one is unmounted) —
           // otherwise a pasted image attaches but inserts no inline thumbnail.
           editorRef={editorRef}
+          // The expand tap already focused this editor in-gesture (flushSync), which
+          // is what ARMS the iOS long-press menu — so skip the programmatic timer
+          // focus (it would re-focus over it and could disarm the menu).
+          autoFocus={false}
           // Mounts fresh on open, seeding from the CURRENT in-progress text (like
           // the edit overlay) so inline text carries in; markdown stays literal.
           value={text}
