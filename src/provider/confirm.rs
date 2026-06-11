@@ -48,6 +48,7 @@ pub fn l1(provider_id: &str, ctx: &TurnEndCtx) -> Option<Verdict> {
     match provider_id {
         "claude-code" => super::claude_code::confirm_l1(ctx),
         "codex" => super::codex::confirm_l1(ctx),
+        "gemini" => super::gemini::confirm_l1(ctx),
         // Unknown provider → only the portable stop-reason rule applies.
         _ => stop_reason_l1(ctx.stop_reason),
     }

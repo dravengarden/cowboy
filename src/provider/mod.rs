@@ -13,6 +13,7 @@ use std::collections::HashMap;
 pub mod claude_code;
 pub mod codex;
 pub mod confirm;
+pub mod gemini;
 
 /// How to spawn one provider's ACP adapter as a subprocess.
 #[derive(Debug, Clone)]
@@ -39,6 +40,9 @@ pub struct LaunchSpec {
 /// - `codex`: the `@zed-industries/codex-acp` adapter, run via `npx`. Wraps the
 ///   Codex CLI. Requires Codex auth (`ChatGPT` subscription login in `~/.codex`,
 ///   or `CODEX_API_KEY` / `OPENAI_API_KEY`).
+/// - `gemini`: the Gemini CLI's own ACP mode — `@google/gemini-cli --acp`, run via
+///   `npx` (the CLI is the adapter; no separate package). Requires Gemini auth (a
+///   prior `gemini` OAuth login in `~/.gemini`, or `GEMINI_API_KEY`).
 #[must_use]
 pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
@@ -56,6 +60,16 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
             id: "codex",
             command: "npx".into(),
             args: vec!["-y".into(), "@zed-industries/codex-acp".into()],
+        },
+    );
+    m.insert(
+        "gemini",
+        LaunchSpec {
+            id: "gemini",
+            // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's
+            // no separate npm package like the others.
+            command: "npx".into(),
+            args: vec!["-y".into(), "@google/gemini-cli".into(), "--acp".into()],
         },
     );
     m

@@ -331,4 +331,4 @@ export type Inbound =
   | { type: "set_inference_secret"; provider: string; api_key: string }
   | { type: "inference_probe"; provider: string; prompt?: string };
 
-export const PROVIDERS = ["claude-code", "codex"] as const;
+export const PROVIDERS = ["claude-code", "codex", "gemini"] as const;
