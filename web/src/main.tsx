@@ -18,7 +18,12 @@ function Root(): React.JSX.Element {
   useKeyboardInset();
   return (
     <ThemeProvider theme={theme}>
-      <CssBaseline />
+      {/* `enableColorScheme` writes `:root { color-scheme: light|dark }` from the
+          ACTIVE theme's `palette.mode`. Without it the iOS keyboard (and UA form
+          controls / scrollbars) followed the DEVICE system appearance, so a
+          light-themed app on a dark-mode phone got a dark keyboard — mismatched.
+          Now the keyboard tracks the in-app theme and flips live when it does. */}
+      <CssBaseline enableColorScheme />
       <App themeMode={mode} onSetThemeMode={setMode} />
     </ThemeProvider>
   );
