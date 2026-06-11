@@ -185,7 +185,24 @@ export function FullscreenComposer({
       )}
 
       {/* The writing canvas — fills the space between the top bar and the toolbar. */}
-      <Box sx={{ flex: 1, minHeight: 0, p: 1.5, display: "flex", flexDirection: "column" }}>
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          p: 1.5,
+          display: "flex",
+          flexDirection: "column",
+          // Make the editor content FILL: the last line grows to take the
+          // remaining height, so a long-press anywhere in the empty area lands
+          // INSIDE a text line (not the .cm-content padding). Otherwise the native
+          // caret drops in the padding, CM6 re-syncs it to the doc start on release,
+          // and THAT jump cancels the iOS Paste menu — the "长按空白没菜单, 紫色光标
+          // 不提交成 gray cursor" symptom. Scoped to the fullscreen editor (the
+          // compact inline composer must stay content-height, so it's NOT touched).
+          "& .cm-content": { display: "flex", flexDirection: "column" },
+          "& .cm-content > .cm-line:last-child": { flexGrow: 1 },
+        }}
+      >
         <ComposerEditor
           ref={editorRef}
           value={seed}
