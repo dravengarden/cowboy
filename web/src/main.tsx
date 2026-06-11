@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { App } from "./App";
@@ -20,67 +20,7 @@ function Root(): React.JSX.Element {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <App themeMode={mode} onSetThemeMode={setMode} />
-      <DebugSelOverlay />
     </ThemeProvider>
-  );
-}
-
-// TEMP diagnostic bar (remove after the long-press-paste investigation). A thin
-// top strip showing the live focus + selection state, so a device screenshot
-// during a long-press reveals: is the native-shell flag set, is drawSelection
-// drawing the caret, where does the selection land, does it re-sync on release.
-function DebugSelOverlay(): React.JSX.Element {
-  const [info, setInfo] = useState("dbg…");
-  useEffect(() => {
-    const w = globalThis as unknown as { __cowboyNativeShell?: boolean };
-    const update = (): void => {
-      const ae = document.activeElement;
-      const sel = globalThis.getSelection();
-      const an = sel?.anchorNode ?? null;
-      const anDesc = an === null
-        ? "null"
-        : an.nodeType === 3
-        ? `#text"${(an.textContent ?? "").slice(0, 6)}"`
-        : ((an as Element).className || (an as Element).tagName || "?").toString().slice(0, 18);
-      const aeDesc = ae === null
-        ? "null"
-        : ((ae as Element).className || ae.tagName || "?").toString().slice(0, 18);
-      const lines = document.querySelectorAll(".cm-content .cm-line").length;
-      setInfo(
-        `ns=${String(w.__cowboyNativeShell)} drawn=${
-          document.querySelector(".cm-cursor") !== null ? "Y" : "n"
-        } lines=${String(lines)} | ae=${aeDesc} | selNode=${anDesc} o=${
-          String(sel?.anchorOffset)
-        } collapsed=${String(sel?.isCollapsed)}`,
-      );
-    };
-    update();
-    document.addEventListener("selectionchange", update);
-    const iv = globalThis.setInterval(update, 250);
-    return (): void => {
-      document.removeEventListener("selectionchange", update);
-      globalThis.clearInterval(iv);
-    };
-  }, []);
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 2147483647,
-        background: "rgba(0,0,0,0.82)",
-        color: "#3f6",
-        font: "9px ui-monospace, monospace",
-        padding: "1px 4px",
-        pointerEvents: "none",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-      }}
-    >
-      {info}
-    </div>
   );
 }
 

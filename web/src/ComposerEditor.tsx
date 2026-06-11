@@ -12,6 +12,7 @@ import {
   EditorView,
   keymap,
   placeholder as placeholderExt,
+  scrollPastEnd,
 } from "@codemirror/view";
 import { type Extension, Prec } from "@codemirror/state";
 import {
@@ -542,6 +543,15 @@ export const ComposerEditor = forwardRef<
 
   const extensions = useMemo<Extension[]>(
     () => [
+      // Fill editor (fullscreen composer) ONLY: scrollPastEnd adds a `padding-bottom`
+      // (≈ one viewport) below the text, exactly like Obsidian's mobile editor. That
+      // padding is the long-pressable empty area — a long-press there snaps the caret
+      // to the line end (a real position) and the iOS Paste menu appears. This
+      // REPLACES the old `min-height: 100%` content-fill (cmTheme), which stretched
+      // the content box and made the empty-area long-press land mid-air on the
+      // `.cm-line` element → no menu. The compact composer is content-height, so it
+      // gets neither (it never had the empty-area problem).
+      ...(fill ? [scrollPastEnd()] : []),
       EditorView.lineWrapping,
       // Publish selection-empty state to the fullscreen keyboard toolbar so it can
       // swap insert↔wrap actions. Ref-routed so the memo never rebuilds for it.
@@ -752,7 +762,7 @@ export const ComposerEditor = forwardRef<
       ...livePreviewExtensions(),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vimExt, aboveCursor],
+    [theme, sessionId, placeholder, vimExt, aboveCursor, fill],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather

@@ -125,15 +125,13 @@ export function FullscreenComposer({
   return createPortal(
     <Box
       sx={{
-        // `position: fixed` in the PWA. In the NATIVE shell use `absolute`: iOS
-        // WebKit's text interaction (the long-press Paste/Select menu + caret
-        // placement) is broken for a contenteditable inside a position:fixed
-        // container — that's why long-pressing the fullscreen editor's empty area
-        // showed no menu while the inline composer (normal flow) was fine. The
-        // shell resizes the WebView for the keyboard and `body` is normal-flow at
-        // viewport height, so `absolute inset:0` covers the screen identically
-        // without the fixed-contenteditable bug. (Obsidian's editor isn't in a
-        // fixed overlay either.)
+        // `position: fixed` in the PWA; `absolute` in the NATIVE shell. The empty-area
+        // long-press menu was actually fixed by scrollPastEnd (see the editor Box +
+        // cmTheme) — NOT by this. But `absolute` is kept defensively: iOS WebKit text
+        // interaction inside a position:fixed contenteditable is historically flaky,
+        // the shell resizes the WebView for the keyboard so `body` is normal-flow at
+        // viewport height, and `absolute inset:0` covers the screen identically.
+        // (Obsidian's editor isn't in a fixed overlay either.)
         position: isNativeShell() ? "absolute" : "fixed",
         inset: 0,
         zIndex: theme.zIndex.modal,
@@ -192,15 +190,11 @@ export function FullscreenComposer({
           p: 1.5,
           display: "flex",
           flexDirection: "column",
-          // Make the editor content FILL: the last line grows to take the
-          // remaining height, so a long-press anywhere in the empty area lands
-          // INSIDE a text line (not the .cm-content padding). Otherwise the native
-          // caret drops in the padding, CM6 re-syncs it to the doc start on release,
-          // and THAT jump cancels the iOS Paste menu — the "长按空白没菜单, 紫色光标
-          // 不提交成 gray cursor" symptom. Scoped to the fullscreen editor (the
-          // compact inline composer must stay content-height, so it's NOT touched).
-          "& .cm-content": { display: "flex", flexDirection: "column" },
-          "& .cm-content > .cm-line:last-child": { flexGrow: 1 },
+          // NO content/line fill here. The empty long-pressable area below the text
+          // is now Obsidian's `scrollPastEnd` padding (ComposerEditor, fill mode) —
+          // a long-press in that padding snaps the caret to the line end and the iOS
+          // Paste menu appears. A flex content-fill (the old approach) made the press
+          // land mid-air on the `.cm-line` element → no menu; scrollPastEnd is the fix.
         }}
       >
         <ComposerEditor

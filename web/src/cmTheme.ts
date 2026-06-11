@@ -71,13 +71,16 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         padding: "0",
         caretColor: accent,
         lineHeight: "var(--cowboy-reading-line-height, 1.5)",
-        // Fill the editor's height so the WHOLE area is the contenteditable, not
-        // just the lines of text — otherwise long-pressing the empty space below a
-        // short note lands on the non-editable scroller and no iOS Paste/Select
-        // menu appears ("长按区域好像小"). 100% is inert when the scroller height is
-        // content-driven (compact composer) and fills when it's definite (the
-        // fullscreen/fill editor), so it self-adjusts per surface.
-        minHeight: "100%",
+        // NO `min-height: 100%` here. Filling `.cm-content` to the editor height
+        // (the old approach) is exactly what BROKE the iOS long-press Paste menu in
+        // the fullscreen editor: a stretched content box makes a long-press on the
+        // empty area land MID-AIR inside the box, so iOS drops the caret on the
+        // `.cm-line` ELEMENT (not a #text run) and shows no menu. Obsidian's mobile
+        // editor instead leaves `.cm-content` content-height and uses `scrollPastEnd`
+        // (a `padding-bottom`) to make the empty scroll area — a long-press in that
+        // PADDING snaps the caret to the line end (a real position) and the menu
+        // appears. We match it: `scrollPastEnd()` is added only to the fill editor
+        // (ComposerEditor), and the compact composer stays content-height as before.
       },
       // iOS PWA repaint fix lives on the SCROLLER, not `.cm-content`. On
       // iPad/iPhone the composer's contenteditable sits inside the
