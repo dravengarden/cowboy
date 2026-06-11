@@ -111,6 +111,7 @@ import {
   removeDraft,
   removeQueued,
   reorderDrafts,
+  renameSession,
   reorderQueue,
   requestSendQueued,
   retryQueued,
@@ -3020,6 +3021,24 @@ function SessionInfoSection({
 }: {
   session: SessionMeta;
 }): React.JSX.Element {
+  // Title is editable right here — this sheet already shows the session's identity,
+  // so the rename (edit-title) belongs with it rather than off in app Settings.
+  // Strip the auto "provider · " prefix like the navbar does, so you edit the
+  // DISPLAY title, not the machine string; saving a custom title drops the prefix
+  // for good. Local draft so store echoes don't fight typing; committed via
+  // renameSession on Enter (blurs → onBlur) or when focus leaves.
+  const displayTitle = session.title.startsWith(`${session.provider} · `)
+    ? session.title.slice(session.provider.length + 3)
+    : session.title;
+  const [title, setTitle] = useState(displayTitle);
+  useEffect(() => {
+    setTitle(displayTitle);
+  }, [displayTitle]);
+  const commit = (): void => {
+    const t = title.trim();
+    if (t && t !== displayTitle) renameSession(session.id, t);
+    else setTitle(displayTitle); // empty / unchanged → revert the field
+  };
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
     { label: "Working dir", value: session.cwd, mono: true },
@@ -3038,6 +3057,18 @@ function SessionInfoSection({
           Session
         </Typography>
       </Box>
+      <TextField
+        size="small"
+        label="Title"
+        value={title}
+        onChange={(e): void => setTitle(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e): void => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        fullWidth
+        sx={{ mt: 1, mb: 0.5 }}
+      />
       <List dense disablePadding>
         {rows.map((r) => (
           <SheetDetailRow
