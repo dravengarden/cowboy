@@ -92,6 +92,11 @@ export interface ComposerEditorHandle {
   toggleLinePrefix: (prefix: string) => void;
   /// Cycle the caret line's heading level: none → `# ` → `## ` → `### ` → none.
   cycleHeading: () => void;
+  /// Set the caret line's heading to an exact level (1–6); `0` removes the
+  /// heading. Drives the Obsidian-style "Set as heading N" / "Remove heading".
+  setHeading: (level: number) => void;
+  /// Flip the caret line's task checkbox `[ ]` ↔ `[x]` (no-op off a task line).
+  toggleCheckbox: () => void;
   /// Insert a `[selection](url)` link with `url` pre-selected for typing.
   insertLink: () => void;
   /// Wrap the selection (or the caret) in a fenced ``` code block.
@@ -498,6 +503,37 @@ export const ComposerEditor = forwardRef<
       view.dispatch({
         changes: { from: line.from, to: line.from + stripLen, insert },
         selection: { anchor: Math.max(line.from, head + insert.length - stripLen) },
+      });
+      view.focus();
+    },
+    setHeading: (level: number): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
+      const m = /^(#{1,6})\s/.exec(line.text);
+      const stripLen = m?.[0]?.length ?? 0;
+      // 0 (or out of range low) → strip to plain text; otherwise set exactly
+      // `level` hashes, clamped to the GFM max of 6.
+      const insert = level <= 0 ? "" : `${"#".repeat(Math.min(level, 6))} `;
+      view.dispatch({
+        changes: { from: line.from, to: line.from + stripLen, insert },
+        selection: { anchor: Math.max(line.from, head + insert.length - stripLen) },
+      });
+      view.focus();
+    },
+    toggleCheckbox: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
+      // Flip the checkbox state in place; do nothing if the line isn't a task.
+      const m = /^(\s*[-*+]\s+)\[([ xX])\]/.exec(line.text);
+      if (m?.[1] === undefined || m[2] === undefined) return;
+      const boxAt = line.from + m[1].length + 1; // the char inside the brackets
+      const checked = m[2] !== " ";
+      view.dispatch({
+        changes: { from: boxAt, to: boxAt + 1, insert: checked ? " " : "x" },
       });
       view.focus();
     },
