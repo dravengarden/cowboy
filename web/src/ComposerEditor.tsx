@@ -14,7 +14,7 @@ import {
   placeholder as placeholderExt,
   scrollPastEnd,
 } from "@codemirror/view";
-import { type Extension, Prec } from "@codemirror/state";
+import { Compartment, type Extension, Prec } from "@codemirror/state";
 import {
   autocompletion,
   completionKeymap,
@@ -306,6 +306,17 @@ export const ComposerEditor = forwardRef<
 
   const vimExt = useVimExtension(vim ?? false, vimApiRef);
 
+  // Vim NORMAL-mode IME guard. A compartment that toggles `EditorView.editable`:
+  // in any NON-insert vim mode we set editable=false, so the contentDOM becomes
+  // `contenteditable=false` and the desktop OS IME (pinyin, etc.) cannot START a
+  // composition — NORMAL-mode keys reach vim as commands instead of being eaten by
+  // the IME candidate window. Crucially `editable` ≠ `readOnly`: vim's own
+  // programmatic edits still dispatch and its keymap still runs on keydown, so
+  // `x`/`dd`/`p`/entering insert all work. INSERT → editable=true so typing + IME
+  // behave normally. Only ever reconfigured while vim is on (desktop-only); the
+  // subscription's cleanup restores editable=true when vim turns off / unmounts.
+  const imeGuard = useMemo(() => new Compartment(), []);
+
   // Surface the live vim mode to the card's NORMAL/INSERT hint. Once the lazy
   // vim module has loaded (vimExt truthy → vimApiRef populated), subscribe to the
   // CM5-compat `vim-mode-change` event and emit the initial mode. No-op when vim
@@ -317,13 +328,26 @@ export const ComposerEditor = forwardRef<
     const view = cmRef.current?.view;
     const cm = view ? vimApiRef.current?.getCM(view) : null;
     if (!cm?.on) return undefined;
+    const applyImeGuard = (insert: boolean): void => {
+      cmRef.current?.view?.dispatch({
+        effects: imeGuard.reconfigure(EditorView.editable.of(insert)),
+      });
+    };
     const handler = (e: VimModeEvent): void => {
-      onVimModeRef.current?.(e.mode ?? "normal");
+      const mode = e.mode ?? "normal";
+      onVimModeRef.current?.(mode);
+      applyImeGuard(mode === "insert");
     };
     cm.on("vim-mode-change", handler);
-    onVimModeRef.current?.(cm.state?.vim?.insertMode ? "insert" : "normal");
-    return (): void => cm.off?.("vim-mode-change", handler);
-  }, [vim, vimExt]);
+    const insert = !!cm.state?.vim?.insertMode;
+    onVimModeRef.current?.(insert ? "insert" : "normal");
+    applyImeGuard(insert);
+    return (): void => {
+      cm.off?.("vim-mode-change", handler);
+      // vim turned off / unmounting → restore a normally-editable editor.
+      applyImeGuard(true);
+    };
+  }, [vim, vimExt, imeGuard]);
 
   // A held send-chord that unmounts mid-press must not leave its timer running.
   useEffect(() => (): void => {
@@ -588,6 +612,9 @@ export const ComposerEditor = forwardRef<
       // `.cm-line` element → no menu. The compact composer is content-height, so it
       // gets neither (it never had the empty-area problem).
       ...(fill ? [scrollPastEnd()] : []),
+      // Vim NORMAL-mode IME guard (reconfigured by the vim-mode-change effect).
+      // Defaults editable=true; vim flips it to false outside insert mode.
+      imeGuard.of(EditorView.editable.of(true)),
       EditorView.lineWrapping,
       // Publish selection-empty state to the fullscreen keyboard toolbar so it can
       // swap insert↔wrap actions. Ref-routed so the memo never rebuilds for it.
@@ -798,7 +825,7 @@ export const ComposerEditor = forwardRef<
       ...livePreviewExtensions(),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vimExt, aboveCursor, fill],
+    [theme, sessionId, placeholder, vimExt, aboveCursor, fill, imeGuard],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather
