@@ -1,4 +1,4 @@
-import type { Theme } from "@mui/material";
+import { alpha, type Theme } from "@mui/material";
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 
@@ -34,6 +34,33 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         color: theme.palette.text.primary,
         backgroundColor: "transparent",
         fontSize: "1rem",
+        // Drive the mdlive engine's `--atomic-editor-*` colour tokens from the MUI
+        // theme so the live-preview markdown (headings, links, inline code, quote
+        // rails, selection…) tracks cowboy's LIGHT/DARK + accent automatically.
+        // Without this the engine fell back to its built-in DARK defaults (its
+        // `[data-theme=light] .atomic-cm-editor` overrides never matched cowboy's
+        // editor), so markdown rendered dark-on-light in light mode. Typography
+        // tokens are owned by cmTheme above; the `--atomic-editor-hl-*` code-syntax
+        // tokens are skipped (cowboy passes `codeLanguages: []`, so no nested
+        // grammar tokens are ever emitted).
+        "--atomic-editor-fg": theme.palette.text.primary,
+        "--atomic-editor-fg-muted": theme.palette.text.secondary,
+        "--atomic-editor-fg-faint": theme.palette.text.disabled,
+        "--atomic-editor-bg": theme.palette.background.paper,
+        "--atomic-editor-bg-panel": theme.palette.background.paper,
+        "--atomic-editor-bg-surface": dark
+          ? alpha("#ffffff", 0.06)
+          : alpha("#000000", 0.04),
+        "--atomic-editor-border": theme.palette.divider,
+        "--atomic-editor-accent": accent,
+        "--atomic-editor-accent-bright": theme.palette.primary.light,
+        "--atomic-editor-accent-soft": alpha(accent, 0.3),
+        "--atomic-editor-link": accent,
+        "--atomic-editor-link-hover": theme.palette.primary.light,
+        "--atomic-editor-code-bg": alpha(accent, dark ? 0.16 : 0.08),
+        "--atomic-editor-selection-bg": alpha(accent, dark ? 0.32 : 0.18),
+        "--atomic-editor-initial-reveal-bg": alpha(accent, 0.16),
+        "--atomic-editor-initial-reveal-bg-strong": alpha(accent, 0.3),
       },
       ".cm-content": {
         fontFamily: editorFont,
