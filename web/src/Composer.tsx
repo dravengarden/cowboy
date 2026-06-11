@@ -74,7 +74,8 @@ import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
-import { latestPlan } from "./derive";
+import { PermissionOverlay } from "./PermissionOverlay";
+import { latestPendingPermission, latestPlan } from "./derive";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -560,6 +561,13 @@ export function Composer({
     timelines,
     sessionId,
   ]);
+  // The latest unresolved tool-permission request (cheap single pass). When set,
+  // the sticky PermissionOverlay takes the floating slot INSTEAD of the
+  // turn-status pill — the two share the slot + material but never show at once.
+  const pendingPermission = useMemo(
+    () => latestPendingPermission(timelines.get(sessionId) ?? []),
+    [timelines, sessionId],
+  );
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
@@ -949,21 +957,28 @@ export function Composer({
         />
       )}
       {
-        /* Confirm-detect: the unified turn-status overlay (floats above the
-          composer). It decides its own visibility — awaiting / done / interrupted
-          / error / no-key, hidden while working — so it's rendered unconditionally. */
+        /* The floating slot above the composer. A pending tool-permission OUTRANKS
+          the turn-status pill (a blocking decision beats a status), and the two
+          share the slot + frosted material — so they're mutually exclusive here,
+          never overlapping. Otherwise the unified turn-status overlay decides its
+          own visibility (awaiting / done / interrupted / error / no-key, hidden
+          while working). */
       }
-      <TurnStatusOverlay
-        sessionId={sessionId}
-        status={status}
-        awaitingUser={session?.awaiting_user ?? false}
-        done={session?.done ?? false}
-        judging={session?.judging ?? false}
-        queue={queue}
-        hasKey={hasJudgeKey}
-        onFocusComposer={(): void => editorRef.current?.focus()}
-        onConfigure={onOpenInfo}
-      />
+      {pendingPermission ? (
+        <PermissionOverlay item={pendingPermission} sessionId={sessionId} />
+      ) : (
+        <TurnStatusOverlay
+          sessionId={sessionId}
+          status={status}
+          awaitingUser={session?.awaiting_user ?? false}
+          done={session?.done ?? false}
+          judging={session?.judging ?? false}
+          queue={queue}
+          hasKey={hasJudgeKey}
+          onFocusComposer={(): void => editorRef.current?.focus()}
+          onConfigure={onOpenInfo}
+        />
+      )}
       {
         /* Queued prompts (top): while the agent is busy, messages stack here and
           drain one per turn-end. Hidden when empty. */

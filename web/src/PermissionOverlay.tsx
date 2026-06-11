@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
-import type { RenderItem } from "./derive";
+import type { PendingPermission } from "./derive";
 import { send } from "./store";
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
@@ -27,7 +27,7 @@ export function PermissionOverlay({
   item,
   sessionId,
 }: {
-  item: Extract<RenderItem, { kind: "permission" }>;
+  item: PendingPermission;
   sessionId: string;
 }): React.JSX.Element {
   // `useSticky` is the existing "is the transcript pinned to the bottom" signal,
@@ -57,13 +57,17 @@ export function PermissionOverlay({
     <Box
       ref={measureRef}
       sx={{
+        // Same anchor as TurnStatusOverlay: floats just above the composer (its
+        // relative container), so it's positioned correctly in BOTH the mobile
+        // (transcript-is-absolute-background) and desktop (two-column) layouts.
         position: "absolute",
         left: 0,
         right: 0,
-        bottom: 8,
+        bottom: "100%",
         display: "flex",
         justifyContent: "center",
         px: 2,
+        pb: 1,
         pointerEvents: "none",
         zIndex: 3,
       }}

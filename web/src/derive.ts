@@ -301,6 +301,36 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
   };
 }
 
+/// The latest UNRESOLVED tool-permission request, or null. A cheap single pass
+/// (mirrors latestPlan) so the composer's sticky PermissionOverlay can read it
+/// WITHOUT deriving the whole transcript — and, by living next to the turn-status
+/// overlay, the two coordinate (a pending permission outranks the status pill)
+/// instead of overlapping. A request stays pending until its matching
+/// `permission_resolved` removes it.
+export interface PendingPermission {
+  requestId: string;
+  title: string;
+  options: PermissionOption[];
+}
+export function latestPendingPermission(timeline: Envelope[]): PendingPermission | null {
+  const pending = new Map<string, PendingPermission>();
+  for (const env of timeline) {
+    if (env.kind === "permission_request") {
+      pending.set(env.request_id, {
+        requestId: env.request_id,
+        title: titleOfToolCall(env.tool_call),
+        options: env.options,
+      });
+    } else if (env.kind === "permission_resolved") {
+      pending.delete(env.request_id);
+    }
+  }
+  // Map preserves insertion order → the last entry is the most recent request.
+  let last: PendingPermission | null = null;
+  for (const p of pending.values()) last = p;
+  return last;
+}
+
 function titleOfToolCall(tc: unknown): string {
   if (tc && typeof tc === "object" && "title" in tc) {
     const t = (tc as { title?: unknown }).title;

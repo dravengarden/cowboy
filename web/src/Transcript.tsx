@@ -51,7 +51,6 @@ import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { PermissionOverlay } from "./PermissionOverlay";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
@@ -1117,18 +1116,9 @@ export function Transcript({
   // re-measures rows on the next pass, so live adjustments reflow without a
   // reload.
   const { padding, lineHeight } = useReadingSettings();
-  // Latest unresolved tool-permission request → drives the sticky PermissionOverlay
-  // (floats above the composer, auto-collapses on scroll). The timeline itself
-  // keeps only a record marker (PermissionCard); the actionable surface is the
-  // overlay, so a required decision is always reachable without scrolling.
-  let pendingPermission: Extract<RenderItem, { kind: "permission" }> | undefined;
-  for (let i = items.length - 1; i >= 0; i -= 1) {
-    const it = items[i];
-    if (it && it.kind === "permission" && !it.resolved) {
-      pendingPermission = it;
-      break;
-    }
-  }
+  // A pending tool-permission is surfaced by the sticky PermissionOverlay, which
+  // lives in the COMPOSER (sharing the floating slot + mutual-exclusivity with the
+  // turn-status pill). The timeline here keeps only a record marker (PermissionCard).
   const busy = status === "busy";
   const dead =
     status === "exited" || status === "crashed" || status === "interrupted";
@@ -1572,13 +1562,8 @@ export function Transcript({
           composer — never covering the last message. */}
       <SessionStatusBar status={status} />
       {/* The scroll-to-latest affordance is the persistent sticky/auto-scroll
-          toggle in the composer (stickyStore + Composer), not a pill here. */}
-      {/* A pending tool-permission: the sticky frosted overlay floating above the
-          composer (same slot/material as the turn-status pill, which is hidden
-          while busy). Auto-collapses on scroll-up; the timeline keeps a marker. */}
-      {pendingPermission && (
-        <PermissionOverlay item={pendingPermission} sessionId={sessionId} />
-      )}
+          toggle in the composer (stickyStore + Composer), not a pill here. A
+          pending permission is surfaced by the PermissionOverlay in the composer. */}
     </Box>
   );
 }
