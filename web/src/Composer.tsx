@@ -2883,17 +2883,21 @@ export function SessionControls({
           <VerticalAlignBottom />
         </IconButton>
       </Tooltip>
-      {busy && (
-        <Tooltip title="Stop">
+      {/* Stop is ALWAYS shown so the navbar doesn't reflow when a turn starts/ends;
+          it's just disabled (greyed) when there's no running turn to stop. The
+          <span> wrapper lets the Tooltip attach while the button is disabled. */}
+      <Tooltip title="Stop">
+        <span>
           <IconButton
             color="error"
             aria-label="cancel"
+            disabled={!busy}
             onClick={(): void => setCancelOpen(true)}
           >
             <Stop />
           </IconButton>
-        </Tooltip>
-      )}
+        </span>
+      </Tooltip>
       <ComposerSheet
         open={sheetOpen}
         onClose={(): void => setSheetOpen(false)}
