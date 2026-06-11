@@ -1350,35 +1350,35 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {queue.length > 0 && (
-          <Tooltip title="Jump to front of queue">
-            <span>
-              <IconButton
-                aria-label="jump to front of queue"
-                disabled={!sendable}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={jumpToFront}
-              >
-                <VerticalAlignTop fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
-        {(busy || starting) && (
-          <Tooltip title="Force push">
-            <span>
-              <IconButton
-                color="warning"
-                aria-label="force push"
-                disabled={!sendable}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(e): void => setForceAnchor(e.currentTarget)}
-              >
-                <Bolt fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
+        {/* Jump-front + Force-push are ALWAYS shown so the send cluster never reflows
+            as the queue fills/drains or a turn starts/ends; each is just disabled
+            (greyed) when it doesn't apply — Jump-front with no queue to jump, Force-push
+            with no running turn to interrupt. */}
+        <Tooltip title="Jump to front of queue">
+          <span>
+            <IconButton
+              aria-label="jump to front of queue"
+              disabled={!sendable || queue.length === 0}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={jumpToFront}
+            >
+              <VerticalAlignTop fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Force push">
+          <span>
+            <IconButton
+              color="warning"
+              aria-label="force push"
+              disabled={!sendable || !(busy || starting)}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(e): void => setForceAnchor(e.currentTarget)}
+            >
+              <Bolt fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         </Stack>
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}
