@@ -27,8 +27,8 @@ use agent_client_protocol::schema::{
     CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
     LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
     ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionId, SessionModeId, SessionNotification, SessionUpdate,
-    SetSessionModeRequest,
+    SelectedPermissionOutcome, SessionConfigOption, SessionConfigSelectOption, SessionId,
+    SessionModeId, SessionNotification, SessionUpdate, SetSessionModeRequest,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
@@ -227,7 +227,7 @@ async fn agent_main(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            run_session(&main_state, cx, resume, cwd, cmd_rx).await
+            run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id).await
         })
         .await;
 
@@ -274,6 +274,7 @@ async fn run_session(
     resume: Option<String>,
     cwd: PathBuf,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    provider_id: &str,
 ) -> Result<(), Error> {
     let session_id = state.session_id.clone();
 
@@ -379,6 +380,38 @@ async fn run_session(
         }
     }
 
+    // gemini (unlike codex) exposes its APPROVAL options as session MODES
+    // (`availableModes` + `session/set_mode`), NOT config_options — so the codex
+    // push above renders nothing for it. Translate those modes into a synthetic
+    // "mode" select chip (matching Zed, which surfaces `session_modes` as its own
+    // selector) so gemini gets an Approval dropdown like the others. Gated to
+    // gemini: claude ALSO ships session modes, but advertises its mode as a real
+    // `config_option` (via a later notification) that this must not shadow. The
+    // chip's SET is routed to `session/set_mode` in the command loop below —
+    // gemini implements no `session/set_config_option`. `Some` here also marks the
+    // session as mode-via-session-modes for that routing.
+    let mode_select: Option<Vec<SessionConfigSelectOption>> = if provider_id == "gemini" {
+        modes
+            .as_ref()
+            .filter(|m| !m.available_modes.is_empty())
+            .map(|m| {
+                m.available_modes
+                    .iter()
+                    .map(|md| SessionConfigSelectOption::new(md.id.0.to_string(), md.name.clone()))
+                    .collect()
+            })
+    } else {
+        None
+    };
+    if let (Some(options), Some(m)) = (mode_select.as_ref(), modes.as_ref()) {
+        let opt =
+            SessionConfigOption::select("mode", "Mode", m.current_mode_id.0.to_string(), options.clone());
+        match serde_json::to_value([opt]) {
+            Ok(v) => state.hub.set_config_options(&session_id, v),
+            Err(e) => tracing::warn!(error = %e, "serializing gemini mode chip"),
+        }
+    }
+
     // Command loop. Prompts and config changes run as concurrent tasks
     // (`cx.spawn`) so Cancel and Permission answers are still processed while a
     // turn is in flight.
@@ -466,6 +499,37 @@ async fn run_session(
                         option_id,
                     },
                 );
+            }
+            AgentCommand::SetConfigOption { config_id, value } if config_id == "mode" && mode_select.is_some() => {
+                // gemini's synthesized "mode" chip maps to ACP `session/set_mode` —
+                // it implements no `session/set_config_option` (it never advertised
+                // config options; cowboy built this chip from its session modes).
+                let Some(mode_id) = value.as_str().map(str::to_owned) else {
+                    tracing::warn!(?value, "set mode: non-string value");
+                    continue;
+                };
+                let cx = cx.clone();
+                let hub = state.hub.clone();
+                let sid = session_id.clone();
+                let acp = acp_id.clone();
+                let options = mode_select.clone().unwrap_or_default();
+                cx.clone().spawn(async move {
+                    let req = SetSessionModeRequest::new(acp, SessionModeId::new(mode_id.clone()));
+                    match cx.send_request(req).block_task().await {
+                        Ok(_) => {
+                            // Re-push the chip with the new current so the dropdown
+                            // sticks (gemini emits no current_mode_update for an
+                            // explicit set).
+                            let opt = SessionConfigOption::select("mode", "Mode", mode_id, options);
+                            match serde_json::to_value([opt]) {
+                                Ok(v) => hub.set_config_options(&sid, v),
+                                Err(e) => tracing::warn!(error = %e, "re-serializing gemini mode chip"),
+                            }
+                        }
+                        Err(e) => hub.broadcast_error(Some(sid.clone()), format!("set mode: {e}")),
+                    }
+                    Ok(())
+                })?;
             }
             AgentCommand::SetConfigOption { config_id, value } => {
                 // claude-agent-acp ≥ 0.31 handles mode / model / effort all
