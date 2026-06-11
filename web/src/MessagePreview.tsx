@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, useTheme } from "@mui/material";
 import CodeMirror from "@uiw/react-codemirror";
 import type { Extension } from "@codemirror/state";
@@ -35,7 +35,7 @@ function compactForPreview(text: string): string {
     .trim();
 }
 
-export function MessagePreview({
+function MessagePreviewImpl({
   text,
   onClick,
 }: {
@@ -111,3 +111,15 @@ export function MessagePreview({
     </>
   );
 }
+
+// Each preview mounts a FULL CodeMirror (mdlive fidelity — the same engine as the
+// composer), so a queue/drafts panel can hold a dozen+ heavy editors at once.
+// Memoize on `text` — the only visual input — so a parent re-render (a store tick
+// mid-stream, a collapse toggle, a reorder) does NOT reconcile every CM6 instance,
+// which was the source of the expand/collapse jank. `onClick` is a stable per-row
+// closure (opens that row's edit); its identity churning each render must not
+// re-render the editor, so the comparison checks only its presence, not identity.
+export const MessagePreview = memo(
+  MessagePreviewImpl,
+  (a, b) => a.text === b.text && !!a.onClick === !!b.onClick,
+);

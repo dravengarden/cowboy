@@ -1,5 +1,6 @@
 import {
   type PointerEvent as ReactPointerEvent,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -1960,7 +1961,7 @@ function AttachmentPreviews({
 // thumbnails (images) + name chips (files), each tapping into the full-screen
 // lightbox. A parked message now SHOWS what it carries instead of a blind
 // "2 attachments" count. Removal is via editing the row, so no × here.
-function QueuedAttachmentChips({
+const QueuedAttachmentChips = memo(function QueuedAttachmentChips({
   attachments,
 }: {
   attachments: Attachment[];
@@ -2016,7 +2017,9 @@ function QueuedAttachmentChips({
       )}
     </Box>
   );
-}
+}, (a, b) =>
+  a.attachments.length === b.attachments.length &&
+  a.attachments.every((x, i) => x.id === b.attachments[i]?.id));
 
 // The Zed-style staging panel above the editor — one component for two kinds:
 //   - "queued": prompts the busy agent can't take yet, auto-drained one per turn.
