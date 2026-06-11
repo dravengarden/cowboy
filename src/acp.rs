@@ -291,6 +291,11 @@ async fn run_session(
     // the session stays usable) — matching Zed's always-resumable thread.
     let mut acp_id: Option<SessionId> = None;
     let mut modes = None;
+    // Agents may return their initial config options (mode / model / effort) IN the
+    // session-creation response (codex does this) rather than only via a later
+    // `config_option_update` notification (claude does that). We capture + surface
+    // both, so codex's Model / approval chips render like claude's.
+    let mut config_options = None;
     if let Some(resume_id) = resume.filter(|_| agent_can_load) {
         let load_id = SessionId::new(resume_id.as_str());
         state.suppress_updates.store(true, Ordering::SeqCst);
@@ -304,6 +309,7 @@ async fn run_session(
                 tracing::info!(session = %session_id, acp_id = %resume_id, "session resumed via session/load");
                 acp_id = Some(load_id);
                 modes = resp.modes;
+                config_options = resp.config_options;
             }
             Err(e) => {
                 tracing::warn!(session = %session_id, error = ?e, "session/load failed; starting fresh");
@@ -324,6 +330,7 @@ async fn run_session(
             .set_agent_session_id(&session_id, session.session_id.0.to_string());
         tracing::info!(session = %session_id, acp_id = %session.session_id.0, "session created");
         modes = session.modes;
+        config_options = session.config_options;
         session.session_id
     };
     state.hub.set_status(&session_id, Status::Running, None);
@@ -356,6 +363,19 @@ async fn run_session(
                 }
                 Err(e) => tracing::warn!(error = ?e, "set_session_mode bypassPermissions failed"),
             }
+        }
+    }
+
+    // Surface config options the agent returned IN the session response (codex
+    // ships its Model + approval options this way; claude instead emits a later
+    // `config_option_update` notification, handled separately). Without this codex
+    // sessions showed NO Model/effort chips. The SET path is unchanged — the
+    // composer's `set_config_option` already routes to `session/set_config_option`,
+    // which codex implements (`set_session_config_option`).
+    if let Some(opts) = config_options.filter(|o| !o.is_empty()) {
+        match serde_json::to_value(&opts) {
+            Ok(v) => state.hub.set_config_options(&session_id, v),
+            Err(e) => tracing::warn!(error = %e, "serializing session config_options"),
         }
     }
 
