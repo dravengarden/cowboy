@@ -340,7 +340,19 @@ const MarkdownImpl = memo(function MarkdownImpl({
     },
     a({ children, href }) {
       return (
-        <Link href={href ?? "#"} target="_blank" rel="noopener noreferrer">
+        <Link
+          href={href ?? "#"}
+          target="_blank"
+          rel="noopener noreferrer"
+          // On an inverted (user) bubble the text is white on the primary fill, so
+          // the default theme link colour is near-invisible — a link (e.g. a bare
+          // `git@github.com` that remark-gfm auto-linked) then reads as "lost". Make
+          // links inherit the bubble's text colour there; the underline still marks
+          // them as links.
+          sx={invert
+            ? { color: "inherit", textDecorationColor: "inherit" }
+            : undefined}
+        >
           {children}
         </Link>
       );
