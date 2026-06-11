@@ -80,7 +80,7 @@ class InlineImageWidget extends WidgetType {
     return other.id === this.id && other.name === this.name &&
       other.selected === this.selected;
   }
-  override toDOM(): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
     if (att?.previewUrl !== undefined && att.isImage) {
       const img = document.createElement("img");
@@ -90,6 +90,20 @@ class InlineImageWidget extends WidgetType {
       img.src = att.previewUrl;
       img.alt = att.name;
       img.draggable = false;
+      // Keep the caret visible after a paste: a tall inline image only gets its
+      // real height once the <img> LOADS, so a scrollIntoView at insert time would
+      // measure it as 0 and under-scroll — leaving the just-landed caret below the
+      // image, hidden behind the keyboard. Re-scroll once it lays out. Gated on
+      // focus so seeding a draft's images on mount (editor unfocused) doesn't yank
+      // the view; `y: "nearest"` only scrolls if the caret is actually off-screen.
+      img.addEventListener("load", () => {
+        if (!view.hasFocus) return;
+        view.dispatch({
+          effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+            y: "nearest",
+          }),
+        });
+      });
       const id = this.id;
       // mousedown (not click): beat CM's own pointer handling and stop the press
       // from moving the caret into the atomic widget. Hand off to the host's
@@ -210,6 +224,9 @@ export function insertImageToken(view: EditorView, a: Attachment): void {
   view.dispatch({
     changes: { from: pos, insert },
     selection: { anchor: pos + insert.length },
+    // Best-effort immediate scroll (the image is still height-0 here); the
+    // widget's load handler re-scrolls once it lays out for the real position.
+    scrollIntoView: true,
   });
   view.focus();
 }
