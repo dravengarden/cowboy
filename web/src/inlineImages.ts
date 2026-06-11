@@ -196,7 +196,14 @@ export const inlineImageTheme = EditorView.theme({
     borderRadius: "10px",
     margin: "4px 0",
     cursor: "pointer",
-    boxShadow: "0 1px 6px rgba(0,0,0,0.22)",
+    // A theme-aware hairline guarantees the thumbnail has a visible EDGE on BOTH
+    // themes. The old black drop-shadow vanished on the dark surface — a pasted
+    // dark screenshot blended into the dark panel with no boundary.
+    // `--atomic-editor-border` is the MUI divider (cmTheme): a faint dark line on
+    // light, a faint light line on dark. Keep a soft shadow for a touch of depth
+    // (negligible on dark, a light lift on light).
+    border: "1px solid var(--atomic-editor-border, rgba(128, 128, 128, 0.3))",
+    boxShadow: "0 1px 4px rgba(0, 0, 0, 0.12)",
   },
   // Selection ring while the host's preview/delete popover is open for this image.
   // INSET (outline-offset negative) so the ring is drawn just inside the image's
