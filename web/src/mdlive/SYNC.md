@@ -50,18 +50,27 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    (`noUncheckedIndexedAccess`), which flags upstream's index access as ~16
    strict-null "errors" that are pure noise (runtime is unaffected). We do not
    re-typecheck third-party code we don't own. **Re-apply this on every sync.**
-3. **List-marker active-line reveal** (`inline-preview.ts`, the `ListMark` branch
-   — task + plain-bullet paths — and the `TaskMarker` branch). Upstream hid `- `,
-   rendered the GFM checkbox, and rendered the `•` bullet widget UNCONDITIONALLY,
-   so a task/bullet NEVER revealed its markdown source when the cursor was on its
-   line — unlike every other marker (HeaderMark, emphasis, quote, …) which the
-   engine reveals on the active line. That broke Obsidian parity (a task shows
-   `• [ ]` raw while you edit/backspace it, `☐` only away; a bullet shows `- ` raw
-   on the active line, `•` away). The LOCAL edits gate each on
-   `!activeLines.has(line)`: inactive → hide `- ` / render `☐` / render `•`;
-   active → render the bullet / leave `[ ]` raw / leave `- ` raw. The done-line
-   strike is likewise inactive-only so an edited `[x]` reveals clean. On re-sync,
-   re-apply over upstream's three unconditional pushes.
+3. **Plain-bullet active-line reveal; tasks ALWAYS render the checkbox**
+   (`inline-preview.ts`, the `ListMark` branch — task + plain-bullet paths — and
+   the `TaskMarker` branch).
+   - **Plain bullets** reveal on the active line like every other marker
+     (HeaderMark, emphasis, quote, …): inactive → render the `•` widget; active →
+     leave `- ` raw so backspacing edits the markdown. Gated on
+     `!activeLines.has(line)` (the non-task `ListMark` else-branch). Upstream
+     rendered the bullet unconditionally.
+   - **Tasks ALWAYS render the `☐`/`☑` checkbox** (and the done-line strike),
+     active line included, and ALWAYS hide the `- ` lead. This matches Obsidian,
+     which keeps the rendered checkbox on the task line you're editing (its marker
+     is an atomic widget) rather than flashing the raw `[ ]`. An earlier LOCAL
+     version reveal-gated tasks too (active → bullet widget here + raw `[ ]` in the
+     `TaskMarker` branch), which produced a `• [ ]` HALF-STATE on a backspaced task
+     — reported against Obsidian's clean `☐`. So the task paths are now
+     UNGATED (like upstream's unconditional pushes), while only the plain-bullet
+     path keeps the `!activeLines` gate. On re-sync: keep the plain-bullet gate;
+     leave the task checkbox + `- `-hide unconditional.
+     NOTE: with no `atomicRanges` provided, backspacing THROUGH an empty task is
+     stepwise (the `☐` persists until the `[ ]` itself is broken); a follow-up
+     atomic-range + task-aware Backspace would make removal one-shot like Obsidian.
 
 4. **Highlight node classes** (`inline-preview.ts`): `'HighlightMark'` added to
    `HIDEABLE_SYNTAX` and `Highlight: 'cm-atomic-highlight'` to

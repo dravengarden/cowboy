@@ -522,18 +522,14 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         const markEnd = hasTrailingSpace ? node.to + 1 : node.to;
 
         if (taskFrom !== undefined) {
-          // LOCAL (Obsidian parity, ./SYNC.md): reveal the task marker on the
-          // ACTIVE line like every other marker. Inactive → hide `- ` so the
-          // checkbox widget (TaskMarker branch) absorbs it into a clean `☐`.
-          // Active → render the list bullet so the revealed source reads `• [ ]`
-          // (the TaskMarker branch leaves `[ ]` raw on the active line) — matching
-          // how Obsidian shows a task's markdown while you edit/backspace it.
-          // Upstream hid `- ` unconditionally, so a task never revealed on edit.
-          if (!activeLines.has(line.number)) {
-            pushReplace(ranges, doc, node.from, taskFrom);
-          } else {
-            pushReplace(ranges, doc, node.from, markEnd, { widget: BULLET_WIDGET });
-          }
+          // LOCAL (Obsidian parity, ./SYNC.md): ALWAYS hide the `- ` task lead,
+          // active line included, so the TaskMarker branch's checkbox widget
+          // absorbs `- [ ] ` into a clean `☐`. Obsidian keeps the rendered
+          // checkbox on the task line you're editing — it does NOT reveal `- [ ]`
+          // raw — so a backspaced-to-empty task shows `☐`, never the `• [ ]`
+          // half-state a prior reveal-on-active version produced (this branch's
+          // bullet widget + the TaskMarker branch's raw `[ ]`).
+          pushReplace(ranges, doc, node.from, taskFrom);
         } else {
           const markText = doc.sliceString(node.from, node.to);
           if (markText === '-' || markText === '*' || markText === '+') {
@@ -610,30 +606,29 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         const taskLineNum = doc.lineAt(node.from).number;
         const markText = doc.sliceString(node.from, node.to);
         const checked = /\[x\]/i.test(markText);
-        // LOCAL (Obsidian parity, ./SYNC.md): render the checkbox widget — and
-        // the done-line strike — ONLY on INACTIVE lines. On the active line leave
-        // `[ ]` / `[x]` raw so the markdown is editable (the ListMark branch
-        // reveals the bullet, so an active task reads `• [ ]`). Upstream pushed
-        // the widget unconditionally, so a task never showed its source on edit.
-        if (!activeLines.has(taskLineNum)) {
-          // Swallow the single trailing space after `[ ]` / `[x]` so the
-          // checkbox widget owns the alcove exactly (mirrors how bullet
-          // markers also swallow their trailing space). Without this the
-          // space stays visible, pushing first-line content to the right
-          // of where wrapped lines start — visible as a 0.3em hang.
-          const hasTrailingSpace =
-            node.to < doc.length &&
-            doc.sliceString(node.to, node.to + 1) === ' ';
-          const replaceTo = hasTrailingSpace ? node.to + 1 : node.to;
-          pushReplace(ranges, doc, node.from, replaceTo, {
-            widget: new TaskCheckboxWidget(checked),
-          });
-          if (checked) {
-            const line = doc.line(taskLineNum);
-            ranges.push(
-              Decoration.line({ class: 'cm-atomic-task-done' }).range(line.from),
-            );
-          }
+        // LOCAL (Obsidian parity, ./SYNC.md): render the checkbox widget — and the
+        // done-line strike — on EVERY line, the active one included. Obsidian keeps
+        // the rendered `☐`/`☑` on the task line you're editing (its marker is an
+        // atomic widget), so it never flashes the raw `[ ]`. Together with the
+        // ListMark branch always hiding `- `, an active task reads `☐`, not the
+        // `• [ ]` half-state. Upstream also pushed the widget unconditionally.
+        //
+        // Swallow the single trailing space after `[ ]` / `[x]` so the checkbox
+        // widget owns the alcove exactly (mirrors how bullet markers swallow their
+        // trailing space). Without this the space stays visible, pushing first-line
+        // content 0.3em right of where wrapped lines start.
+        const hasTrailingSpace =
+          node.to < doc.length &&
+          doc.sliceString(node.to, node.to + 1) === ' ';
+        const replaceTo = hasTrailingSpace ? node.to + 1 : node.to;
+        pushReplace(ranges, doc, node.from, replaceTo, {
+          widget: new TaskCheckboxWidget(checked),
+        });
+        if (checked) {
+          const line = doc.line(taskLineNum);
+          ranges.push(
+            Decoration.line({ class: 'cm-atomic-task-done' }).range(line.from),
+          );
         }
       }
     },
