@@ -51,6 +51,7 @@ import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
+import { PermissionOverlay } from "./PermissionOverlay";
 import { derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
@@ -58,7 +59,6 @@ import {
   loadOlder,
   type QueuedMessage,
   retryMessage,
-  send,
   useStore,
 } from "./store";
 import { useReadingSettings } from "./readingSettings";
@@ -834,13 +834,14 @@ function ToolCard({
 
 function PermissionCard({
   item,
-  sessionId,
 }: {
   item: Extract<RenderItem, { kind: "permission" }>;
-  sessionId: string;
 }): React.JSX.Element {
-  // Resolved → a subtle italic one-line record, so a glaring card doesn't sit in
-  // the log forever.
+  // The timeline keeps only a compact RECORD marker — the actual decision is taken
+  // in the sticky PermissionOverlay floating above the composer (always reachable,
+  // auto-collapses on scroll). Pending = an amber "Permission requested · cmd"
+  // line; resolved = a subtle italic "Allowed/Rejected · cmd" so a glaring card
+  // doesn't sit in the log forever.
   if (item.resolved) {
     const rejected = item.chosen?.toLowerCase().startsWith("reject") ?? false;
     return (
@@ -857,88 +858,18 @@ function PermissionCard({
       </Stack>
     );
   }
-  // Pending → an INLINE interactive card, IN the timeline (no modal sheet). A
-  // tool-approval is high-stakes, so it's a prominent warning-tinted card that
-  // shows the command verbatim with full-width, generously-tappable option rows.
-  // Adapts to both form factors: full-width on a phone, capped on desktop; ≥48px
-  // touch targets; and SENTENCE-case labels (textTransform:none) so a long option
-  // like "…don't ask again for commands that start with `git status`" reads
-  // cleanly instead of SHOUTING in all-caps. Replaces the bottom-sheet modal —
-  // the decision lives in the chat flow (ui.md §7).
   return (
-    <Paper
-      variant="outlined"
-      sx={{
-        alignSelf: "flex-start",
-        width: "100%",
-        maxWidth: 560,
-        p: 1.5,
-        borderColor: "warning.main",
-        bgcolor: (t) =>
-          alpha(t.palette.warning.main, t.palette.mode === "dark" ? 0.14 : 0.08),
-        borderRadius: 2,
-      }}
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      sx={{ alignSelf: "flex-start", color: "warning.main", px: 0.5 }}
     >
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        sx={{ color: "warning.main", mb: 1 }}
-      >
-        <WarningAmberRounded fontSize="small" sx={{ flexShrink: 0 }} />
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Permission required
-        </Typography>
-      </Stack>
-      <Box
-        component="pre"
-        sx={{
-          m: 0,
-          mb: 1.5,
-          px: 1,
-          py: 0.75,
-          borderRadius: 1,
-          bgcolor: "action.hover",
-          fontFamily: "ui-monospace, SFMono-Regular, monospace",
-          fontSize: 13,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
-      >
-        {item.title}
-      </Box>
-      <Stack spacing={1}>
-        {item.options.map((opt) => {
-          const reject = opt.kind.startsWith("reject");
-          return (
-            <Button
-              key={opt.optionId}
-              fullWidth
-              disableElevation
-              variant={reject ? "outlined" : "contained"}
-              color={reject ? "error" : "primary"}
-              onClick={(): void => {
-                send({
-                  type: "permission",
-                  session_id: sessionId,
-                  request_id: item.requestId,
-                  option_id: opt.optionId,
-                });
-              }}
-              sx={{
-                minHeight: { xs: 48, sm: 40 },
-                py: 0.75,
-                textTransform: "none",
-                fontSize: { xs: 15, sm: 14 },
-                lineHeight: 1.35,
-              }}
-            >
-              {opt.name}
-            </Button>
-          );
-        })}
-      </Stack>
-    </Paper>
+      <WarningAmberRounded fontSize="medium" sx={{ flexShrink: 0 }} />
+      <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
+        Permission requested · {item.title}
+      </Typography>
+    </Stack>
   );
 }
 
@@ -950,14 +881,11 @@ function PermissionCard({
 const ItemView = memo(function ItemView({
   item,
   streaming,
-  sessionId,
 }: {
   item: RenderItem;
   /** True when this item is the last assistant chunk-bearing item and the
    *  session is still busy. Adds a blinking caret / dots accordingly. */
   streaming?: boolean;
-  /** The session a pending permission card answers to (sends the ACP reply). */
-  sessionId: string;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message":
@@ -992,7 +920,7 @@ const ItemView = memo(function ItemView({
     case "tool":
       return <ToolCard item={item} />;
     case "permission":
-      return <PermissionCard item={item} sessionId={sessionId} />;
+      return <PermissionCard item={item} />;
     case "lifecycle": {
       // The interrupted marker (a turn cut off by a daemon restart) is a durable,
       // amber record that stays in the log after the session resumes; crashes are
@@ -1189,10 +1117,18 @@ export function Transcript({
   // re-measures rows on the next pass, so live adjustments reflow without a
   // reload.
   const { padding, lineHeight } = useReadingSettings();
-  // A pending tool-permission request is answered INLINE, by the PermissionCard
-  // rendered in the timeline (no modal sheet / no sticky Review control) — see
-  // PermissionCard. The card sits at the bottom (latest item), so it rides the
-  // transcript's bottom-anchored scroll into view like any new message.
+  // Latest unresolved tool-permission request → drives the sticky PermissionOverlay
+  // (floats above the composer, auto-collapses on scroll). The timeline itself
+  // keeps only a record marker (PermissionCard); the actionable surface is the
+  // overlay, so a required decision is always reachable without scrolling.
+  let pendingPermission: Extract<RenderItem, { kind: "permission" }> | undefined;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it && it.kind === "permission" && !it.resolved) {
+      pendingPermission = it;
+      break;
+    }
+  }
   const busy = status === "busy";
   const dead =
     status === "exited" || status === "crashed" || status === "interrupted";
@@ -1608,7 +1544,7 @@ export function Transcript({
                     containIntrinsicSize: "auto 96px",
                   }}
                 >
-                  <ItemView item={item} streaming={working && i === lastIdx} sessionId={sessionId} />
+                  <ItemView item={item} streaming={working && i === lastIdx} />
                 </Box>
               ))}
           </>
@@ -1636,9 +1572,13 @@ export function Transcript({
           composer — never covering the last message. */}
       <SessionStatusBar status={status} />
       {/* The scroll-to-latest affordance is the persistent sticky/auto-scroll
-          toggle in the composer (stickyStore + Composer), not a pill here.
-          A pending permission is answered inline by its PermissionCard in the
-          timeline (no modal sheet / no Review Fab). */}
+          toggle in the composer (stickyStore + Composer), not a pill here. */}
+      {/* A pending tool-permission: the sticky frosted overlay floating above the
+          composer (same slot/material as the turn-status pill, which is hidden
+          while busy). Auto-collapses on scroll-up; the timeline keeps a marker. */}
+      {pendingPermission && (
+        <PermissionOverlay item={pendingPermission} sessionId={sessionId} />
+      )}
     </Box>
   );
 }
