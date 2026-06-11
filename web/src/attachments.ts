@@ -306,6 +306,15 @@ export function stripImageTokens(text: string): string {
   return text.replace(IMG_TOKEN_RE, "").replace(/ {2,}/g, " ");
 }
 
+/// Drop only the inline-image tokens whose bytes aren't in `ids` — used when
+/// rehydrating a persisted draft, so a token left orphaned by a prior quota-drop
+/// of its attachment doesn't reload as a stray fallback chip ("的样式 bug").
+export function dropOrphanImageTokens(text: string, ids: ReadonlySet<string>): string {
+  return text
+    .replace(IMG_TOKEN_RE, (full, id: string) => (ids.has(id) ? full : ""))
+    .replace(/ {2,}/g, " ");
+}
+
 /// Build the ACP `content` block array for a prompt.
 ///   • With inline tokens (Obsidian-style images): walk the doc and emit blocks
 ///     in DOCUMENT ORDER — text segment, image block, text segment, … — so the

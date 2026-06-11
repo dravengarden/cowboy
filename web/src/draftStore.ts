@@ -16,7 +16,11 @@
 // text-only fallback if attachments blow the quota (the text is the precious
 // part — an image is easy to re-attach).
 
-import type { Attachment } from "./attachments";
+import {
+  type Attachment,
+  dropOrphanImageTokens,
+  stripImageTokens,
+} from "./attachments";
 
 export interface Draft {
   text: string;
@@ -43,9 +47,16 @@ function hydrate(): void {
       const d: unknown = raw ? JSON.parse(raw) : null;
       if (d && typeof d === "object" && typeof (d as Draft).text === "string") {
         const parsed = d as Partial<Draft>;
+        const attachments = Array.isArray(parsed.attachments)
+          ? parsed.attachments
+          : [];
+        // Heal drafts whose image bytes were dropped on a prior quota-save: strip
+        // the now-orphaned `![](cowboy-att:id)` tokens so they don't render as a
+        // stray fallback chip on reload.
+        const ids = new Set(attachments.map((a) => a.id));
         drafts.set(k.slice(KEY_PREFIX.length), {
-          text: parsed.text ?? "",
-          attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+          text: dropOrphanImageTokens(parsed.text ?? "", ids),
+          attachments,
         });
       }
     } catch {
@@ -71,9 +82,14 @@ function persist(sessionId: string, draft: Draft | null): void {
     ls.setItem(key, JSON.stringify(draft));
   } catch {
     // Quota (likely large attachment data) — keep at least the text so a reload
-    // doesn't lose what was typed; attachments can be re-added.
+    // doesn't lose what was typed; attachments can be re-added. STRIP the inline
+    // image tokens too: their bytes are being dropped, so a kept `![](cowboy-att:id)`
+    // would reload as an orphaned token rendering as a stray chip ("的样式 bug").
     try {
-      ls.setItem(key, JSON.stringify({ text: draft.text, attachments: [] }));
+      ls.setItem(
+        key,
+        JSON.stringify({ text: stripImageTokens(draft.text), attachments: [] }),
+      );
     } catch {
       /* still failing — the in-memory copy holds it for this session */
     }
