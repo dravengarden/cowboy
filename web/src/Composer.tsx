@@ -65,7 +65,7 @@ import {
   Visibility,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
@@ -2898,22 +2898,31 @@ export function SessionControls({
           </IconButton>
         </span>
       </Tooltip>
-      <ComposerSheet
-        open={sheetOpen}
-        onClose={(): void => setSheetOpen(false)}
-        session={session}
-        options={options}
-        loading={showSkeleton}
-        dead={dead}
-        onSelectOption={(configId, value): void => {
-          send({
-            type: "set_config_option",
-            session_id: sessionId,
-            config_id: configId,
-            value,
-          });
-        }}
-      />
+      {/* Portal to <body>: SessionControls lives inside the navbar (a low z-index
+          stacking context), but the mobile config sheet is a NON-portaled DetentSheet
+          (position:fixed + zIndex.modal, rendered inline). Mounted in the navbar it
+          would be trapped BELOW the floating composer (its own higher stacking
+          context), which then bleeds through the open sheet. Portaling lifts it to the
+          top stacking context so it covers everything, like every other app sheet. */}
+      {createPortal(
+        <ComposerSheet
+          open={sheetOpen}
+          onClose={(): void => setSheetOpen(false)}
+          session={session}
+          options={options}
+          loading={showSkeleton}
+          dead={dead}
+          onSelectOption={(configId, value): void => {
+            send({
+              type: "set_config_option",
+              session_id: sessionId,
+              config_id: configId,
+              value,
+            });
+          }}
+        />,
+        document.body,
+      )}
       <StopConfirmDialog
         open={cancelOpen}
         onClose={(): void => setCancelOpen(false)}
