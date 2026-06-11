@@ -26,6 +26,21 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Cowboy</title>
+    <script>
+      // Native-shell gate. CowboyNativeTweaks.mm injects `__cowboyNativeShell`
+      // (at document-start) ONLY once it has installed native keyboard avoidance
+      // — the shell resizes the WKWebView for the keyboard, so the web can drop
+      // the PWA's position:fixed lock (+ its translateZ/IME fallout). Flag the
+      // root before first paint so the gated layout applies on frame one. Inert in
+      // the PWA / a browser (flag absent). Mirrors src/nativeShell.ts.
+      try {
+        if (window.__cowboyNativeShell) {
+          document.documentElement.dataset.nativeShell = "1";
+        }
+      } catch (e) {
+        /* noop */
+      }
+    </script>
     <style>
       /* Hard reset so the root flex container has a 100% canvas to work on
          no matter what the browser's default margins / DPI / dvh quirks
@@ -63,6 +78,17 @@
          100% always matches the body. Matches the atlantis portal. */
       #root {
         height: 100%;
+      }
+      /* NATIVE SHELL (Tauri): the WKWebView is resized natively for the keyboard
+         (CowboyNativeTweaks.mm), so the layout viewport already shrinks — the web
+         uses NORMAL FLOW instead of the PWA's position:fixed lock. That removes the
+         WebKit "editable won't repaint inside position:fixed" bug at the ROOT, so
+         the shell needs none of the translateZ / composition hacks (the source of
+         the iOS IME swallow + caret bugs). The height:100% chain above still maps
+         to the (natively-resized) viewport; html's overflow:hidden still blocks
+         page scroll. Inert in the PWA (no [data-native-shell]). */
+      html[data-native-shell] body {
+        position: static;
       }
       /* Pre-mount app-shell splash. Painted with the document — before the SPA
          bundle parses and the /ws socket connects — so the first frame is a

@@ -36,6 +36,7 @@ import {
   removeImageTokenById,
 } from "./inlineImages";
 import type { Attachment } from "./attachments";
+import { isNativeShell } from "./nativeShell";
 import {
   fileCompletionSource,
   slashCompletionSource,
@@ -477,6 +478,9 @@ export const ComposerEditor = forwardRef<
         // ignoreDuringComposition lets them through to these handlers. Returning
         // false leaves CM's own composition handling untouched.
         compositionstart: (_event, view): boolean => {
+          // Native shell: no position:fixed → no translateZ layer → none of this
+          // transform/nudge dance is needed (it's the source of the IME bugs).
+          if (isNativeShell()) return false;
           // Drop the scroller's compositing layer for the composition (it mis-paints
           // the IME overlay — pinyin at line start). The compositionupdate nudge
           // below re-forces repaint so marked text stays visible.
@@ -501,6 +505,7 @@ export const ComposerEditor = forwardRef<
         // non-editable parent, so toggling it repaints the subtree (marked text
         // included) without touching the composition. Paint-only, one frame.
         compositionupdate: (_event, view): boolean => {
+          if (isNativeShell()) return false;
           view.scrollDOM.style.opacity = "0.999";
           requestAnimationFrame(() => {
             view.scrollDOM.style.opacity = "";
@@ -508,6 +513,7 @@ export const ComposerEditor = forwardRef<
           return false;
         },
         compositionend: (_event, view): boolean => {
+          if (isNativeShell()) return false;
           view.scrollDOM.style.transform = "";
           const content = view.contentDOM;
           content.style.opacity = "0.999";
@@ -525,6 +531,7 @@ export const ComposerEditor = forwardRef<
         // A blur always restores the layer, so whatever state a half-finished
         // composition left, losing focus puts it back.
         blur: (_event, view): boolean => {
+          if (isNativeShell()) return false;
           view.scrollDOM.style.transform = "";
           return false;
         },
