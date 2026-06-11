@@ -246,14 +246,27 @@ function nameFromUri(uri: string): string {
 /// are skipped (the prompt text is shown from the message's own `text` field);
 /// only `image` / `resource` blocks become attachments. The original block is
 /// carried back verbatim so a re-send re-emits identical content.
-export function blocksToAttachments(blocks: readonly ContentBlock[]): Attachment[] {
+export function blocksToAttachments(
+  blocks: readonly ContentBlock[],
+  text?: string,
+): Attachment[] {
+  // A reconstructed image attachment MUST keep the same id as the inline
+  // `![](cowboy-att:<id>)` token already embedded in `text` — the inline-image
+  // decoration resolves bytes by that id (inlineImages.ts registry), and a mismatch
+  // makes it fall back to a chip ("🖼 image.png") instead of the thumbnail. The ids
+  // are session-local counters (nextId), so a server round-trip / reload would
+  // otherwise mint fresh ids no token references (the "synced draft shows chips"
+  // bug). buildContentBlocks emits image blocks in DOCUMENT ORDER (tokened images
+  // first, interleaved with text), so align the Nth image block to the Nth token.
+  const tokenIds = text !== undefined ? imageTokensInText(text).map((t) => t.id) : [];
+  let imageSeen = 0;
   const out: Attachment[] = [];
   for (const block of blocks) {
     if (block.type === "image") {
       const data = typeof block.data === "string" ? block.data : "";
       const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/jpeg";
       out.push({
-        id: nextId(),
+        id: tokenIds[imageSeen++] ?? nextId(),
         name: "image",
         mimeType,
         isImage: true,
