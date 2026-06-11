@@ -73,7 +73,6 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { latestPlan } from "./derive";
-import { DetentSheet } from "./_shell";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -2609,11 +2608,11 @@ function PendingRow({
   // fires first, so the view already exists here. Focusing from here keeps it
   // inside the gesture and pops the keyboard. (@uiw's own autoFocus wouldn't
   // help: it focuses from a passive useEffect — the same late timing.)
-  // Focused edit overlay (Zed-style ↗): a near-full-screen DetentSheet hosting a
-  // tall editor so a long queued message edits comfortably without ballooning the
-  // queue panel inline. ONE editor is mounted at a time (inline XOR overlay), both
-  // driving the shared `draft` — so there's no uncontrolled-editor desync.
-  const theme = useTheme();
+  // Focused edit overlay (Zed-style ↗): the FullscreenComposer — the SAME expand
+  // component the main input uses — so a long queued message edits comfortably
+  // (full toolbar + inline images) without ballooning the queue panel inline. ONE
+  // editor is mounted at a time (inline XOR overlay), both driving the shared
+  // `draft` — so there's no uncontrolled-editor desync.
   // Same vim setting as the composer — editing a queued/draft message uses the same
   // editor surface, so it gets vim too.
   const vim = useVimSetting();
@@ -2754,82 +2753,42 @@ function PendingRow({
           )}
           {!overlayOpen && editBar}
         </Paper>
-        {/* Focused edit overlay (Step 7): a near-full-screen frosted sheet hosting a
-            tall editor for comfortable long-message editing without ballooning the
-            queue panel. Save/Cancel end the row edit; grab-dismiss returns to the
-            inline box (the shared `draft` is preserved). */}
+        {/* Focused edit overlay: the row's expanded edit reuses the SAME component
+            as the main input's expand — FullscreenComposer (the toolbar registry,
+            inline images, native caret) — NOT a bespoke DetentSheet, so editing a
+            queued/draft message is identical to composing one. Touch: the overlay
+            IS the edit, so collapse commits (it's live-saved anyway). Desktop:
+            collapse returns to the inline box (the shared `draft` is preserved). */}
         {overlayOpen && (
-          <DetentSheet
-            open
-            // Always full-screen frosted glass — matches the compose sheet.
-            ariaLabel="Edit message"
-            frosted
-            cover
-            surfaceColor={theme.palette.background.default}
-            // Desktop: dismiss returns to the inline edit (the overlay is an
-            // optional expand). Touch: the overlay IS the edit (no inline card on a
-            // phone), so a grab-dismiss AUTO-SAVES the edit (the user asked Edit to
-            // save on collapse, not discard) — and the live-persist effect has been
-            // streaming it the whole time anyway, so save() just commits + closes.
-            onClose={touchInput
-              ? save
-              : (): void => setOverlayOpen(false)}
-            header={
-              // px matches the body's p:1.5 so the title's left edge lines up with
-              // the attachments + editor below (it was flush to the edge before);
-              // pb gives it breathing room under the grab handle.
-              <Box sx={{ px: 1.5, pb: 0.5 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                  Edit message
-                </Typography>
-              </Box>
-            }
-            footer={
-              // Same docked bar as the compose sheet (the user asked Edit to match
-              // the input): Send saves the edit; grab-dismiss / the close ×
-              // cancels (onClose → cancel). No Cancel/Save text buttons. Config
-              // chips are session-level (not available per-row here), so the edit
-              // bar is just the triggers + Send.
-              <ComposeBar
-                dead={false}
-                sendable={!!draft.trim() || editAttachments.length > 0}
-                attachments={editAttachments}
-                onRemoveAttachment={(id): void =>
-                  setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
-                onTrigger={(t): void => overlayEditorRef.current?.insertTrigger(t)}
-                onAttach={(): void => editFileInputRef.current?.click()}
-                onSend={(): void => {
-                  save();
-                  setOverlayOpen(false);
-                }}
-                onCollapse={touchInput ? save : (): void => setOverlayOpen(false)}
-              />
-            }
-          >
-            <Box sx={{ p: 1.5 }}>
-              <ComposerEditor
-                ref={overlayEditorRef}
-                value={draft}
-                borderless
-                expanded
-                vim={vim}
-                onVimMode={setVimMode}
-                onChange={setDraft}
-                onSubmit={(): void => {
-                  save();
-                  setOverlayOpen(false);
-                }}
-                sessionId={sessionId}
-                commands={commands}
-                placeholder="Edit message…"
-                onPasteFiles={addEditFiles}
-                onEscape={(): boolean => {
-                  setOverlayOpen(false);
-                  return true;
-                }}
-              />
-            </Box>
-          </DetentSheet>
+          <FullscreenComposer
+            editorRef={overlayEditorRef}
+            value={draft}
+            onChange={setDraft}
+            onSubmit={(): void => {
+              save();
+              setOverlayOpen(false);
+            }}
+            onSaveDraft={(): void => {
+              save();
+              setOverlayOpen(false);
+            }}
+            onCollapse={touchInput ? save : (): void => setOverlayOpen(false)}
+            onAttach={(): void => editFileInputRef.current?.click()}
+            onPasteFiles={addEditFiles}
+            sessionId={sessionId}
+            commands={commands}
+            placeholder="Edit message…"
+            sendable={!!draft.trim() || editAttachments.length > 0}
+            attachmentsSlot={editAttachments.some((a) => !a.isImage)
+              ? (
+                <AttachmentPreviews
+                  attachments={editAttachments.filter((a) => !a.isImage)}
+                  onRemove={(id): void =>
+                    setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
+                />
+              )
+              : undefined}
+          />
         )}
       </>
     );
