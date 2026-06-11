@@ -14,6 +14,7 @@ import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
+import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 
@@ -113,7 +114,16 @@ export function FullscreenComposer({
   return createPortal(
     <Box
       sx={{
-        position: "fixed",
+        // `position: fixed` in the PWA. In the NATIVE shell use `absolute`: iOS
+        // WebKit's text interaction (the long-press Paste/Select menu + caret
+        // placement) is broken for a contenteditable inside a position:fixed
+        // container — that's why long-pressing the fullscreen editor's empty area
+        // showed no menu while the inline composer (normal flow) was fine. The
+        // shell resizes the WebView for the keyboard and `body` is normal-flow at
+        // viewport height, so `absolute inset:0` covers the screen identically
+        // without the fixed-contenteditable bug. (Obsidian's editor isn't in a
+        // fixed overlay either.)
+        position: isNativeShell() ? "absolute" : "fixed",
         inset: 0,
         zIndex: theme.zIndex.modal,
         bgcolor: "background.default",

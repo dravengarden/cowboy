@@ -99,21 +99,6 @@ export function livePreviewExtensions(
       }),
     ]),
     highlightActiveLine(),
-    // Tapping the empty fill area BELOW the last line snaps the caret to the doc
-    // end — like Obsidian / any editor. On touch CM6 defers caret placement to the
-    // browser, so iOS otherwise drops a NATIVE caret floating in mid-air in the
-    // empty contenteditable region (the min-height:100% fill area), and the
-    // long-press Paste menu has no settled text position to anchor to ("长按空白
-    // 没有粘贴菜单"). posAtCoords is null ONLY when the point misses every line, so
-    // taps on real text are untouched.
-    EditorView.domEventHandlers({
-      pointerdown: (event, view): boolean => {
-        if (view.posAtCoords({ x: event.clientX, y: event.clientY }) === null) {
-          view.dispatch({ selection: { anchor: view.state.doc.length } });
-        }
-        return false;
-      },
-    }),
     indentOnInput(),
     // --- Obsidian-style bracket / emphasis / code-fence pairing ---
     closeBrackets(),
