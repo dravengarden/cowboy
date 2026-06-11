@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isNativeShell } from "./nativeShell";
 
 // Publish the on-screen keyboard's overlap of the layout viewport as the
 // `--kb-inset` CSS var (px). The composer column lifts by this so it clears the
@@ -18,6 +19,16 @@ import { useEffect, useState } from "react";
 // animation doesn't re-render the tree every frame; a rAF coalesces bursts.
 export function useKeyboardInset(): void {
   useEffect(() => {
+    // In the native shell the WebView itself is resized for the keyboard (the
+    // Capacitor resize:native model — CowboyNativeTweaks.mm shrinks the WKWebView
+    // frame), so the native side ALREADY lifts the composer clear of the keyboard.
+    // visualViewport ALSO reports the overlap inside WKWebView (it fires here,
+    // unlike `interactive-widget`), so publishing --kb-inset on top would lift the
+    // composer a SECOND time → a keyboard-height blank gap between the composer and
+    // the keyboard (observed on device). Native resize is the sole avoidance in the
+    // shell; --kb-inset stays 0 so `bottom/pb: var(--kb-inset, 0px)` collapse to the
+    // native-resized bottom. The PWA path is unchanged.
+    if (isNativeShell()) return undefined;
     const vv = globalThis.visualViewport;
     if (!vv) return undefined;
     const root = globalThis.document.documentElement;
