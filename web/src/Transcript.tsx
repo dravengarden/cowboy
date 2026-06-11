@@ -21,7 +21,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Fab,
   IconButton,
   Paper,
   Skeleton,
@@ -69,7 +68,6 @@ import {
   useScrollNonce,
 } from "./stickyStore";
 import { ImageLightbox } from "./_shell";
-import { Sheet } from "./Sheet";
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -836,18 +834,13 @@ function ToolCard({
 
 function PermissionCard({
   item,
+  sessionId,
 }: {
   item: Extract<RenderItem, { kind: "permission" }>;
+  sessionId: string;
 }): React.JSX.Element {
-  // Two visual states, both compact in-timeline markers. The actual decision
-  // happens in the dedicated PermissionSheet (a modal that pops at the
-  // Transcript root), not inline: a tool-approval is high-stakes and easy to
-  // scroll past / mis-tap as inline buttons on a phone, so it earns a focused
-  // dialog. The timeline keeps only a record:
-  //   Pending  = an amber "permission requested" line (the sheet is open / can
-  //              be reopened via the sticky Review control).
-  //   Resolved = a subtle italic one-line summary of what was decided (a
-  //              glaring orange card would otherwise sit in the log forever).
+  // Resolved → a subtle italic one-line record, so a glaring card doesn't sit in
+  // the log forever.
   if (item.resolved) {
     const rejected = item.chosen?.toLowerCase().startsWith("reject") ?? false;
     return (
@@ -864,56 +857,66 @@ function PermissionCard({
       </Stack>
     );
   }
+  // Pending → an INLINE interactive card, IN the timeline (no modal sheet). A
+  // tool-approval is high-stakes, so it's a prominent warning-tinted card that
+  // shows the command verbatim with full-width, generously-tappable option rows.
+  // Adapts to both form factors: full-width on a phone, capped on desktop; ≥48px
+  // touch targets; and SENTENCE-case labels (textTransform:none) so a long option
+  // like "…don't ask again for commands that start with `git status`" reads
+  // cleanly instead of SHOUTING in all-caps. Replaces the bottom-sheet modal —
+  // the decision lives in the chat flow (ui.md §7).
   return (
-    <Stack
-      direction="row"
-      spacing={1}
-      alignItems="center"
-      sx={{ alignSelf: "flex-start", color: "warning.main", px: 0.5 }}
+    <Paper
+      variant="outlined"
+      sx={{
+        alignSelf: "flex-start",
+        width: "100%",
+        maxWidth: 560,
+        p: 1.5,
+        borderColor: "warning.main",
+        bgcolor: (t) =>
+          alpha(t.palette.warning.main, t.palette.mode === "dark" ? 0.14 : 0.08),
+        borderRadius: 2,
+      }}
     >
-      <WarningAmberRounded fontSize="medium" sx={{ flexShrink: 0 }} />
-      <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
-        Permission requested · {item.title}
-      </Typography>
-    </Stack>
-  );
-}
-
-// The dedicated approval dialog. Mobile → the shared DetentSheet (sheet on the
-// keyboard-safe bottom); desktop → a centered Dialog. The ACP options become
-// full-width, ≥48px stacked buttons in the sheet footer — a forced, unmissable
-// decision instead of small inline chips (ui.md §7). Dismissing the sheet does
-// NOT resolve the request (no accidental reject); the Transcript shows a sticky
-// "Review" control to reopen it, and the agent stays blocked until a real pick.
-function PermissionSheet({
-  sessionId,
-  item,
-  open,
-  onClose,
-}: {
-  sessionId: string;
-  item: Extract<RenderItem, { kind: "permission" }>;
-  open: boolean;
-  onClose: () => void;
-}): React.JSX.Element {
-  return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title={
-        <Stack direction="row" spacing={1} alignItems="center">
-          <WarningAmberRounded color="warning" />
-          <span>Permission required</span>
-        </Stack>
-      }
-      actions={
-        <Stack spacing={1} sx={{ width: "100%" }}>
-          {item.options.map((opt) => (
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ color: "warning.main", mb: 1 }}
+      >
+        <WarningAmberRounded fontSize="small" sx={{ flexShrink: 0 }} />
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          Permission required
+        </Typography>
+      </Stack>
+      <Box
+        component="pre"
+        sx={{
+          m: 0,
+          mb: 1.5,
+          px: 1,
+          py: 0.75,
+          borderRadius: 1,
+          bgcolor: "action.hover",
+          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          fontSize: 13,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {item.title}
+      </Box>
+      <Stack spacing={1}>
+        {item.options.map((opt) => {
+          const reject = opt.kind.startsWith("reject");
+          return (
             <Button
               key={opt.optionId}
               fullWidth
-              variant={opt.kind.startsWith("reject") ? "outlined" : "contained"}
-              color={opt.kind.startsWith("reject") ? "error" : "primary"}
+              disableElevation
+              variant={reject ? "outlined" : "contained"}
+              color={reject ? "error" : "primary"}
               onClick={(): void => {
                 send({
                   type: "permission",
@@ -922,20 +925,20 @@ function PermissionSheet({
                   option_id: opt.optionId,
                 });
               }}
-              // Full-width, ≥48px stacked rows: the highest-stakes tap in the
-              // app deserves the most reachable target on touch (ui.md §7).
-              sx={{ minHeight: { xs: 48, sm: 44 }, fontSize: { xs: 16, sm: 15 } }}
+              sx={{
+                minHeight: { xs: 48, sm: 40 },
+                py: 0.75,
+                textTransform: "none",
+                fontSize: { xs: 15, sm: 14 },
+                lineHeight: 1.35,
+              }}
             >
               {opt.name}
             </Button>
-          ))}
-        </Stack>
-      }
-    >
-      <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
-        {item.title}
-      </Typography>
-    </Sheet>
+          );
+        })}
+      </Stack>
+    </Paper>
   );
 }
 
@@ -947,11 +950,14 @@ function PermissionSheet({
 const ItemView = memo(function ItemView({
   item,
   streaming,
+  sessionId,
 }: {
   item: RenderItem;
   /** True when this item is the last assistant chunk-bearing item and the
    *  session is still busy. Adds a blinking caret / dots accordingly. */
   streaming?: boolean;
+  /** The session a pending permission card answers to (sends the ACP reply). */
+  sessionId: string;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message":
@@ -986,7 +992,7 @@ const ItemView = memo(function ItemView({
     case "tool":
       return <ToolCard item={item} />;
     case "permission":
-      return <PermissionCard item={item} />;
+      return <PermissionCard item={item} sessionId={sessionId} />;
     case "lifecycle": {
       // The interrupted marker (a turn cut off by a daemon restart) is a durable,
       // amber record that stays in the log after the session resumes; crashes are
@@ -1183,22 +1189,10 @@ export function Transcript({
   // re-measures rows on the next pass, so live adjustments reflow without a
   // reload.
   const { padding, lineHeight } = useReadingSettings();
-  // Latest unresolved tool-permission request, if any → drives the dedicated
-  // PermissionSheet. `reviewClosedFor` remembers a request the user flicked the
-  // sheet shut on, so it doesn't keep re-popping while still leaving the sticky
-  // "Review" control to reopen it. A new request (different id) auto-opens.
-  let pendingPermission: Extract<RenderItem, { kind: "permission" }> | undefined;
-  for (let i = items.length - 1; i >= 0; i -= 1) {
-    const it = items[i];
-    if (it && it.kind === "permission" && !it.resolved) {
-      pendingPermission = it;
-      break;
-    }
-  }
-  const pendingReqId = pendingPermission?.requestId ?? null;
-  const [reviewClosedFor, setReviewClosedFor] = useState<string | null>(null);
-  const permissionOpen =
-    pendingPermission !== undefined && pendingReqId !== reviewClosedFor;
+  // A pending tool-permission request is answered INLINE, by the PermissionCard
+  // rendered in the timeline (no modal sheet / no sticky Review control) — see
+  // PermissionCard. The card sits at the bottom (latest item), so it rides the
+  // transcript's bottom-anchored scroll into view like any new message.
   const busy = status === "busy";
   const dead =
     status === "exited" || status === "crashed" || status === "interrupted";
@@ -1502,8 +1496,8 @@ export function Transcript({
         position: "relative",
         overflow: "hidden",
         // Column so the status bar can sit at the bottom IN FLOW (pushing the
-        // scroll area up, never overlapping the last message). The permission
-        // Fab/sheet stay absolutely positioned, unaffected.
+        // scroll area up, never overlapping the last message). The "loading
+        // older" spinner stays absolutely positioned, unaffected.
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
@@ -1614,7 +1608,7 @@ export function Transcript({
                     containIntrinsicSize: "auto 96px",
                   }}
                 >
-                  <ItemView item={item} streaming={working && i === lastIdx} />
+                  <ItemView item={item} streaming={working && i === lastIdx} sessionId={sessionId} />
                 </Box>
               ))}
           </>
@@ -1642,38 +1636,9 @@ export function Transcript({
           composer — never covering the last message. */}
       <SessionStatusBar status={status} />
       {/* The scroll-to-latest affordance is the persistent sticky/auto-scroll
-          toggle in the composer (stickyStore + Composer), not a pill here. */}
-      {pendingPermission && (
-        <PermissionSheet
-          sessionId={sessionId}
-          item={pendingPermission}
-          open={permissionOpen}
-          onClose={(): void => setReviewClosedFor(pendingReqId)}
-        />
-      )}
-      {pendingPermission && !permissionOpen && (
-        // The sheet was flicked away but the request is still unresolved — keep
-        // a prominent, centered reopen affordance so a required decision is
-        // never stranded. Centered (not the bottom-right jump Fab's corner) and
-        // amber to read as "action needed", clear of the landscape edge.
-        <Fab
-          variant="extended"
-          color="warning"
-          aria-label="review permission request"
-          onClick={(): void => setReviewClosedFor(null)}
-          sx={{
-            position: "absolute",
-            bottom: 16,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 2,
-            boxShadow: 3,
-          }}
-        >
-          <WarningAmberRounded sx={{ mr: 1 }} />
-          Review permission
-        </Fab>
-      )}
+          toggle in the composer (stickyStore + Composer), not a pill here.
+          A pending permission is answered inline by its PermissionCard in the
+          timeline (no modal sheet / no Review Fab). */}
     </Box>
   );
 }
