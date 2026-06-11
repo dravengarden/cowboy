@@ -23,7 +23,11 @@ import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/c
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { deleteTokenBackward, tokenChipPlugin } from "./fileTokenWidget";
+import {
+  deleteEmptyCodeFenceBackward,
+  deleteTokenBackward,
+  tokenChipPlugin,
+} from "./fileTokenWidget";
 import {
   deleteImageTokenBackward,
   inlineImageField,
@@ -598,8 +602,11 @@ export const ComposerEditor = forwardRef<
       // the default char-delete).
       Prec.high(keymap.of([
         // Inline-image token delete runs first (its token contains spaces, so the
-        // @-token regex can't match it), then the @/​/ token delete.
+        // @-token regex can't match it), then the empty-code-fence delete, then the
+        // @/​/ token delete. Each no-ops when it doesn't apply, so order is by
+        // specificity.
         { key: "Backspace", run: deleteImageTokenBackward },
+        { key: "Backspace", run: deleteEmptyCodeFenceBackward },
         { key: "Backspace", run: deleteTokenBackward },
       ])),
       // Escape: in vim insert mode, yield (return false) so the vim extension

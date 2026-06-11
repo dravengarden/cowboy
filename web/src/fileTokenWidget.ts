@@ -134,3 +134,51 @@ export function deleteTokenBackward(view: EditorView): boolean {
   }
   return false;
 }
+
+// A line that is (just) a code fence: ``` / ~~~ (3+), optional indent + info.
+const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+
+// Backspace that removes an EMPTY fenced code block as a unit. `autoCloseCodeFence`
+// turns a typed ``` into ```\n``` (an empty block, rendered as a dark bar); deleting
+// it char-by-char leaves an orphaned closing fence — the "往回删除还会留一小段"
+// leftover. When the caret sits at the END of the opening fence (or the START of the
+// closing fence) of an empty block, delete the whole block in one press. Returns
+// false otherwise, so normal Backspace / token-delete still run. Wire it in the
+// Backspace keymap alongside the token deleters.
+export function deleteEmptyCodeFenceBackward(view: EditorView): boolean {
+  const { state } = view;
+  const range = state.selection.main;
+  if (!range.empty) return false;
+  const { doc } = state;
+  const caret = doc.lineAt(range.head);
+  if (!FENCE_RE.test(caret.text)) return false;
+
+  let openLn = -1;
+  let closeLn = -1;
+  if (range.head === caret.to) {
+    // Caret at end of an OPENING fence → the block runs down to the next fence,
+    // with only blank lines (an empty body) between.
+    openLn = caret.number;
+    for (let i = caret.number + 1; i <= doc.lines; i++) {
+      const t = doc.line(i).text;
+      if (FENCE_RE.test(t)) { closeLn = i; break; }
+      if (t.trim() !== "") return false; // real content → leave it alone
+    }
+  } else if (range.head === caret.from) {
+    // Caret at start of a CLOSING fence → the block runs up to the previous fence.
+    closeLn = caret.number;
+    for (let i = caret.number - 1; i >= 1; i--) {
+      const t = doc.line(i).text;
+      if (FENCE_RE.test(t)) { openLn = i; break; }
+      if (t.trim() !== "") return false;
+    }
+  } else {
+    return false; // mid-fence (e.g. editing the info string) → don't touch
+  }
+  if (openLn === -1 || closeLn === -1 || closeLn <= openLn) return false;
+
+  const from = doc.line(openLn).from;
+  const to = Math.min(doc.length, doc.line(closeLn).to + 1);
+  view.dispatch({ changes: { from, to }, selection: { anchor: from } });
+  return true;
+}
