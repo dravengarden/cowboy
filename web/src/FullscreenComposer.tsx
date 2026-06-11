@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useRef } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AppBar,
@@ -9,10 +9,11 @@ import {
   Tooltip,
   useTheme,
 } from "@mui/material";
-import { CloseFullscreen, Send } from "@mui/icons-material";
+import { CloseFullscreen, Send, Tune } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
+import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 
@@ -92,6 +93,7 @@ export function FullscreenComposer({
   // each re-focuses the editor (keyboard stays up). Scrolls horizontally on a
   // narrow phone. (The phase-2 settings sheet edits the id list.)
   const toolbarIds = useComposerToolbar();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const runCmd = (cmd: ComposerCommand): void => {
     const ed = editorRef.current;
     if (ed) cmd.run({ editor: ed, attach: onAttach });
@@ -183,24 +185,37 @@ export function FullscreenComposer({
         />
       </Box>
 
-      {/* Fixed Obsidian-style markdown toolbar, pinned just above the keyboard;
-          scrolls horizontally on a narrow phone. */}
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={0.25}
+      {/* Obsidian-style markdown toolbar pinned above the keyboard: the
+          config-driven commands scroll horizontally; a pinned wrench (never
+          scrolls away) opens "Manage toolbar options". */}
+      <Box
         sx={{
-          px: 1,
-          py: 0.5,
+          display: "flex",
+          alignItems: "center",
           borderTop: 1,
           borderColor: "divider",
           bgcolor: "background.paper",
-          overflowX: "auto",
-          flexWrap: "nowrap",
         }}
       >
-        {actions}
-      </Stack>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.25}
+          sx={{ flex: 1, minWidth: 0, px: 1, py: 0.5, overflowX: "auto", flexWrap: "nowrap" }}
+        >
+          {actions}
+        </Stack>
+        <Box sx={{ borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
+          <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
+            <Tune />
+          </ToolBtn>
+        </Box>
+      </Box>
+
+      <ComposerToolbarSettings
+        open={settingsOpen}
+        onClose={(): void => setSettingsOpen(false)}
+      />
     </Box>,
     document.body,
   );
