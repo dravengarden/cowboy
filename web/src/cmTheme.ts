@@ -162,6 +162,47 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         whiteSpace: "nowrap",
         cursor: "default",
       },
+      // GFM task checkbox. The vendored mdlive emits a NATIVE <input
+      // type=checkbox>, which on iOS WebKit renders as a gray hollow CIRCLE
+      // (accent-color only tints the checked state) — out of place next to the
+      // Material composer ("样式有点丑"). Override to an Obsidian-style rounded
+      // square: empty box w/ a muted border when unchecked, accent fill + white
+      // tick when done. `input.` + the CM-theme class prefix beats the vendored
+      // plain-class rule, so this stays in OUR file (mdlive CSS is DO-NOT-EDIT).
+      // Footprint stays 0.9em box + 0.3em gap so the shared list alcove math
+      // (ALCOVE_EM in inline-preview.ts) is untouched.
+      "input.cm-atomic-task-checkbox": {
+        appearance: "none",
+        WebkitAppearance: "none",
+        boxSizing: "border-box",
+        width: "0.9em",
+        height: "0.9em",
+        margin: "0 0.3em 0 0",
+        verticalAlign: "-0.15em",
+        position: "relative",
+        border: `1.5px solid ${theme.palette.text.disabled}`,
+        borderRadius: "0.28em",
+        backgroundColor: "transparent",
+        cursor: "pointer",
+        transition: "background-color 0.12s ease, border-color 0.12s ease",
+      },
+      "input.cm-atomic-task-checkbox:hover": { borderColor: accent },
+      "input.cm-atomic-task-checkbox:checked": {
+        backgroundColor: accent,
+        borderColor: accent,
+      },
+      // The tick — a rotated bottom-right border corner, classic CSS checkmark.
+      "input.cm-atomic-task-checkbox:checked::after": {
+        content: '""',
+        position: "absolute",
+        left: "0.28em",
+        top: "0.08em",
+        width: "0.2em",
+        height: "0.42em",
+        border: `solid ${theme.palette.primary.contrastText}`,
+        borderWidth: "0 0.12em 0.12em 0",
+        transform: "rotate(45deg)",
+      },
     },
     { dark },
   );
