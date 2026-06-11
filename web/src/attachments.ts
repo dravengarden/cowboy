@@ -136,18 +136,26 @@ function drawScaled(bmp: ImageBitmap, maxEdge: number, quality: number): Raster 
   return { dataUrl, base64: comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl, mimeType: "image/jpeg" };
 }
 
-// Downscale a picked/pasted image to two small rasters from ONE decode. Why:
+// Downscale a picked/pasted image to ONE capped raster (from one decode). Why:
 // a phone photo is several MB; embedding it verbatim — and decoding the full
-// raster just to paint a 56px preview — is what froze the composer on pick and
-// bloated the WS frame on send. createImageBitmap decodes once off the main
-// thread; we then draw a send-size and a thumb-size JPEG from that one bitmap:
-//   - send  ≤ 1568px q0.85 — the agent payload. 1568 is Claude's vision sweet
-//            spot; anything larger is downsampled server-side, so full-res only
-//            wastes bytes + CPU.
-//   - thumb ≤ 256px  q0.7  — the composer / bubble preview.
+// raster just to paint a preview — is what froze the composer on pick and bloated
+// the WS frame on send. createImageBitmap decodes once off the main thread; we
+// draw a single ≤1568px q0.85 JPEG and use it for BOTH the agent payload and the
+// preview:
+//   - 1568px is Claude's vision sweet spot — larger is downsampled server-side,
+//     so full-res only wastes bytes + CPU on the send.
+//   - the SAME raster is `previewUrl`, which drives every user-facing display (the
+//     inline composer image, queue/draft rows, AND the lightbox's "open full" —
+//     all read `previewUrl`; see inlineImages.ts / ResourceLightbox.tsx). It was a
+//     separate 256px thumb before, which is below even the inline image's ~360px
+//     CSS box (≈720–1080px on a 2–3× retina screen) — a pasted screenshot looked
+//     badly blurred. 1568 is sharp there AND exactly matches what a sent message
+//     shows (blocksToAttachments rebuilds previewUrl from the 1568 send bytes), so
+//     there's no quality jump on send. The send dataUrl is already computed, so
+//     reusing it for the preview is free (vs the old second thumb raster).
 // Returns null when the browser can't rasterize (no canvas / decode failure);
 // the caller then falls back to embedding the original bytes verbatim.
-async function encodeImage(file: File): Promise<{ send: Raster; thumb: Raster } | null> {
+async function encodeImage(file: File): Promise<Raster | null> {
   try {
     // Bound the decode. iOS Safari's createImageBitmap can hang indefinitely on
     // some images (e.g. right after the native photo picker closes); an
@@ -161,7 +169,7 @@ async function encodeImage(file: File): Promise<{ send: Raster; thumb: Raster } 
     ]);
     if (!bmp) return null;
     try {
-      return { send: drawScaled(bmp, 1568, 0.85), thumb: drawScaled(bmp, 256, 0.7) };
+      return drawScaled(bmp, 1568, 0.85);
     } finally {
       bmp.close();
     }
@@ -181,10 +189,10 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
       return {
         id: nextId(),
         name: file.name || "pasted-image",
-        mimeType: encoded.send.mimeType,
+        mimeType: encoded.mimeType,
         isImage: true,
-        previewUrl: encoded.thumb.dataUrl,
-        block: { type: "image", data: encoded.send.base64, mimeType: encoded.send.mimeType },
+        previewUrl: encoded.dataUrl,
+        block: { type: "image", data: encoded.base64, mimeType: encoded.mimeType },
       };
     }
     // Fallback: the browser couldn't rasterize — embed the original bytes.
