@@ -42,7 +42,7 @@ needs no code edit.
 ## Local modifications log
 
 Keep edits minimal and `// LOCAL:`-tagged so the upstream diff stays small and
-re-syncable. As of the `eba2066` vendoring, the ONLY local edits are:
+re-syncable. As of the `eba2066` vendoring, the local edits are:
 
 1. **Per-file banner** (2 lines) at the top of each vendored file.
 2. **`// @ts-nocheck` block** (3 lines, after the banner) on every vendored
@@ -50,8 +50,19 @@ re-syncable. As of the `eba2066` vendoring, the ONLY local edits are:
    (`noUncheckedIndexedAccess`), which flags upstream's index access as ~16
    strict-null "errors" that are pure noise (runtime is unaffected). We do not
    re-typecheck third-party code we don't own. **Re-apply this on every sync.**
+3. **Task-marker active-line reveal** (`inline-preview.ts`, the `ListMark` task
+   branch + the `TaskMarker` branch). Upstream hid `- ` and rendered the GFM
+   checkbox widget UNCONDITIONALLY, so a task item NEVER revealed its markdown
+   source when the cursor was on its line — unlike every other marker
+   (HeaderMark, emphasis, quote, …) which the engine reveals on the active line.
+   That broke Obsidian parity (a task should show `• [ ]` raw while you
+   edit/backspace it, `☐` only when the cursor is away). The LOCAL edit gates
+   both on `!activeLines.has(line)`: inactive → hide `- ` + render `☐`; active →
+   render the list bullet + leave `[ ]` raw (= `• [ ]`). The done-line strike is
+   likewise inactive-only so an edited `[x]` reveals clean. On re-sync, re-apply
+   over upstream's two unconditional pushes.
 
-No edits were made to the engine logic or the CSS contents.
+The CSS contents are unmodified.
 
 ## Sync workflow (run this to port an upstream fix)
 
