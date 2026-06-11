@@ -16,6 +16,25 @@ import { livePreviewExtensions } from "./composerExtensions";
 // chips below), so no inline-image registry is needed here.
 const COLLAPSED_MAX = "4.6em"; // ~3 lines at the composer's 1.5 line-height
 
+// Display-only whitespace tidy for the preview — like HTML's whitespace
+// collapsing, but markdown-aware (the STORED text is untouched; this only shapes
+// what the read-only preview shows). Trim leading/trailing blank space, cap a run
+// of blank lines at one, and collapse interior space runs WITHIN each line —
+// while PRESERVING each line's leading indentation so nested lists / indented
+// code still render. Without this a draft with leading newlines wastes the
+// preview's first lines on emptiness ("预览前后留白").
+function compactForPreview(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const indent = line.match(/^[ \t]*/)?.[0] ?? "";
+      return indent + line.slice(indent.length).replace(/[ \t]+/g, " ").trimEnd();
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function MessagePreview({
   text,
   onClick,
@@ -34,6 +53,7 @@ export function MessagePreview({
     () => [cmTheme(theme), ...livePreviewExtensions()],
     [theme],
   );
+  const display = useMemo(() => compactForPreview(text), [text]);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -61,7 +81,7 @@ export function MessagePreview({
         }}
       >
         <CodeMirror
-          value={text}
+          value={display}
           editable={false}
           theme="none"
           basicSetup={false}
