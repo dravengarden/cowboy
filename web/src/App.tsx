@@ -1451,19 +1451,6 @@ export function App({
                                             : active.title}
                                     </Typography>
                                 </Tooltip>
-                                <Tooltip title="Rename session">
-                                    <IconButton
-                                        size="small"
-                                        aria-label="rename session"
-                                        onClick={(): void => {
-                                            claimKeyboard(); // raise the keyboard in-gesture (iOS)
-                                            setPendingRename(active);
-                                        }}
-                                        sx={{ flexShrink: 0 }}
-                                    >
-                                        <DriveFileRenameOutline fontSize="small" />
-                                    </IconButton>
-                                </Tooltip>
                             </Stack>
                         ) : (
                             // No session: the content pane already says "No
@@ -1760,6 +1747,20 @@ export function App({
                 initialTab={settingsTab}
                 themeMode={themeMode}
                 onSetThemeMode={onSetThemeMode}
+                // Rename moved off the navbar into here. Strip the stored
+                // "provider · " prefix like the navbar title does.
+                activeTitle={active
+                    ? (active.title.startsWith(`${active.provider} · `)
+                        ? active.title.slice(active.provider.length + 3)
+                        : active.title)
+                    : undefined}
+                onRenameSession={active
+                    ? (): void => {
+                        setSettingsOpen(false);
+                        claimKeyboard(); // raise the keyboard in-gesture (iOS)
+                        setPendingRename(active);
+                    }
+                    : undefined}
             />
             <Snackbar
                 open={errorOpen}
@@ -1933,12 +1934,18 @@ function SettingsShell({
     initialTab,
     themeMode,
     onSetThemeMode,
+    activeTitle,
+    onRenameSession,
 }: {
     open: boolean;
     onClose: () => void;
     initialTab: "settings" | "info";
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
+    /** Active session's display title — shown above its Rename action. */
+    activeTitle?: string | undefined;
+    /** Open the rename flow for the active session (undefined → no active session). */
+    onRenameSession?: (() => void) | undefined;
 }): React.JSX.Element {
     // Merged sheet: a Settings / Info segmented switch in the header. Each open
     // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
@@ -2008,6 +2015,38 @@ function SettingsShell({
             </Box>
             {tab === "info" ? <InfoContent /> : (
             <Stack spacing={3}>
+                {/* Session — rename lives here now (moved off the navbar to declutter
+                    it). Only shown when a session is active. */}
+                {onRenameSession && (
+                    <>
+                        <Stack spacing={1}>
+                            <Typography variant="overline" color="text.secondary">
+                                Session
+                            </Typography>
+                            <Stack
+                                direction="row"
+                                alignItems="center"
+                                justifyContent="space-between"
+                                spacing={2}
+                            >
+                                <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
+                                    {activeTitle}
+                                </Typography>
+                                <Button
+                                    size="small"
+                                    variant="outlined"
+                                    color="inherit"
+                                    startIcon={<DriveFileRenameOutline fontSize="small" />}
+                                    onClick={onRenameSession}
+                                    sx={{ flexShrink: 0, textTransform: "none" }}
+                                >
+                                    Rename
+                                </Button>
+                            </Stack>
+                        </Stack>
+                        <Divider />
+                    </>
+                )}
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
                 {/* Reading comfort — scales only the transcript message content
