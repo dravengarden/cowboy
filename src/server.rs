@@ -127,6 +127,32 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         dispatch_rx,
     ));
 
+    // Headless auto-resume. A turn cut off by THIS restart had its continuation
+    // enqueued + the session marked Interrupted during `hub.restore` above — but
+    // that continuation only drains once the agent revives, which used to wait for
+    // a CLIENT to open the session. Revive the opted-in ones right here so an
+    // interrupted turn resumes with NO client connected — the whole point of
+    // auto-resume is surviving an unattended deploy. Gated on a non-empty queue so
+    // we only wake sessions that actually have the continuation (or user-queued
+    // prompts) to drain, never an idle Interrupted one (which would just spin a
+    // misleading "working" state). The drain runs through the dispatcher wired above.
+    for meta in hub.session_list() {
+        if meta.status != Status::Interrupted || !hub.effective_auto_resume(&meta.id) {
+            continue;
+        }
+        if !hub.session_info(&meta.id).is_some_and(|i| i.queue_count > 0) {
+            continue;
+        }
+        match supervisor.ensure_alive(&meta.id) {
+            Ok(revived) => {
+                tracing::info!(session = %meta.id, revived, "auto-resume: reviving interrupted turn");
+            }
+            Err(e) => {
+                tracing::warn!(session = %meta.id, error = %e, "auto-resume revive failed");
+            }
+        }
+    }
+
     tracing::info!(
         workspace = %args.workspace_root.display(),
         data_dir = %args.data_dir.display(),
