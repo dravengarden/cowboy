@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   AppBar,
@@ -54,6 +54,7 @@ export function FullscreenComposer({
   placeholder,
   sendable,
   attachmentsSlot,
+  editorRef,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -67,9 +68,13 @@ export function FullscreenComposer({
   placeholder: string;
   sendable: boolean;
   attachmentsSlot?: ReactNode;
+  // The SHARED composer editor handle. Must be the same ref the parent's
+  // `addFiles`/submit/clear use — else paste-an-image here inserts the inline
+  // token into nobody (the parent's inline editor is unmounted while fullscreen is
+  // open), so the image attaches + sends but shows NO inline thumbnail.
+  editorRef: RefObject<ComposerEditorHandle | null>;
 }): React.JSX.Element {
   const theme = useTheme();
-  const editorRef = useRef<ComposerEditorHandle>(null);
 
   // UNCONTROLLED, exactly like the inline composer: freeze the open-time text as a
   // one-shot seed and let `onChange` flow text OUT only. Passing the live

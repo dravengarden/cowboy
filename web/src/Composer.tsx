@@ -1667,6 +1667,10 @@ export function Composer({
           shared editorRef points at the one mounted here. */}
       {composeFs && (
         <FullscreenComposer
+          // SHARE the composer's editor handle so addFiles/submit/clear hit the
+          // fullscreen editor while it's mounted (the inline one is unmounted) —
+          // otherwise a pasted image attaches but inserts no inline thumbnail.
+          editorRef={editorRef}
           // Mounts fresh on open, seeding from the CURRENT in-progress text (like
           // the edit overlay) so inline text carries in; markdown stays literal.
           value={text}
