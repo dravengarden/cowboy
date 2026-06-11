@@ -66,6 +66,7 @@ import {
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { FullscreenComposer } from "./FullscreenComposer";
+import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -2446,83 +2447,6 @@ function PendingPanel({
 // One queued prompt. Read mode shows the (clamped) text + a primary action +
 // Edit / Delete. Edit mode swaps in a small multiline field (Enter saves, Esc
 // cancels). The primary action depends on whether the session can take a turn
-// Plain-text preview that clamps to 2 lines, with a Show more / Show less toggle
-// at the end that appears ONLY when the text actually overflows — so a long
-// pasted draft / queued prompt stays a compact row by default but expands inline
-// (the "多行末尾要有折叠按钮，默认折叠" ask). Measured only while clamped (the
-// expanded state has no overflow to read) and re-measured on resize. The toggle
-// is a real button with a touch-sized hit target (mobile + desktop).
-function ClampedText({ text, onTextClick }: { text: string; onTextClick?: () => void }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || expanded) return undefined;
-    const measure = (): void =>
-      setOverflowing(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [text, expanded]);
-  return (
-    <>
-      <Box
-        ref={ref}
-        onClick={onTextClick}
-        sx={{
-          typography: "body2",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          // Tap the text to edit the message (the "Show more" button below has
-          // its own handler and isn't affected).
-          ...(onTextClick && { cursor: "pointer" }),
-          ...(expanded ? {} : {
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }),
-        }}
-      >
-        {text}
-      </Box>
-      {(overflowing || expanded) && (
-        <Button
-          size="small"
-          disableRipple
-          onClick={(): void => setExpanded((e) => !e)}
-          endIcon={
-            <ExpandMore
-              fontSize="small"
-              sx={{
-                transition: "transform .15s",
-                transform: expanded ? "rotate(180deg)" : "none",
-              }}
-            />
-          }
-          sx={{
-            mt: 0.25,
-            px: 0.5,
-            py: 0,
-            minWidth: 0,
-            minHeight: 28,
-            "@media (pointer: coarse)": { minHeight: 32 },
-            textTransform: "none",
-            fontSize: "0.72rem",
-            color: "text.secondary",
-            "& .MuiButton-endIcon": { ml: 0.25 },
-            "&:hover": { bgcolor: "transparent", color: "text.primary" },
-          }}
-        >
-          {expanded ? "Show less" : "Show more"}
-        </Button>
-      )}
-    </>
-  );
-}
-
 // right now: dispatchable → a plain "Send now" (sends immediately, revives a
 // dead session); busy → a warning-coloured "Force push" that interrupts the
 // running turn and runs this prompt next — gated behind a confirm popover
@@ -2897,7 +2821,7 @@ function PendingRow({
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
         {stripImageTokens(message.text).trim() !== "" && (
-          <ClampedText text={stripImageTokens(message.text)} onTextClick={onEdit} />
+          <MessagePreview text={stripImageTokens(message.text)} onClick={onEdit} />
         )}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
