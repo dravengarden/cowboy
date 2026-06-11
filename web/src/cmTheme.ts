@@ -71,6 +71,13 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         padding: "0",
         caretColor: accent,
         lineHeight: "var(--cowboy-reading-line-height, 1.5)",
+        // Fill the editor's height so the WHOLE area is the contenteditable, not
+        // just the lines of text — otherwise long-pressing the empty space below a
+        // short note lands on the non-editable scroller and no iOS Paste/Select
+        // menu appears ("长按区域好像小"). 100% is inert when the scroller height is
+        // content-driven (compact composer) and fills when it's definite (the
+        // fullscreen/fill editor), so it self-adjusts per surface.
+        minHeight: "100%",
       },
       // iOS PWA repaint fix lives on the SCROLLER, not `.cm-content`. On
       // iPad/iPhone the composer's contenteditable sits inside the

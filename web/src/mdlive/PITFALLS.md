@@ -100,21 +100,25 @@ here says otherwise.
    IME was checked, hence 2a). Real-IME caret tracking is iOS-WebKit-only; confirm
    on a device, not the Simulator.
 
-3. **iOS long-press "Paste / Select" menu — was suspected drawSelection-broken,
-   but that was a MISDIAGNOSIS.** The real cause of a missing web-editor edit menu
-   on iOS is almost always `-webkit-user-select` / `-webkit-touch-callout` on the
-   *editable* text. Audited (2026-06-11): every `user-select: none` in
-   `mdlive/styles/inline-preview.css` is on a non-editable decoration widget
-   (`.cm-atomic-link-icon`, table/wiki-link [both excluded], `.cm-atomic-search-count`)
-   — NONE touch `.cm-content` / `.cm-line`. So the editable text keeps a native
-   selection, and `drawSelection()` only draws an OVERLAY (it does not remove the
-   DOM selection the iOS edit menu attaches to). Obsidian confirms drawSelection +
-   working paste coexist. **Caveat:** AXe synthetic `touch --down --up` does NOT
-   trigger the UIKit long-press menu (it's a gesture recognizer, not a DOM event),
-   so this is the ONE item the Simulator can't prove — confirm on a real device.
-   If a real device ever shows no menu, the fix is a toolbar Paste button (custom
-   affordance), **NOT** dropping drawSelection (which reintroduces pitfall #2).
-   Status: **expected-fine (no CSS blocker); confirm long-press paste on device.**
+3. **iOS long-press "Paste / Select" menu — `drawSelection()` DOES break it (on a
+   real device), and the fix is to go native in the shell.** The CSS-blocker
+   theory (`-webkit-user-select`/`-webkit-touch-callout` on the editable) was
+   audited clean, but a real device (2026-06-11) showed the no-selection menu
+   (`Paste | Select | Select All | AutoFill`) flicker up then immediately dismiss
+   — because `drawSelection()`'s `hideNativeSelection` forces
+   `caret-color: transparent`, so the menu had **no native caret to anchor to**.
+   AXe never caught it (synthetic touch isn't a UIKit gesture), so the earlier
+   "expected-fine" was wrong. **Fix:** in the NATIVE shell, drop `drawSelection()`
+   + `dropCursor()` + the `.cm-composing` dance entirely and use the NATIVE
+   caret/selection (`composerExtensions.ts`, gated on `isNativeShell()`). Safe
+   because the shell has no `translateZ(0)` (pitfall #2's reason for drawSelection
+   is gone there), and it matches Obsidian (native). The PWA keeps drawSelection
+   (it still needs translateZ). Also: `.cm-content { min-height: 100% }` (cmTheme)
+   so the whole editor area is editable — long-pressing the blank space below a
+   short note now hits the contenteditable instead of the inert scroller ("长按
+   区域小"). Status: **fixed in the native shell (v190); the menu is the OS's, not
+   custom — nothing to "migrate". Re-verify the IME matrix since the shell caret
+   is now native.**
 
 4. **A tiny "dot" after the caret / near rendered markdown on iOS.** CM6 wraps
    every widget (the placeholder, each hidden-marker widget) in a srcless

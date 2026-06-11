@@ -9,6 +9,7 @@
 // strong reason to drop (noted at the bottom).
 import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
 import { Highlight } from "./composerHighlight";
+import { isNativeShell } from "./nativeShell";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
@@ -53,51 +54,50 @@ export function livePreviewExtensions(
     // a tiny broken-image DOT. visibility:hidden kills the dot while keeping the
     // element's 0-width layout box, so cursor positioning around widgets is intact.
     EditorView.theme({ ".cm-widgetBuffer": { visibility: "hidden" } }),
-    // Obsidian's caret: CM draws the cursor + selection itself (drawSelection),
-    // immune to the iOS-WebKit "native caret blinks out under a translateZ(0)
-    // compositing layer" glitch (cowboy's cmTheme promotes the scroller) — that's
-    // the "光标经常消失，尤其上下移动时". dropCursor = the drag-drop caret. The
-    // earlier removal blamed a paste-menu regression, but that was a MISDIAGNOSIS:
-    // no `user-select`/`touch-callout` touches the editable text, and drawSelection
-    // only OVERLAYS the native selection the iOS menu attaches to (Obsidian runs it
-    // with working paste). See PITFALLS.md #2/#3.
-    drawSelection(),
-    dropCursor(),
-    // Composition-aware caret — the drawSelection ↔ iOS IME fix. drawSelection
-    // hides the native caret (its `hideNativeSelection` facet forces
-    // `.cm-content`/`.cm-line { caret-color: transparent !important }`) and draws
-    // its own `.cm-cursor`. But CM6 deliberately does NOT re-measure mid-
-    // composition (to avoid disrupting the IME), so the drawn caret FREEZES at the
-    // pre-composition spot while the IME's marked text (pinyin "ni…") renders
-    // AFTER it — the caret ends up to the LEFT of what you're typing ("光标位置很
-    //奇怪"). Fix: for the duration of a composition, REVEAL the native caret (it
-    // tracks marked text natively, in the same layer) and HIDE the stale drawn
-    // one; restore on commit. The `.cm-composing` class is toggled by the handlers
-    // just below. The selectors out-specify drawSelection's `.cm-content`/`.cm-line`
-    // (which is how they win over its `!important`). See mdlive/PITFALLS.md #2.
-    EditorView.theme({
-      "&.cm-composing .cm-content, &.cm-composing .cm-line": {
-        caretColor: "var(--atomic-editor-accent-bright, #a78bfa) !important",
-      },
-      "&.cm-composing .cm-cursorLayer": { visibility: "hidden" },
-    }),
-    EditorView.domEventHandlers({
-      compositionstart: (_e, view): boolean => {
-        view.dom.classList.add("cm-composing");
-        return false;
-      },
-      compositionend: (_e, view): boolean => {
-        view.dom.classList.remove("cm-composing");
-        return false;
-      },
-      // A composition can be interrupted WITHOUT a compositionend (focus loss, the
-      // native photo picker stealing focus mid-pinyin). A blur always tears the
-      // composition styling down so the caret can't get stuck in the native state.
-      blur: (_e, view): boolean => {
-        view.dom.classList.remove("cm-composing");
-        return false;
-      },
-    }),
+    // CARET + SELECTION model — split by surface:
+    //
+    // PWA: `drawSelection()` (CM draws its own caret/selection). The PWA needs the
+    // `translateZ(0)` scroller layer (cmTheme) for the position:fixed repaint bug,
+    // and the NATIVE caret blinks out under that layer ("光标经常消失"); the drawn
+    // caret is immune. The `.cm-composing` dance then reveals the native caret
+    // only mid-IME (the drawn one freezes during composition). dropCursor = the
+    // drag-drop caret.
+    //
+    // NATIVE shell: drop ALL of it → NATIVE caret + NATIVE selection. There is no
+    // translateZ in the shell (cowboy-native-keyboard-ime), so the native caret
+    // doesn't blink out — and the native selection is what the iOS long-press
+    // Paste/Select menu anchors to. drawSelection HIDES the native caret (its
+    // `hideNativeSelection` forces `caret-color: transparent`), so the no-selection
+    // edit menu had no caret to attach to → "弹出来后马上消失". Going native (like
+    // Obsidian, which is native) keeps that menu stable AND simplifies IME (the
+    // native caret tracks marked text on its own, so the composition dance is moot).
+    ...(isNativeShell() ? [] : [
+      drawSelection(),
+      dropCursor(),
+      EditorView.theme({
+        "&.cm-composing .cm-content, &.cm-composing .cm-line": {
+          caretColor: "var(--atomic-editor-accent-bright, #a78bfa) !important",
+        },
+        "&.cm-composing .cm-cursorLayer": { visibility: "hidden" },
+      }),
+      EditorView.domEventHandlers({
+        compositionstart: (_e, view): boolean => {
+          view.dom.classList.add("cm-composing");
+          return false;
+        },
+        compositionend: (_e, view): boolean => {
+          view.dom.classList.remove("cm-composing");
+          return false;
+        },
+        // A composition can be interrupted WITHOUT a compositionend (focus loss,
+        // the native photo picker stealing focus). A blur tears the styling down so
+        // the caret can't get stuck in the native state.
+        blur: (_e, view): boolean => {
+          view.dom.classList.remove("cm-composing");
+          return false;
+        },
+      }),
+    ]),
     highlightActiveLine(),
     indentOnInput(),
     // --- Obsidian-style bracket / emphasis / code-fence pairing ---
