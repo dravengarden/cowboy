@@ -30,7 +30,6 @@ import {
   MenuItem,
   Paper,
   Popover,
-  Skeleton,
   Snackbar,
   Stack,
   TextField,
@@ -71,7 +70,7 @@ import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
-import { DRAFT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
@@ -550,7 +549,7 @@ export function Composer({
   }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { configOptions, drafts, queues, sessions, timelines } = useStore();
+  const { drafts, queues, sessions, timelines } = useStore();
   // `queues`/`drafts` already merge the server rows with this device's optimistic
   // (sending/failed) rows via the queue sync client (commitQueue) — server rows
   // first, optimistic rebased after, reconciled out the instant their cmid lands.
@@ -596,12 +595,6 @@ export function Composer({
   // the sheet pattern wins on every sub-desktop viewport. Desktop keeps the
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
-  // Roomy enough (≥ sm — tablets, landscape) to show the secondary actions
-  // (save-draft / jump-front / force-push) INLINE rather than folded into the ⋮.
-  // They + the core icons all fit well under sm's width, so this never truncates;
-  // only the narrow phone tier (< sm) keeps the ⋮ fold.
-  const roomy = useMediaQuery(theme.breakpoints.up("sm"));
-  const [sheetOpen, setSheetOpen] = useState(false);
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
   // inline expand instead (composeFs is never set true there).
@@ -646,10 +639,6 @@ export function Composer({
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
   const [cancelOpen, setCancelOpen] = useState(false);
-  // The composer's overlaid ⋮ kebab (Save draft / Force push) anchor. The
-  // secondary actions live here so the input's bottom-right shows only the
-  // primary Send/Queue + (busy) Stop, matching the pending-row layout.
-  const [actionsMenu, setActionsMenu] = useState<HTMLElement | null>(null);
   // Long-press-send → force-push: hold the Queue button ~450ms to pop a confirm
   // that interrupts the running turn and runs this prompt next (skipping the
   // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
@@ -717,28 +706,6 @@ export function Composer({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
-  // Pull the agent-advertised options for this session, if known. Sorted in
-  // a fixed display order so dropdowns don't flicker between
-  // config_option_update notifications.
-  const options = useMemo(() => {
-    const raw = configOptions.get(sessionId) ?? [];
-    const order = ["mode", "model", "effort"];
-    return [...raw].sort((a, b) => {
-      const ai = order.indexOf(a.id);
-      const bi = order.indexOf(b.id);
-      if (ai === -1 && bi === -1) return a.id.localeCompare(b.id);
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
-    });
-  }, [configOptions, sessionId]);
-  // `starting` is the obvious case; we also keep the skeleton on for the
-  // brief window after status flips to `running` but before the agent's
-  // first `config_option_update` arrives (otherwise the action row pops
-  // empty for ~1 frame and then re-flows when the chips appear).
-  const showSkeleton = !dead && options.length === 0 &&
-    (starting || status === "running");
-
   // Slash skills + `@` file references are handled inside the editor now, via
   // CodeMirror autocomplete (see ComposerEditor + composerCompletions): no more
   // Popper pickers or caret/regex bookkeeping here. The editor reads the
@@ -791,8 +758,6 @@ export function Composer({
     doc.body.style.cursor = "ns-resize";
     doc.body.style.userSelect = "none";
   }, [expanded, composerHeight]);
-  // Auto-scroll / stick-to-bottom state for the toolbar's scroll-to-bottom toggle.
-  const sticky = useSticky(sessionId);
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
@@ -1290,95 +1255,11 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {compact
-          ? (
-            <Tooltip title="Options">
-              <span>
-                <IconButton
-                  aria-label="options"
-                  disabled={dead}
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={(): void => setSheetOpen(true)}
-                >
-                  <Tune />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )
-          : (
-            <Stack
-              direction="row"
-              alignItems="center"
-              spacing={0.5}
-              sx={{
-                minWidth: 0,
-                overflowX: "auto",
-                scrollbarWidth: "thin",
-                "&::-webkit-scrollbar": { height: 6 },
-              }}
-            >
-              {showSkeleton ? <ConfigChipSkeletons /> : (
-                options.map((opt) => (
-                  <ConfigOptionChip
-                    key={opt.id}
-                    option={opt}
-                    disabled={dead}
-                    onSelect={(value): void => {
-                      send({
-                        type: "set_config_option",
-                        session_id: sessionId,
-                        config_id: opt.id,
-                        value,
-                      });
-                    }}
-                  />
-                ))
-              )}
-            </Stack>
-          )}
-
-        {/* Sticky / auto-scroll toggle — the persistent scroll-to-bottom control,
-            rightmost of the left group. Default ON (active = primary, following the
-            latest); inactive = muted. Tap while inactive → scroll to bottom + follow
-            again; tap while active → stop following. The Transcript owns the actual
-            scroll (stickyStore). Hover-only tooltip (disableFocus/Touch) so a tap on
-            the most-tapped control doesn't pop the bubble. */}
-        <Tooltip
-          title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
-          disableFocusListener
-          disableTouchListener
-        >
-          <IconButton
-            aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
-            color={sticky ? "primary" : "default"}
-            sx={TOOLBAR_ICON_BTN}
-            onClick={(): void => {
-              haptic(); // light — confirm the toggle flipped
-              if (sticky) setSticky(sessionId, false);
-              else requestStickToBottom(sessionId);
-            }}
-          >
-            <VerticalAlignBottom />
-          </IconButton>
-        </Tooltip>
-
-        {/* Spacer (desktop only) → pins the Stop + send/queue/⋮ cluster to the
-            right edge while the left group stays left. On compact the row is
-            space-evenly instead, so the spacer would defeat the even spread. */}
+        {/* Spacer (desktop only) → pins the send/queue cluster to the right edge
+            while the left group (slash / @ / attach) stays left. On compact the row
+            is space-evenly instead, so the spacer would defeat the even spread.
+            (Stop + config + auto-scroll moved to the navbar — see SessionControls.) */}
         {!compact && <Box sx={{ flex: 1 }} />}
-        {/* Stop owns the turn while busy — sits just left of the send path. */}
-        {busy && (
-          <Tooltip title="Stop">
-            <IconButton
-              color="error"
-              aria-label="cancel"
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => setCancelOpen(true)}
-            >
-              <Stop />
-            </IconButton>
-          </Tooltip>
-        )}
         {/* Primary action: Send (idle) / Queue (busy — long-press → force push).
             Moved here from the old absolute overlay so the whole composer is one
             card; the long-press force-push ring + haptics are preserved. */}
@@ -1453,116 +1334,55 @@ export function Composer({
               </span>
             </Tooltip>
           )}
-        {/* Secondary actions: shown INLINE when there's room (≥ sm), folded into
-            the ⋮ on the narrow phone tier. Save-draft is always present; jump-front
-            only with a queue, force-push only while busy/starting. */}
-        {roomy
-          ? (
-            <>
-              <Tooltip title="Save as draft">
-                <span>
-                  <IconButton
-                    aria-label="save as draft"
-                    disabled={!sendable}
-                    sx={TOOLBAR_ICON_BTN}
-                    onClick={saveDraft}
-                  >
-                    <EditNoteOutlined fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              {queue.length > 0 && (
-                <Tooltip title="Jump to front of queue">
-                  <span>
-                    <IconButton
-                      aria-label="jump to front of queue"
-                      disabled={!sendable}
-                      sx={TOOLBAR_ICON_BTN}
-                      onClick={jumpToFront}
-                    >
-                      <VerticalAlignTop fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              )}
-              {(busy || starting) && (
-                <Tooltip title="Force push">
-                  <span>
-                    <IconButton
-                      color="warning"
-                      aria-label="force push"
-                      disabled={!sendable}
-                      sx={TOOLBAR_ICON_BTN}
-                      onClick={(e): void => setForceAnchor(e.currentTarget)}
-                    >
-                      <Bolt fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              )}
-            </>
-          )
-          : (
+        {/* Secondary actions, always inline now: Save-draft (always), Jump-to-front
+            (with a queue), Force-push (while busy/starting). The narrow-phone ⋮ fold
+            is gone — moving the session-level controls (config / auto-scroll / Stop)
+            out to the navbar freed the room that fold used to reclaim. */}
+        <Tooltip title="Save as draft">
+          <span>
             <IconButton
-              aria-label="more actions"
+              aria-label="save as draft"
+              disabled={!sendable}
               sx={TOOLBAR_ICON_BTN}
-              onClick={(e): void => setActionsMenu(e.currentTarget)}
+              onClick={saveDraft}
             >
-              <MoreVert fontSize="small" />
+              <EditNoteOutlined fontSize="small" />
             </IconButton>
-          )}
+          </span>
+        </Tooltip>
+        {queue.length > 0 && (
+          <Tooltip title="Jump to front of queue">
+            <span>
+              <IconButton
+                aria-label="jump to front of queue"
+                disabled={!sendable}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={jumpToFront}
+              >
+                <VerticalAlignTop fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {(busy || starting) && (
+          <Tooltip title="Force push">
+            <span>
+              <IconButton
+                color="warning"
+                aria-label="force push"
+                disabled={!sendable}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(e): void => setForceAnchor(e.currentTarget)}
+              >
+                <Bolt fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         </Stack>
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}
       </Paper>
-      {
-        /* The input overlay's ⋮ kebab — secondary actions that used to sit in the
-          toolbar (Save draft) + the keyboard-only force-push, now discoverable. */
-      }
-      <Menu
-        anchorEl={actionsMenu}
-        open={actionsMenu !== null}
-        onClose={(): void => setActionsMenu(null)}
-        anchorOrigin={{ vertical: "top", horizontal: "right" }}
-        transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-      >
-        <MenuItem
-          disabled={!sendable}
-          onClick={(): void => {
-            saveDraft();
-            setActionsMenu(null);
-          }}
-        >
-          <EditNoteOutlined fontSize="small" sx={{ mr: 1 }} />
-          Save as draft
-          <Kbd keys={`${DRAFT_LABEL}${ENTER_LABEL}`} />
-        </MenuItem>
-        {/* Jump ahead of the rest of the queue WITHOUT interrupting the running
-            turn — only useful when there's already a queue, so disabled when it's
-            empty (or there's nothing to send). */}
-        <MenuItem
-          disabled={!sendable || queue.length === 0}
-          onClick={(): void => {
-            setActionsMenu(null);
-            jumpToFront();
-          }}
-        >
-          <VerticalAlignTop fontSize="small" sx={{ mr: 1 }} />
-          Jump to front of queue
-        </MenuItem>
-        {(busy || starting) && (
-          <MenuItem
-            disabled={!sendable}
-            onClick={(): void => {
-              setActionsMenu(null);
-              if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
-            }}
-          >
-            <Bolt fontSize="small" color="warning" sx={{ mr: 1 }} />
-            Force push
-          </MenuItem>
-        )}
-      </Menu>
       {
         /* Force-push confirm — opened by a completed long-press on Queue. Anchored
           to the button, rising above it. Confirm interrupts the running turn and
@@ -1666,24 +1486,6 @@ export function Composer({
           </Button>
         </Stack>
       </Popover>
-      {compact && (
-        <ComposerSheet
-          open={sheetOpen}
-          onClose={(): void => setSheetOpen(false)}
-          session={session}
-          options={options}
-          loading={showSkeleton}
-          dead={dead}
-          onSelectOption={(configId, value): void => {
-            send({
-              type: "set_config_option",
-              session_id: sessionId,
-              config_id: configId,
-              value,
-            });
-          }}
-        />
-      )}
       {/* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
           comfortable long-form writing — the first-class editor + future home of a
           markdown / rich-text toolbar + preview. Shares the composer's `text` +
@@ -1737,50 +1539,18 @@ export function Composer({
             : undefined}
         />
       )}
-      {
-        /* Confirm before stopping a running turn. The Stop button is destructive
-          (the in-flight turn ends), so a single click/Esc shouldn't trigger it.
-          The Stop action is autoFocused so Enter confirms; Esc dismisses (MUI
-          Dialog default), so a stray second Esc backs out rather than cancelling. */
-      }
-      <Dialog
+      {/* Stop-confirm for the editor's Esc-to-stop (only fires while busy). The
+          navbar's Stop button keeps its own copy in SessionControls; both reuse
+          StopConfirmDialog and only one is ever open at a time. */}
+      <StopConfirmDialog
         open={cancelOpen}
         onClose={(): void => setCancelOpen(false)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Stop the running turn?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            The agent is still working. Stopping ends the current turn; whatever
-            it produced so far stays in the transcript.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            color="inherit"
-            onClick={(): void => setCancelOpen(false)}
-            sx={{ textTransform: "none" }}
-          >
-            Keep running
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            color="error"
-            variant="contained"
-            autoFocus
-            onClick={(): void => {
-              haptic(24); // medium — interrupting a running turn is significant
-              send({ type: "cancel", session_id: sessionId });
-              setCancelOpen(false);
-            }}
-            sx={{ textTransform: "none" }}
-          >
-            Stop
-            <Kbd keys={ENTER_LABEL} />
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onConfirm={(): void => {
+          haptic(24); // medium — interrupting a running turn is significant
+          send({ type: "cancel", session_id: sessionId });
+          setCancelOpen(false);
+        }}
+      />
       {
         /* Move-draft destination picker + undo snackbar. Owned here (not in the
           drafts panel) so the snackbar survives when moving the LAST draft
@@ -2997,94 +2767,158 @@ function PendingRow({
   );
 }
 
-function ConfigChipSkeletons(): React.JSX.Element {
-  // Three skeletons sized to the typical chip widths (Bypass Permissions ≈
-  // 160px, Default (recommended) ≈ 170px, High ≈ 80px). Keeps the row's
-  // visual rhythm stable when the real chips replace them.
-  const widths = [148, 168, 76];
+// Confirm before stopping a running turn — the in-flight turn ends, so a single
+// click/Esc must not trigger it. Shared by the navbar's Stop button (SessionControls)
+// and the composer editor's Esc-to-stop; each owns its own `open` state, the markup
+// is one component. Stop autoFocuses so Enter confirms; Esc dismisses (Dialog default).
+function StopConfirmDialog({
+  open,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}): React.JSX.Element {
   return (
-    <>
-      {widths.map((w, i) => (
-        <Skeleton
-          key={i}
-          variant="rounded"
-          width={w}
-          height={36}
-          animation="wave"
-          sx={{ flexShrink: 0, borderRadius: 1 }}
-        />
-      ))}
-    </>
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>Stop the running turn?</DialogTitle>
+      <DialogContent>
+        <DialogContentText>
+          The agent is still working. Stopping ends the current turn; whatever it
+          produced so far stays in the transcript.
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button color="inherit" onClick={onClose} sx={{ textTransform: "none" }}>
+          Keep running
+          <Kbd keys="Esc" />
+        </Button>
+        <Button
+          color="error"
+          variant="contained"
+          autoFocus
+          onClick={onConfirm}
+          sx={{ textTransform: "none" }}
+        >
+          Stop
+          <Kbd keys={ENTER_LABEL} />
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
-function ConfigOptionChip({
-  option,
-  disabled,
-  onSelect,
+// The SESSION-level controls — agent config (the options sheet), auto-scroll
+// follow, and Stop — surfaced in the app's navbar, NOT the composer toolbar: they
+// act on the session / transcript, not the message you're typing, so mixing them
+// into the input row read as clutter. Store-driven (the same hooks the Composer
+// reads), so the navbar renders it from just the active session's id + status.
+// Carries its own config sheet + stop-confirm dialog. The config `⚙` is now the
+// single entry on EVERY tier (mobile sheet + desktop), so the composer no longer
+// shows inline config chips.
+export function SessionControls({
+  sessionId,
+  status,
 }: {
-  option: ConfigOption;
-  disabled: boolean;
-  onSelect: (value: string | boolean) => void;
+  sessionId: string;
+  status: Status;
 }): React.JSX.Element {
-  // Desktop-only: ComposerSheet handles touch viewports now, so this just
-  // needs the anchored Menu it always had.
-  const [anchor, setAnchor] = useState<null | HTMLElement>(null);
-  const current = useMemo(
-    () =>
-      option.options.find((o) => o.value === option.currentValue) ??
-        option.options[0],
-    [option.options, option.currentValue],
-  );
+  const { configOptions, sessions } = useStore();
+  const session = sessions.find((s) => s.id === sessionId);
+  const sticky = useSticky(sessionId);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const busy = status === "busy";
+  const dead = status === "exited" || status === "crashed" ||
+    status === "interrupted";
+  // Same fixed display order as the old inline chip row, so the sheet's selectors
+  // never reshuffle between config_option_update notifications.
+  const options = useMemo(() => {
+    const raw = configOptions.get(sessionId) ?? [];
+    const order = ["mode", "model", "effort"];
+    return [...raw].sort((a, b) => {
+      const ai = order.indexOf(a.id);
+      const bi = order.indexOf(b.id);
+      if (ai === -1 && bi === -1) return a.id.localeCompare(b.id);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }, [configOptions, sessionId]);
+  const showSkeleton = !dead && options.length === 0 &&
+    (status === "starting" || status === "running");
+  const hasConfig = showSkeleton || options.length > 0;
   return (
     <>
-      <Button
-        size="small"
-        variant="outlined"
-        color="inherit"
-        disabled={disabled}
-        endIcon={<ExpandMore fontSize="medium" />}
-        onClick={(e): void => setAnchor(e.currentTarget)}
-        sx={{
-          textTransform: "none",
-          ...TOOLBAR_MIN_H,
-          px: 1.25,
-          flexShrink: 0,
-          fontWeight: 500,
-          borderColor: "divider",
-        }}
-      >
-        {current?.name ?? String(option.currentValue)}
-      </Button>
-      <Menu
-        anchorEl={anchor}
-        open={!!anchor}
-        onClose={(): void => setAnchor(null)}
-        slotProps={{ paper: { sx: { maxWidth: 360 } } }}
-      >
-        {option.options.map((o) => (
-          <MenuItem
-            key={String(o.value)}
-            selected={o.value === option.currentValue}
-            onClick={(): void => {
-              onSelect(o.value);
-              setAnchor(null);
-            }}
-            sx={{ alignItems: "flex-start", whiteSpace: "normal" }}
+      {hasConfig && (
+        <Tooltip title="Options">
+          <IconButton
+            aria-label="options"
+            disabled={dead}
+            onClick={(): void => setSheetOpen(true)}
           >
-            <Box>
-              <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                {o.name}
-              </Typography>
-              {o.description && (
-                <Typography variant="caption" color="text.secondary">
-                  {o.description}
-                </Typography>
-              )}
-            </Box>
-          </MenuItem>
-        ))}
-      </Menu>
+            <Tune />
+          </IconButton>
+        </Tooltip>
+      )}
+      {/* Auto-scroll / follow toggle. Default ON (primary = following the latest);
+          tap while inactive → scroll to bottom + follow again; tap while active →
+          stop following. The Transcript owns the scroll (stickyStore). Hover-only
+          tooltip so a tap on this oft-used control doesn't pop the bubble. */}
+      <Tooltip
+        title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
+        disableFocusListener
+        disableTouchListener
+      >
+        <IconButton
+          aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
+          color={sticky ? "primary" : "default"}
+          onClick={(): void => {
+            haptic();
+            if (sticky) setSticky(sessionId, false);
+            else requestStickToBottom(sessionId);
+          }}
+        >
+          <VerticalAlignBottom />
+        </IconButton>
+      </Tooltip>
+      {busy && (
+        <Tooltip title="Stop">
+          <IconButton
+            color="error"
+            aria-label="cancel"
+            onClick={(): void => setCancelOpen(true)}
+          >
+            <Stop />
+          </IconButton>
+        </Tooltip>
+      )}
+      <ComposerSheet
+        open={sheetOpen}
+        onClose={(): void => setSheetOpen(false)}
+        session={session}
+        options={options}
+        loading={showSkeleton}
+        dead={dead}
+        onSelectOption={(configId, value): void => {
+          send({
+            type: "set_config_option",
+            session_id: sessionId,
+            config_id: configId,
+            value,
+          });
+        }}
+      />
+      <StopConfirmDialog
+        open={cancelOpen}
+        onClose={(): void => setCancelOpen(false)}
+        onConfirm={(): void => {
+          haptic(24);
+          send({ type: "cancel", session_id: sessionId });
+          setCancelOpen(false);
+        }}
+      />
     </>
   );
 }

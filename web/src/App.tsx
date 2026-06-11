@@ -46,7 +46,7 @@ import {
     MoreVert,
     Settings as SettingsIcon,
 } from "@mui/icons-material";
-import { Composer } from "./Composer";
+import { Composer, SessionControls } from "./Composer";
 import { useTouchComposer } from "./ComposerTextarea";
 import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
 import { claimKeyboard } from "./keyboardClaim";
@@ -1470,6 +1470,16 @@ export function App({
                             // session selected", so the bar shows nothing — no
                             // redundant brand/emoji.
                             <Box sx={{ flex: 1, minWidth: 0 }} />
+                        )}
+                        {/* Session-level controls (agent config / auto-scroll / Stop)
+                            live here in the navbar, left of Settings — they act on the
+                            session, not the message being typed, so they were pulled out
+                            of the composer toolbar. */}
+                        {active && (
+                            <SessionControls
+                                sessionId={active.id}
+                                status={active.status}
+                            />
                         )}
                         <IconButton
                             onClick={(): void => openSettings("settings")}
