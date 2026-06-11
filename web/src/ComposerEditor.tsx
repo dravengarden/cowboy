@@ -477,15 +477,14 @@ export const ComposerEditor = forwardRef<
         // ignoreDuringComposition lets them through to these handlers. Returning
         // false leaves CM's own composition handling untouched.
         compositionstart: (_event, view): boolean => {
-          // Move the repaint compositing layer OFF the scroller — promoting the
-          // scrolled layer is what mis-paints the IME overlay (pinyin at line
-          // start) — and onto the editor ROOT, a NON-scrolling ancestor, instead.
-          // That keeps the position:fixed repaint fix alive CONTINUOUSLY through
-          // the whole composition (so marked text never "swallows" mid-pinyin,
-          // intermittently or not), while the un-promoted scroller/content let the
-          // IME position its overlay normally. translateZ(0) is identity (no shift).
+          // Drop the scroller's compositing layer for the composition (it mis-paints
+          // the IME overlay — pinyin at line start). The compositionupdate nudge
+          // below re-forces repaint so marked text stays visible.
+          // NOTE: a v177 experiment ALSO promoted the editor ROOT (view.dom) here to
+          // keep repaint continuous — but that broke IME input at the doc START
+          // (composition at the promoted layer's origin failed). Reverted; do NOT
+          // re-promote an ancestor during composition.
           view.scrollDOM.style.transform = "none";
-          view.dom.style.transform = "translateZ(0)";
           return false;
         },
         // The flip side of dropping the compositing layer above. With
@@ -509,8 +508,6 @@ export const ComposerEditor = forwardRef<
           return false;
         },
         compositionend: (_event, view): boolean => {
-          // Restore: layer back on the scroller, off the root.
-          view.dom.style.transform = "";
           view.scrollDOM.style.transform = "";
           const content = view.contentDOM;
           content.style.opacity = "0.999";
@@ -528,7 +525,6 @@ export const ComposerEditor = forwardRef<
         // A blur always restores the layer, so whatever state a half-finished
         // composition left, losing focus puts it back.
         blur: (_event, view): boolean => {
-          view.dom.style.transform = "";
           view.scrollDOM.style.transform = "";
           return false;
         },
