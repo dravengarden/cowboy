@@ -1163,8 +1163,10 @@ export function App({
                         sx={{
                             position: "absolute",
                             top: 0,
-                            right: -3,
-                            width: 6,
+                            // Wide hit area centred on the edge — easy to grab; the
+                            // visible 1px accent line stays centred via `::after`.
+                            right: -11,
+                            width: 22,
                             height: "100%",
                             cursor: "col-resize",
                             zIndex: 2,
@@ -1535,14 +1537,15 @@ export function App({
                                         cursor: "col-resize",
                                         touchAction: "none",
                                         zIndex: 3,
-                                        // Invisible wide hit area centred on the line.
+                                        // Invisible wide hit area centred on the line —
+                                        // generous so the thin 1px divider is easy to grab.
                                         "&::after": {
                                             content: '""',
                                             position: "absolute",
                                             top: 0,
                                             bottom: 0,
-                                            left: "-4px",
-                                            right: "-4px",
+                                            left: "-11px",
+                                            right: "-11px",
                                         },
                                         "&:hover": { bgcolor: "primary.main" },
                                         ...(colResizing && { bgcolor: "primary.main" }),

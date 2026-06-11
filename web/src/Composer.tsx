@@ -1016,7 +1016,12 @@ export function Composer({
           floats over the frosted bottom slab (a solid paper would hide the glass).
           A flex column so a later step can pin an inline toolbar to the bottom. */}
       <Paper
-        variant="outlined"
+        // Desktop (column) drops the frame: the two-column split already delineates
+        // the composer column (the draggable divider is its edge), so the outlined
+        // box read as a redundant nested frame. Mobile/overlay keeps the outline —
+        // there it's a floating card over the transcript and needs the boundary.
+        variant={column ? "elevation" : "outlined"}
+        elevation={0}
         sx={{
           position: "relative",
           display: "flex",
