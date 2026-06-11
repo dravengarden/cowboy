@@ -66,6 +66,10 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 }
 @end
 
+// The shell's main WKWebView, captured at creation (below) for the keyboard
+// avoider. Weak: the avoider just no-ops if it's gone.
+static __weak WKWebView *gCowboyWebView = nil;
+
 __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     @autoreleasepool {
         Class cls = [WKWebView class];
@@ -91,7 +95,13 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                     [ucc addScriptMessageHandler:handler name:@"cowboyHaptic"];
                     NSString *js =
                         @"window.__cowboyHaptic=function(){try{"
-                        @"window.webkit.messageHandlers.cowboyHaptic.postMessage(0)}catch(e){}};";
+                        @"window.webkit.messageHandlers.cowboyHaptic.postMessage(0)}catch(e){}};"
+                        // ARM the web's native-shell gate (src/nativeShell.ts): the
+                        // shell now does native keyboard avoidance (below), so the
+                        // web drops its position:fixed/translateZ/IME-composition
+                        // hacks. document-start, so it's set before the page's own
+                        // boot script reads it. (cowboy-native-keyboard-ime)
+                        @"window.__cowboyNativeShell=true;";
                     WKUserScript *script =
                         [[WKUserScript alloc] initWithSource:js
                                                injectionTime:WKUserScriptInjectionTimeAtDocumentStart
@@ -99,9 +109,110 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                     [ucc addUserScript:script];
                 } @catch (__unused NSException *e) {
                 }
-                return ((WKWebView * (*)(id, SEL, CGRect, WKWebViewConfiguration *)) original)(
-                    _self, sel, frame, config);
+                WKWebView *cowboyWv =
+                    ((WKWebView * (*)(id, SEL, CGRect, WKWebViewConfiguration *)) original)(
+                        _self, sel, frame, config);
+                // Capture the shell's web view for the keyboard avoider below. The
+                // thin shell creates one main web view; the latest assignment wins.
+                gCowboyWebView = cowboyWv;
+                return cowboyWv;
             });
         method_setImplementation(m, replacement);
     }
+}
+
+// (3) Native keyboard avoidance — the Obsidian/Capacitor "resize: native" model.
+// On keyboard show, shrink the WKWebView's frame by the keyboard's overlap so the
+// web's LAYOUT viewport (and `vh`/`100%`) shrinks with it; restore on hide. This is
+// the WHOLE point of going native for IME: with the viewport shrinking natively,
+// the remote web UI can drop the PWA's position:fixed lock — and therefore the
+// translateZ repaint hack that mis-paints iOS pinyin (the swallow/caret bugs). The
+// web arms this path off `window.__cowboyNativeShell` (injected above). A pure-web
+// PWA can't do this: WKWebView does NOT honour interactive-widget/visualViewport
+// for the keyboard, so only the native owner can shrink the viewport.
+// See tasks/active/cowboy-native-keyboard-ime.
+@interface CowboyKeyboardAvoider : NSObject
+@end
+
+@implementation CowboyKeyboardAvoider
+
++ (instancetype)shared {
+    static CowboyKeyboardAvoider *inst;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ inst = [[CowboyKeyboardAvoider alloc] init]; });
+    return inst;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserver:self
+               selector:@selector(onKeyboardWillChangeFrame:)
+                   name:UIKeyboardWillChangeFrameNotification
+                 object:nil];
+        // Explicit hide handler is the safety net for the documented WKWebView
+        // "doesn't resize back / black strip on close" gotcha — force full there.
+        [nc addObserver:self
+               selector:@selector(onKeyboardWillHide:)
+                   name:UIKeyboardWillHideNotification
+                 object:nil];
+    }
+    return self;
+}
+
+// Trim the web view to `full.height − overlap` (overlap 0 == full), animated with
+// the keyboard's own duration/curve so it tracks the slide. Keeps origin + width;
+// only the height changes. The parent's bounds are the stable full extent (the
+// keyboard never resizes the parent), so this is idempotent + safe to re-apply.
+- (void)applyOverlap:(CGFloat)overlap userInfo:(NSDictionary *)info {
+    WKWebView *wv = gCowboyWebView;
+    UIView *parent = wv.superview;
+    if (wv == nil || parent == nil || wv.window == nil) return;
+    CGRect full = parent.bounds;
+
+    NSTimeInterval duration =
+        info != nil ? [info[UIKeyboardAnimationDurationUserInfoKey] doubleValue] : 0.25;
+    UIViewAnimationCurve curve =
+        info != nil
+            ? (UIViewAnimationCurve)[info[UIKeyboardAnimationCurveUserInfoKey] integerValue]
+            : UIViewAnimationCurveEaseInOut;
+
+    [UIView animateWithDuration:duration
+                          delay:0
+                        options:(UIViewAnimationOptions)(curve << 16)
+                     animations:^{
+                         CGRect f = full;
+                         f.size.height = MAX(0, full.size.height - overlap);
+                         wv.frame = f;
+                         [wv layoutIfNeeded];
+                     }
+                     completion:nil];
+}
+
+- (void)onKeyboardWillChangeFrame:(NSNotification *)note {
+    WKWebView *wv = gCowboyWebView;
+    UIView *parent = wv.superview;
+    if (wv == nil || parent == nil || wv.window == nil) return;
+    CGRect kbScreen = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    // Keyboard frame → parent coords; overlap = how far it intrudes from the bottom.
+    CGRect kbInParent = [parent convertRect:kbScreen fromView:nil];
+    CGFloat overlap = MAX(0, CGRectGetMaxY(parent.bounds) - CGRectGetMinY(kbInParent));
+    [self applyOverlap:overlap userInfo:note.userInfo];
+}
+
+- (void)onKeyboardWillHide:(NSNotification *)note {
+    [self applyOverlap:0 userInfo:note.userInfo];
+}
+
+@end
+
+__attribute__((constructor)) static void cowboyInstallKeyboardAvoider(void) {
+    // Register the observers on the main thread (NotificationCenter delivery +
+    // UIKit frame mutation must be main-thread). `+load`/constructors run early —
+    // before any window — so defer to the main queue.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            (void)[CowboyKeyboardAvoider shared];
+        }
+    });
 }
