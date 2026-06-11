@@ -8,6 +8,7 @@
 // not just the decorations. We include everything it does EXCEPT items with a
 // strong reason to drop (noted at the bottom).
 import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
+import { Highlight } from "./composerHighlight";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { indentOnInput } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
@@ -106,7 +107,9 @@ export function livePreviewExtensions(
     // Find-in-document (Mod-f), top panel — useful in the fullscreen long-form editor.
     search({ top: true }),
     // --- markdown language + GFM (source of the engine's syntax tree) ---
-    markdown({ base: markdownLanguage, codeLanguages: [] }),
+    // `extensions: [Highlight]` teaches lezer `==text==` (composerHighlight.ts) —
+    // GFM has no highlight rule. mdlive renders it via the node-class entries.
+    markdown({ base: markdownLanguage, codeLanguages: [], extensions: [Highlight] }),
     markdownLanguage.data.of({
       closeBrackets: { brackets: ["(", "[", "{", "'", '"', "*", "_", "`"] },
     }),

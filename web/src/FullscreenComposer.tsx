@@ -3,34 +3,16 @@ import { createPortal } from "react-dom";
 import {
   AppBar,
   Box,
-  Divider,
   IconButton,
   Stack,
   Toolbar,
   Tooltip,
   useTheme,
 } from "@mui/material";
-import {
-  AlternateEmail,
-  AttachFile,
-  CheckBoxOutlined,
-  CloseFullscreen,
-  Code,
-  DataObject,
-  FormatBold,
-  FormatItalic,
-  FormatListBulleted,
-  FormatListNumbered,
-  FormatQuote,
-  InsertLink,
-  Redo,
-  Send,
-  StrikethroughS,
-  Tag,
-  Title,
-  Undo,
-} from "@mui/icons-material";
+import { CloseFullscreen, Send } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
+import { useComposerToolbar } from "./composerToolbarConfig";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 
@@ -102,70 +84,26 @@ export function FullscreenComposer({
     fn();
   };
 
-  // A FIXED, comprehensive Obsidian-style toolbar (no selection-swap). The
-  // wrap/inline actions work with OR without a selection (the handle inserts an
-  // empty marker pair at the caret when nothing is selected). Scrolls
-  // horizontally on a narrow phone. Each action re-focuses the editor (keyboard
-  // stays up). A thin divider groups history / format / block / insert.
-  const e = (): ComposerEditorHandle | null => editorRef.current;
-  const sep = (
-    <Divider orientation="vertical" flexItem sx={{ my: 0.75, mx: 0.25 }} />
-  );
-  const actions = (
-    <>
-      <ToolBtn title="Undo" onClick={act(() => e()?.undo())}>
-        <Undo />
+  // CONFIG-DRIVEN Obsidian-style toolbar: render the user's ordered command ids
+  // (composerToolbarConfig) from the shared registry (composerCommands), instead
+  // of a hardcoded array. Each command runs against { editor, attach } — `attach`
+  // drives the host file-picker (attachment isn't an editor-only action), which
+  // is why a command takes a context. Actions work with OR without a selection;
+  // each re-focuses the editor (keyboard stays up). Scrolls horizontally on a
+  // narrow phone. (The phase-2 settings sheet edits the id list.)
+  const toolbarIds = useComposerToolbar();
+  const runCmd = (cmd: ComposerCommand): void => {
+    const ed = editorRef.current;
+    if (ed) cmd.run({ editor: ed, attach: onAttach });
+  };
+  const actions = toolbarIds
+    .map((id) => COMPOSER_COMMANDS_BY_ID[id])
+    .filter((c): c is ComposerCommand => c !== undefined)
+    .map((cmd) => (
+      <ToolBtn key={cmd.id} title={cmd.label} onClick={act(() => runCmd(cmd))}>
+        {cmd.icon}
       </ToolBtn>
-      <ToolBtn title="Redo" onClick={act(() => e()?.redo())}>
-        <Redo />
-      </ToolBtn>
-      {sep}
-      <ToolBtn title="Heading" onClick={act(() => e()?.cycleHeading())}>
-        <Title />
-      </ToolBtn>
-      <ToolBtn title="Bold" onClick={act(() => e()?.wrap("**", "**"))}>
-        <FormatBold />
-      </ToolBtn>
-      <ToolBtn title="Italic" onClick={act(() => e()?.wrap("*", "*"))}>
-        <FormatItalic />
-      </ToolBtn>
-      <ToolBtn title="Strikethrough" onClick={act(() => e()?.wrap("~~", "~~"))}>
-        <StrikethroughS />
-      </ToolBtn>
-      <ToolBtn title="Inline code" onClick={act(() => e()?.wrap("`", "`"))}>
-        <Code />
-      </ToolBtn>
-      <ToolBtn title="Link" onClick={act(() => e()?.insertLink())}>
-        <InsertLink />
-      </ToolBtn>
-      {sep}
-      <ToolBtn title="Bulleted list" onClick={act(() => e()?.toggleLinePrefix("- "))}>
-        <FormatListBulleted />
-      </ToolBtn>
-      <ToolBtn title="Numbered list" onClick={act(() => e()?.toggleLinePrefix("1. "))}>
-        <FormatListNumbered />
-      </ToolBtn>
-      <ToolBtn title="Checklist" onClick={act(() => e()?.toggleLinePrefix("- [ ] "))}>
-        <CheckBoxOutlined />
-      </ToolBtn>
-      <ToolBtn title="Quote" onClick={act(() => e()?.toggleLinePrefix("> "))}>
-        <FormatQuote />
-      </ToolBtn>
-      <ToolBtn title="Code block" onClick={act(() => e()?.insertCodeBlock())}>
-        <DataObject />
-      </ToolBtn>
-      {sep}
-      <ToolBtn title="Mention" onClick={act(() => e()?.insertTrigger("@"))}>
-        <AlternateEmail />
-      </ToolBtn>
-      <ToolBtn title="Slash command" onClick={act(() => e()?.insertTrigger("/"))}>
-        <Tag />
-      </ToolBtn>
-      <ToolBtn title="Attach" onClick={act(onAttach)}>
-        <AttachFile />
-      </ToolBtn>
-    </>
-  );
+    ));
 
   // Portal to <body>: the composer is rendered deep inside the app's flex layout,
   // whose ancestors form stacking contexts (the bottom navbar paints over an

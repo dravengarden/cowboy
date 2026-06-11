@@ -19,7 +19,15 @@ import {
   completionKeymap,
   startCompletion,
 } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentLess,
+  indentMore,
+  redo,
+  undo,
+} from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { hasDraftMod, hasSendMod } from "./platform";
@@ -72,6 +80,13 @@ export interface ComposerEditorHandle {
   /// Wrap the selection (or insert the marker pair at the caret) — bold `**`,
   /// italic `*`, inline code `` ` ``.
   wrap: (before: string, after: string) => void;
+  /// Toggle a symmetric inline marker on the selection (Obsidian "Toggle bold"):
+  /// strip the marker if the selection is already wrapped in it, else wrap. Used
+  /// for bold `**`, italic `*`, strikethrough `~~`, highlight `==`, code `` ` ``.
+  toggleWrap: (marker: string) => void;
+  /// Indent / outdent the current line(s) — list nesting (CM6 indentMore/Less).
+  indent: () => void;
+  outdent: () => void;
   /// Toggle a line-start prefix on the caret's line — list `- `, quote `> `.
   toggleLinePrefix: (prefix: string) => void;
   /// Cycle the caret line's heading level: none → `# ` → `## ` → `### ` → none.
@@ -361,6 +376,61 @@ export const ComposerEditor = forwardRef<
             head: from + before.length + sel.length,
           },
       });
+      view.focus();
+    },
+    toggleWrap: (marker: string): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      const m = marker.length;
+      const sel = view.state.sliceDoc(from, to);
+      // Already-wrapped, two ways: the selection itself is `**text**`, OR the
+      // markers sit just OUTSIDE the selection (the user selected only the inner
+      // text). Strip whichever applies; else wrap. Obsidian's "Toggle bold".
+      if (sel.length >= 2 * m && sel.startsWith(marker) && sel.endsWith(marker)) {
+        const inner = sel.slice(m, sel.length - m);
+        view.dispatch({
+          changes: { from, to, insert: inner },
+          selection: { anchor: from, head: from + inner.length },
+        });
+        view.focus();
+        return;
+      }
+      const outerFrom = from - m;
+      const outerTo = to + m;
+      if (
+        outerFrom >= 0 && outerTo <= view.state.doc.length &&
+        view.state.sliceDoc(outerFrom, from) === marker &&
+        view.state.sliceDoc(to, outerTo) === marker
+      ) {
+        view.dispatch({
+          changes: [
+            { from: outerFrom, to: from, insert: "" },
+            { from: to, to: outerTo, insert: "" },
+          ],
+          selection: { anchor: outerFrom, head: outerFrom + sel.length },
+        });
+        view.focus();
+        return;
+      }
+      view.dispatch({
+        changes: { from, to, insert: marker + sel + marker },
+        selection: from === to
+          ? { anchor: from + m }
+          : { anchor: from + m, head: from + m + sel.length },
+      });
+      view.focus();
+    },
+    indent: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      indentMore(view);
+      view.focus();
+    },
+    outdent: (): void => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      indentLess(view);
       view.focus();
     },
     toggleLinePrefix: (prefix: string): void => {

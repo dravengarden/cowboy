@@ -254,6 +254,9 @@ export const ComposerTextarea = forwardRef<
     // ComposerEditorHandle — this component is retained solely as the documented
     // iOS-IME fallback for the collapsed mobile input (see plan Risks).
     wrap: (): void => undefined,
+    toggleWrap: (): void => undefined,
+    indent: (): void => undefined,
+    outdent: (): void => undefined,
     toggleLinePrefix: (): void => undefined,
     cycleHeading: (): void => undefined,
     insertLink: (): void => undefined,

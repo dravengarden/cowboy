@@ -201,6 +201,7 @@ const HIDEABLE_SYNTAX = new Set([
   'URL',
   'LinkTitle',
   'StrikethroughMark',
+  'HighlightMark', // LOCAL (./SYNC.md): cowboy's `==highlight==` extension
   'QuoteMark',
 ]);
 
@@ -215,6 +216,7 @@ const INLINE_MARK_CLASS: Record<string, string> = {
   Emphasis: 'cm-atomic-em',
   InlineCode: 'cm-atomic-inline-code',
   Strikethrough: 'cm-atomic-strike',
+  Highlight: 'cm-atomic-highlight', // LOCAL (./SYNC.md): cowboy `==highlight==`
   Link: 'cm-atomic-link',
 };
 

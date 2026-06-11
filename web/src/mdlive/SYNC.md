@@ -62,6 +62,15 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    likewise inactive-only so an edited `[x]` reveals clean. On re-sync, re-apply
    over upstream's two unconditional pushes.
 
+4. **Highlight node classes** (`inline-preview.ts`): `'HighlightMark'` added to
+   `HIDEABLE_SYNTAX` and `Highlight: 'cm-atomic-highlight'` to
+   `INLINE_MARK_CLASS`. cowboy adds a `==text==` highlight via a `@lezer/markdown`
+   extension (`web/src/composerHighlight.ts`); these two entries let the generic
+   mark hide/reveal + content-class machinery render it (marker hidden inactive /
+   revealed active, content highlighted) with zero new logic. The colour is in
+   cowboy's `cmTheme.ts` (`.cm-atomic-highlight`), not the vendored CSS. On
+   re-sync, re-add both entries.
+
 The CSS contents are unmodified.
 
 ## Sync workflow (run this to port an upstream fix)

@@ -203,6 +203,19 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         borderWidth: "0 0.12em 0.12em 0",
         transform: "rotate(45deg)",
       },
+      // `==highlight==` (composerHighlight.ts + the mdlive node-class entries).
+      // A yellow marker like Obsidian — theme-tuned: a solid warm yellow on
+      // light (default dark text stays legible), a translucent amber on dark
+      // (inherited light text stays legible). box-decoration-break so a wrapped
+      // highlight keeps its rounding on each line fragment.
+      ".cm-atomic-highlight": {
+        backgroundColor: dark ? "rgba(255, 213, 79, 0.26)" : "rgba(255, 235, 130, 0.9)",
+        color: dark ? "inherit" : "#000",
+        borderRadius: "3px",
+        padding: "0 1px",
+        WebkitBoxDecorationBreak: "clone",
+        boxDecorationBreak: "clone",
+      },
     },
     { dark },
   );
