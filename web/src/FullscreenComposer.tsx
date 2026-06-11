@@ -1,6 +1,7 @@
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  alpha,
   AppBar,
   Box,
   IconButton,
@@ -150,9 +151,11 @@ export function FullscreenComposer({
         color="transparent"
         elevation={0}
         sx={{
+          // No bottom divider: a hard hairline on the near-white surface read as a
+          // cheap seam under a bare top bar. The collapse/send float on the same
+          // calm writing surface — a seamless, focused editor (Bear / iA Writer
+          // style) instead of a boxed-off pale band.
           bgcolor: "background.default",
-          borderBottom: 1,
-          borderColor: "divider",
           pt: "env(safe-area-inset-top, 0px)",
         }}
       >
@@ -224,9 +227,15 @@ export function FullscreenComposer({
         sx={{
           display: "flex",
           alignItems: "center",
-          borderTop: 1,
-          borderColor: "divider",
-          bgcolor: "background.paper",
+          // Same surface tone as the editor (was the whiter `background.paper`,
+          // which read as an ugly bright band). A soft upward shadow gives the
+          // toolbar a gentle lift above the writing area instead of a hard hairline
+          // seam — distinct, but part of one cohesive surface.
+          bgcolor: "background.default",
+          boxShadow: (t) =>
+            `0 -10px 24px -18px ${
+              alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.6 : 0.22)
+            }`,
         }}
       >
         <Stack
