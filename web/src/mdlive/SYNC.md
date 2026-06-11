@@ -50,17 +50,18 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    (`noUncheckedIndexedAccess`), which flags upstream's index access as ~16
    strict-null "errors" that are pure noise (runtime is unaffected). We do not
    re-typecheck third-party code we don't own. **Re-apply this on every sync.**
-3. **Task-marker active-line reveal** (`inline-preview.ts`, the `ListMark` task
-   branch + the `TaskMarker` branch). Upstream hid `- ` and rendered the GFM
-   checkbox widget UNCONDITIONALLY, so a task item NEVER revealed its markdown
-   source when the cursor was on its line — unlike every other marker
-   (HeaderMark, emphasis, quote, …) which the engine reveals on the active line.
-   That broke Obsidian parity (a task should show `• [ ]` raw while you
-   edit/backspace it, `☐` only when the cursor is away). The LOCAL edit gates
-   both on `!activeLines.has(line)`: inactive → hide `- ` + render `☐`; active →
-   render the list bullet + leave `[ ]` raw (= `• [ ]`). The done-line strike is
-   likewise inactive-only so an edited `[x]` reveals clean. On re-sync, re-apply
-   over upstream's two unconditional pushes.
+3. **List-marker active-line reveal** (`inline-preview.ts`, the `ListMark` branch
+   — task + plain-bullet paths — and the `TaskMarker` branch). Upstream hid `- `,
+   rendered the GFM checkbox, and rendered the `•` bullet widget UNCONDITIONALLY,
+   so a task/bullet NEVER revealed its markdown source when the cursor was on its
+   line — unlike every other marker (HeaderMark, emphasis, quote, …) which the
+   engine reveals on the active line. That broke Obsidian parity (a task shows
+   `• [ ]` raw while you edit/backspace it, `☐` only away; a bullet shows `- ` raw
+   on the active line, `•` away). The LOCAL edits gate each on
+   `!activeLines.has(line)`: inactive → hide `- ` / render `☐` / render `•`;
+   active → render the bullet / leave `[ ]` raw / leave `- ` raw. The done-line
+   strike is likewise inactive-only so an edited `[x]` reveals clean. On re-sync,
+   re-apply over upstream's three unconditional pushes.
 
 4. **Highlight node classes** (`inline-preview.ts`): `'HighlightMark'` added to
    `HIDEABLE_SYNTAX` and `Highlight: 'cm-atomic-highlight'` to

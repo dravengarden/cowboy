@@ -116,6 +116,34 @@ type VimApi = {
   getCM: (view: EditorView) => CmVimHandle | null;
 };
 
+// Backspace on an EMPTY symmetric markdown marker pair deletes BOTH sides at
+// once — Obsidian's "delete the front and the back goes too", extended to the
+// MULTI-char markers (`**`, `~~`, `==`). cowboy's closeBrackets only knows the
+// single-char pairs (`*`, `_`, `` ` ``), so an empty `~~|~~` / `**|**` / `==|==`
+// (what the toggle toolbar inserts) otherwise needs two presses and deletes
+// asymmetrically. Longest marker first so `**|**` clears the full `**`, not one
+// `*`. No-op (false) → the normal Backspace chain runs.
+const EMPTY_PAIR_MARKERS = ["**", "~~", "==", "`", "*", "_"];
+function deleteEmptyMarkerPairBackward(view: EditorView): boolean {
+  const { state } = view;
+  const r = state.selection.main;
+  if (!r.empty) return false;
+  const pos = r.head;
+  for (const m of EMPTY_PAIR_MARKERS) {
+    const k = m.length;
+    if (pos - k < 0 || pos + k > state.doc.length) continue;
+    if (state.sliceDoc(pos - k, pos) === m && state.sliceDoc(pos, pos + k) === m) {
+      view.dispatch({
+        changes: { from: pos - k, to: pos + k },
+        selection: { anchor: pos - k },
+        userEvent: "delete.backward",
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
 // Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
 // device has a precise pointer + hover (a real keyboard) — touch never imports
 // it, so it costs the mobile bundle nothing. (Plan Step 11 / REQ-2.) Also
@@ -685,10 +713,13 @@ export const ComposerEditor = forwardRef<
       // Backspace removes a whole `@path` / `/skill` chip in one press (above
       // the default char-delete).
       Prec.high(keymap.of([
-        // Inline-image token delete runs first (its token contains spaces, so the
-        // @-token regex can't match it), then the empty-code-fence delete, then the
-        // @/​/ token delete. Each no-ops when it doesn't apply, so order is by
-        // specificity.
+        // Empty symmetric marker pair (`**|**`, `~~|~~`, `==|==`, …) deletes both
+        // sides — runs FIRST + before composerExtensions' closeBrackets so the
+        // multi-char markers clear whole. Inline-image token delete next (its token
+        // contains spaces, so the @-token regex can't match it), then the
+        // empty-code-fence delete, then the @/​/ token delete. Each no-ops when it
+        // doesn't apply, so order is by specificity.
+        { key: "Backspace", run: deleteEmptyMarkerPairBackward },
         { key: "Backspace", run: deleteImageTokenBackward },
         { key: "Backspace", run: deleteEmptyCodeFenceBackward },
         { key: "Backspace", run: deleteTokenBackward },

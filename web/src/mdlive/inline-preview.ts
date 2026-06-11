@@ -537,10 +537,15 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         } else {
           const markText = doc.sliceString(node.from, node.to);
           if (markText === '-' || markText === '*' || markText === '+') {
-            // Bullet: substitute with the fixed-width marker
-            // widget, swallowing the trailing space so content
-            // starts precisely at padding-left.
-            pushReplace(ranges, doc, node.from, markEnd, { widget: BULLET_WIDGET });
+            // Bullet: substitute with the fixed-width marker widget, swallowing
+            // the trailing space so content starts precisely at padding-left.
+            // LOCAL (Obsidian parity, ./SYNC.md): only on INACTIVE lines — on the
+            // active line leave the raw `- ` visible so backspacing turns the
+            // bullet back into markdown, consistent with tasks + every other
+            // marker (upstream rendered the bullet unconditionally).
+            if (!activeLines.has(line.number)) {
+              pushReplace(ranges, doc, node.from, markEnd, { widget: BULLET_WIDGET });
+            }
           } else {
             // Ordered list (or anything else with a non-standard
             // mark text like `1.`, `42.`): keep the text visible
