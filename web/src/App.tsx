@@ -1260,10 +1260,15 @@ export function App({
                         // Frosted / matte glass (磨砂): a milkier tint diffuses the content
                         // rather than showing it clearly; the heavy blur + `saturate` add
                         // the iOS-material vibrancy that reads as thick frosted glass.
+                        // Bottom-mode (mobile) status-bar strip is OPAQUE-leaning (0.8, ≥
+                        // the bottom slab's 0.76): `saturate` can only vivify the lavender
+                        // backdrop, never a gray one, so at 0.62 a gray code block scrolling
+                        // under it bled through as a muddy gray band under the status bar.
+                        // A near-solid lavender tint masks that while staying frosted.
                         bgcolor: (t) =>
                             alpha(
                                 t.palette.background.default,
-                                navbarAtBottom ? 0.62 : (t.palette.mode === "dark" ? 0.72 : 0.76),
+                                navbarAtBottom ? 0.8 : (t.palette.mode === "dark" ? 0.72 : 0.76),
                             ),
                         backdropFilter: "blur(30px) saturate(200%)",
                         WebkitBackdropFilter: "blur(30px) saturate(200%)",
