@@ -28,6 +28,54 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::core::{Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, SessionOrigin, Status};
 
+/// Strip NUL (`U+0000`) code points from every string (and object key) inside a
+/// JSON value, in place.
+///
+/// Postgres `jsonb` cannot represent `U+0000`: an INSERT/UPDATE carrying one
+/// fails with `ERROR: unsupported Unicode escape sequence`, and our write-behind
+/// writer then drops the whole intent (the event / queue / judge-run is lost,
+/// logged as "store writer failed an intent"). Agent stdout and pasted prompts
+/// occasionally carry stray NUL bytes (terminal control noise); they carry no
+/// meaning in our stored text, so we drop them rather than lose the row. Call
+/// this on any value bound to a `jsonb` column.
+fn strip_nul(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.contains('\0') {
+                s.retain(|c| c != '\0');
+            }
+        }
+        serde_json::Value::Array(arr) => arr.iter_mut().for_each(strip_nul),
+        serde_json::Value::Object(map) => {
+            // Object keys can also carry NUL; rebuild the map only if needed so
+            // the common (clean) path stays allocation-free.
+            if map.keys().any(|k| k.contains('\0')) {
+                let cleaned: serde_json::Map<String, serde_json::Value> = std::mem::take(map)
+                    .into_iter()
+                    .map(|(k, mut v)| {
+                        strip_nul(&mut v);
+                        (k.replace('\0', ""), v)
+                    })
+                    .collect();
+                *map = cleaned;
+            } else {
+                map.values_mut().for_each(strip_nul);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Same as [`strip_nul`] but for a plain `text` column — Postgres `text`/`varchar`
+/// reject NUL just like `jsonb`. Allocates only when a NUL is actually present.
+fn strip_nul_str(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\0') {
+        std::borrow::Cow::Owned(s.replace('\0', ""))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// All persistent state needed to rehydrate a single session after restart.
 pub struct LoadedSession {
     pub meta: SessionMeta,
@@ -103,8 +151,25 @@ impl Store {
 
             let mut events = Vec::with_capacity(event_rows.len());
             for er in event_rows {
-                let event: Event = serde_json::from_value(er.payload)
-                    .with_context(|| format!("decoding event seq={} for {id}", er.seq))?;
+                let seq_for_log = er.seq;
+                // Degrade a single undecodable event to a SKIP (with a warn), not a
+                // hard error: one corrupt/legacy row must not fail the whole
+                // `load_all` and so block the daemon from starting at all (that
+                // bricks EVERY session — a blank UI for the user). Same
+                // "tolerate one bad row" philosophy as queue/drafts/judge_runs
+                // below. The skipped seq leaves a gap, which the client tolerates.
+                let event: Event = match serde_json::from_value(er.payload) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            session = %id,
+                            seq = seq_for_log,
+                            "skipping undecodable event during restore",
+                        );
+                        continue;
+                    }
+                };
                 let seq = u64::try_from(er.seq).unwrap_or(0);
                 events.push(Envelope {
                     session_id: id.clone(),
@@ -148,7 +213,7 @@ impl Store {
         .bind(&m.id)
         .bind(&m.provider)
         .bind(&m.cwd)
-        .bind(&m.title)
+        .bind(strip_nul_str(&m.title))
         .bind(origin_to_str(m.origin))
         .bind(status_to_str(m.status))
         .execute(&self.pool)
@@ -216,7 +281,7 @@ impl Store {
     /// If the UPDATE fails.
     pub async fn update_title(&self, session_id: &str, title: &str) -> Result<()> {
         sqlx::query("UPDATE sessions SET title = $1, updated_at = now() WHERE id = $2")
-            .bind(title)
+            .bind(strip_nul_str(title))
             .bind(session_id)
             .execute(&self.pool)
             .await
@@ -259,12 +324,14 @@ impl Store {
     /// # Errors
     /// If the UPSERT fails.
     pub async fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        let mut value = value.clone();
+        strip_nul(&mut value);
         sqlx::query(
             "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
              ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
         )
         .bind(key)
-        .bind(value)
+        .bind(&value)
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPSERT setting {key}"))?;
@@ -298,6 +365,8 @@ impl Store {
         model: &str,
         params: &serde_json::Value,
     ) -> Result<()> {
+        let mut params = params.clone();
+        strip_nul(&mut params);
         sqlx::query(
             "INSERT INTO inference_config(provider, model, params, updated_at) \
              VALUES ($1, $2, $3, now()) \
@@ -305,7 +374,7 @@ impl Store {
         )
         .bind(provider)
         .bind(model)
-        .bind(params)
+        .bind(&params)
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPSERT inference_config {provider}"))?;
@@ -381,7 +450,8 @@ impl Store {
     /// conflicts with an existing row.
     pub async fn append_event(&self, env: &Envelope) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin tx")?;
-        let payload = serde_json::to_value(&env.event).context("serialize event")?;
+        let mut payload = serde_json::to_value(&env.event).context("serialize event")?;
+        strip_nul(&mut payload);
         let seq_i64 = i64::try_from(env.seq).context("seq i64 overflow")?;
         sqlx::query("INSERT INTO events(session_id, seq, payload) VALUES ($1, $2, $3)")
             .bind(&env.session_id)
@@ -416,8 +486,10 @@ impl Store {
         queue: &[QueuedMessage],
         drafts: &[QueuedMessage],
     ) -> Result<()> {
-        let queue_json = serde_json::to_value(queue).context("serialize queue")?;
-        let drafts_json = serde_json::to_value(drafts).context("serialize drafts")?;
+        let mut queue_json = serde_json::to_value(queue).context("serialize queue")?;
+        let mut drafts_json = serde_json::to_value(drafts).context("serialize drafts")?;
+        strip_nul(&mut queue_json);
+        strip_nul(&mut drafts_json);
         sqlx::query("UPDATE sessions SET queue = $1, drafts = $2, updated_at = now() WHERE id = $3")
             .bind(&queue_json)
             .bind(&drafts_json)
@@ -435,7 +507,8 @@ impl Store {
     /// # Errors
     /// If serializing the list fails or the UPDATE fails.
     pub async fn update_judge_runs(&self, session_id: &str, runs: &[JudgeRun]) -> Result<()> {
-        let runs_json = serde_json::to_value(runs).context("serialize judge_runs")?;
+        let mut runs_json = serde_json::to_value(runs).context("serialize judge_runs")?;
+        strip_nul(&mut runs_json);
         sqlx::query("UPDATE sessions SET judge_runs = $1, updated_at = now() WHERE id = $2")
             .bind(&runs_json)
             .bind(session_id)

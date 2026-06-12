@@ -21,7 +21,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use agent_client_protocol::schema::{
     CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
@@ -196,7 +197,6 @@ async fn agent_main(
                 perm_state
                     .pending
                     .lock()
-                    .unwrap()
                     .insert(request_id.clone(), tx);
                 perm_state.hub.push(
                     &perm_state.session_id,
@@ -489,7 +489,7 @@ async fn run_session(
                 request_id,
                 option_id,
             } => {
-                if let Some(tx) = state.pending.lock().unwrap().remove(&request_id) {
+                if let Some(tx) = state.pending.lock().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }
                 state.hub.push(

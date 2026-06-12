@@ -506,6 +506,7 @@ dependencies = [
  "ignore",
  "mime_guess",
  "nucleo-matcher",
+ "parking_lot",
  "reqwest",
  "rust-embed",
  "serde",

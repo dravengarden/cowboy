@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use tokio::sync::mpsc;
 
@@ -119,7 +119,7 @@ impl Supervisor {
         cwd: PathBuf,
         resume: Option<String>,
     ) -> Result<(), String> {
-        let mut senders = self.senders.lock().unwrap();
+        let mut senders = self.senders.lock();
         if senders.contains_key(session_id) {
             return Ok(()); // already live
         }
@@ -161,7 +161,7 @@ impl Supervisor {
         // stale sender and fall through to revive, recovering the command from
         // the `SendError` so we needn't require `AgentCommand: Clone`.
         let cmd = {
-            let mut senders = self.senders.lock().unwrap();
+            let mut senders = self.senders.lock();
             match senders.get(session_id) {
                 Some(tx) => match tx.send(cmd) {
                     Ok(()) => return Ok(()),
@@ -176,7 +176,6 @@ impl Supervisor {
         self.revive(session_id)?;
         self.senders
             .lock()
-            .unwrap()
             .get(session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?
             .send(cmd)
@@ -201,7 +200,7 @@ impl Supervisor {
     /// If the session is unknown to the Hub, its provider is no longer
     /// registered, or the agent thread cannot be spawned.
     pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
-        if self.senders.lock().unwrap().contains_key(session_id) {
+        if self.senders.lock().contains_key(session_id) {
             return Ok(false);
         }
         self.revive(session_id)?;
@@ -251,7 +250,7 @@ impl Supervisor {
     /// alive). Unknown / already-torn-down sessions are a no-op and return
     /// `false`.
     pub fn delete_session(&self, session_id: &str) -> bool {
-        let tx = self.senders.lock().unwrap().remove(session_id);
+        let tx = self.senders.lock().remove(session_id);
         match tx {
             Some(tx) => {
                 let _ = tx.send(AgentCommand::Cancel);

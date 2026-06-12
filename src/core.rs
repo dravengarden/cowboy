@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -944,7 +944,7 @@ impl Hub {
     /// (in `crate::server`) after the dispatcher task is spawned, before any
     /// client connects. Until set, drains compute but dispatch nothing.
     pub fn set_dispatch_tx(&self, tx: mpsc::UnboundedSender<DispatchReq>) {
-        *self.inner.dispatch_tx.lock().unwrap() = Some(tx);
+        *self.inner.dispatch_tx.lock() = Some(tx);
     }
 
     /// Populate the in-memory state from a previously-stored snapshot.
@@ -996,8 +996,8 @@ impl Hub {
         // one past `max_qid`.
         let mut seen: HashSet<String> = HashSet::new();
         {
-            let mut sessions_lock = self.inner.sessions.lock().unwrap();
-            let mut order = self.inner.order.lock().unwrap();
+            let mut sessions_lock = self.inner.sessions.lock();
+            let mut order = self.inner.order.lock();
             for r in sessions {
                 let RestoredSession {
                     mut meta,
@@ -1098,8 +1098,8 @@ impl Hub {
     /// Current session list (insertion order).
     #[must_use]
     pub fn session_list(&self) -> Vec<SessionMeta> {
-        let sessions = self.inner.sessions.lock().unwrap();
-        let order = self.inner.order.lock().unwrap();
+        let sessions = self.inner.sessions.lock();
+        let order = self.inner.order.lock();
         order
             .iter()
             .filter_map(|id| sessions.get(id).map(|s| s.meta.clone()))
@@ -1110,7 +1110,7 @@ impl Hub {
     /// session-info dialog. `None` for an unknown session.
     #[must_use]
     pub fn session_info(&self, session_id: &str) -> Option<SessionInfo> {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
         Some(SessionInfo {
             meta: s.meta.clone(),
@@ -1124,7 +1124,7 @@ impl Hub {
     /// metric for the info panel.
     #[must_use]
     pub fn event_total(&self) -> u64 {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self.inner.sessions.lock();
         sessions.values().map(|s| u64::try_from(s.log.len()).unwrap_or(u64::MAX)).sum()
     }
 
@@ -1134,7 +1134,7 @@ impl Hub {
     /// session must not re-send its entire history on every connect/reconnect.
     #[must_use]
     pub fn snapshot(&self, session_id: &str) -> Option<(Vec<Envelope>, bool)> {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|s| {
             let len = s.log.len();
             let start = len.saturating_sub(SNAPSHOT_TAIL);
@@ -1151,7 +1151,7 @@ impl Hub {
     /// out-of-range page yields an empty slice.
     #[must_use]
     pub fn history_page(&self, session_id: &str, page: usize) -> Option<(Vec<Envelope>, bool)> {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|s| {
             // Page k = events whose SEQ is in [k·P, (k+1)·P). Sliced by SEQ, not
             // log index: seqs aren't always contiguous from 0 (some get assigned
@@ -1193,8 +1193,8 @@ impl Hub {
             judging: false,
         };
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
-            let mut order = self.inner.order.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
+            let mut order = self.inner.order.lock();
             sessions.insert(
                 id.clone(),
                 Session {
@@ -1226,8 +1226,8 @@ impl Hub {
     /// process shutdown).
     pub fn delete_session(&self, session_id: &str) -> bool {
         let removed = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
-            let mut order = self.inner.order.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
+            let mut order = self.inner.order.lock();
             let removed = sessions.remove(session_id).is_some();
             order.retain(|id| id != session_id);
             removed
@@ -1246,7 +1246,7 @@ impl Hub {
     /// new label. Unknown ids are silently ignored (matches `set_status`).
     pub fn rename_session(&self, session_id: &str, title: String) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1268,7 +1268,7 @@ impl Hub {
     /// Mirror of [`Self::rename_session`].
     pub fn set_auto_resume(&self, session_id: &str, value: Option<bool>) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1286,14 +1286,14 @@ impl Hub {
     /// Snapshot of all global settings — for the connect-time push.
     #[must_use]
     pub fn settings_snapshot(&self) -> HashMap<String, serde_json::Value> {
-        self.inner.settings.lock().unwrap().clone()
+        self.inner.settings.lock().clone()
     }
 
     /// Set one global setting (auto-resume default / continuation template),
     /// persist it, and broadcast the new full map to every connected surface.
     pub fn set_setting(&self, key: String, value: serde_json::Value) {
         let snapshot = {
-            let mut s = self.inner.settings.lock().unwrap();
+            let mut s = self.inner.settings.lock();
             s.insert(key.clone(), value.clone());
             s.clone()
         };
@@ -1305,7 +1305,7 @@ impl Hub {
 
     /// Seed the in-memory settings map from the persisted table (restore only).
     pub fn load_settings(&self, entries: Vec<(String, serde_json::Value)>) {
-        let mut s = self.inner.settings.lock().unwrap();
+        let mut s = self.inner.settings.lock();
         for (k, v) in entries {
             s.insert(k, v);
         }
@@ -1315,7 +1315,7 @@ impl Hub {
     /// `key_set` only, NEVER the key. Sorted by provider for a stable UI order.
     #[must_use]
     pub fn inference_snapshot(&self) -> Vec<InferenceView> {
-        let m = self.inner.inference.lock().unwrap();
+        let m = self.inner.inference.lock();
         let mut v: Vec<InferenceView> = m
             .iter()
             .map(|(p, e)| InferenceView {
@@ -1360,7 +1360,7 @@ impl Hub {
     /// Set a provider's non-secret config; persist + broadcast.
     pub fn set_inference_config(&self, provider: String, model: String, params: serde_json::Value) {
         {
-            let mut m = self.inner.inference.lock().unwrap();
+            let mut m = self.inner.inference.lock();
             let e = m.entry(provider.clone()).or_default();
             e.model = model.clone();
             e.params = params.clone();
@@ -1374,7 +1374,7 @@ impl Hub {
     /// Set a provider's API key; persist (separate table) + broadcast (key_set only).
     pub fn set_inference_secret(&self, provider: String, api_key: String) {
         {
-            let mut m = self.inner.inference.lock().unwrap();
+            let mut m = self.inner.inference.lock();
             m.entry(provider.clone()).or_default().api_key = Some(api_key.clone());
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -1389,7 +1389,7 @@ impl Hub {
         configs: Vec<(String, String, serde_json::Value)>,
         keys: Vec<(String, String)>,
     ) {
-        let mut m = self.inner.inference.lock().unwrap();
+        let mut m = self.inner.inference.lock();
         for (provider, model, params) in configs {
             let e = m.entry(provider).or_default();
             e.model = model;
@@ -1403,26 +1403,26 @@ impl Hub {
     /// The API key for `provider` — INTERNAL (the judge call). Never broadcast.
     #[must_use]
     pub fn inference_key(&self, provider: &str) -> Option<String> {
-        self.inner.inference.lock().unwrap().get(provider).and_then(|e| e.api_key.clone())
+        self.inner.inference.lock().get(provider).and_then(|e| e.api_key.clone())
     }
 
     /// The configured model for `provider` (the caller applies a default if unset).
     #[must_use]
     pub fn inference_model(&self, provider: &str) -> Option<String> {
-        self.inner.inference.lock().unwrap().get(provider).map(|e| e.model.clone())
+        self.inner.inference.lock().get(provider).map(|e| e.model.clone())
     }
 
     /// Whether the confirm-detect judge can run — i.e. the `deepseek` provider has
     /// an API key. When false, the drain holds everything (§J no-token block).
     #[must_use]
     pub fn confirm_key_present(&self) -> bool {
-        self.inner.inference.lock().unwrap().get("deepseek").is_some_and(|e| e.api_key.is_some())
+        self.inner.inference.lock().get("deepseek").is_some_and(|e| e.api_key.is_some())
     }
 
     /// Whether a session is currently holding for "awaiting user".
     #[must_use]
     pub fn is_awaiting(&self, session_id: &str) -> bool {
-        self.inner.sessions.lock().unwrap().get(session_id).is_some_and(|s| s.meta.awaiting_user)
+        self.inner.sessions.lock().get(session_id).is_some_and(|s| s.meta.awaiting_user)
     }
 
     /// Set/clear a session's "awaiting user" hold. Broadcasts the session list so
@@ -1442,7 +1442,7 @@ impl Hub {
         // `Some(done)` when the awaiting flag actually flipped — carries the
         // unchanged `done` so the persisted pair stays consistent.
         let changed = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) if s.meta.awaiting_user != awaiting => {
                     s.meta.awaiting_user = awaiting;
@@ -1466,7 +1466,7 @@ impl Hub {
     /// if the flag is unchanged.
     fn set_judging(&self, session_id: &str, judging: bool) {
         let changed = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) if s.meta.judging != judging => {
                     s.meta.judging = judging;
@@ -1485,7 +1485,7 @@ impl Hub {
     /// Broadcasts and resumes the drain when the hold clears.
     fn apply_verdict(&self, session_id: &str, seq: u64, v: &crate::skills::Verdict) {
         let resume = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1515,7 +1515,7 @@ impl Hub {
     /// for a future "task complete" notification hook.
     fn judge_turn_end(&self, session_id: &str) {
         let (final_text, seq, provider, stop_reason) = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1634,7 +1634,7 @@ impl Hub {
             latency_ms: run.latency_ms,
         });
         let runs = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1663,7 +1663,7 @@ impl Hub {
     /// No-op (no broadcast) if the id isn't present.
     pub fn remove_judge_run(&self, session_id: &str, id: &str) {
         let runs = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1680,7 +1680,7 @@ impl Hub {
     /// Clear a session's entire judge history. No-op if already empty.
     pub fn clear_judge_runs(&self, session_id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1699,7 +1699,6 @@ impl Hub {
         self.inner
             .sessions
             .lock()
-            .unwrap()
             .get(session_id)
             .map_or_else(Vec::new, |s| s.judge_runs.clone())
     }
@@ -1710,7 +1709,6 @@ impl Hub {
         self.inner
             .settings
             .lock()
-            .unwrap()
             .get(AUTO_RESUME_DEFAULT_KEY)
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
@@ -1724,7 +1722,6 @@ impl Hub {
             .inner
             .sessions
             .lock()
-            .unwrap()
             .get(session_id)
             .map(|s| s.meta.auto_resume);
         match over {
@@ -1740,7 +1737,6 @@ impl Hub {
         self.inner
             .settings
             .lock()
-            .unwrap()
             .get(AUTO_RESUME_TEMPLATE_KEY)
             .and_then(|v| v.as_str())
             .map_or_else(|| DEFAULT_CONTINUATION_TEMPLATE.to_owned(), str::to_owned)
@@ -1757,7 +1753,7 @@ impl Hub {
         // settings lock under it).
         let template = self.continuation_template();
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -1816,7 +1812,7 @@ impl Hub {
     /// it. Mirror of [`Self::rename_session`] minus the broadcast.
     fn apply_rename(&self, session_id: &str, title: String) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             if let Some(s) = sessions.get_mut(session_id) {
                 s.meta.title.clone_from(&title);
             }
@@ -1830,11 +1826,11 @@ impl Hub {
     /// carries it). Mirror of [`Self::reorder_sessions`] minus the broadcast.
     fn apply_reorder(&self, order: &[String]) {
         {
-            let mut list = self.inner.order.lock().unwrap();
+            let mut list = self.inner.order.lock();
             list.sort_by_key(|id| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let order = self.inner.order.lock().unwrap().clone();
+            let order = self.inner.order.lock().clone();
             let _ = tx.send(StoreWrite::UpdateSessionOrder { order });
         }
     }
@@ -1845,7 +1841,7 @@ impl Hub {
     fn sync_value(&self, state: &str) -> serde_json::Value {
         match state {
             "title" => {
-                let sessions = self.inner.sessions.lock().unwrap();
+                let sessions = self.inner.sessions.lock();
                 let map: serde_json::Map<String, serde_json::Value> = sessions
                     .values()
                     .map(|s| (s.meta.id.clone(), serde_json::Value::String(s.meta.title.clone())))
@@ -1853,7 +1849,7 @@ impl Hub {
                 serde_json::Value::Object(map)
             }
             "order" => {
-                let list = self.inner.order.lock().unwrap();
+                let list = self.inner.order.lock();
                 serde_json::Value::Array(list.iter().map(|id| serde_json::Value::String(id.clone())).collect())
             }
             _ => serde_json::Value::Null,
@@ -1862,7 +1858,7 @@ impl Hub {
 
     /// Record `id` as seen for `state`; returns true if it's NEW (first delivery).
     fn sync_first_seen(&self, state: &str, id: &str) -> bool {
-        let mut reg = self.inner.sync.lock().unwrap();
+        let mut reg = self.inner.sync.lock();
         reg.entry(state.to_owned()).or_default().seen.insert(id.to_owned())
     }
 
@@ -1876,7 +1872,7 @@ impl Hub {
     /// the given absolute value + confirm set.
     fn sync_emit(&self, state: &str, value: serde_json::Value, confirmed: Vec<String>) {
         let version = {
-            let mut reg = self.inner.sync.lock().unwrap();
+            let mut reg = self.inner.sync.lock();
             let e = reg.entry(state.to_owned()).or_default();
             e.version += 1;
             e.version
@@ -1957,7 +1953,7 @@ impl Hub {
     #[must_use]
     pub fn sync_resync(&self) -> Vec<Outbound> {
         let snapshot: Vec<(String, u64, Vec<String>)> = {
-            let reg = self.inner.sync.lock().unwrap();
+            let reg = self.inner.sync.lock();
             let mut out: Vec<(String, u64, Vec<String>)> = reg
                 .iter()
                 .filter(|(s, _)| !s.starts_with("queue:"))
@@ -1991,12 +1987,12 @@ impl Hub {
     #[must_use]
     pub fn queue_resync(&self, session_id: &str) -> Option<Outbound> {
         let (queue, drafts) = {
-            let sessions = self.inner.sessions.lock().unwrap();
+            let sessions = self.inner.sessions.lock();
             let s = sessions.get(session_id)?;
             (s.queue.clone(), s.drafts.clone())
         };
         let state = format!("queue:{session_id}");
-        let version = self.inner.sync.lock().unwrap().get(&state).map_or(0, |e| e.version);
+        let version = self.inner.sync.lock().get(&state).map_or(0, |e| e.version);
         let confirmed = Self::cmids_of(&queue, &drafts);
         let value = serde_json::json!({ "queue": queue, "drafts": drafts });
         Some(Outbound::SyncPatch { state, version, value, confirmed, resync: true })
@@ -2010,7 +2006,7 @@ impl Hub {
     /// concurrent rename can't race it.
     pub fn auto_title(&self, session_id: &str, title: String) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2036,7 +2032,7 @@ impl Hub {
     /// ignored (matches `set_status`).
     pub fn set_agent_session_id(&self, session_id: &str, agent_session_id: String) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2054,7 +2050,7 @@ impl Hub {
     pub fn set_status(&self, session_id: &str, status: Status, detail: Option<String>) {
         let turn_ended;
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2118,7 +2114,7 @@ impl Hub {
     /// client reconciles its optimistic bubble (see Envelope::cmid).
     pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
         let envelope = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2152,7 +2148,7 @@ impl Hub {
     /// without waiting for the next `config_option_update`).
     #[must_use]
     pub fn config_options(&self, session_id: &str) -> Option<serde_json::Value> {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self.inner.sessions.lock();
         sessions
             .get(session_id)
             .and_then(|s| s.config_options.clone())
@@ -2165,7 +2161,7 @@ impl Hub {
     /// refreshes the same array).
     pub fn set_config_options(&self, session_id: &str, options: serde_json::Value) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2202,7 +2198,6 @@ impl Hub {
         self.inner
             .sessions
             .lock()
-            .unwrap()
             .get(session_id)
             .map(|s| s.meta.status)
     }
@@ -2215,7 +2210,7 @@ impl Hub {
     /// Re-locks `sessions`, so callers MUST NOT hold the lock when calling.
     fn emit_pending(&self, session_id: &str) {
         let (queue, drafts) = {
-            let sessions = self.inner.sessions.lock().unwrap();
+            let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
                 return;
             };
@@ -2237,7 +2232,7 @@ impl Hub {
     }
 
     fn send_dispatch(&self, req: DispatchReq) {
-        if let Some(tx) = self.inner.dispatch_tx.lock().unwrap().as_ref() {
+        if let Some(tx) = self.inner.dispatch_tx.lock().as_ref() {
             let _ = tx.send(req);
         }
     }
@@ -2274,7 +2269,7 @@ impl Hub {
     /// otherwise. `allow_revive` is forwarded to [`Self::ready`].
     fn drain_head(&self, session_id: &str, allow_revive: bool, manual: bool) {
         // Without a dispatcher wired we must not pop (the prompt would be lost).
-        if self.inner.dispatch_tx.lock().unwrap().is_none() {
+        if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
         // The two LLM-gated holds below apply ONLY to the automatic drain. A manual
@@ -2289,7 +2284,7 @@ impl Hub {
             }
         }
         let req = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2337,7 +2332,7 @@ impl Hub {
     /// try the next queued prompt.
     pub fn clear_in_flight(&self, session_id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             if let Some(s) = sessions.get_mut(session_id) {
                 s.in_flight = false;
             }
@@ -2355,11 +2350,11 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
-        let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
+        let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
         let mut cleared_awaiting = false;
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2426,12 +2421,12 @@ impl Hub {
         // ("jump to front" / `submit { front: true }`).
         interrupt_on_busy: bool,
     ) -> bool {
-        let wired = self.inner.dispatch_tx.lock().unwrap().is_some();
+        let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
         let mut interrupt = false;
         let mut cleared_awaiting = false;
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
@@ -2472,7 +2467,7 @@ impl Hub {
     /// Drop one queued prompt.
     pub fn remove_queued(&self, session_id: &str, id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2494,7 +2489,7 @@ impl Hub {
         content: Vec<serde_json::Value>,
     ) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2515,7 +2510,7 @@ impl Hub {
     /// Drop a session's whole queue.
     pub fn clear_queue(&self, session_id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2531,7 +2526,7 @@ impl Hub {
     /// just becomes next in line.
     pub fn request_send_queued(&self, session_id: &str, id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2560,7 +2555,7 @@ impl Hub {
     /// (reviving the session). No-op if there's no prior prompt.
     pub fn retry_turn(&self, session_id: &str) {
         let (prompt, status) = {
-            let sessions = self.inner.sessions.lock().unwrap();
+            let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
                 tracing::warn!(session = %session_id, "retry_turn: unknown session — no-op");
                 return;
@@ -2580,7 +2575,7 @@ impl Hub {
     /// Move a queued prompt back to drafts.
     pub fn queued_to_draft(&self, session_id: &str, id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2603,7 +2598,7 @@ impl Hub {
     pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) {
         let released = id.is_none();
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2623,7 +2618,7 @@ impl Hub {
         cmid: Option<String>,
     ) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2655,7 +2650,7 @@ impl Hub {
         content: Vec<serde_json::Value>,
     ) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2672,7 +2667,7 @@ impl Hub {
     /// Drop one draft.
     pub fn remove_draft(&self, session_id: &str, id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2691,7 +2686,7 @@ impl Hub {
             return;
         }
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             // Take the draft out of `from`, but only if `to` exists to receive it.
             let Some(msg) = (if sessions.contains_key(to) {
                 sessions.get_mut(from).and_then(|s| {
@@ -2718,7 +2713,7 @@ impl Hub {
     /// Drop a session's whole draft list.
     pub fn clear_drafts(&self, session_id: &str) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2730,7 +2725,7 @@ impl Hub {
     /// Activate one draft: remove it from drafts and submit it (send-or-queue).
     pub fn activate_draft(&self, session_id: &str, id: &str) {
         let msg = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2750,7 +2745,7 @@ impl Hub {
     /// Activate every draft, front-to-back, then clear them.
     pub fn activate_all_drafts(&self, session_id: &str) {
         let msgs = {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2775,7 +2770,7 @@ impl Hub {
     /// the drain in case the new head is now dispatchable.
     pub fn reorder_queue(&self, session_id: &str, order: &[String]) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2788,7 +2783,7 @@ impl Hub {
     /// Reorder one session's drafts to the given id order (see `reorder_queue`).
     pub fn reorder_drafts(&self, session_id: &str, order: &[String]) {
         {
-            let mut sessions = self.inner.sessions.lock().unwrap();
+            let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
@@ -2801,7 +2796,7 @@ impl Hub {
     /// Ids not in `order` keep their relative order at the end.
     pub fn reorder_sessions(&self, order: &[String]) {
         {
-            let mut list = self.inner.order.lock().unwrap();
+            let mut list = self.inner.order.lock();
             list.sort_by_key(|id| {
                 order
                     .iter()
@@ -2811,7 +2806,7 @@ impl Hub {
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateSessionOrder {
-                order: self.inner.order.lock().unwrap().clone(),
+                order: self.inner.order.lock().clone(),
             });
         }
         self.broadcast_sessions();

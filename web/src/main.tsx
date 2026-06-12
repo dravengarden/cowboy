@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { App } from "./App";
+import { AppErrorBoundary } from "./AppErrorBoundary";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
@@ -24,7 +25,11 @@ function Root(): React.JSX.Element {
           light-themed app on a dark-mode phone got a dark keyboard — mismatched.
           Now the keyboard tracks the in-app theme and flips live when it does. */}
       <CssBaseline enableColorScheme />
-      <App themeMode={mode} onSetThemeMode={setMode} />
+      {/* Top-level boundary: a render crash anywhere in <App> degrades to a red
+          error card with a reload instead of a blank white screen. */}
+      <AppErrorBoundary>
+        <App themeMode={mode} onSetThemeMode={setMode} />
+      </AppErrorBoundary>
     </ThemeProvider>
   );
 }
