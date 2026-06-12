@@ -1267,13 +1267,16 @@ export function App({
                             ),
                         backdropFilter: "blur(30px) saturate(200%)",
                         WebkitBackdropFilter: "blur(30px) saturate(200%)",
-                        // Desktop: a hairline + soft down-shadow give the navbar the
-                        // "floating over scrolling content" depth (mirrors the bottom slab).
+                        // Desktop: a hairline delineates the navbar. In LIGHT mode the
+                        // old `0 1px 24px` down-shadow smeared a gray cloud across the
+                        // lavender (a black shadow on a light tint always reads gray) —
+                        // dropped it; the hairline + the frosted blur are enough. Dark
+                        // mode keeps a soft shadow (it reads as depth there, not gray).
                         ...(!navbarAtBottom && {
                             borderBottom: 1,
                             borderColor: "divider",
                             boxShadow: (t) =>
-                                `0 1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
+                                t.palette.mode === "dark" ? "0 1px 24px rgba(0,0,0,0.5)" : "none",
                         }),
                     }}
                 />
