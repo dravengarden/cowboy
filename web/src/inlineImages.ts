@@ -189,11 +189,16 @@ export const inlineImageField = StateField.define<DecorationSet>({
 export const inlineImageTheme = EditorView.theme({
   ".cm-inline-image": {
     display: "block",
-    maxWidth: "min(100%, 360px)",
-    maxHeight: "320px",
+    // A SMALL tap-to-open thumbnail, not a full inline preview: the token is a
+    // placeholder you tap to open the lightbox (full image), so it only needs to
+    // be big enough to recognize + tap — a large inline image otherwise ate most
+    // of the composer height. Aspect ratio preserved (no crop); the 80px cap +
+    // 200px width keep it compact while staying a comfortable tap target.
+    maxWidth: "min(100%, 200px)",
+    maxHeight: "80px",
     width: "auto",
     height: "auto",
-    borderRadius: "10px",
+    borderRadius: "8px",
     margin: "4px 0",
     cursor: "pointer",
     // A theme-aware hairline guarantees the thumbnail has a visible EDGE on BOTH
