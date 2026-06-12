@@ -2842,14 +2842,79 @@ function StopConfirmDialog({
   );
 }
 
-// The SESSION-level controls — agent config (the options sheet), auto-scroll
-// follow, and Stop — surfaced in the app's navbar, NOT the composer toolbar: they
-// act on the session / transcript, not the message you're typing, so mixing them
-// into the input row read as clutter. Store-driven (the same hooks the Composer
-// reads), so the navbar renders it from just the active session's id + status.
-// Carries its own config sheet + stop-confirm dialog. The config `⚙` is now the
-// single entry on EVERY tier (mobile sheet + desktop), so the composer no longer
-// shows inline config chips.
+// The auto-scroll-follow + Stop pair — the session's "live" controls. Extracted so
+// it rides BOTH the mobile navbar (alongside the config ⊟) AND the desktop bottom
+// status bar (Zed/VSCode style), without duplicating the stop-confirm wiring.
+// `dense` shrinks the buttons to fit the thin status strip.
+export function AutoScrollAndStop({
+  sessionId,
+  status,
+  dense = false,
+}: {
+  sessionId: string;
+  status: Status;
+  dense?: boolean;
+}): React.JSX.Element {
+  const sticky = useSticky(sessionId);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const busy = status === "busy";
+  const size = dense ? "small" : "medium";
+  return (
+    <>
+      {/* Auto-scroll / follow toggle. Default ON (primary = following the latest);
+          tap while inactive → scroll to bottom + follow again; tap while active →
+          stop following. Hover-only tooltip so a tap doesn't pop the bubble. */}
+      <Tooltip
+        title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
+        disableFocusListener
+        disableTouchListener
+      >
+        <IconButton
+          size={size}
+          aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
+          color={sticky ? "primary" : "default"}
+          onClick={(): void => {
+            haptic();
+            if (sticky) setSticky(sessionId, false);
+            else requestStickToBottom(sessionId);
+          }}
+        >
+          <VerticalAlignBottom fontSize={size} />
+        </IconButton>
+      </Tooltip>
+      {/* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —
+          just disabled (greyed) when there's no running turn. <span> lets the
+          Tooltip attach over the disabled button. */}
+      <Tooltip title="Stop">
+        <span>
+          <IconButton
+            size={size}
+            color="error"
+            aria-label="cancel"
+            disabled={!busy}
+            onClick={(): void => setCancelOpen(true)}
+          >
+            <Stop fontSize={size} />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <StopConfirmDialog
+        open={cancelOpen}
+        onClose={(): void => setCancelOpen(false)}
+        onConfirm={(): void => {
+          haptic(24);
+          send({ type: "cancel", session_id: sessionId });
+          setCancelOpen(false);
+        }}
+      />
+    </>
+  );
+}
+
+// The SESSION-level controls in the navbar: the agent-config ⊟ (options sheet),
+// plus — ON MOBILE — the auto-scroll + Stop pair. On desktop those two live in the
+// bottom status bar instead (AppStatusBar), so here they're gated to touch.
+// Store-driven, so the navbar renders it from just the active session's id + status.
 export function SessionControls({
   sessionId,
   status,
@@ -2859,10 +2924,8 @@ export function SessionControls({
 }): React.JSX.Element {
   const { configOptions, sessions } = useStore();
   const session = sessions.find((s) => s.id === sessionId);
-  const sticky = useSticky(sessionId);
+  const touchInput = useTouchComposer();
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const busy = status === "busy";
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   // Same fixed display order as the old inline chip row, so the sheet's selectors
@@ -2895,42 +2958,9 @@ export function SessionControls({
           </IconButton>
         </Tooltip>
       )}
-      {/* Auto-scroll / follow toggle. Default ON (primary = following the latest);
-          tap while inactive → scroll to bottom + follow again; tap while active →
-          stop following. The Transcript owns the scroll (stickyStore). Hover-only
-          tooltip so a tap on this oft-used control doesn't pop the bubble. */}
-      <Tooltip
-        title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
-        disableFocusListener
-        disableTouchListener
-      >
-        <IconButton
-          aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
-          color={sticky ? "primary" : "default"}
-          onClick={(): void => {
-            haptic();
-            if (sticky) setSticky(sessionId, false);
-            else requestStickToBottom(sessionId);
-          }}
-        >
-          <VerticalAlignBottom />
-        </IconButton>
-      </Tooltip>
-      {/* Stop is ALWAYS shown so the navbar doesn't reflow when a turn starts/ends;
-          it's just disabled (greyed) when there's no running turn to stop. The
-          <span> wrapper lets the Tooltip attach while the button is disabled. */}
-      <Tooltip title="Stop">
-        <span>
-          <IconButton
-            color="error"
-            aria-label="cancel"
-            disabled={!busy}
-            onClick={(): void => setCancelOpen(true)}
-          >
-            <Stop />
-          </IconButton>
-        </span>
-      </Tooltip>
+      {/* Auto-scroll + Stop ride the navbar on MOBILE; desktop puts them in the
+          bottom status bar instead (see AppStatusBar), so gate them to touch here. */}
+      {touchInput && <AutoScrollAndStop sessionId={sessionId} status={status} />}
       {/* Portal to <body>: SessionControls lives inside the navbar (a low z-index
           stacking context), but the mobile config sheet is a NON-portaled DetentSheet
           (position:fixed + zIndex.modal, rendered inline). Mounted in the navbar it
@@ -2956,15 +2986,6 @@ export function SessionControls({
         />,
         document.body,
       )}
-      <StopConfirmDialog
-        open={cancelOpen}
-        onClose={(): void => setCancelOpen(false)}
-        onConfirm={(): void => {
-          haptic(24);
-          send({ type: "cancel", session_id: sessionId });
-          setCancelOpen(false);
-        }}
-      />
     </>
   );
 }

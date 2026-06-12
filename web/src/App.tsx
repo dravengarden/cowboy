@@ -46,7 +46,7 @@ import {
     MoreVert,
     Settings as SettingsIcon,
 } from "@mui/icons-material";
-import { Composer, SessionControls } from "./Composer";
+import { AutoScrollAndStop, Composer, SessionControls } from "./Composer";
 import { useTouchComposer } from "./ComposerTextarea";
 import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
 import { claimKeyboard } from "./keyboardClaim";
@@ -186,33 +186,22 @@ function StatusItem({
 // `left`/`right` with no layout work. Desktop-only (inside the composer's measured
 // wrapper, so the transcript's --composer-h reservation includes it). Renders
 // nothing until at least one item exists.
-function AppStatusBar(): React.JSX.Element | null {
+function AppStatusBar({
+    sessionId,
+    status,
+}: {
+    sessionId?: string;
+    status?: Status;
+}): React.JSX.Element | null {
     const vim = useVimSetting();
     const vimMode = useVimMode();
     const touchInput = useTouchComposer();
-    const { connected } = useStore();
     // Desktop-only (mobile has the navbar at the bottom; this footer is a
-    // Zed/VSCode-style status strip). Below this point the bar ALWAYS renders on
-    // desktop — the connection item keeps it persistent regardless of vim.
+    // Zed/VSCode-style status strip). On desktop it always renders — the session's
+    // live controls (auto-scroll + Stop) live here now, so it's never empty.
     if (touchInput) return null;
 
     const left: React.ReactNode[] = [];
-    const right: React.ReactNode[] = [];
-
-    // Connection status — always present, so the desktop bar never vanishes
-    // (the reason it used to disappear: it was vim-only and returned null when
-    // vim was off). Live = receiving daemon updates; otherwise reconnecting.
-    left.push(
-        <StatusItem
-            key="conn"
-            label={connected ? "Live" : "Reconnecting…"}
-            color={connected ? "success.main" : "warning.main"}
-            tooltip={connected
-                ? "Connected — receiving live daemon updates"
-                : "Reconnecting to the daemon…"}
-        />,
-    );
-
     if (vim) {
         left.push(
             <StatusItem
@@ -225,14 +214,13 @@ function AppStatusBar(): React.JSX.Element | null {
         );
     }
 
-
     return (
         <Box
             sx={{
                 display: "flex",
-                alignItems: "stretch",
-                height: 24,
-                minHeight: 24,
+                alignItems: "center",
+                minHeight: 34,
+                px: 0.25,
                 borderTop: 1,
                 borderColor: "divider",
                 // A whisper of fill so the bar reads as its own surface (material)
@@ -242,13 +230,16 @@ function AppStatusBar(): React.JSX.Element | null {
                 userSelect: "none",
             }}
         >
-            <Stack direction="row" alignItems="stretch">
+            <Stack direction="row" alignItems="center">
                 {left}
             </Stack>
             <Box sx={{ flex: 1 }} />
-            <Stack direction="row" alignItems="stretch">
-                {right}
-            </Stack>
+            {/* The session's live controls — auto-scroll follow + Stop — moved off
+                the navbar into the status bar on desktop (Zed/VSCode keep run/stop in
+                the bottom bar). `dense` shrinks them to fit the strip. */}
+            {sessionId !== undefined && status !== undefined && (
+                <AutoScrollAndStop sessionId={sessionId} status={status} dense />
+            )}
         </Box>
     );
 }
@@ -1596,7 +1587,7 @@ export function App({
                             </Box>
                             {/* Full-width status-bar footer spanning both columns. */}
                             <Box sx={{ order: 2, position: "relative", zIndex: 2 }}>
-                                <AppStatusBar />
+                                <AppStatusBar sessionId={active.id} status={active.status} />
                             </Box>
                         </>
                     ) : (
@@ -1670,7 +1661,7 @@ export function App({
                             {/* Zed/VSCode-style status bar at the very bottom of
                                 the window; inside this measured wrapper so the
                                 transcript reserves it via --composer-h. */}
-                            <AppStatusBar />
+                            <AppStatusBar sessionId={active.id} status={active.status} />
                         </Box>
                     </>
                     )
