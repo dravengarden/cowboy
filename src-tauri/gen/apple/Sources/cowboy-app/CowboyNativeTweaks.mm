@@ -16,7 +16,27 @@
 // keyboard). It cannot be removed from a pure-web PWA — only a native WKWebView
 // owner can, by making the private WKContentView return a nil inputAccessoryView.
 // cowboy has its own in-UI send/compose affordances, so the bar is pure noise.
+//
+// A/B DIAGNOSTIC (tasks/active/cowboy-ios-native-shell-fixes, BUG 1). After the
+// keyboard avoider (#3) was RULED OUT on-device, this swizzle is the prime suspect
+// for the missing empty-area Paste callout: it mutates `WKContentView` — the SAME
+// private view that hosts the caret / selection / edit-menu text interaction. Set
+// to 1 to BUILD WITHOUT this swizzle (the ∧∨ Done bar comes back — expected for the
+// test). If the empty-area long-press Paste menu then RETURNS → this swizzle is the
+// culprit → replace it with a surgical hide that doesn't disturb the text
+// interaction. If it STILL doesn't appear → it's not this; keep digging in wry.
+//
+// A/B RESULT (2026-06-12): disabling this swizzle did NOT bring back the empty-area
+// Paste menu → this swizzle is RULED OUT too. With #3 (avoider) also ruled out and
+// the web byte-identical to Obsidian, the empty-area Paste menu is an UPSTREAM
+// wry/tao WKWebView limitation (wry-v0.55.1 is the latest; no fix in its releases).
+// Re-enabled (=0); the dependable path is the in-UI Paste button (web v222/v224).
+#define COWBOY_AB_DISABLE_INPUT_ACCESSORY_SWIZZLE 0
 __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
+#if COWBOY_AB_DISABLE_INPUT_ACCESSORY_SWIZZLE
+    NSLog(@"[cowboy] A/B: inputAccessoryView swizzle DISABLED for the empty-area Paste test");
+    return;
+#else
     @autoreleasepool {
         Class cls = NSClassFromString(@"WKContentView");
         if (!cls) {
@@ -36,6 +56,7 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
             method_setImplementation(class_getInstanceMethod(cls, sel), nilImp);
         }
     }
+#endif
 }
 
 // (2) Native haptic bridge. iOS web (Safari AND a WKWebView) has no Vibration
@@ -206,7 +227,27 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
 
 @end
 
+// A/B DIAGNOSTIC TOGGLE (tasks/active/cowboy-ios-native-shell-fixes, BUG 1).
+// Set to 1 to BUILD WITHOUT the keyboard avoider, to test whether its `wv.frame`
+// mutation is what suppresses the empty-area long-press Paste callout. With this
+// =1 the keyboard will OVERLAP the composer (no native viewport shrink) — that's
+// expected for the test build; it's purely to isolate the cause. If the Paste
+// menu RETURNS on the empty area with the avoider off → the frame mutation is the
+// culprit → rework `applyOverlap:` to resize via Auto-Layout constraints /
+// scrollView.contentInset instead of `wv.frame =`. If it STILL doesn't appear →
+// the cause is elsewhere (wry's WKWebView config) and we keep the avoider. Flip
+// back to 0 once diagnosed.
+// A/B RESULT (2026-06-12): disabling the avoider did NOT bring back the empty-area
+// Paste menu → the `wv.frame` mutation is RULED OUT as the cause. Avoider re-enabled
+// (=0); the empty-area Paste cause is in wry's WKWebView creation — see the new
+// text-interaction tweak below.
+#define COWBOY_AB_DISABLE_KB_AVOIDER 0
+
 __attribute__((constructor)) static void cowboyInstallKeyboardAvoider(void) {
+#if COWBOY_AB_DISABLE_KB_AVOIDER
+    NSLog(@"[cowboy] A/B: keyboard avoider DISABLED for the empty-area Paste test");
+    return;
+#else
     // Register the observers on the main thread (NotificationCenter delivery +
     // UIKit frame mutation must be main-thread). `+load`/constructors run early —
     // before any window — so defer to the main queue.
@@ -215,4 +256,5 @@ __attribute__((constructor)) static void cowboyInstallKeyboardAvoider(void) {
             (void)[CowboyKeyboardAvoider shared];
         }
     });
+#endif
 }
