@@ -177,6 +177,17 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                selector:@selector(onKeyboardWillHide:)
                    name:UIKeyboardWillHideNotification
                  object:nil];
+        // A 3rd-party keyboard (e.g. WeChat) reports its frame in PHASES on the
+        // FIRST open: WillChangeFrame fires with a frame TALLER than what's actually
+        // rendered that instant, so the avoider OVER-shrinks → a dead gap appears
+        // above the keyboard (it self-heals on the 2nd open, when the keyboard is
+        // warm and reports its settled frame). Re-measure + re-apply on DidShow,
+        // once the final layout is in place, to correct that first-open over-shrink.
+        // (cowboy-ios-native-shell-fixes BUG 2)
+        [nc addObserver:self
+               selector:@selector(onKeyboardDidShow:)
+                   name:UIKeyboardDidShowNotification
+                 object:nil];
     }
     return self;
 }
@@ -210,7 +221,11 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                      completion:nil];
 }
 
-- (void)onKeyboardWillChangeFrame:(NSNotification *)note {
+// Compute the overlap from a keyboard notification's settled end-frame and apply
+// it. Shared by WillChangeFrame (tracks the slide) and DidShow (corrects a
+// 3rd-party keyboard's first-open over-shrink — its end-frame is only trustworthy
+// once the keyboard is actually shown).
+- (void)applyFromNote:(NSNotification *)note {
     WKWebView *wv = gCowboyWebView;
     UIView *parent = wv.superview;
     if (wv == nil || parent == nil || wv.window == nil) return;
@@ -219,6 +234,17 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     CGRect kbInParent = [parent convertRect:kbScreen fromView:nil];
     CGFloat overlap = MAX(0, CGRectGetMaxY(parent.bounds) - CGRectGetMinY(kbInParent));
     [self applyOverlap:overlap userInfo:note.userInfo];
+}
+
+- (void)onKeyboardWillChangeFrame:(NSNotification *)note {
+    [self applyFromNote:note];
+}
+
+// Re-apply once the keyboard has fully settled — fixes the WeChat-keyboard
+// first-open gap (BUG 2). Idempotent with WillChangeFrame for the system keyboard
+// (same settled frame → same overlap → no visible change).
+- (void)onKeyboardDidShow:(NSNotification *)note {
+    [self applyFromNote:note];
 }
 
 - (void)onKeyboardWillHide:(NSNotification *)note {
