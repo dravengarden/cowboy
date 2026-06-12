@@ -3094,6 +3094,14 @@ function SessionInfoSection({
         label="Title"
         value={title}
         onChange={(e): void => setTitle(e.target.value)}
+        onFocus={(e): void => {
+          // Select the whole title on focus, so tapping it to rename lets you
+          // replace it in one go (instead of fiddling a caret into a long string).
+          // Deferred a frame — iOS collapses a synchronous select() back to a caret
+          // as it finishes installing focus/the keyboard.
+          const input = e.target as HTMLInputElement;
+          requestAnimationFrame(() => input.select());
+        }}
         onBlur={commit}
         onKeyDown={(e): void => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
