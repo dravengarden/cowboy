@@ -13,7 +13,6 @@ import {
   CheckBoxOutlined,
   Code,
   CommentOutlined,
-  ContentPaste,
   DataObject,
   FormatBold,
   FormatClear,
@@ -33,7 +32,6 @@ import {
   Undo,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
-import { readClipboardText } from "./nativeShell";
 
 // The context a command runs against. The editor handle covers in-doc actions;
 // `attach` drives the HOST file-picker (attachment isn't editor-only) — which is
@@ -100,23 +98,6 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
   { id: "mention", icon: <AlternateEmail />, label: "Mention file", run: (c): void => c.editor.insertTrigger("@") },
   { id: "slash", icon: <Tag />, label: "Slash command", run: (c): void => c.editor.insertTrigger("/") },
   { id: "attach", icon: <AttachFile />, label: "Insert attachment", run: (c): void => c.attach() },
-  {
-    id: "paste",
-    icon: <ContentPaste />,
-    label: "Paste",
-    // Reliable clipboard paste — the fallback for the iOS native shell, where a
-    // long-press on the EMPTY composer shows no Paste callout (root-caused to the
-    // native keyboard avoider; see tasks/active/cowboy-ios-native-shell-fixes).
-    // `readClipboardText` is native-first: the shell's WKWebView blocks
-    // `navigator.clipboard.readText()`, so it reads UIPasteboard via the native
-    // bridge there and falls back to the web API on the PWA. Text only: clipboard
-    // images still arrive via the attach button. `run` is sync → fire-and-forget.
-    run: (c): void => {
-      void readClipboardText().then((t) => {
-        if (t) c.editor.insertText(t);
-      });
-    },
-  },
 ];
 
 export const COMPOSER_COMMANDS_BY_ID: Readonly<Record<string, ComposerCommand>> = Object

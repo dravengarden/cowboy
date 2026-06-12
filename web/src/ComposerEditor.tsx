@@ -61,11 +61,6 @@ export interface ComposerEditorHandle {
   // Insert a trigger char (`/` or `@`) at the caret + open the picker — used by
   // the action-row buttons. Mirrors the old `appendToken` + focus behavior.
   insertTrigger: (ch: string) => void;
-  /// Insert plain text at the caret, replacing any selection (caret lands after).
-  /// The Paste command's insert — a reliable clipboard paste that doesn't depend
-  /// on the iOS long-press callout (which the native shell can't show on an empty
-  /// area — see tasks/active/cowboy-ios-native-shell-fixes).
-  insertText: (text: string) => void;
   // Insert an image at the caret as an inline `![](cowboy-att:id)` token (the host
   // adds the bytes to `attachments[]`; this renders it as an inline thumbnail).
   insertImage: (a: Attachment) => void;
@@ -393,16 +388,6 @@ export const ComposerEditor = forwardRef<
       });
       view.focus();
       startCompletion(view);
-    },
-    insertText: (text: string): void => {
-      const view = cmRef.current?.view;
-      if (!view || text === "") return;
-      const sel = view.state.selection.main;
-      view.dispatch({
-        changes: { from: sel.from, to: sel.to, insert: text },
-        selection: { anchor: sel.from + text.length },
-      });
-      view.focus();
     },
     insertImage: (a: Attachment): void => {
       const view = cmRef.current?.view;

@@ -243,19 +243,6 @@ export const ComposerTextarea = forwardRef<
         sync(next, pos);
       });
     },
-    insertText: (text: string): void => {
-      const ta = inputRef.current;
-      const at = ta?.selectionStart ?? value.length;
-      const to = ta?.selectionEnd ?? at;
-      const next = value.slice(0, at) + text + value.slice(to);
-      onChange(next);
-      ta?.focus();
-      const pos = at + text.length;
-      requestAnimationFrame(() => {
-        inputRef.current?.setSelectionRange(pos, pos);
-        sync(next, pos);
-      });
-    },
     clear: (): void => undefined,
     // Inline images are CM6-only (the textarea fallback can't host widgets); a
     // no-op keeps the shared handle satisfied. Touch paths that hit this fallback

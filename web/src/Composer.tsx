@@ -45,7 +45,6 @@ import {
   ChevronRight,
   Close,
   CloseFullscreen,
-  ContentPaste,
   DeleteOutline,
   DragIndicator,
   DriveFileMoveOutlined,
@@ -123,7 +122,6 @@ import {
   useStore,
 } from "./store";
 import { haptic } from "./haptic";
-import { readClipboardText } from "./nativeShell";
 import { useSortable } from "./useSortable";
 import { getDraft, setDraft } from "./draftStore";
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -1260,27 +1258,6 @@ export function Composer({
               onClick={(): void => fileInputRef.current?.click()}
             >
               <AttachFile />
-            </IconButton>
-          </span>
-        </Tooltip>
-        {/* Paste — a reliable one-tap clipboard paste right in the inline composer.
-            The iOS native shell shows no long-press Paste callout on the empty
-            composer (a wry WKWebView issue — the keyboard-avoider was ruled out by
-            an on-device A/B; see cowboy-ios-native-shell-fixes), so this button is
-            the dependable path. Text only; inserts at the caret via the editor. */}
-        <Tooltip title="Paste">
-          <span>
-            <IconButton
-              aria-label="paste from clipboard"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => {
-                void readClipboardText().then((t) => {
-                  if (t) editorRef.current?.insertText(t);
-                });
-              }}
-            >
-              <ContentPaste />
             </IconButton>
           </span>
         </Tooltip>

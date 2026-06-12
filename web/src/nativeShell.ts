@@ -17,29 +17,3 @@ export function isNativeShell(): boolean {
   if (typeof window === "undefined") return false;
   return (window as { __cowboyNativeShell?: boolean }).__cowboyNativeShell === true;
 }
-
-// Read clipboard text, native-first. The iOS WKWebView shell does NOT grant
-// `navigator.clipboard.readText()` (it rejects / returns empty — unlike Safari),
-// which is why the in-composer Paste button silently no-op'd on the device. The
-// native layer (`CowboyNativeTweaks.mm`) exposes a reply-style bridge at
-// `window.__cowboyReadClipboard()` that reads `UIPasteboard.general` and returns a
-// Promise<string>; prefer it in the shell. On the PWA / browser fall back to the
-// web Clipboard API (where it works and shows the iOS paste affordance). Returns ""
-// on any failure so callers can just guard on a non-empty result.
-export async function readClipboardText(): Promise<string> {
-  if (typeof window === "undefined") return "";
-  const bridge = (window as { __cowboyReadClipboard?: () => Promise<unknown> }).__cowboyReadClipboard;
-  if (typeof bridge === "function") {
-    try {
-      const t = await bridge();
-      return typeof t === "string" ? t : "";
-    } catch {
-      return "";
-    }
-  }
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return "";
-  }
-}

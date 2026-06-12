@@ -28,7 +28,6 @@ export const DEFAULT_COMPOSER_TOOLBAR: readonly string[] = [
   "mention",
   "slash",
   "attach",
-  "paste",
 ];
 
 const store = persisted<string[]>(
