@@ -13,6 +13,7 @@ import {
   CheckBoxOutlined,
   Code,
   CommentOutlined,
+  ContentPaste,
   DataObject,
   FormatBold,
   FormatClear,
@@ -98,6 +99,26 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
   { id: "mention", icon: <AlternateEmail />, label: "Mention file", run: (c): void => c.editor.insertTrigger("@") },
   { id: "slash", icon: <Tag />, label: "Slash command", run: (c): void => c.editor.insertTrigger("/") },
   { id: "attach", icon: <AttachFile />, label: "Insert attachment", run: (c): void => c.attach() },
+  {
+    id: "paste",
+    icon: <ContentPaste />,
+    label: "Paste",
+    // Reliable clipboard paste — the fallback for the iOS native shell, where a
+    // long-press on the EMPTY composer shows no Paste callout (root-caused to the
+    // native keyboard avoider; see tasks/active/cowboy-ios-native-shell-fixes).
+    // Text only: clipboard images still arrive via the attach button or a native
+    // paste on a non-empty area. `run` is sync, so fire the async read + insert.
+    run: (c): void => {
+      void navigator.clipboard
+        .readText()
+        .then((t) => {
+          if (t) c.editor.insertText(t);
+        })
+        .catch(() => {
+          /* clipboard blocked / empty / unsupported — no-op */
+        });
+    },
+  },
 ];
 
 export const COMPOSER_COMMANDS_BY_ID: Readonly<Record<string, ComposerCommand>> = Object
