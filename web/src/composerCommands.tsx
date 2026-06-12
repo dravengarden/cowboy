@@ -33,6 +33,7 @@ import {
   Undo,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
+import { readClipboardText } from "./nativeShell";
 
 // The context a command runs against. The editor handle covers in-doc actions;
 // `attach` drives the HOST file-picker (attachment isn't editor-only) — which is
@@ -106,17 +107,14 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
     // Reliable clipboard paste — the fallback for the iOS native shell, where a
     // long-press on the EMPTY composer shows no Paste callout (root-caused to the
     // native keyboard avoider; see tasks/active/cowboy-ios-native-shell-fixes).
-    // Text only: clipboard images still arrive via the attach button or a native
-    // paste on a non-empty area. `run` is sync, so fire the async read + insert.
+    // `readClipboardText` is native-first: the shell's WKWebView blocks
+    // `navigator.clipboard.readText()`, so it reads UIPasteboard via the native
+    // bridge there and falls back to the web API on the PWA. Text only: clipboard
+    // images still arrive via the attach button. `run` is sync → fire-and-forget.
     run: (c): void => {
-      void navigator.clipboard
-        .readText()
-        .then((t) => {
-          if (t) c.editor.insertText(t);
-        })
-        .catch(() => {
-          /* clipboard blocked / empty / unsupported — no-op */
-        });
+      void readClipboardText().then((t) => {
+        if (t) c.editor.insertText(t);
+      });
     },
   },
 ];

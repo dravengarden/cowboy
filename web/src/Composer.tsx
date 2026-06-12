@@ -123,6 +123,7 @@ import {
   useStore,
 } from "./store";
 import { haptic } from "./haptic";
+import { readClipboardText } from "./nativeShell";
 import { useSortable } from "./useSortable";
 import { getDraft, setDraft } from "./draftStore";
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -1274,14 +1275,9 @@ export function Composer({
               disabled={dead}
               sx={TOOLBAR_ICON_BTN}
               onClick={(): void => {
-                void navigator.clipboard
-                  .readText()
-                  .then((t) => {
-                    if (t) editorRef.current?.insertText(t);
-                  })
-                  .catch(() => {
-                    /* clipboard blocked / empty / unsupported — no-op */
-                  });
+                void readClipboardText().then((t) => {
+                  if (t) editorRef.current?.insertText(t);
+                });
               }}
             >
               <ContentPaste />
