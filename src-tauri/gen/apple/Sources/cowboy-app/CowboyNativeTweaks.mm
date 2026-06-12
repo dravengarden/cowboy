@@ -87,6 +87,28 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 }
 @end
 
+// (2b) Native clipboard READ bridge. iOS WKWebView does NOT grant
+// `navigator.clipboard.readText()` (Safari does; a WKWebView app does not), so the
+// web UI's in-composer Paste button silently no-op'd in the shell. Expose the
+// system pasteboard via a reply-style script handler: JS calls
+// `window.__cowboyReadClipboard()` and gets a Promise that resolves to
+// `UIPasteboard.general.string`. Reply variant (WKScriptMessageHandlerWithReply,
+// iOS 14+) is what lets the handler return a value to the JS Promise. The "Pasted
+// from …" banner iOS shows on read is the expected, correct affordance. Text only;
+// images still go through the attach button. (cowboy-ios-native-shell-fixes BUG 1
+// fallback — the dependable paste path now actually works in the shell.)
+@interface CowboyClipboardHandler : NSObject <WKScriptMessageHandlerWithReply>
+@end
+
+@implementation CowboyClipboardHandler
+- (void)userContentController:(WKUserContentController *)ucc
+      didReceiveScriptMessage:(WKScriptMessage *)message
+                 replyHandler:(void (^)(id _Nullable, NSString *_Nullable))replyHandler {
+    NSString *s = UIPasteboard.generalPasteboard.string;
+    replyHandler(s != nil ? s : @"", nil);
+}
+@end
+
 // The shell's main WKWebView, captured at creation (below) for the keyboard
 // avoider. Weak: the avoider just no-ops if it's gone.
 static __weak WKWebView *gCowboyWebView = nil;
@@ -114,9 +136,29 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                     // Re-adding the same name on a ucc throws; the @try swallows it
                     // (a webview reusing a ucc keeps the first registration).
                     [ucc addScriptMessageHandler:handler name:@"cowboyHaptic"];
+                    // Clipboard read bridge (own @try: a re-add throw on a reused
+                    // ucc must not block the haptic/native-shell wiring above, and
+                    // the reply API is iOS 14+ so guard it).
+                    @try {
+                        if (@available(iOS 14.0, *)) {
+                            static CowboyClipboardHandler *clip;
+                            static dispatch_once_t clipOnce;
+                            dispatch_once(&clipOnce, ^{ clip = [[CowboyClipboardHandler alloc] init]; });
+                            [ucc addScriptMessageHandlerWithReply:clip
+                                                     contentWorld:WKContentWorld.pageWorld
+                                                             name:@"cowboyClipboard"];
+                        }
+                    } @catch (__unused NSException *e) {
+                    }
                     NSString *js =
                         @"window.__cowboyHaptic=function(){try{"
                         @"window.webkit.messageHandlers.cowboyHaptic.postMessage(0)}catch(e){}};"
+                        // Native clipboard READ (see CowboyClipboardHandler): returns
+                        // a Promise<string>. The web's Paste button prefers this in
+                        // the shell (navigator.clipboard.readText is blocked here).
+                        @"window.__cowboyReadClipboard=function(){try{"
+                        @"return window.webkit.messageHandlers.cowboyClipboard.postMessage(0)}"
+                        @"catch(e){return Promise.reject(e)}};"
                         // ARM the web's native-shell gate (src/nativeShell.ts): the
                         // shell now does native keyboard avoidance (below), so the
                         // web drops its position:fixed/translateZ/IME-composition
