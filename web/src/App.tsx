@@ -190,10 +190,28 @@ function AppStatusBar(): React.JSX.Element | null {
     const vim = useVimSetting();
     const vimMode = useVimMode();
     const touchInput = useTouchComposer();
+    const { connected } = useStore();
+    // Desktop-only (mobile has the navbar at the bottom; this footer is a
+    // Zed/VSCode-style status strip). Below this point the bar ALWAYS renders on
+    // desktop — the connection item keeps it persistent regardless of vim.
     if (touchInput) return null;
 
     const left: React.ReactNode[] = [];
     const right: React.ReactNode[] = [];
+
+    // Connection status — always present, so the desktop bar never vanishes
+    // (the reason it used to disappear: it was vim-only and returned null when
+    // vim was off). Live = receiving daemon updates; otherwise reconnecting.
+    left.push(
+        <StatusItem
+            key="conn"
+            label={connected ? "Live" : "Reconnecting…"}
+            color={connected ? "success.main" : "warning.main"}
+            tooltip={connected
+                ? "Connected — receiving live daemon updates"
+                : "Reconnecting to the daemon…"}
+        />,
+    );
 
     if (vim) {
         left.push(
@@ -207,7 +225,6 @@ function AppStatusBar(): React.JSX.Element | null {
         );
     }
 
-    if (left.length === 0 && right.length === 0) return null;
 
     return (
         <Box
