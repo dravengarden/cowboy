@@ -1178,21 +1178,23 @@ export function App({
                             height: "100%",
                             cursor: "col-resize",
                             zIndex: 2,
-                            // Centered 1px accent line that thickens on hover /
-                            // while dragging — the visible part of the handle.
+                            // Centered VSCode-style hairline: a SOLID 1px line
+                            // (divider) that just recolours to the accent on hover /
+                            // while dragging — never thickens. Identical to the
+                            // composer-column divider below so the two read the same.
                             "&::after": {
                                 content: '""',
                                 position: "absolute",
                                 top: 0,
                                 left: "50%",
                                 transform: "translateX(-50%)",
-                                width: resizing ? 2 : 1,
+                                width: "1px",
                                 height: "100%",
-                                bgcolor: resizing ? "primary.main" : "transparent",
+                                bgcolor: resizing ? "primary.main" : "divider",
                                 transition: "background-color 120ms",
                             },
                             "&:hover::after": {
-                                bgcolor: resizing ? "primary.main" : "primary.light",
+                                bgcolor: "primary.main",
                             },
                         }}
                     />
@@ -1539,14 +1541,17 @@ export function App({
                                     sx={{
                                         flex: "0 0 auto",
                                         alignSelf: "stretch",
+                                        // Identical VSCode-style hairline to the sidebar
+                                        // divider above: a solid 1px line that recolours
+                                        // to the accent on hover / drag, with the same
+                                        // wide invisible hit area — so both read the same.
                                         width: "1px",
-                                        bgcolor: "divider",
+                                        bgcolor: colResizing ? "primary.main" : "divider",
+                                        transition: "background-color 120ms",
                                         position: "relative",
                                         cursor: "col-resize",
                                         touchAction: "none",
                                         zIndex: 3,
-                                        // Invisible wide hit area centred on the line —
-                                        // generous so the thin 1px divider is easy to grab.
                                         "&::after": {
                                             content: '""',
                                             position: "absolute",
@@ -1556,7 +1561,6 @@ export function App({
                                             right: "-11px",
                                         },
                                         "&:hover": { bgcolor: "primary.main" },
-                                        ...(colResizing && { bgcolor: "primary.main" }),
                                     }}
                                 />
                                 {/* Transcript column (right) */}
