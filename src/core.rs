@@ -2570,6 +2570,15 @@ impl Hub {
         }
         tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), "retry_turn: re-submitting last prompt");
         let _ = self.force_submit(session_id, prompt, Vec::new(), None, true);
+        // force_submit DISPATCHES only when the queue is empty AND the session is
+        // ready; with messages already queued — or a crashed/exited session — it
+        // just parks the prompt at the queue FRONT and emits pending. That left
+        // Retry looking like "added to the top of the queue, now send it yourself".
+        // Drain the head WITH revive (the same path resume_turn uses) so Retry runs
+        // the prompt immediately, reviving a dead session — no manual send. Safe
+        // after a direct dispatch too: force_submit set `in_flight`, so `ready`
+        // returns false and this drain no-ops (no double send).
+        self.drain_head(session_id, true, true);
     }
 
     /// Move a queued prompt back to drafts.
