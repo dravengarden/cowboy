@@ -1313,6 +1313,15 @@ export function dismissAwaiting(sessionId: string): void {
   send({ type: "set_awaiting", session_id: sessionId, awaiting: false });
 }
 
+// Manually PAUSE / RESUME the queue drain (the ⏸ toggle). Paused holds the
+// auto-drain — queued messages don't advance even after the current turn ends —
+// without interrupting the running turn. The daemon broadcasts the flag back, so
+// every terminal reflects it within a round-trip (non-optimistic, like
+// dismissAwaiting).
+export function setPaused(sessionId: string, paused: boolean): void {
+  send({ type: "set_paused", session_id: sessionId, paused });
+}
+
 /** The latest confirm-detect judge result for a session (overlay raw-data expand). */
 export function useJudgeResult(sessionId: string): JudgeResult | undefined {
   return useStore().judgeResults[sessionId];

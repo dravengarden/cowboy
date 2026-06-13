@@ -676,6 +676,9 @@ impl SessionRow {
             done: self.done,
             // Transient — a restored session is never mid-judge.
             judging: false,
+            // Transient — the manual pause is in-memory only (not persisted), so a
+            // restored session always comes back un-paused.
+            paused: false,
         }
     }
 }

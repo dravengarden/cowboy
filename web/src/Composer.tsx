@@ -55,6 +55,8 @@ import {
   OpenInFull,
   Refresh,
   Send,
+  Pause,
+  PlayArrow,
   Stop,
   SwapVert,
   Tune,
@@ -115,6 +117,7 @@ import {
   requestSendQueued,
   retryQueued,
   send,
+  setPaused,
   setQueueEditing,
   submitPrompt,
   useInferenceConfig,
@@ -2037,6 +2040,12 @@ function PendingPanel({
   // like `collapsed`. Per-panel state → drafts and queue toggle independently.
   const [reordering, setReordering] = useState(false);
   const count = items.length;
+  // The manual queue pause holds the QUEUE drain only (drafts never auto-drain),
+  // so the "Paused" badge shows on the queued panel — that's why its messages
+  // aren't advancing. Read live so it tracks the toggle.
+  const { sessions } = useStore();
+  const queueHeld = kind === "queued" &&
+    (sessions.find((s) => s.id === sessionId)?.paused ?? false);
   // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
   // toggle) so a cleared/sent-down panel never sits stuck in an empty mode.
   useEffect(() => {
@@ -2117,12 +2126,36 @@ function PendingPanel({
         </IconButton>
         <Typography
           variant="caption"
-          sx={{ fontWeight: 600, flex: 1, minWidth: 0, cursor: "pointer" }}
+          sx={{ fontWeight: 600, minWidth: 0, cursor: "pointer" }}
           onClick={toggleCollapsed}
         >
           {count} {noun}
           {count === 1 ? "" : "s"}
         </Typography>
+        {/* Why-it's-held badge: the queue is manually paused, so it won't drain
+            until the user resumes (the ⏸ toggle in the nav/status bar). */}
+        {queueHeld && (
+          <Box
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.25,
+              ml: 0.75,
+              px: 0.625,
+              py: 0.125,
+              borderRadius: 1,
+              bgcolor: "warning.main",
+              color: "warning.contrastText",
+              flexShrink: 0,
+            }}
+          >
+            <Pause sx={{ fontSize: "0.875rem" }} />
+            <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+              Paused
+            </Typography>
+          </Box>
+        )}
+        <Box sx={{ flex: 1, minWidth: 0 }} />
         {
           /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
             only shown) with 2+ rows. Primary-tinted while active. HIDDEN on a wide
@@ -2835,6 +2868,8 @@ export function AutoScrollAndStop({
   dense?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
+  const { sessions } = useStore();
+  const paused = sessions.find((s) => s.id === sessionId)?.paused ?? false;
   const [cancelOpen, setCancelOpen] = useState(false);
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
@@ -2859,6 +2894,24 @@ export function AutoScrollAndStop({
           }}
         >
           <VerticalAlignBottom fontSize={size} />
+        </IconButton>
+      </Tooltip>
+      {/* Manual queue PAUSE / RESUME (separate from Stop): holds the auto-drain so
+          queued messages don't advance even after the current turn ends, WITHOUT
+          interrupting the running turn. Tap again to resume. Warning-tinted +
+          shows ▶ while held so the hold is obvious. Always shown (pausing is valid
+          anytime — you can pre-pause before queuing). */}
+      <Tooltip title={paused ? "Queue paused — tap to resume" : "Pause queue"}>
+        <IconButton
+          size={size}
+          aria-label={paused ? "resume queue" : "pause queue"}
+          color={paused ? "warning" : "default"}
+          onClick={(): void => {
+            haptic();
+            setPaused(sessionId, !paused);
+          }}
+        >
+          {paused ? <PlayArrow fontSize={size} /> : <Pause fontSize={size} />}
         </IconButton>
       </Tooltip>
       {/* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —

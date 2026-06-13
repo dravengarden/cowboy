@@ -51,6 +51,11 @@ export interface SessionMeta {
    *  (between the provisional hold and the verdict). Drives the pill's "Judging…"
    *  loading state. Transient, never persisted. */
   judging?: boolean;
+  /** User-set MANUAL PAUSE of the queue drain (the ⏸ toggle). While true queued
+   *  messages don't auto-advance (even after the turn ends), but the running turn
+   *  isn't interrupted. Released by the user to resume. Transient, never
+   *  persisted (resets to false on a daemon restart). */
+  paused?: boolean;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -321,6 +326,7 @@ export type Inbound =
   // Confirm-detect: clear/set the "awaiting user" hold (the awaiting widget's
   // dismiss / Send). `awaiting: false` = "not a question" → drain the held queue.
   | { type: "set_awaiting"; session_id: string; awaiting: boolean }
+  | { type: "set_paused"; session_id: string; paused: boolean }
   // Overlay actions for interrupted / errored turns.
   | { type: "resume_turn"; session_id: string }
   | { type: "retry_turn"; session_id: string }

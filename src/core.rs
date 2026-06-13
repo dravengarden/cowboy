@@ -242,6 +242,14 @@ pub struct SessionMeta {
     /// restart; `serde(default)` covers old clients + the restore path.
     #[serde(default)]
     pub judging: bool,
+    /// User-set MANUAL PAUSE of the queue drain (the ⏸ toggle). While true the
+    /// auto-drain is HELD — queued messages don't advance even after the current
+    /// turn ends — but the running turn is NOT interrupted (it finishes). The
+    /// user toggles it (`SetPaused`) and releases it to resume. A MANUAL send
+    /// still overrides it. In-memory only (transient — resets to false on a
+    /// daemon restart); `serde(default)` covers old clients + the restore path.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -440,6 +448,12 @@ pub enum Inbound {
     SetAwaiting {
         session_id: String,
         awaiting: bool,
+    },
+    /// User toggle: manually pause/resume the queue drain. Holds the auto-drain
+    /// without interrupting the running turn (see [`Hub::set_paused`]).
+    SetPaused {
+        session_id: String,
+        paused: bool,
     },
     /// Overlay action: resume an interrupted turn (inject the continuation + run).
     ResumeTurn {
@@ -1191,6 +1205,7 @@ impl Hub {
             awaiting_user: false,
             done: false,
             judging: false,
+            paused: false,
         };
         {
             let mut sessions = self.inner.sessions.lock();
@@ -1455,6 +1470,33 @@ impl Hub {
             self.persist_verdict(session_id, awaiting, done);
             self.broadcast_sessions();
             if !awaiting {
+                self.try_drain(session_id);
+            }
+        }
+    }
+
+    /// Manually PAUSE / RESUME the queue drain (the user's ⏸ toggle). Pausing
+    /// holds the auto-drain (`drain_head` returns early on `paused`) WITHOUT
+    /// touching the running turn — it finishes normally; only the next queued
+    /// message is held. Resuming kicks the drain (which still waits for any
+    /// in-flight turn to end, then advances). In-memory only (not persisted) +
+    /// broadcast so every terminal reflects the state. No-op when unchanged.
+    pub fn set_paused(&self, session_id: &str, paused: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.paused != paused => {
+                    s.meta.paused = paused;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+            // Resuming → try to advance now (an idle session with a queue drains
+            // immediately; a busy one drains on the next turn-end as usual).
+            if !paused {
                 self.try_drain(session_id);
             }
         }
@@ -2295,6 +2337,13 @@ impl Hub {
             // queue so the next message isn't auto-sent as a wrong answer. A manual
             // send overrides this (the user chose to send anyway).
             if !manual && s.meta.awaiting_user {
+                return;
+            }
+            // The user MANUALLY paused the drain (the ⏸ toggle) → hold the queue
+            // exactly like awaiting_user: the running turn still finishes, but no
+            // queued message auto-advances until they resume. A manual send still
+            // overrides (the user can force a specific message through).
+            if !manual && s.meta.paused {
                 return;
             }
             if s.queue.is_empty() {
