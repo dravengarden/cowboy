@@ -13,7 +13,6 @@ import {
   Box,
   Button,
   CircularProgress,
-  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -2170,7 +2169,14 @@ function PendingPanel({
           }}
         />
       </Stack>
-      <Collapse in={!collapsed}>
+      {/* Instant show/hide — NOT MUI <Collapse>: its 300ms height animation
+          re-fired the composer-height ResizeObserver (App.tsx measureGlass) and
+          reflowed every row's CodeMirror preview EACH frame; in sticky mode the
+          transcript then repainted its heavy newest content per frame — the
+          reported expand/collapse jank. `display:none` keeps the rows mounted
+          (no remount cost), costs no layout/paint while collapsed, and resizes
+          the composer ONCE, so the transcript inset recomputes once. */}
+      <Box sx={{ display: collapsed ? "none" : "block" }}>
         <Stack
           spacing={0.5}
           sx={{
@@ -2245,7 +2251,7 @@ function PendingPanel({
             );
           })}
         </Stack>
-      </Collapse>
+      </Box>
     </Box>
   );
 }
