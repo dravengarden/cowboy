@@ -52,6 +52,14 @@ impl Supervisor {
         }
     }
 
+    /// The workspace root sessions resolve against (default `/home/draven`).
+    /// Exposed so the server can enumerate selectable workspaces beneath it
+    /// (the columbus project registry lives at `<root>/columbus/project-defs`).
+    #[must_use]
+    pub fn workspace_root(&self) -> &std::path::Path {
+        &self.workspace_root
+    }
+
     /// Create a new session for `provider`, optionally rooted at `cwd`
     /// (resolved under the workspace root), tagged with the surface
     /// (`origin`) that opened it. Returns the cowboy session id.

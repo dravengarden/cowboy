@@ -677,6 +677,12 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    // Working-dir choices: start from the hard-coded fallback, then replace with
+    // the daemon's `/api/workspaces` (host roots + every columbus-managed
+    // project) once the dialog opens. Falling back keeps the dialog usable if
+    // the endpoint is unreachable (older daemon / fetch error).
+    const [workspaces, setWorkspaces] =
+        useState<readonly { value: string; label: string; help: string }[]>(WORKING_DIRS);
     // Editable session title (defaults to the cwd label as a placeholder you type
     // over). Empty on Create → renameSession no-ops → the daemon's default +
     // first-prompt auto-title apply as before.
@@ -693,6 +699,17 @@ function NewSessionDialog({
             titleRef.current?.select();
         }, 60);
         return () => globalThis.clearTimeout(t);
+    }, [open]);
+    useEffect(() => {
+        if (!open) return;
+        void fetch("/api/workspaces")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { value: string; label: string; help: string }[] | null) => {
+                if (Array.isArray(data) && data.length > 0) setWorkspaces(data);
+            })
+            .catch(() => {
+                // Keep the hard-coded fallback on any error.
+            });
     }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
@@ -771,10 +788,10 @@ function NewSessionDialog({
                     value={cwd}
                     onChange={(e): void => setCwd(e.target.value)}
                     helperText={
-                        WORKING_DIRS.find((w) => w.value === cwd)?.help ?? ""
+                        workspaces.find((w) => w.value === cwd)?.help ?? ""
                     }
                 >
-                    {WORKING_DIRS.map((w) => (
+                    {workspaces.map((w) => (
                         <MenuItem key={w.value} value={w.value}>
                             {w.label}
                         </MenuItem>

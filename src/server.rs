@@ -316,6 +316,7 @@ async fn serve_axum(
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
+        .route("/api/workspaces", get(api_workspaces))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
@@ -422,6 +423,74 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         daemon_rss_bytes: daemon_rss_bytes(),
     })
     .into_response()
+}
+
+/// One selectable working directory for the New Session dialog's dropdown.
+#[derive(Debug, Serialize)]
+struct Workspace {
+    /// Sent to the daemon as `cwd` (absolute paths are honoured as-is).
+    value: String,
+    /// Short display name shown in the dropdown.
+    label: String,
+    /// Secondary line — the resolved absolute path or a description.
+    help: String,
+}
+
+/// Resolve a registered project's session cwd from its on-disk layout:
+/// `projects/<name>/main` for an external worktree, else `projects/<name>`
+/// itself for a subdir project. `None` for a registered-but-not-checked-out
+/// project (no `main` worktree and nothing on disk but a bare clone).
+fn project_worktree(columbus: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let proj = columbus.join("projects").join(name);
+    let main = proj.join("main");
+    if main.is_dir() {
+        return Some(main);
+    }
+    // Subdir project: the dir itself holds the checkout. Skip a dir that is
+    // only a bare clone (`.bare` with no worktree, e.g. an uncloned external).
+    let has_content = std::fs::read_dir(&proj)
+        .ok()?
+        .filter_map(Result::ok)
+        .any(|e| e.file_name() != ".bare");
+    has_content.then_some(proj)
+}
+
+/// `GET /api/workspaces` — the selectable session roots for the New Session
+/// dialog: the two host roots (columbus, /etc/nixos) plus one entry per
+/// columbus-managed project, read from `<workspace-root>/columbus/project-defs/*`
+/// (the registry is the source of truth for which projects exist) and resolved
+/// to each project's worktree. The frontend keeps a hard-coded fallback for when
+/// this is unreachable.
+async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
+    let columbus = state.supervisor.workspace_root().join("columbus");
+    let mut out = vec![
+        Workspace {
+            value: "columbus".to_owned(),
+            label: "columbus".to_owned(),
+            help: columbus.display().to_string(),
+        },
+        Workspace {
+            value: "/etc/nixos".to_owned(),
+            label: "/etc/nixos".to_owned(),
+            help: "NixOS host config".to_owned(),
+        },
+    ];
+    if let Ok(entries) = std::fs::read_dir(columbus.join("project-defs")) {
+        let mut names: Vec<String> = entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "schema" && n != "cue.mod")
+            .collect();
+        names.sort();
+        for name in names {
+            if let Some(dir) = project_worktree(&columbus, &name) {
+                let path = dir.display().to_string();
+                out.push(Workspace { value: path.clone(), label: name, help: path });
+            }
+        }
+    }
+    Json(out).into_response()
 }
 
 async fn api_session_info(State(state): State<Arc<AppState>>, Path(session_id): Path<String>) -> Response {
