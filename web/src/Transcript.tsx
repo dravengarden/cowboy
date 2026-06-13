@@ -45,6 +45,7 @@ import {
   Refresh,
   Search,
   Terminal,
+  UnfoldLess,
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
@@ -327,6 +328,105 @@ function StreamingCaret(): React.JSX.Element {
   );
 }
 
+// Claude Code's auto-compaction notice. When its context window fills, the
+// agent streams a STANDALONE assistant message whose entire text is the literal
+// "Compacting..." (its own messageId, no `_meta`) while it condenses history,
+// then continues the turn under a fresh message. Rendered verbatim it reads as a
+// stray one-word reply, so this widget gives it a purpose-built treatment.
+const COMPACTING_TEXT = "Compacting...";
+
+// True when a message item is exactly that compaction notice — every chunk is
+// text and the concatenation trims to the literal. Concatenate (not "first
+// chunk") so a split stream still matches.
+function isCompactingMessage(chunks: ContentChunk[]): boolean {
+  if (chunks.length === 0) return false;
+  let text = "";
+  for (const c of chunks) {
+    if (c.type !== "text") return false;
+    text += c.text;
+  }
+  return text.trim() === COMPACTING_TEXT;
+}
+
+// The fold icon's gentle vertical squeeze — "condensing" made literal. Compositor
+// transform only (cheap on mobile); frozen under prefers-reduced-motion.
+const fold = keyframes`
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(0.6); }
+`;
+
+// Two states, because the notice is PERSISTED in the transcript and stays in
+// scrollback after compaction ends:
+//   • active (`active` — it's the live tail and the turn is still busy): a
+//     terracotta shimmer + a squeezing fold icon = "condensing right now".
+//   • done   (anything followed it / the turn is idle): a calm, static muted
+//     "Context compacted" note — no infinite shimmer implying it's still going.
+function CompactingWidget({ active }: { active: boolean }): React.JSX.Element {
+  const theme = useTheme();
+  const muted = theme.palette.text.secondary;
+  // Claude Code brand terracotta — this is a CC operation, matching ClaudeThinking.
+  const accent = "#D97757";
+  const reducedMotion = globalThis.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  return (
+    <Stack
+      direction="row"
+      spacing={0.75}
+      alignItems="center"
+      sx={{
+        alignSelf: "flex-start",
+        my: 0.25,
+        px: 1,
+        py: 0.4,
+        borderRadius: 1.5,
+        border: 1,
+        borderColor: active ? alpha(accent, 0.35) : "divider",
+        bgcolor: active ? alpha(accent, 0.08) : "action.hover",
+      }}
+    >
+      <UnfoldLess
+        aria-hidden
+        sx={{
+          fontSize: 16,
+          color: active ? accent : muted,
+          ...(active &&
+            !reducedMotion && {
+              animation: `${fold} 1.4s ease-in-out infinite`,
+            }),
+        }}
+      />
+      {active ? (
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 500,
+            letterSpacing: 0.2,
+            background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
+            backgroundSize: "200% 100%",
+            WebkitBackgroundClip: "text",
+            backgroundClip: "text",
+            color: "transparent",
+            animation: `${shimmer} 2.4s linear infinite`,
+            "@media (prefers-reduced-motion: reduce)": {
+              animation: "none",
+              background: "none",
+              color: muted,
+              WebkitTextFillColor: muted,
+            },
+          }}
+        >
+          Compacting context…
+        </Typography>
+      ) : (
+        <Typography variant="caption" sx={{ color: muted, fontWeight: 500 }}>
+          Context compacted
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
 function toolColor(status: string): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
   if (status === "failed") return "error";
@@ -588,6 +688,12 @@ function MessageBubble({
   autoResumed?: boolean;
 }): React.JSX.Element {
   const mine = role === "user";
+  // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
+  // instead of a stray one-word assistant reply. `streaming` (last item + turn
+  // busy) means it's condensing right now; otherwise it's a finished record.
+  if (!mine && isCompactingMessage(chunks)) {
+    return <CompactingWidget active={!!streaming} />;
+  }
   const lastChunkIdx = chunks.length - 1;
   const body = chunks.map((c, i) => (
     <Box key={i} sx={{ position: "relative" }}>
