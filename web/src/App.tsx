@@ -683,17 +683,26 @@ function NewSessionDialog({
     // the endpoint is unreachable (older daemon / fetch error).
     const [workspaces, setWorkspaces] =
         useState<readonly { value: string; label: string; help: string }[]>(WORKING_DIRS);
-    // Editable session title (defaults to the cwd label as a placeholder you type
-    // over). Empty on Create → renameSession no-ops → the daemon's default +
-    // first-prompt auto-title apply as before.
-    const [title, setTitle] = useState<string>(WORKING_DIRS[0].label);
+    // Editable session title. Empty on Create → renameSession no-ops → the
+    // daemon's default + first-prompt auto-title apply. RESET to a fresh default
+    // on every open (below): the sheet stays mounted, so this state would
+    // otherwise survive and show the last-typed value.
+    const [title, setTitle] = useState<string>("");
     const titleRef = useRef<HTMLInputElement>(null);
-    // On open: focus the title field + select its default so a name can be typed
-    // straight away. autoFocus (below) is the keyboard's best shot within the
-    // opening tap's gesture window — iOS only raises it for an in-gesture focus;
-    // the delayed select() then highlights the default text once the sheet mounts.
+    // Session count, captured in a ref so its default name is computed at open
+    // time WITHOUT a session arriving mid-edit clobbering what you're typing.
+    const { sessions } = useStore();
+    const sessionCountRef = useRef(sessions.length);
+    sessionCountRef.current = sessions.length;
+    // On open: reset to a fresh "New session N" default (N keeps it distinct if
+    // you open several without renaming), then focus + select it so you can type
+    // a name straight away — or clear it to let the first message auto-name.
+    // autoFocus (below) is the keyboard's best shot within the opening tap's
+    // gesture window (iOS only raises it for an in-gesture focus); the delayed
+    // select() highlights the default once the sheet has mounted the field.
     useEffect(() => {
         if (!open) return undefined;
+        setTitle(`New session ${sessionCountRef.current + 1}`);
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();
             titleRef.current?.select();
@@ -768,7 +777,7 @@ function NewSessionDialog({
                     inputRef={titleRef}
                     autoFocus
                     placeholder="Name this session"
-                    helperText="Leave as-is to auto-name from the first message"
+                    helperText="Clear to auto-name from the first message"
                 />
                 <TextField
                     select
