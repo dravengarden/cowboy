@@ -250,6 +250,12 @@ pub struct SessionMeta {
     /// daemon restart); `serde(default)` covers old clients + the restore path.
     #[serde(default)]
     pub paused: bool,
+    /// True for the machine-driven memory janitor SYSTEM session: visible and
+    /// watchable in the UI but VIEW-ONLY — the composer is hidden and user turns
+    /// are rejected; only the backend wake endpoint drives it. Persisted
+    /// (migration 0010) so it survives a daemon restart. See mnemosyne.
+    #[serde(default)]
+    pub system: bool,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -1206,6 +1212,7 @@ impl Hub {
             done: false,
             judging: false,
             paused: false,
+            system: false,
         };
         {
             let mut sessions = self.inner.sessions.lock();

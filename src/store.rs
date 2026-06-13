@@ -131,7 +131,7 @@ impl Store {
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, cwd, title, origin, status, agent_session_id, auto_resume, \
-             awaiting_user, done, next_seq, queue, drafts, judge_runs, created_at \
+             awaiting_user, done, system, next_seq, queue, drafts, judge_runs, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -207,8 +207,8 @@ impl Store {
     /// If the row already exists or the INSERT fails.
     pub async fn insert_session(&self, m: &SessionMeta) -> Result<()> {
         sqlx::query(
-            "INSERT INTO sessions(id, provider, cwd, title, origin, status, next_seq) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+            "INSERT INTO sessions(id, provider, cwd, title, origin, status, next_seq, system) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7)",
         )
         .bind(&m.id)
         .bind(&m.provider)
@@ -216,6 +216,7 @@ impl Store {
         .bind(strip_nul_str(&m.title))
         .bind(origin_to_str(m.origin))
         .bind(status_to_str(m.status))
+        .bind(m.system)
         .execute(&self.pool)
         .await
         .with_context(|| format!("INSERT session {}", m.id))?;
@@ -649,6 +650,7 @@ struct SessionRow {
     auto_resume: Option<bool>,
     awaiting_user: bool,
     done: bool,
+    system: bool,
     next_seq: i64,
     queue: serde_json::Value,
     drafts: serde_json::Value,
@@ -674,6 +676,9 @@ impl SessionRow {
             // precedence, and the next turn re-judges + re-persists.
             awaiting_user: self.awaiting_user,
             done: self.done,
+            // Restored from the DB (migration 0010) — a system session stays
+            // view-only across a daemon restart.
+            system: self.system,
             // Transient — a restored session is never mid-judge.
             judging: false,
             // Transient — the manual pause is in-memory only (not persisted), so a
