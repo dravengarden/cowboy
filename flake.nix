@@ -40,7 +40,7 @@
         # crates via python-requests, which sends a User-Agent. crates.io now
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-mkQ2Wlz064Gho5VID8AlHhDw6EBHjZN19XIUAkiUYBk=";
+        cargoHash = "sha256-h36xRafN5a8ia+lxIV5ytZ0n0gvoIgBwAEnoefpw9eU=";
         preBuild = ''
           mkdir -p web/dist
           cp -R ${cowboy-web}/. web/dist/
