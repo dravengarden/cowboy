@@ -1027,6 +1027,28 @@ export function App({
         }
     }, [sessionsLoaded, sessions]);
 
+    // Self-heal the "stuck on the loading skeleton" case (a fresh load that raced
+    // a daemon restart — the deploy window: SW reloads the tab while cowboy is
+    // briefly down, so the first connect fails). If the first session list hasn't
+    // arrived after a grace, reload ONCE — by then the daemon is back, so the
+    // reload connects cleanly. A per-tab flag guards against a loop when the daemon
+    // is genuinely down: the SECOND stall doesn't auto-reload (LoadingState's own
+    // 8s "reload" button takes over). Cleared the moment sessions load.
+    useEffect(() => {
+        const KEY = "cowboy:stall-reloaded";
+        if (sessionsLoaded) {
+            globalThis.sessionStorage.removeItem(KEY);
+            return undefined;
+        }
+        const t = globalThis.setTimeout(() => {
+            if (!globalThis.sessionStorage.getItem(KEY)) {
+                globalThis.sessionStorage.setItem(KEY, "1");
+                globalThis.location.reload();
+            }
+        }, 7000);
+        return () => globalThis.clearTimeout(t);
+    }, [sessionsLoaded]);
+
     // Revive-on-open (design §7): tell the daemon which session is focused so it
     // warms that agent — reviving one whose agent died with a daemon restart —
     // before the user types, instead of only on the first prompt. Keyed on the
@@ -1321,13 +1343,18 @@ export function App({
                         // backdrop, never a gray one, so at 0.62 a gray code block scrolling
                         // under it bled through as a muddy gray band under the status bar.
                         // A near-solid lavender tint masks that while staying frosted.
+                        // Top mode (desktop, navbar at top) is a SOLID surface:
+                        // an OPAQUE tint means the backdrop-blur has nothing to
+                        // bleed, so the frosted edge can't read as a gray band
+                        // under the bar (the reported "navbar 底部灰色阴影"). Bottom
+                        // mode (mobile status-bar strip) stays frosted — content
+                        // scrolls UNDER it, so it needs the translucent blur.
                         bgcolor: (t) =>
-                            alpha(
-                                t.palette.background.default,
-                                navbarAtBottom ? 0.8 : (t.palette.mode === "dark" ? 0.72 : 0.76),
-                            ),
-                        backdropFilter: "blur(30px) saturate(200%)",
-                        WebkitBackdropFilter: "blur(30px) saturate(200%)",
+                            alpha(t.palette.background.default, navbarAtBottom ? 0.8 : 1),
+                        ...(navbarAtBottom && {
+                            backdropFilter: "blur(30px) saturate(200%)",
+                            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+                        }),
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
                         // lavender (a black shadow on a light tint always reads gray) —
