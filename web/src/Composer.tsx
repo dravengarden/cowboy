@@ -2189,6 +2189,26 @@ function PendingPanel({
             onConfirm={(): void => activateAllDrafts(sessionId)}
           />
         )}
+        {/* Pause / Resume the queue drain (queued panel only — drafts never
+            auto-drain). Tap ⏸ to hold the queue: the running turn still finishes,
+            but the next queued message waits until you tap ▶. Warning-tinted while
+            held; the same release is also offered by the "Queue paused" overlay. */}
+        {kind === "queued" && (
+          <Tooltip title={queueHeld ? "Resume queue" : "Pause queue"}>
+            <IconButton
+              size="small"
+              aria-label={queueHeld ? "resume queue" : "pause queue"}
+              color={queueHeld ? "warning" : "default"}
+              sx={{ flexShrink: 0 }}
+              onClick={(): void => {
+                haptic();
+                setPaused(sessionId, !queueHeld);
+              }}
+            >
+              {queueHeld ? <PlayArrow fontSize="small" /> : <Pause fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        )}
         <ConfirmButton
           label="Clear All"
           message={kind === "queued"
@@ -2869,8 +2889,6 @@ export function AutoScrollAndStop({
   dense?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
-  const { sessions } = useStore();
-  const paused = sessions.find((s) => s.id === sessionId)?.paused ?? false;
   const [cancelOpen, setCancelOpen] = useState(false);
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
@@ -2895,24 +2913,6 @@ export function AutoScrollAndStop({
           }}
         >
           <VerticalAlignBottom fontSize={size} />
-        </IconButton>
-      </Tooltip>
-      {/* Manual queue PAUSE / RESUME (separate from Stop): holds the auto-drain so
-          queued messages don't advance even after the current turn ends, WITHOUT
-          interrupting the running turn. Tap again to resume. Warning-tinted +
-          shows ▶ while held so the hold is obvious. Always shown (pausing is valid
-          anytime — you can pre-pause before queuing). */}
-      <Tooltip title={paused ? "Queue paused — tap to resume" : "Pause queue"}>
-        <IconButton
-          size={size}
-          aria-label={paused ? "resume queue" : "pause queue"}
-          color={paused ? "warning" : "default"}
-          onClick={(): void => {
-            haptic();
-            setPaused(sessionId, !paused);
-          }}
-        >
-          {paused ? <PlayArrow fontSize={size} /> : <Pause fontSize={size} />}
         </IconButton>
       </Tooltip>
       {/* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —
