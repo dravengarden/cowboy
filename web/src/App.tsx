@@ -677,6 +677,23 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    // Editable session title (defaults to the cwd label as a placeholder you type
+    // over). Empty on Create → renameSession no-ops → the daemon's default +
+    // first-prompt auto-title apply as before.
+    const [title, setTitle] = useState<string>(WORKING_DIRS[0].label);
+    const titleRef = useRef<HTMLInputElement>(null);
+    // On open: focus the title field + select its default so a name can be typed
+    // straight away. autoFocus (below) is the keyboard's best shot within the
+    // opening tap's gesture window — iOS only raises it for an in-gesture focus;
+    // the delayed select() then highlights the default text once the sheet mounts.
+    useEffect(() => {
+        if (!open) return undefined;
+        const t = globalThis.setTimeout(() => {
+            titleRef.current?.focus();
+            titleRef.current?.select();
+        }, 60);
+        return () => globalThis.clearTimeout(t);
+    }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
@@ -694,6 +711,10 @@ function NewSessionDialog({
                     // first prompt, and OpenSession doesn't snapshot), so mark it
                     // hydrated now — otherwise the transcript skeleton spins forever.
                     markSessionHydrated(data.session_id);
+                    // Apply the title set in the modal. renameSession trims +
+                    // no-ops on empty, so a cleared title falls back to the
+                    // daemon default + first-prompt auto-title.
+                    renameSession(data.session_id, title);
                     onCreated(data.session_id);
                 }
             })
@@ -723,6 +744,15 @@ function NewSessionDialog({
             }
         >
             <Stack spacing={2} sx={{ mt: 1 }}>
+                <TextField
+                    label="Title"
+                    value={title}
+                    onChange={(e): void => setTitle(e.target.value)}
+                    inputRef={titleRef}
+                    autoFocus
+                    placeholder="Name this session"
+                    helperText="Leave as-is to auto-name from the first message"
+                />
                 <TextField
                     select
                     label="Provider"
