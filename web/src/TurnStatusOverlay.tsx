@@ -9,13 +9,14 @@ import {
   requestSendQueued,
   resumeTurn,
   retryTurn,
+  setPaused,
   useConnected,
   useJudgeResult,
 } from "./store";
 import { openJudgeInspector } from "./JudgeInspector";
 import { haptic } from "./haptic";
 
-type Kind = "offline" | "judging" | "awaiting" | "done" | "interrupted" | "error" | "no-key";
+type Kind = "offline" | "judging" | "awaiting" | "paused" | "done" | "interrupted" | "error" | "no-key";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
 // The unified "turn status" overlay (replaces the old AwaitingBar): one floating
@@ -33,10 +34,11 @@ function deriveKind(args: {
   judging: boolean;
   awaitingUser: boolean;
   done: boolean;
+  paused: boolean;
   queueLen: number;
   hasKey: boolean;
 }): Kind | null {
-  const { offline, status, judging, awaitingUser, done, queueLen, hasKey } = args;
+  const { offline, status, judging, awaitingUser, done, paused, queueLen, hasKey } = args;
   // Connection loss outranks everything: while the socket is down the `status` is
   // stale (we can't know the real turn state), so surface "Reconnecting…" instead —
   // even mid-turn — so you're never silently typing into a dead socket.
@@ -49,6 +51,12 @@ function deriveKind(args: {
   // purple then settle.
   if (judging) return "judging";
   if (awaitingUser) return "awaiting";
+  // User manually paused the queue → surface a prominent "Resume" pill, the same
+  // affordance as an interrupted turn (Stop is itself a kind of interrupt). Shown
+  // once the turn settles (busy returns null above, like every other state), with
+  // the ⏸ toggle covering the mid-turn case. Outranks `done` so a finished-but-
+  // -held session shows how to release it, not just "Task complete".
+  if (paused) return "paused";
   if (done) return "done";
   if (!hasKey && queueLen > 0) return "no-key"; // queue held, can't judge
   return null;
@@ -60,6 +68,7 @@ const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
   awaiting: { color: "primary", label: "Waiting for your reply" },
   done: { color: "success", label: "Task complete" },
   interrupted: { color: "warning", label: "Turn interrupted" },
+  paused: { color: "warning", label: "Queue paused" },
   error: { color: "error", label: "Agent error" },
   "no-key": { color: "info", label: "Queue held · no judge key" },
 };
@@ -70,6 +79,7 @@ export function TurnStatusOverlay({
   judging,
   awaitingUser,
   done,
+  paused,
   queue,
   hasKey,
   onFocusComposer,
@@ -80,6 +90,7 @@ export function TurnStatusOverlay({
   judging: boolean;
   awaitingUser: boolean;
   done: boolean;
+  paused: boolean;
   queue: { id: string }[];
   hasKey: boolean;
   onFocusComposer: () => void;
@@ -105,6 +116,7 @@ export function TurnStatusOverlay({
     judging,
     awaitingUser,
     done,
+    paused,
     queueLen: queue.length,
     hasKey,
   });
@@ -196,6 +208,10 @@ export function TurnStatusOverlay({
     };
   } else if (kind === "interrupted") {
     action = { label: "Resume", onClick: () => resumeTurn(sessionId) };
+  } else if (kind === "paused") {
+    // Release the manual queue pause — the queue drain picks back up (waiting for
+    // any in-flight turn to end first). Mirrors the interrupted "Resume".
+    action = { label: "Resume", onClick: () => setPaused(sessionId, false) };
   } else if (kind === "error") {
     action = { label: "Retry", onClick: () => retryTurn(sessionId) };
   } else if (kind === "no-key") {

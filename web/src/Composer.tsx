@@ -942,6 +942,7 @@ export function Composer({
           awaitingUser={session?.awaiting_user ?? false}
           done={session?.done ?? false}
           judging={session?.judging ?? false}
+          paused={session?.paused ?? false}
           queue={queue}
           hasKey={hasJudgeKey}
           onFocusComposer={(): void => editorRef.current?.focus()}
