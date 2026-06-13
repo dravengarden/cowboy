@@ -483,6 +483,10 @@ struct NewSessionRequest {
     /// (which always tags `Web`), not this endpoint.
     #[serde(default)]
     origin: SessionOrigin,
+    /// Create a VIEW-ONLY machine-driven system session (the mnemosyne memory
+    /// janitor). Defaults false; the Web UI never sets it.
+    #[serde(default)]
+    system: bool,
 }
 
 /// Response body for `POST /api/sessions`.
@@ -497,7 +501,7 @@ async fn api_new_session(
 ) -> Response {
     match state
         .supervisor
-        .new_session(&req.provider, req.cwd, req.origin)
+        .new_session(&req.provider, req.cwd, req.origin, req.system)
     {
         Ok(session_id) => {
             (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response()
@@ -936,7 +940,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
             .supervisor
-            .new_session(&provider, cwd, SessionOrigin::Web)
+            .new_session(&provider, cwd, SessionOrigin::Web, false)
             .map(|_| ()),
         Inbound::Prompt {
             session_id,

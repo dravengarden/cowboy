@@ -63,6 +63,7 @@ impl Supervisor {
         provider: &str,
         cwd: Option<String>,
         origin: SessionOrigin,
+        system: bool,
     ) -> Result<String, String> {
         let spec =
             provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
@@ -94,6 +95,7 @@ impl Supervisor {
             cwd.display().to_string(),
             title,
             origin,
+            system,
         );
 
         // Fresh session — no agent id to resume.

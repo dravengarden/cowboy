@@ -1208,6 +1208,7 @@ impl Hub {
         cwd: String,
         title: String,
         origin: SessionOrigin,
+        system: bool,
     ) {
         let meta = SessionMeta {
             id: id.clone(),
@@ -1222,7 +1223,7 @@ impl Hub {
             done: false,
             judging: false,
             paused: false,
-            system: false,
+            system,
         };
         {
             let mut sessions = self.inner.sessions.lock();
@@ -2918,6 +2919,7 @@ mod confirm_hold_tests {
             "/tmp".to_owned(),
             "t".to_owned(),
             SessionOrigin::Web,
+            false,
         );
         hub
     }
