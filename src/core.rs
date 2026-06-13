@@ -1140,6 +1140,16 @@ impl Hub {
         })
     }
 
+    /// Whether a session is a machine-driven VIEW-ONLY system session (the
+    /// mnemosyne memory janitor). The WS dispatch rejects user-driven turns for
+    /// these; only the backend wake endpoint (`POST /api/sessions/{id}/prompt`)
+    /// drives them.
+    #[must_use]
+    pub fn session_is_system(&self, session_id: &str) -> bool {
+        let sessions = self.inner.sessions.lock();
+        sessions.get(session_id).is_some_and(|s| s.meta.system)
+    }
+
     /// Total events held in memory across all live sessions — the event-count
     /// metric for the info panel.
     #[must_use]

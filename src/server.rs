@@ -319,6 +319,7 @@ async fn serve_axum(
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
+        .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/history/{id}/{page}", get(api_history))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
@@ -427,6 +428,41 @@ async fn api_session_info(State(state): State<Arc<AppState>>, Path(session_id): 
     match state.hub.session_info(&session_id) {
         Some(info) => Json(info).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown session").into_response(),
+    }
+}
+
+/// Request body for the machine wake (`POST /api/sessions/{id}/prompt`).
+#[derive(Debug, Deserialize)]
+struct SessionPromptRequest {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    content: Vec<serde_json::Value>,
+}
+
+/// Inject a prompt into a session FROM THE BACKEND (machine-driven). The
+/// mnemosyne daemon POSTs a batch here to drive the (view-only) memory session;
+/// this bypasses the WS user-input gate precisely because it is the backend, not
+/// a user. Works on any session, including `system` ones.
+async fn api_session_prompt(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(req): Json<SessionPromptRequest>,
+) -> Response {
+    let blocks: Vec<ContentBlock> = if req.content.is_empty() {
+        if req.text.is_empty() {
+            return (StatusCode::BAD_REQUEST, "empty prompt: no text or content").into_response();
+        }
+        vec![ContentBlock::from(req.text)]
+    } else {
+        req.content
+            .into_iter()
+            .filter_map(|v| serde_json::from_value::<ContentBlock>(v).ok())
+            .collect()
+    };
+    match state.supervisor.send(&session_id, AgentCommand::Prompt(blocks, None)) {
+        Ok(()) => (StatusCode::ACCEPTED, "queued").into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
 }
 
@@ -883,6 +919,20 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::SetInferenceSecret { .. }
         | Inbound::InferenceProbe { .. } => None,
     };
+    // A view-only system session (the mnemosyne memory janitor) rejects
+    // user-driven turns; only the backend wake endpoint
+    // (POST /api/sessions/{id}/prompt) drives it.
+    if let Some(sid) = &session_id_for_err {
+        if matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. })
+            && state.hub.session_is_system(sid)
+        {
+            state.hub.broadcast_error(
+                Some(sid.clone()),
+                "view-only system session: input is disabled".to_owned(),
+            );
+            return;
+        }
+    }
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
             .supervisor
