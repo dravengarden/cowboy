@@ -528,8 +528,8 @@ function SessionList({
                                     </Typography>
                                     <Chip
                                         size="small"
-                                        label={originLabel(s.origin)}
-                                        color={originColor(s.origin)}
+                                        label={s.system ? "System" : originLabel(s.origin)}
+                                        color={s.system ? "secondary" : originColor(s.origin)}
                                         sx={{
                                             height: 16,
                                             fontSize: 10,
@@ -1531,13 +1531,19 @@ export function App({
                                         minHeight: 0,
                                     }}
                                 >
-                                    <Composer
-                                        key={active.id}
-                                        sessionId={active.id}
-                                        status={active.status}
-                                        onOpenInfo={(): void => openSettings("info")}
-                                        variant="column"
-                                    />
+                                    {active.system ? (
+                                        <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
+                                            View-only system session — managed by mnemosyne
+                                        </Box>
+                                    ) : (
+                                        <Composer
+                                            key={active.id}
+                                            sessionId={active.id}
+                                            status={active.status}
+                                            onOpenInfo={(): void => openSettings("info")}
+                                            variant="column"
+                                        />
+                                    )}
                                 </Box>
                                 {/* Vertical splitter — straddles the column edge so its
                                     6px hit area centres on the 1px divider line. */}
@@ -1660,16 +1666,22 @@ export function App({
                                 zIndex: 2,
                             }}
                         >
-                            <Composer
-                                // Remount per session: each session owns its draft
-                                // (seeded from the per-session draft store) and a
-                                // fresh CodeMirror editor, so one session's
-                                // in-progress text never bleeds into another.
-                                key={active.id}
-                                sessionId={active.id}
-                                status={active.status}
-                                onOpenInfo={(): void => openSettings("info")}
-                            />
+                            {active.system ? (
+                                <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
+                                    View-only system session — managed by mnemosyne
+                                </Box>
+                            ) : (
+                                <Composer
+                                    // Remount per session: each session owns its draft
+                                    // (seeded from the per-session draft store) and a
+                                    // fresh CodeMirror editor, so one session's
+                                    // in-progress text never bleeds into another.
+                                    key={active.id}
+                                    sessionId={active.id}
+                                    status={active.status}
+                                    onOpenInfo={(): void => openSettings("info")}
+                                />
+                            )}
                             {/* Zed/VSCode-style status bar at the very bottom of
                                 the window; inside this measured wrapper so the
                                 transcript reserves it via --composer-h. */}
