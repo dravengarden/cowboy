@@ -18,7 +18,7 @@ import {
   EditorView,
   WidgetType,
 } from "@codemirror/view";
-import { type EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
 import { type Attachment, IMG_TOKEN_RE } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 
@@ -183,6 +183,38 @@ export const inlineImageField = StateField.define<DecorationSet>({
       (view) => view.state.field(f, false) ?? Decoration.none,
     ),
   ],
+});
+
+/// True when `text`'s LAST line is a lone block-image token (with no empty line
+/// after it). A block-image decoration replaces its whole line and is atomic, so
+/// as the doc's final line it traps the caret — you can't get below it to add a
+/// line or keep typing. The two guards below keep a trailing newline so there's
+/// always a landing line under a trailing image.
+function lastLineIsBlockImage(text: string): boolean {
+  const nl = text.lastIndexOf("\n");
+  const last = nl === -1 ? text : text.slice(nl + 1);
+  return last.length > 0 && LONE_TOKEN_RE.test(last);
+}
+
+/// Normalise a SEED value: append a newline when it ends with a block-image
+/// token, so a restored draft / handed-off text never opens with the image
+/// trapped as the last line. Idempotent; the extra line is whitespace, trimmed
+/// back off on send (saveDraft/submit use trimEnd).
+export function ensureTrailingImageLine(text: string): string {
+  return lastLineIsBlockImage(text) ? `${text}\n` : text;
+}
+
+/// Keep a block image from ever being the doc's LAST line during editing. After
+/// any change that leaves a trailing image token (e.g. the user backspaced the
+/// empty line under it), append a newline so the caret can still land below it
+/// ("图片在最后一行,无法开启新的一行"). Runs in the same transaction — no loop (the
+/// appended newline makes the last line empty, so it won't re-match).
+export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged) return tr;
+  const last = tr.newDoc.line(tr.newDoc.lines);
+  return last.length > 0 && LONE_TOKEN_RE.test(last.text)
+    ? [tr, { changes: { from: tr.newDoc.length, insert: "\n" }, sequential: true }]
+    : tr;
 });
 
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.

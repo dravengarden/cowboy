@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes, which is what triggers the
 // auto-reload onto the fresh bundle.
-const VERSION = "cowboy-v233";
+const VERSION = "cowboy-v234";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). cowboy serves its OWN frontend from the same
 // process as the API/WS, so when the daemon is down (e.g. stopped by a

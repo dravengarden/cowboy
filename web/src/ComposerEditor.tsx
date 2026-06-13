@@ -39,8 +39,10 @@ import {
 } from "./fileTokenWidget";
 import {
   deleteImageTokenBackward,
+  ensureTrailingImageLine,
   inlineImageField,
   inlineImageTheme,
+  inlineImageTrailingLine,
   insertImageToken,
   removeImageTokenById,
 } from "./inlineImages";
@@ -719,6 +721,9 @@ export const ComposerEditor = forwardRef<
       // IME-safe like the @-chip. See inlineImages.ts.
       inlineImageField,
       inlineImageTheme,
+      // Keep a trailing image from being the doc's last line (atomic block traps
+      // the caret — "图片在最后一行,无法开启新的一行"). See inlineImages.ts.
+      inlineImageTrailingLine,
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
@@ -895,7 +900,11 @@ export const ComposerEditor = forwardRef<
       )}
       <CodeMirror
         ref={cmRef}
-        value={value}
+        // Normalise the SEED so a value that ends with a block-image token opens
+        // with a landing line below it (the transactionFilter keeps it that way
+        // during edits). Idempotent + stable for a stable seed, so @uiw doesn't
+        // re-apply it. See inlineImages.ts (ensureTrailingImageLine).
+        value={ensureTrailingImageLine(value)}
         onChange={onChange}
         editable={!disabled}
         // `none` disables @uiw's built-in light theme (which paints the editor
