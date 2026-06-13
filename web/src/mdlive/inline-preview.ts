@@ -437,9 +437,20 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
             parent = parent.parent;
           }
           if (parent && parent.name === 'Link') {
-            shouldHide = !activeLinkStarts.has(parent.from);
+            // LOCAL (./SYNC.md): a BARE autolink (e.g. https://… as the whole
+            // link) has the URL as its ONLY visible content — there's no separate
+            // `[label]` to fall back to — so hiding the URL makes it VANISH the
+            // moment the cursor leaves its line (the reported "type a url, press
+            // Enter, it disappears" bug). Keep it shown; only hide a URL that sits
+            // inside a labelled `[text](url)` (there the URL starts AFTER the
+            // `[label](`, so `node.from > parent.from`).
+            const bareAutolink = node.name === 'URL' && node.from === parent.from;
+            shouldHide = !bareAutolink && !activeLinkStarts.has(parent.from);
           } else {
-            shouldHide = !activeLines.has(lineNum);
+            // LOCAL (./SYNC.md): a URL with no Link parent is a standalone
+            // autolink — it IS the visible text, so never hide it (a stray
+            // LinkMark/LinkTitle still follows the line rule).
+            shouldHide = node.name !== 'URL' && !activeLines.has(lineNum);
           }
         } else {
           shouldHide = !activeLines.has(lineNum);
