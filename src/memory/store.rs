@@ -154,6 +154,15 @@ impl Memory {
                 "type" if in_metadata => {
                     type_raw = val.to_string();
                 }
+                // CC's native auto-memory writes a FLAT frontmatter (top-level
+                // `type:` + `originSessionId`), not mnemosyne's nested
+                // `metadata.type`. The store holds both formats side by side
+                // (CC writes directly via CLAUDE_CODE_REMOTE_MEMORY_DIR, the
+                // janitor writes nested), so accept a top-level `type:` too.
+                "type" if !indented => {
+                    type_raw = val.to_string();
+                    in_metadata = false;
+                }
                 _ => {}
             }
         }
@@ -307,6 +316,44 @@ impl Store {
                 .read(t, stem)
                 .with_context(|| format!("read {t}/{n}"))?;
             out.push(m);
+        }
+        Ok(out)
+    }
+
+    /// Best-effort variant of `list`: a single unparseable file is logged and
+    /// skipped, never aborting the whole listing. Used to build the recall
+    /// index, where one malformed memory (a hand-edited or future-format file)
+    /// must not blank recall for all the others — the all-or-nothing `list`
+    /// once dropped the index to empty on the first bad file.
+    ///
+    /// # Errors
+    /// Only the directory read itself can fail; per-file parse errors are
+    /// swallowed (warned).
+    pub fn list_lenient(&self, t: &Tier) -> Result<Vec<Memory>> {
+        let dir = self.dir(t);
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("readdir {}", dir.display())),
+        };
+        let mut names: Vec<String> = Vec::new();
+        for entry in rd {
+            let entry = entry?;
+            let n = entry.file_name().to_string_lossy().to_string();
+            let ft = entry.file_type()?;
+            if ft.is_dir() || !n.ends_with(".md") || n == "MEMORY.md" {
+                continue;
+            }
+            names.push(n);
+        }
+        names.sort();
+        let mut out = Vec::with_capacity(names.len());
+        for n in names {
+            let stem = n.trim_end_matches(".md");
+            match self.read(t, stem) {
+                Ok(m) => out.push(m),
+                Err(e) => tracing::warn!(tier = %t, file = %n, error = %e, "skipping unparseable memory"),
+            }
         }
         Ok(out)
     }
@@ -501,6 +548,18 @@ mod tests {
         assert_eq!(m.description, "a thing");
         assert_eq!(m.mem_type, MemoryType::Project);
         assert_eq!(m.body, "body line one\nbody line two");
+    }
+
+    #[test]
+    fn parse_memory_flat_cc_native() {
+        // CC's native auto-memory: flat top-level `type:` + `originSessionId`,
+        // no `metadata:` block. The store holds these alongside nested ones.
+        let input = b"---\nname: cli-help\ndescription: help is for AI\ntype: feedback\noriginSessionId: abc-123\n---\n\nbody\n";
+        let m = Memory::parse(input).unwrap();
+        assert_eq!(m.name, "cli-help");
+        assert_eq!(m.description, "help is for AI");
+        assert_eq!(m.mem_type, MemoryType::Feedback);
+        assert_eq!(m.body, "body");
     }
 
     #[test]

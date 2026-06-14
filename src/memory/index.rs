@@ -77,7 +77,8 @@ impl Index {
     pub fn from_store(s: &Store) -> anyhow::Result<Index> {
         let mut entries = Vec::new();
         for t in s.active_tiers()? {
-            for m in s.list(&t)? {
+            // Lenient: one malformed memory must not blank the whole index.
+            for m in s.list_lenient(&t)? {
                 entries.push(IndexEntry {
                     tier: t.clone(),
                     memory: m,
