@@ -170,7 +170,7 @@ async fn agent_main(
     let perm_state = state.clone();
     let main_state = state.clone();
 
-    let result = Client
+    let conn = Client
         .builder()
         .name("cowboy")
         .on_receive_notification(
@@ -228,13 +228,36 @@ async fn agent_main(
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
             run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id).await
-        })
-        .await;
+        });
+
+    // Race the connection against the subprocess's OWN exit. The connection
+    // future only resolves when `run_session` returns (its cmd channel closed),
+    // so it cannot see the agent dying underneath it: if the agent streams a full
+    // reply then exits BEFORE returning the turn's stop_reason, the in-flight
+    // `prompt()` awaits a response that will never arrive — and a dead pipe does
+    // not reliably surface as a request error — so the future hangs forever and
+    // the session latches at `Busy`: a perpetual streaming caret + a queue that
+    // never drains (the confirmed sess-stuck bug). `child.wait()` is the ground
+    // truth the connection can miss; whichever finishes first ends the session,
+    // and the hung turn is torn down with the dropped connection future. The Err
+    // here lands as `Status::Crashed` in `run_agent` (queue holds; resend
+    // revives). `biased` prefers a clean `run_session` return when both are ready.
+    let result = tokio::select! {
+        biased;
+        r = conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
+        status = child.wait() => Err(anyhow::anyhow!(
+            "agent subprocess exited mid-session ({})",
+            match status {
+                Ok(s) => s.to_string(),
+                Err(e) => format!("wait failed: {e}"),
+            }
+        )),
+    };
 
     // Keep the child alive for the whole connection; dropping it here lets the
-    // agent see stdin EOF and exit.
+    // agent see stdin EOF and exit (a no-op if it already exited above).
     drop(child);
-    result.map_err(|e| anyhow::anyhow!("acp connection: {e}"))
+    result
 }
 
 /// Translate one incoming agent `SessionUpdate` into a Hub event.
