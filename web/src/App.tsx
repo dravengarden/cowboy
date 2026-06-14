@@ -446,9 +446,11 @@ function SessionList({
     } | null>(null);
     // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
     const byId = new Map(sessions.map((s) => [s.id, s]));
+    const listRef = useRef<HTMLUListElement>(null);
     const sortable = useSortable({
         ids: sessions.map((s) => s.id),
         onReorder: reorderSessions,
+        scrollContainer: () => listRef.current,
     });
     return (
         <Stack sx={{ height: "100%" }}>
@@ -462,7 +464,7 @@ function SessionList({
                     New session
                 </Button>
             </Box>
-            <List dense sx={{ flex: 1, overflowY: "auto" }}>
+            <List dense ref={listRef} sx={{ flex: 1, overflowY: "auto" }}>
                 {sortable.order.map((id) => {
                     const s = byId.get(id);
                     if (!s) return null;

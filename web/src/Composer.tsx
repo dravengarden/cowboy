@@ -2064,8 +2064,10 @@ function PendingPanel({
   // the WHOLE queue pauses (drain is front-to-back) until the drop commits the
   // new order and releases. Drafts don't drain, so no hold.
   const byId = new Map(items.map((m) => [m.id, m]));
+  const scrollRef = useRef<HTMLDivElement>(null);
   const sortable = useSortable({
     ids: items.map((m) => m.id),
+    scrollContainer: () => scrollRef.current,
     onReorder: (order) =>
       kind === "queued"
         ? reorderQueue(sessionId, order)
@@ -2233,6 +2235,7 @@ function PendingPanel({
       <Box sx={{ display: collapsed ? "none" : "block" }}>
         <Stack
           spacing={0.5}
+          ref={scrollRef}
           sx={{
             // Inner padding so the rows sit INSIDE the frame with a small inset
             // (the original framed look). The frame's OUTER edge is what aligns
