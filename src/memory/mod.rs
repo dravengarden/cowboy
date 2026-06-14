@@ -13,6 +13,22 @@
 //! the write VALIDATION guardrail is in place; the store/index/queue/janitor +
 //! the `/api/memory/record` endpoint land in Phases B–C.
 
+// The pure-logic ports of mnemosyne's core (p5 Phase B): the file+git store,
+// the tier router, the keyword index, the debounce queue, and the resolve-op
+// applier. These are integration-free (no axum, no Hub, no tokio tasks); Phase C
+// wires them into the daemon.
+pub mod apply;
+pub mod index;
+pub mod queue;
+pub mod store;
+pub mod tier;
+
+pub use apply::{batch, resolve, ResolveKind, ResolveOp};
+pub use index::{Hit, Index, IndexEntry};
+pub use queue::{Config as QueueConfig, Mutation, Op, Queue};
+pub use store::{Memory, MemoryType, Store, Tier};
+pub use tier::{project_tier, route, route_slug, sanitize, slug_of, Caller};
+
 use crate::cli::{MemArgs, MemCommand, MemRecordArgs};
 
 /// `cowboy mem …` entry point — the validated memory WRITE path. Reads are NOT
