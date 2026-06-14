@@ -201,21 +201,26 @@ fn setup_memory(
     let store = MemStore::new(root.clone());
     store.ensure_git_repo().context("init memory git repo")?;
 
-    // The janitor session's cwd: the mnemosyne repo if it exists (so the agent
-    // loads its memory skill + AGENTS.md), else the memory root. This same path
-    // is the marker used to find/reuse a restored system session.
-    let mnemosyne = std::path::PathBuf::from("/home/draven/mnemosyne");
-    let janitor_cwd = if mnemosyne.is_dir() { mnemosyne } else { root.clone() };
-    let janitor_cwd_str = janitor_cwd.display().to_string();
+    // The janitor session's cwd + the marker used to find/reuse its restored
+    // system session: the memory root itself. (It used to be ~/mnemosyne, but
+    // that path matched stale pre-fold janitor sessions — a claude-code one got
+    // picked as the "codex janitor" and its revived turn hung past the timeout,
+    // and ~/mnemosyne also carries an obsolete memory-tidy skill codex fails to
+    // load. The store root has neither.)
+    let janitor_cwd_str = root.display().to_string();
 
-    // Reuse a restored memory-janitor system session (one whose cwd matches and
-    // is flagged `system`), else create one. After a daemon restart Hub::restore
-    // brings persisted system sessions back, so without this we'd spawn a second
+    // Reuse a restored memory-janitor system session — flagged `system`, at the
+    // janitor cwd, AND of the configured provider. The provider check is what
+    // stops a stale WRONG-provider session from being mistaken for the janitor
+    // (the bug above). Else create one. Hub::restore brings persisted system
+    // sessions back across a daemon restart, so without reuse we'd spawn a second
     // janitor every restart.
     let session_id = hub
         .session_list()
         .into_iter()
-        .find(|m| m.system && m.cwd == janitor_cwd_str)
+        .find(|m| {
+            m.system && m.cwd == janitor_cwd_str && m.provider == args.memory_janitor_provider
+        })
         .map(|m| m.id)
         .map_or_else(
             || {
