@@ -187,6 +187,35 @@ async fn agent_main(
                         responder,
                         cx: ConnectionTo<Agent>|
                         -> Result<(), Error> {
+                // System sessions (machine-driven, immutable, unattended — the
+                // memory janitor and any future machine session) have no human
+                // to answer an approval. Auto-approve tool calls the way the
+                // try-agent path does; without this a system session hangs on
+                // its first MCP tool approval forever (the per-tool approval a
+                // provider like Codex requests just sits pending). The response
+                // is instant, so unlike the human path it needn't be deferred.
+                if perm_state.hub.session_is_system(&perm_state.session_id) {
+                    let allow = req.options.iter().find(|o| {
+                        matches!(
+                            o.kind,
+                            PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+                        )
+                    });
+                    let outcome = match allow {
+                        Some(opt) => {
+                            tracing::info!(
+                                option = %opt.name,
+                                session = %perm_state.session_id,
+                                "auto-approving permission (system session)"
+                            );
+                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                opt.option_id.clone(),
+                            ))
+                        }
+                        None => RequestPermissionOutcome::Cancelled,
+                    };
+                    return responder.respond(RequestPermissionResponse::new(outcome));
+                }
                 let n = perm_state.next_perm.fetch_add(1, Ordering::Relaxed);
                 let request_id = format!("perm-{n}");
                 let tool_call =
