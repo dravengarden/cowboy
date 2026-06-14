@@ -2,6 +2,7 @@ mod acp;
 mod cli;
 mod core;
 mod inference;
+mod memory;
 mod skills;
 mod files;
 mod provider;
