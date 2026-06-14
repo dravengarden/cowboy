@@ -43,6 +43,10 @@ struct AppState {
     supervisor: Arc<Supervisor>,
     /// Kept for read-only storage metrics (`/api/metrics`). `None` in-memory.
     store: Option<Store>,
+    /// The memory debounce queue — the enqueue handle the `/api/memory/*`
+    /// handlers reach. `None` when `--memory-enabled` is off (the endpoints then
+    /// 404), so nothing memory-related runs by default.
+    memory_queue: Option<Arc<crate::memory::Queue>>,
 }
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
@@ -153,13 +157,146 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
+    // Memory subsystem (p5). GATED: when --memory-enabled is off this whole
+    // block is skipped, so the daemon's behaviour is byte-for-byte unchanged
+    // (no store, no janitor session, no queue, no endpoints).
+    let memory_queue = if args.memory_enabled {
+        match setup_memory(&args, hub.clone(), Arc::clone(&supervisor)) {
+            Ok(q) => Some(q),
+            Err(e) => {
+                // A memory-setup failure must NOT take the daemon down — the
+                // core chat surface stays up; memory simply stays inert.
+                tracing::error!(error = %e, "memory subsystem failed to start (disabled for this run)");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     tracing::info!(
         workspace = %args.workspace_root.display(),
         data_dir = %args.data_dir.display(),
+        memory_enabled = args.memory_enabled,
         "cowboy serving",
     );
 
-    serve_axum(args.bind, hub, supervisor, store).await
+    serve_axum(args.bind, hub, supervisor, store, memory_queue).await
+}
+
+/// Stand up the memory subsystem and return the enqueue handle (the Queue) for
+/// the `/api/memory/*` handlers. Idempotent w.r.t. the janitor session: reuses an
+/// existing system session rooted at the janitor cwd if one was restored, else
+/// creates one. Spawns the reconcile loop (queue → debounced batch → janitor) and
+/// the tidy timer. Returns the Queue or an error if the janitor session can't be
+/// ensured.
+fn setup_memory(
+    args: &ServeArgs,
+    hub: Hub,
+    supervisor: Arc<Supervisor>,
+) -> anyhow::Result<Arc<crate::memory::Queue>> {
+    use crate::memory::{Index, Janitor, Queue, QueueConfig, Store as MemStore};
+
+    let root = expand_tilde(&args.memory_root);
+    let store = MemStore::new(root.clone());
+    store.ensure_git_repo().context("init memory git repo")?;
+
+    // The janitor session's cwd: the mnemosyne repo if it exists (so the agent
+    // loads its memory skill + AGENTS.md), else the memory root. This same path
+    // is the marker used to find/reuse a restored system session.
+    let mnemosyne = std::path::PathBuf::from("/home/draven/mnemosyne");
+    let janitor_cwd = if mnemosyne.is_dir() { mnemosyne } else { root.clone() };
+    let janitor_cwd_str = janitor_cwd.display().to_string();
+
+    // Reuse a restored memory-janitor system session (one whose cwd matches and
+    // is flagged `system`), else create one. After a daemon restart Hub::restore
+    // brings persisted system sessions back, so without this we'd spawn a second
+    // janitor every restart.
+    let session_id = hub
+        .session_list()
+        .into_iter()
+        .find(|m| m.system && m.cwd == janitor_cwd_str)
+        .map(|m| m.id)
+        .map_or_else(
+            || {
+                supervisor
+                    .new_session(
+                        &args.memory_janitor_provider,
+                        Some(janitor_cwd_str.clone()),
+                        SessionOrigin::Api,
+                        true, // system: view-only janitor session
+                    )
+                    .map_err(|e| anyhow::anyhow!("creating memory-janitor session: {e}"))
+            },
+            Ok,
+        )?;
+    tracing::info!(session = %session_id, cwd = %janitor_cwd_str, provider = %args.memory_janitor_provider, "memory janitor session");
+
+    // Build the initial recall/dedup index from whatever the store already holds.
+    let index = Index::from_store(&store).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "building initial memory index (starting empty)");
+        Index::new(Vec::new())
+    });
+    let janitor = Janitor {
+        hub,
+        supervisor,
+        store,
+        session_id,
+        index: Arc::new(parking_lot::Mutex::new(index)),
+    };
+
+    // Cross the sync→async boundary: the Queue's `wake` is a SYNC callback, but
+    // the janitor drive is async. The callback just forwards the coalesced batch
+    // over an mpsc channel; an async task awaits it and runs the janitor. (The
+    // wake fires under the queue lock and MUST NOT block — an unbounded send is
+    // non-blocking, so this is safe.)
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<crate::memory::Mutation>>();
+    let queue = Arc::new(Queue::new(QueueConfig::default_config(), move |batch| {
+        if tx.send(batch).is_err() {
+            tracing::warn!("memory janitor channel closed; dropping batch");
+        }
+    }));
+
+    // The reconcile loop: one debounced batch per wake → run the janitor.
+    let reconcile_janitor = janitor.clone();
+    tokio::spawn(async move {
+        while let Some(batch) = rx.recv().await {
+            reconcile_janitor.run_janitor(batch).await;
+        }
+        tracing::info!("memory reconcile loop shutting down (channel closed)");
+    });
+
+    // The tidy timer: a conservative scheduled survey/soft-archive pass every
+    // 12h (mirrors run_purge_sweeper). The first tick fires immediately; skip it
+    // so a fresh daemon doesn't tidy an empty store on boot.
+    let tidy_janitor = janitor;
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(12 * 60 * 60));
+        tick.tick().await; // immediate first tick — consume it (no boot tidy)
+        loop {
+            tick.tick().await;
+            tidy_janitor.tidy().await;
+        }
+    });
+
+    Ok(queue)
+}
+
+/// Expand a leading `~` / `~/...` in a path to `$HOME`. cowboy has no `dirs`
+/// dep, and the default `--memory-root` is `~/.agents/memory`, which clap stores
+/// verbatim (no shell expansion for an env/default value).
+fn expand_tilde(p: &std::path::Path) -> std::path::PathBuf {
+    let Ok(home) = std::env::var("HOME") else {
+        return p.to_path_buf();
+    };
+    let s = p.to_string_lossy();
+    if s == "~" {
+        std::path::PathBuf::from(home)
+    } else if let Some(rest) = s.strip_prefix("~/") {
+        std::path::Path::new(&home).join(rest)
+    } else {
+        p.to_path_buf()
+    }
 }
 
 /// Drain the write-behind channel into postgres. One row per intent, no
@@ -309,8 +446,9 @@ async fn serve_axum(
     hub: Hub,
     supervisor: Arc<Supervisor>,
     store: Option<Store>,
+    memory_queue: Option<Arc<crate::memory::Queue>>,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(AppState { hub, supervisor, store });
+    let state = Arc::new(AppState { hub, supervisor, store, memory_queue });
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -321,6 +459,8 @@ async fn serve_axum(
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
+        .route("/api/memory/record", post(api_memory_record))
+        .route("/api/memory/forget", post(api_memory_forget))
         .route("/api/history/{id}/{page}", get(api_history))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
@@ -533,6 +673,87 @@ async fn api_session_prompt(
         Ok(()) => (StatusCode::ACCEPTED, "queued").into_response(),
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
+}
+
+/// Request body for `POST /api/memory/record` — a validated memory WRITE
+/// proposal from `cowboy mem record` (the CLI validates frontmatter first). The
+/// daemon enqueues it to the debounce queue; the janitor dedups/judges/commits.
+#[derive(Debug, Deserialize)]
+struct MemoryRecordRequest {
+    name: String,
+    description: String,
+    #[serde(rename = "type")]
+    mem_type: String,
+    /// Target tier slug (a project cwd-slug); omitted/empty → the machine tier.
+    #[serde(default)]
+    tier: Option<String>,
+    #[serde(default)]
+    body: String,
+}
+
+/// Enqueue an add proposal. Gated on `--memory-enabled`: a 404 when off (so the
+/// CLI prints a clear "is memory enabled?" message and nothing memory-related
+/// runs by default). Returns `{ok:true}` on enqueue.
+async fn api_memory_record(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MemoryRecordRequest>,
+) -> Response {
+    let Some(queue) = state.memory_queue.as_ref() else {
+        return (StatusCode::NOT_FOUND, "memory subsystem disabled").into_response();
+    };
+    let Some(mem_type) = crate::memory::MemoryType::parse(&req.mem_type) else {
+        return (StatusCode::BAD_REQUEST, format!("unknown type {:?}", req.mem_type)).into_response();
+    };
+    let mutation = crate::memory::Mutation {
+        op: crate::memory::Op::Add,
+        memory: crate::memory::Memory {
+            name: req.name,
+            description: req.description,
+            mem_type,
+            body: req.body,
+        },
+        slug: req.tier.unwrap_or_default(),
+        cmid: String::new(),
+    };
+    queue.enqueue(mutation);
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+/// Request body for `POST /api/memory/forget` — a soft-archive proposal.
+#[derive(Debug, Deserialize)]
+struct MemoryForgetRequest {
+    name: String,
+    /// Target tier slug; omitted/empty → the machine tier.
+    #[serde(default)]
+    tier: Option<String>,
+}
+
+/// Enqueue a delete (soft-archive) proposal. Gated like `record`.
+async fn api_memory_forget(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MemoryForgetRequest>,
+) -> Response {
+    let Some(queue) = state.memory_queue.as_ref() else {
+        return (StatusCode::NOT_FOUND, "memory subsystem disabled").into_response();
+    };
+    if req.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name is required").into_response();
+    }
+    // A Delete mutation carries only the name (apply soft-archives by name); the
+    // other Memory fields are unused on the delete path, so minimal placeholders.
+    let mutation = crate::memory::Mutation {
+        op: crate::memory::Op::Delete,
+        memory: crate::memory::Memory {
+            name: req.name,
+            description: String::new(),
+            mem_type: crate::memory::MemoryType::Reference,
+            body: String::new(),
+        },
+        slug: req.tier.unwrap_or_default(),
+        cmid: String::new(),
+    };
+    queue.enqueue(mutation);
+    Json(serde_json::json!({ "ok": true })).into_response()
 }
 
 /// Request body for `POST /api/sessions`.

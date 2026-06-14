@@ -100,6 +100,31 @@ pub struct ServeArgs {
     /// `cowboy`; that's the production URL.
     #[arg(long, env = "COWBOY_POSTGRES_URL")]
     pub postgres_url: Option<String>,
+
+    /// Enable the in-process memory subsystem (the fold of mnemosyne, p5): the
+    /// queue + debounce, the `/api/memory/record` + `/api/memory/forget`
+    /// endpoints, the memory-janitor system session, the reconcile + tidy
+    /// loops. DEFAULT OFF — when false NOTHING memory-related starts and the
+    /// daemon behaves exactly as before.
+    #[arg(long, env = "COWBOY_MEMORY_ENABLED", default_value_t = false)]
+    pub memory_enabled: bool,
+
+    /// Root of the tiered memory store (`<root>/{machine,projects/<slug>/memory,
+    /// archive}/`). A leading `~` is expanded to `$HOME`. Defaults to
+    /// `~/.agents/memory` (matches Claude Code's `CLAUDE_CODE_REMOTE_MEMORY_DIR`
+    /// keying). Only consulted when `--memory-enabled`.
+    #[arg(long, env = "COWBOY_MEMORY_ROOT", default_value = "~/.agents/memory")]
+    pub memory_root: PathBuf,
+
+    /// Provider id the memory-janitor system session runs as (the in-process
+    /// judge that dedups/merges/tiers candidates and emits resolve-ops). Only
+    /// consulted when `--memory-enabled`.
+    #[arg(
+        long,
+        env = "COWBOY_MEMORY_JANITOR_PROVIDER",
+        default_value = "codex"
+    )]
+    pub memory_janitor_provider: String,
 }
 
 impl Cli {

@@ -19,12 +19,14 @@
 // wires them into the daemon.
 pub mod apply;
 pub mod index;
+pub mod janitor;
 pub mod queue;
 pub mod store;
 pub mod tier;
 
 pub use apply::{batch, resolve, ResolveKind, ResolveOp};
 pub use index::{Hit, Index, IndexEntry};
+pub use janitor::Janitor;
 pub use queue::{Config as QueueConfig, Mutation, Op, Queue};
 pub use store::{Memory, MemoryType, Store, Tier};
 pub use tier::{project_tier, route, route_slug, sanitize, slug_of, Caller};
@@ -40,23 +42,65 @@ pub async fn mem_cli(args: MemArgs) -> anyhow::Result<()> {
     }
 }
 
+/// The local daemon's base URL. The CLI is a thin client: it POSTs the validated
+/// proposal to the running `cowboy serve` (default bind `127.0.0.1:3333`), which
+/// enqueues it → debounce → the janitor dedups/judges/commits. The CLI NEVER
+/// writes a memory file itself — that is the guardrail (D2).
+const DAEMON_BASE: &str = "http://127.0.0.1:3333";
+
 async fn record(a: MemRecordArgs) -> anyhow::Result<()> {
+    // Validate BEFORE touching the network — the frontmatter guardrail.
     validate_record(&a.name, &a.description, &a.mem_type)?;
-    // Phase C: POST the proposal to the running daemon's `/api/memory/record`,
-    // which enqueues it → debounce → the janitor dedups/judges/commits. The CLI
-    // NEVER writes a file itself — that is the guardrail.
-    anyhow::bail!(
-        "cowboy mem record: input validated, but the daemon record endpoint \
-         lands in p5 Phase C (not wired yet)"
-    )
+    let body = a.body.join("\n");
+    let payload = serde_json::json!({
+        "name": a.name,
+        "description": a.description,
+        "type": a.mem_type,
+        "tier": a.tier,
+        "body": body,
+    });
+    post_proposal("/api/memory/record", &payload).await?;
+    println!("recorded proposal {:?} (queued for the janitor)", a.name);
+    Ok(())
 }
 
 async fn forget(name: &str) -> anyhow::Result<()> {
     if name.trim().is_empty() {
         anyhow::bail!("cowboy mem forget: a memory name is required");
     }
-    // Phase C: soft-archive only (move to archive/), never hard-delete.
-    anyhow::bail!("cowboy mem forget: lands in p5 Phase C (not wired yet)")
+    // Soft-archive only (the janitor moves it to archive/), never hard-delete.
+    let payload = serde_json::json!({ "name": name });
+    post_proposal("/api/memory/forget", &payload).await?;
+    println!("forget proposal {name:?} (queued for the janitor)");
+    Ok(())
+}
+
+/// POST a JSON proposal to a daemon memory endpoint. Surfaces a clear "is cowboy
+/// serve running?" hint on connection refused, and the daemon's body on a non-2xx
+/// (e.g. the 404 the endpoints return when `--memory-enabled` is off).
+async fn post_proposal(path: &str, payload: &serde_json::Value) -> anyhow::Result<()> {
+    let url = format!("{DAEMON_BASE}{path}");
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_connect() {
+                anyhow::anyhow!(
+                    "cannot reach the cowboy daemon at {DAEMON_BASE} — is `cowboy serve` running \
+                     (with --memory-enabled)? underlying error: {e}"
+                )
+            } else {
+                anyhow::anyhow!("POST {url}: {e}")
+            }
+        })?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("POST {url} → {status}: {body}");
+    }
+    Ok(())
 }
 
 /// Validate a record proposal's frontmatter BEFORE it can reach the store — the
