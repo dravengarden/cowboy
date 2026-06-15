@@ -196,6 +196,39 @@ fn last_stop_reason(log: &[Envelope]) -> Option<String> {
     })
 }
 
+/// Whether any tool call in the CURRENT turn is still open (`pending` /
+/// `in_progress`). Used by the prompt watchdog ([`Hub::turn_appears_stuck`]) to
+/// avoid mistaking a legitimately long, silent tool call for a wedged agent.
+///
+/// Scans the log backward, bounded by this turn's start (`Lifecycle { Busy }`)
+/// or the prior `TurnEnd`, plus a hard cap so a huge log can't make this O(n).
+/// The FIRST status seen per `toolCallId` (scanning back) is its latest. A bare
+/// `tool_call` carries no `status` field — it's the open-on-creation marker, so
+/// it counts as in-progress until a later `tool_call_update` settles it. Field
+/// names are standard ACP camelCase (`toolCallId` / `status`), provider-agnostic.
+fn turn_has_open_tool(log: &[Envelope]) -> bool {
+    let mut latest: HashMap<&str, &str> = HashMap::new();
+    for env in log.iter().rev().take(2000) {
+        match &env.event {
+            Event::TurnEnd { .. } | Event::Lifecycle { status: Status::Busy, .. } => break,
+            Event::Update { update } => {
+                let su = update.get("sessionUpdate").and_then(serde_json::Value::as_str);
+                if matches!(su, Some("tool_call" | "tool_call_update")) {
+                    if let Some(id) = update.get("toolCallId").and_then(serde_json::Value::as_str) {
+                        let st = update
+                            .get("status")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("in_progress");
+                        latest.entry(id).or_insert(st);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    latest.values().any(|st| *st == "pending" || *st == "in_progress")
+}
+
 /// Session metadata for the list view (no event log).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -395,6 +428,14 @@ struct Session {
     /// [`JUDGE_HISTORY_CAP`]. Server-authoritative + persisted (migration 0009);
     /// backs the inspector widget. Broadcast as [`Outbound::JudgeHistory`].
     judge_runs: Vec<JudgeRun>,
+    /// Wall-clock of the last agent-streamed update (stamped in `push_tagged`
+    /// for `Event::Update`). The prompt watchdog (acp.rs) reads this to tell a
+    /// STUCK turn — agent finished producing but never returned the ACP prompt
+    /// response, so `prompt().await` hangs and the session is pinned `Busy`
+    /// forever — apart from a legitimately slow one. Not persisted: a fresh
+    /// `Instant` on restore is correct (restore already heals any pre-restart
+    /// `Busy` → `Interrupted`).
+    last_activity: std::time::Instant,
 }
 
 /// A command sent by a client (Web UI, native shell, API / test harnesses)
@@ -1065,6 +1106,7 @@ impl Hub {
                         in_flight: false,
                         judge_seq: 0,
                         judge_runs,
+                        last_activity: std::time::Instant::now(),
                     },
                 );
                 order.push(id);
@@ -1241,6 +1283,7 @@ impl Hub {
                     in_flight: false,
                     judge_seq: 0,
                     judge_runs: Vec::new(),
+                    last_activity: std::time::Instant::now(),
                 },
             );
             order.push(id);
@@ -2187,6 +2230,13 @@ impl Hub {
                 cmid,
             };
             s.log.push(envelope.clone());
+            // Stamp liveness on agent-streamed updates only — NOT on cowboy's own
+            // synthesized `Lifecycle`/`TurnEnd`/permission events, which would
+            // falsely reset the prompt watchdog's idle clock without the agent
+            // having done anything.
+            if matches!(envelope.event, Event::Update { .. }) {
+                s.last_activity = std::time::Instant::now();
+            }
             envelope
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -2260,6 +2310,30 @@ impl Hub {
             .lock()
             .get(session_id)
             .map(|s| s.meta.status)
+    }
+
+    /// True when a session looks WEDGED mid-turn: it's `Busy`, has streamed
+    /// nothing for `threshold`, and no tool call from the current turn is still
+    /// open. This is the case `d6ee0ca` (subprocess-death recovery) explicitly
+    /// left out of scope — the agent stays alive but never returns the turn's
+    /// stop_reason, so `prompt().await` hangs and the session is pinned `Busy`
+    /// (perpetual streaming caret, queue never drains). The prompt watchdog
+    /// (acp.rs) polls this; the caller additionally confirms no permission is
+    /// pending (a turn legitimately parked on a human is silent indefinitely).
+    ///
+    /// The "no open tool" guard is what keeps a legitimately long, silent tool
+    /// call (a build / test / `nixos-rebuild` with no streamed output) from
+    /// being mistaken for a wedge: while a tool is in flight the agent is
+    /// working, not stuck.
+    #[must_use]
+    pub fn turn_appears_stuck(&self, session_id: &str, threshold: std::time::Duration) -> bool {
+        let sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get(session_id) else {
+            return false;
+        };
+        s.meta.status == Status::Busy
+            && s.last_activity.elapsed() >= threshold
+            && !turn_has_open_tool(&s.log)
     }
 
     fn next_qid(&self) -> String {
@@ -2944,5 +3018,73 @@ mod confirm_hold_tests {
         assert!(hub.is_awaiting("s2"), "judge held the queue");
         hub.set_awaiting("s2", false);
         assert!(!hub.is_awaiting("s2"), "clearing resumes the drain");
+    }
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn upd(v: serde_json::Value) -> Envelope {
+        Envelope { session_id: "s".to_owned(), seq: 0, event: Event::Update { update: v }, cmid: None }
+    }
+
+    fn turn_end() -> Envelope {
+        Envelope {
+            session_id: "s".to_owned(),
+            seq: 0,
+            event: Event::TurnEnd { stop_reason: "EndTurn".to_owned() },
+            cmid: None,
+        }
+    }
+
+    // The open-tool guard is the load-bearing part of the watchdog: misreading it
+    // would either keep a wedged session pinned (false "tool still open") or
+    // false-end a live long tool call (false "nothing open"). These lock the exact
+    // ACP field names (`toolCallId` / `status`) the scan depends on.
+    #[test]
+    fn bare_tool_call_is_open_until_settled() {
+        // A `tool_call` carries no `status` — it's open on creation.
+        let log = vec![upd(json!({"sessionUpdate": "tool_call", "toolCallId": "t1"}))];
+        assert!(turn_has_open_tool(&log), "bare tool_call counts as in-progress");
+
+        // A later completed update settles it.
+        let log = vec![
+            upd(json!({"sessionUpdate": "tool_call", "toolCallId": "t1"})),
+            upd(json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})),
+        ];
+        assert!(!turn_has_open_tool(&log), "completed update closes the tool");
+
+        // An explicit in_progress is open.
+        let log = vec![
+            upd(json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "in_progress"})),
+        ];
+        assert!(turn_has_open_tool(&log), "in_progress is open");
+    }
+
+    #[test]
+    fn scan_stops_at_the_prior_turn_boundary() {
+        // A previous turn's still-"open" tool sits BEFORE this turn's TurnEnd; the
+        // backward scan must stop there and ignore it.
+        let log = vec![
+            upd(json!({"sessionUpdate": "tool_call", "toolCallId": "old"})),
+            turn_end(),
+            upd(json!({"sessionUpdate": "agent_message_chunk",
+                       "content": {"type": "text", "text": "done"}})),
+        ];
+        assert!(!turn_has_open_tool(&log), "prior turn's tool is out of scope");
+    }
+
+    #[test]
+    fn text_and_usage_only_turn_has_nothing_open() {
+        // The observed wedge shape (sess-20): full reply + usage, no tool. Nothing
+        // is open, so the watchdog is eligible to fire on this turn.
+        let log = vec![
+            upd(json!({"sessionUpdate": "agent_message_chunk",
+                       "content": {"type": "text", "text": "hi"}})),
+            upd(json!({"sessionUpdate": "usage_update", "size": 1, "used": 1})),
+        ];
+        assert!(!turn_has_open_tool(&log), "a text+usage turn has nothing open");
     }
 }

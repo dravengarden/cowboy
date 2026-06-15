@@ -1171,6 +1171,30 @@ function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
   el.scrollTop += delta;
 }
 
+/** Hide the streaming caret after the last streamed item stops growing for this
+ *  long, even while the session still reads `Busy`. Defense-in-depth (Layer 5):
+ *  the backend watchdog clears a genuinely wedged turn server-side within ~5 min;
+ *  this caps the VISIBLE blinking caret much sooner. Long enough to never flicker
+ *  during a normal between-chunk pause (partial messages stream thinking too). */
+const CARET_IDLE_MS = 60_000;
+
+/** True while `signature` is still changing; flips false `idleMs` after it last
+ *  changed, true again the moment it changes. Purely cosmetic — never touches
+ *  session state. The caret gates on this so a wedged stream stops blinking. */
+function useCaretLive(signature: string, idleMs: number): boolean {
+  const [live, setLive] = useState(true);
+  const lastRef = useRef(signature);
+  useEffect(() => {
+    if (signature !== lastRef.current) {
+      lastRef.current = signature;
+      setLive(true);
+    }
+    const t = setTimeout(() => setLive(false), idleMs);
+    return () => clearTimeout(t);
+  }, [signature, idleMs]);
+  return live;
+}
+
 export function Transcript({
   sessionId,
   timeline,
@@ -1257,6 +1281,11 @@ export function Transcript({
   const isLive = status === "starting" || status === "running" || status === "busy";
   const lastIdx = items.length - 1;
   const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
+  // Signature that changes whenever the last item grows (more chunks / text) or a
+  // new item is appended — drives the caret idle-cap (Layer 5). Cheap: serializes
+  // only the last item.
+  const lastSig = lastItem ? `${items.length}:${JSON.stringify(lastItem).length}` : "";
+  const caretLive = useCaretLive(lastSig, CARET_IDLE_MS);
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
@@ -1640,7 +1669,7 @@ export function Transcript({
                     containIntrinsicSize: "auto 96px",
                   }}
                 >
-                  <ItemView item={item} streaming={working && i === lastIdx} />
+                  <ItemView item={item} streaming={working && i === lastIdx && caretLive} />
                 </Box>
               ))}
           </>

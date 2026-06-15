@@ -1,4 +1,5 @@
 mod acp;
+mod cgroup;
 mod cli;
 mod core;
 mod inference;
