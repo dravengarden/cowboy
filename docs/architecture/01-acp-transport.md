@@ -30,7 +30,9 @@ flowchart TB
 current-thread Tokio runtime. This is the only place agent I/O happens. The flow
 inside `agent_main()`:
 
-1. **Spawn** the subprocess (`Command::new(spec.command).args(spec.args)`).
+1. **Spawn** the subprocess (`Command::new(spec.command).args(spec.args)`), then
+   move it into a **per-agent cgroup** (`src/cgroup.rs`) so its entire process
+   subtree can be reaped in one shot on teardown/recycle (see *Turn liveness*).
 2. **Connect** over the child's stdin/stdout (`ByteStreams`).
 3. Build the `Client` with two handlers:
    - **`on_receive_notification`** → `handle_session_notification()`: translate
@@ -40,8 +42,10 @@ inside `agent_main()`:
      sessions, auto-approve; for human sessions, enqueue a pending request with a
      oneshot channel so a human (any client) can answer it.
 4. **Run** the connection loop (`run_session`) and **race it against
-   `child.wait()`** — if the agent exits before yielding control, that's a hung
-   turn, detected here.
+   `child.wait()`** — if the agent *process exits* before yielding control
+   (→ `Crashed`), that's caught here. A still-*alive* agent that simply stops
+   responding mid-turn is caught separately by the turn watchdog (see *Turn
+   liveness* below).
 
 ## Capabilities advertised
 
@@ -86,7 +90,7 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 
 | Command | ACP action |
 |---|---|
-| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; on error push `TurnEnd` + `Crashed`. |
+| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest` **raced against the wedge watchdog** (see *Turn liveness*). On success push `TurnEnd` + `Running`; on error push `TurnEnd` + `Crashed`. |
 | `Cancel` | `CancelNotification` |
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
 | `SetConfigOption { config_id, value }` | if `config_id == "mode"` and a mode-select exists (gemini) → `SetSessionModeRequest`; otherwise the ext method `session/set_config_option`, whose refreshed options are pushed back to the Hub |
@@ -94,6 +98,42 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 **Auto-resume tagging:** a `cmid` starting with the `__cont__` prefix marks an
 auto-continued turn — the echoed block is flagged `autoResumed: true` so the UI
 renders it as a "↻ resumed turn" note rather than a user bubble.
+
+## Turn liveness: the wedge watchdog
+
+An agent can stay **alive** yet never return a turn's prompt response — e.g. it
+spawned a shell command that never exits (an unbounded `until …; do sleep; done`
+poll loop) and the CLI blocks at turn-end waiting for that child. `child.wait()`
+never fires (the process lives), so `prompt().await` would hang forever and the
+session would latch `Busy` — perpetual streaming caret, queue never drains. (The
+restart-time `busy→interrupted` recovery only fires on a daemon restart, so
+without this a wedge persisted until someone restarted cowboy.)
+
+Each `PromptRequest` is therefore raced (`tokio::select!`, biased to the real
+response) against a periodic watchdog:
+
+- **Fire condition** — status `Busy`, no agent update for `WATCHDOG_IDLE` (300s),
+  **no open tool** (`Hub::turn_appears_stuck` scans the current turn's log), and
+  **no pending permission**. The two guards exclude the legitimate silent cases:
+  a long-running tool with no streamed output, and a turn parked on a human.
+- **Soft recovery** — `Cancel` + `TurnEnd` + `Running`. Abandons just this turn,
+  leaves the agent alive, drains the queue, clears the caret.
+- **Hard recycle** — a 2nd back-to-back wedge (`WEDGE_RECYCLE_THRESHOLD`) means
+  the agent is persistently stuck, so cowboy SIGKILLs the agent's **cgroup**
+  (`cgroup.kill`). That reaps the whole subtree — including `setsid`-detached
+  poll loops a process-group kill can't catch — and trips the `child.wait()`
+  race above → `Crashed` → the supervisor revives a fresh agent.
+
+The per-agent cgroup needs `Delegate=yes` on `cowboy.service` and is
+**fail-open**: any cgroup error logs a warning and the agent runs uncontained,
+never blocking spawn. The frontend independently caps the caret after 60s of no
+growth as a cosmetic backstop.
+
+The watchdog is **cause-agnostic** — cowboy can't see *why* an agent went silent
+(wedged child, a dropped ACP response, …), only that it did, so it keys off the
+externally-observable "Busy + silent + nothing pending" rather than guessing the
+cause. The real upstream fix lives in the agent: don't write unbounded poll
+loops (use a bounded `timeout` / max-iterations).
 
 ## Accepted limitation
 
