@@ -57,6 +57,13 @@ const WATCHDOG_IDLE: std::time::Duration = std::time::Duration::from_secs(300);
 /// first wedge a soft recovery; a second back-to-back wedge means the agent is
 /// persistently broken, so recycle it (and reap its orphaned poll loops).
 const WEDGE_RECYCLE_THRESHOLD: u32 = 2;
+/// After sending a wedged turn a `Cancel`, how long to KEEP AWAITING its response
+/// before giving up and hard-recycling. Must exceed agent-acp's own cancel floor
+/// (~30s, after which it force-yields a `Cancelled`) so a recoverable wedge lands
+/// as a clean turn end rather than being killed. Dropping the prompt future
+/// before this response arrives is what crashed the connection with
+/// "failed to send response, receiver dropped".
+const WATCHDOG_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A command from a client, routed by the supervisor to an agent thread.
 #[derive(Debug)]
@@ -592,7 +599,18 @@ async fn run_session(
                     let acp_for_cancel = acp.clone();
                     let prompt = cx.send_request(PromptRequest::new(acp, blocks)).block_task();
                     tokio::pin!(prompt);
+                    // Once we've sent a watchdog Cancel we do NOT drop the prompt future
+                    // (dropping it while the agent later force-yields a response is what
+                    // crashed the connection with "failed to send response, receiver
+                    // dropped"). Instead we KEEP awaiting it until this grace deadline; a
+                    // recoverable wedge then lands as a clean turn end, and only a truly
+                    // unyielding agent gets hard-recycled.
+                    let mut cancel_deadline: Option<tokio::time::Instant> = None;
                     loop {
+                        let wait = match cancel_deadline {
+                            Some(dl) => dl.saturating_duration_since(tokio::time::Instant::now()),
+                            None => WATCHDOG_TICK,
+                        };
                         tokio::select! {
                             // Prefer a real response when both are ready, so the
                             // watchdog never pre-empts a turn that just finished.
@@ -600,25 +618,25 @@ async fn run_session(
                             r = &mut prompt => {
                                 match r {
                                     Ok(r) => {
-                                        // A clean turn end → the agent isn't wedged; reset the
-                                        // consecutive-wedge counter that drives hard recycle.
-                                        state.wedge_fires.store(0, Ordering::Relaxed);
-                                        // Turn completed normally — including a `Cancelled`
-                                        // stop from a force-push (that's an Ok response, and
-                                        // we WANT the queue to drain the promoted prompt).
-                                        // Going Running lets the auto-drain send the next one.
-                                        hub.push(&sid, Event::TurnEnd {
-                                            stop_reason: format!("{:?}", r.stop_reason),
-                                        });
+                                        let reason = format!("{:?}", r.stop_reason);
+                                        // A GENUINE end resets the consecutive-wedge streak. A
+                                        // `Cancelled` that came from OUR watchdog cancel does
+                                        // NOT (the agent made no progress) — so a turn that keeps
+                                        // wedging escalates to a recycle instead of looping.
+                                        let watchdog_cancel =
+                                            cancel_deadline.is_some() && reason.contains("Cancel");
+                                        if !watchdog_cancel {
+                                            state.wedge_fires.store(0, Ordering::Relaxed);
+                                        }
+                                        // Going Running lets the auto-drain send the next queued
+                                        // prompt (a force-push Cancel is an Ok we WANT to drain).
+                                        hub.push(&sid, Event::TurnEnd { stop_reason: reason });
                                         hub.set_status(&sid, Status::Running, None);
                                     }
                                     Err(e) => {
-                                        // The prompt itself FAILED (agent/connection error) —
-                                        // the task didn't finish. Do NOT go Running, or the
-                                        // auto-drain would fire the next queued prompt into a
-                                        // failed turn ("a task wasn't done but the queue
-                                        // auto-sent"). Mark crashed so the queue holds; an
-                                        // explicit resend / send-now revives and resumes.
+                                        // The prompt FAILED (agent/connection error). Hold the
+                                        // queue (Crashed) so the auto-drain doesn't fire the next
+                                        // prompt into a failed turn; an explicit resend/open revives.
                                         hub.push(&sid, Event::TurnEnd {
                                             stop_reason: format!("error: {e}"),
                                         });
@@ -627,53 +645,52 @@ async fn run_session(
                                 }
                                 break;
                             }
-                            // Wedged-turn watchdog. The agent can stream a full reply
-                            // (text + usage) then never return this turn's stop_reason
-                            // while STAYING ALIVE (so d6ee0ca's `child.wait()` race never
-                            // fires) — `prompt` then hangs forever and the session latches
-                            // `Busy`: perpetual caret, queue never drains. If the turn has
-                            // gone silent past WATCHDOG_IDLE with no open tool and no
-                            // pending permission, close it exactly like a normal end
-                            // (clears in_flight, runs the judge, drains the queue, clears
-                            // the caret). The agent process is left alive — only this turn
-                            // is abandoned — so the next prompt reuses the connection.
-                            () = tokio::time::sleep(WATCHDOG_TICK) => {
+                            // Wedged-turn watchdog. The agent can stream a full reply then never
+                            // return this turn's stop_reason while STAYING ALIVE (d6ee0ca's
+                            // child.wait() race never fires), so `prompt` hangs forever and the
+                            // session latches Busy (perpetual caret, queue never drains).
+                            () = tokio::time::sleep(wait) => {
+                                if cancel_deadline.is_some() {
+                                    // Grace elapsed: the agent won't yield even to Cancel. Hard-
+                                    // recycle — SIGKILL the cgroup subtree (reaps orphaned poll
+                                    // loops); the death trips child.wait() in agent_main →
+                                    // Crashed → revive. Uncontained: abandon the turn so it can't
+                                    // hang (Delegate=yes is the norm, so this is rare).
+                                    if let Some(dir) = &state.cgroup {
+                                        tracing::warn!(session = %sid, "prompt watchdog: agent won't yield to cancel — recycling (kill cgroup subtree)");
+                                        cgroup::kill(dir);
+                                    } else {
+                                        tracing::warn!(session = %sid, "prompt watchdog: agent wedged + uncontained — abandoning turn");
+                                        hub.push(&sid, Event::TurnEnd {
+                                            stop_reason: "watchdog: agent wedged (uncontained)".to_owned(),
+                                        });
+                                        hub.set_status(&sid, Status::Running, None);
+                                    }
+                                    break;
+                                }
                                 if hub.turn_appears_stuck(&sid, WATCHDOG_IDLE)
                                     && state.pending.lock().is_empty()
                                 {
                                     let fires = state.wedge_fires.fetch_add(1, Ordering::Relaxed) + 1;
-                                    // Escalate: a second back-to-back wedge (no clean turn in
-                                    // between) means the agent is persistently stuck, not just
-                                    // having one bad turn. HARD-recycle — SIGKILL the whole
-                                    // cgroup subtree (agent + leaked poll loops); the death
-                                    // trips `child.wait()` in agent_main → Crashed → the
-                                    // supervisor revives a fresh agent on the next prompt. Only
-                                    // when contained; otherwise fall through to soft recovery.
-                                    if fires >= WEDGE_RECYCLE_THRESHOLD {
+                                    if fires >= WEDGE_RECYCLE_THRESHOLD && state.cgroup.is_some() {
+                                        // Persistently wedged (a prior turn wedged and never
+                                        // genuinely finished) → skip the soft cancel, recycle now.
                                         if let Some(dir) = &state.cgroup {
-                                            tracing::warn!(
-                                                session = %sid, fires,
-                                                "prompt watchdog: recycling persistently-wedged agent (kill cgroup subtree)",
-                                            );
+                                            tracing::warn!(session = %sid, fires, "prompt watchdog: persistently wedged — recycling (kill cgroup subtree)");
                                             cgroup::kill(dir);
-                                            break;
                                         }
+                                        break;
                                     }
-                                    // Soft: abandon just this turn, leave the agent alive. Cancel
-                                    // so a late reply is a no-op; dropping `prompt` on break
-                                    // tears the orphaned request down.
+                                    // First wedge: ask the agent to cancel and KEEP awaiting for a
+                                    // grace window (do NOT drop the future). agent-acp force-yields
+                                    // a Cancelled after its own floor, which lands as a clean
+                                    // Running above — no connection crash.
+                                    tracing::warn!(session = %sid, fires, "prompt watchdog: wedged turn — cancelling, awaiting grace");
                                     let _ = cx.send_notification(
                                         CancelNotification::new(acp_for_cancel.clone()),
                                     );
-                                    hub.push(&sid, Event::TurnEnd {
-                                        stop_reason: "watchdog: agent idle, no turn response".to_owned(),
-                                    });
-                                    hub.set_status(&sid, Status::Running, None);
-                                    tracing::warn!(
-                                        session = %sid, fires,
-                                        "prompt watchdog: closed a wedged turn (agent alive, no stop_reason)",
-                                    );
-                                    break;
+                                    cancel_deadline =
+                                        Some(tokio::time::Instant::now() + WATCHDOG_CANCEL_GRACE);
                                 }
                             }
                         }
