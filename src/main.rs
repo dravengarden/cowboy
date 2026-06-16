@@ -7,6 +7,7 @@ mod memory;
 mod skills;
 mod files;
 mod provider;
+mod scheduler;
 mod server;
 mod store;
 mod supervisor;

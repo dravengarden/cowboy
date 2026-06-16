@@ -355,8 +355,44 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         return;
     }
     match serde_json::to_value(&notif.update) {
-        Ok(update) => state.hub.push(&state.session_id, Event::Update { update }),
+        Ok(update) => {
+            // Honor a ScheduleWakeup BEFORE pushing — the event is still stored
+            // verbatim (timeline/UI unchanged); this just adds the side effect of
+            // actually firing the wakeup, which the ACP runtime otherwise drops.
+            maybe_arm_wakeup(state, &update);
+            state.hub.push(&state.session_id, Event::Update { update });
+        }
         Err(e) => tracing::warn!(error = %e, "serializing session update"),
+    }
+}
+
+/// If `update` is a `ScheduleWakeup` tool call carrying `rawInput.{prompt,
+/// delaySeconds}`, arm cowboy's scheduler. The agent expects its `/loop` runtime
+/// to re-invoke it at the scheduled time; under ACP cowboy IS that runtime, so we
+/// honor it here (see [`crate::scheduler`]). Only the event that carries the
+/// input arms — the bare `tool_call` and the result `tool_call_update` lack it,
+/// so this is effectively once per `ScheduleWakeup` call.
+fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
+    if update
+        .pointer("/_meta/claudeCode/toolName")
+        .and_then(serde_json::Value::as_str)
+        != Some("ScheduleWakeup")
+    {
+        return;
+    }
+    let prompt = update
+        .pointer("/rawInput/prompt")
+        .and_then(serde_json::Value::as_str);
+    let delay = update
+        .pointer("/rawInput/delaySeconds")
+        .and_then(serde_json::Value::as_i64);
+    if let (Some(prompt), Some(delay)) = (prompt, delay) {
+        if !prompt.trim().is_empty() {
+            tracing::info!(session = %state.session_id, delay_s = delay, "scheduler: arming ScheduleWakeup");
+            state
+                .hub
+                .schedule_wakeup(&state.session_id, delay, prompt.to_owned());
+        }
     }
 }
 
@@ -521,15 +557,16 @@ async fn run_session(
                 // per block so each renders as its own bubble. The FIRST echo
                 // carries the originating client's cmid so that client reconciles
                 // its optimistic chat bubble by id (the rest are untagged).
-                // A daemon-originated auto-resume continuation (cmid "__cont__…")
-                // is flagged on the echo (persisted in the payload) so the UI
-                // renders it as a distinct "↻ resumed turn" note — it isn't
-                // something the user typed, so it must never look like a user
-                // bubble (e.g. an empty-result continuation re-issues the prompt
-                // verbatim, which would otherwise read as a duplicate).
-                let auto_resumed = cmid
-                    .as_deref()
-                    .is_some_and(|c| c.starts_with(crate::core::AUTO_CONTINUE_PREFIX));
+                // A daemon-originated turn — an auto-resume continuation (cmid
+                // "__cont__…") or a fired ScheduleWakeup ("__wake__…") — is flagged
+                // on the echo (persisted in the payload) so the UI renders it as a
+                // distinct "↻ resumed turn" note: it isn't something the user
+                // typed, so it must never look like a user bubble (e.g. a wakeup
+                // re-issues a self-check prompt the user never sent).
+                let auto_resumed = cmid.as_deref().is_some_and(|c| {
+                    c.starts_with(crate::core::AUTO_CONTINUE_PREFIX)
+                        || c.starts_with(crate::scheduler::WAKEUP_PREFIX)
+                });
                 for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
                     let tag = if i == 0 { cmid.clone() } else { None };

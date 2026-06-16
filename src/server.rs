@@ -131,6 +131,29 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         dispatch_rx,
     ));
 
+    // Honor agent `ScheduleWakeup`s: fires a wake-prompt (via the same dispatch
+    // path) at the scheduled time. Without this, an ACP-driven agent's scheduled
+    // self-checks never fire and get consumed by the next user turn instead.
+    let (sched_tx, sched_rx) = mpsc::unbounded_channel::<crate::scheduler::ScheduleCmd>();
+    hub.set_scheduler_tx(sched_tx);
+    tokio::spawn(crate::scheduler::run_scheduler(hub.clone(), sched_rx));
+    // Re-arm wakeups that were pending across this restart; any already overdue
+    // fire immediately (catch-up for the downtime).
+    if let Some(store) = store.as_ref() {
+        match store.load_wakeups().await {
+            Ok(ws) => {
+                let n = ws.len();
+                for (sid, fire_at_ms, prompt) in ws {
+                    hub.rearm_wakeup(&sid, fire_at_ms, prompt);
+                }
+                if n > 0 {
+                    tracing::info!(rearmed = n, "re-armed persisted scheduled wakeups");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "loading scheduled wakeups (skipping re-arm)"),
+        }
+    }
+
     // Headless auto-resume. A turn cut off by THIS restart had its continuation
     // enqueued + the session marked Interrupted during `hub.restore` above — but
     // that continuation only drains once the agent revives, which used to wait for
@@ -352,6 +375,10 @@ async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWri
             StoreWrite::PutInferenceSecret { provider, api_key } => {
                 store.put_inference_secret(provider, api_key).await
             }
+            StoreWrite::UpsertWakeup { session_id, fire_at_ms, prompt } => {
+                store.upsert_wakeup(session_id, *fire_at_ms, prompt).await
+            }
+            StoreWrite::DeleteWakeup { session_id } => store.delete_wakeup(session_id).await,
         };
         if let Err(e) = result {
             tracing::warn!(error = %e, "store writer failed an intent (intent dropped)");

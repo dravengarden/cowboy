@@ -854,6 +854,11 @@ pub enum StoreWrite {
     PutInferenceConfig { provider: String, model: String, params: serde_json::Value },
     /// Upsert an inference provider's API key (separate secrets table).
     PutInferenceSecret { provider: String, api_key: String },
+    /// Upsert a session's pending `ScheduleWakeup` (migration 0011) so an armed
+    /// wakeup survives a daemon restart and still fires.
+    UpsertWakeup { session_id: String, fire_at_ms: i64, prompt: String },
+    /// Drop a session's persisted wakeup once it has fired (or been dropped).
+    DeleteWakeup { session_id: String },
 }
 
 /// Client-facing view of one inference provider's config — carries `key_set`
@@ -957,6 +962,10 @@ struct HubInner {
     /// in tests), in which case a drain decision is computed but no prompt is
     /// actually sent. See [`DispatchReq`].
     dispatch_tx: Mutex<Option<mpsc::UnboundedSender<DispatchReq>>>,
+    /// Hand-off to the background scheduler task that fires agent-armed
+    /// `ScheduleWakeup`s. Set once at startup via [`Hub::set_scheduler_tx`];
+    /// `None` until then (and in tests) ⇒ wakeups are simply not honored.
+    scheduler_tx: Mutex<Option<mpsc::UnboundedSender<crate::scheduler::ScheduleCmd>>>,
     /// Per-state arbiters for the generic optimistic-sync channel, keyed by
     /// state name (`"title"`, `"order"`, …). See [`SyncArbiter`].
     sync: Mutex<HashMap<String, SyncArbiter>>,
@@ -993,6 +1002,7 @@ impl Hub {
                 tx,
                 store_tx,
                 dispatch_tx: Mutex::new(None),
+                scheduler_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
                 settings: Mutex::new(HashMap::new()),
@@ -1006,6 +1016,68 @@ impl Hub {
     /// client connects. Until set, drains compute but dispatch nothing.
     pub fn set_dispatch_tx(&self, tx: mpsc::UnboundedSender<DispatchReq>) {
         *self.inner.dispatch_tx.lock() = Some(tx);
+    }
+
+    /// Wire the background scheduler's hand-off channel (mirrors
+    /// [`Self::set_dispatch_tx`]). Until set, [`Self::schedule_wakeup`] is a no-op.
+    pub fn set_scheduler_tx(&self, tx: mpsc::UnboundedSender<crate::scheduler::ScheduleCmd>) {
+        *self.inner.scheduler_tx.lock() = Some(tx);
+    }
+
+    /// Arm (replace) a session's pending `ScheduleWakeup` — `acp.rs` calls this
+    /// when it intercepts the tool. `delay_seconds` is the agent-requested delay
+    /// (clamped by the scheduler); the wakeup fires `prompt` as its own turn.
+    /// Also persisted (migration 0011) so it survives a restart.
+    pub fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String) {
+        let fire_at_ms = crate::scheduler::fire_at_from_delay(delay_seconds);
+        if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
+            let _ = tx.send(crate::scheduler::ScheduleCmd::Arm {
+                session_id: session_id.to_owned(),
+                fire_at_ms,
+                prompt: prompt.clone(),
+            });
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpsertWakeup {
+                session_id: session_id.to_owned(),
+                fire_at_ms,
+                prompt,
+            });
+        }
+    }
+
+    /// Re-arm a persisted wakeup on startup (absolute `fire_at_ms`, no re-persist
+    /// — it's already in the DB). An already-overdue one fires immediately
+    /// (catch-up for time the daemon was down).
+    pub fn rearm_wakeup(&self, session_id: &str, fire_at_ms: i64, prompt: String) {
+        if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
+            let _ = tx.send(crate::scheduler::ScheduleCmd::Arm {
+                session_id: session_id.to_owned(),
+                fire_at_ms,
+                prompt,
+            });
+        }
+    }
+
+    /// Drop a session's persisted wakeup — called by the scheduler once it has
+    /// consumed (fired or dropped) the pending wakeup, so it won't re-fire on the
+    /// next restart.
+    pub fn clear_persisted_wakeup(&self, session_id: &str) {
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::DeleteWakeup {
+                session_id: session_id.to_owned(),
+            });
+        }
+    }
+
+    /// Tell the scheduler a human turn arrived for a session, resetting its
+    /// consecutive-wakeup runaway guard. No-op if the scheduler isn't wired.
+    fn notify_human_turn(&self, session_id: &str) {
+        if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
+            let _ = tx.send(crate::scheduler::ScheduleCmd::HumanTurn {
+                session_id: session_id.to_owned(),
+            });
+        }
     }
 
     /// Populate the in-memory state from a previously-stored snapshot.
@@ -2491,6 +2563,14 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        // A human (or any non-wakeup) submit resets the scheduler's runaway guard
+        // — the autonomous-fire streak only counts unattended iterations.
+        if !cmid
+            .as_deref()
+            .is_some_and(|c| c.starts_with(crate::scheduler::WAKEUP_PREFIX))
+        {
+            self.notify_human_turn(session_id);
+        }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
         let mut cleared_awaiting = false;

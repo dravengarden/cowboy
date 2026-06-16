@@ -519,6 +519,51 @@ impl Store {
         Ok(())
     }
 
+    /// Upsert a session's pending `ScheduleWakeup` (migration 0011).
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn upsert_wakeup(&self, session_id: &str, fire_at_ms: i64, prompt: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scheduled_wakeups (session_id, fire_at_ms, prompt) VALUES ($1, $2, $3) \
+             ON CONFLICT (session_id) DO UPDATE SET fire_at_ms = $2, prompt = $3",
+        )
+        .bind(session_id)
+        .bind(fire_at_ms)
+        .bind(prompt)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPSERT wakeup {session_id}"))?;
+        Ok(())
+    }
+
+    /// Drop a session's persisted wakeup (it fired, or was dropped).
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn delete_wakeup(&self, session_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM scheduled_wakeups WHERE session_id = $1")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE wakeup {session_id}"))?;
+        Ok(())
+    }
+
+    /// Load every persisted pending wakeup as `(session_id, fire_at_ms, prompt)`,
+    /// to re-arm the scheduler on startup. Overdue ones fire immediately (catch-up).
+    ///
+    /// # Errors
+    /// If the query fails.
+    pub async fn load_wakeups(&self) -> Result<Vec<(String, i64, String)>> {
+        let rows: Vec<(String, i64, String)> =
+            sqlx::query_as("SELECT session_id, fire_at_ms, prompt FROM scheduled_wakeups")
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT scheduled_wakeups")?;
+        Ok(rows)
+    }
+
     /// Persist the manual session ordering: write each id's index as its
     /// `position`. `load_all` then restores the drag-arranged order (NULLS LAST
     /// + created_at keeps any unknown/never-reordered rows sensible). One UPDATE
