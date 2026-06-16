@@ -2484,7 +2484,15 @@ function PendingRow({
     const addEditFiles = (files: File[]): void => {
       if (files.length === 0) return;
       void filesToAttachments(files).then((added) => {
-        if (added.length > 0) setEditAttachments((prev) => [...prev, ...added]);
+        if (added.length === 0) return;
+        // Mirror addFiles: register bytes BEFORE inserting the token so the
+        // inline decoration resolves synchronously, keep editAttachments as the
+        // send source, then drop an inline `cowboy-att:` token at the caret.
+        // Without the register+insert, a pasted image during edit only became a
+        // footer chip and never rendered inline in the editor (the reported bug).
+        added.forEach(registerInlineAttachment);
+        setEditAttachments((prev) => [...prev, ...added]);
+        added.forEach((a) => editorRef.current?.insertImage(a));
       });
     };
     // Editing IS the composer surface now: the same editor (vim + completions), the
