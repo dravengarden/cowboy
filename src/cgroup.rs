@@ -47,16 +47,11 @@ pub fn add_pid(dir: &Path, pid: u32) {
     }
 }
 
-/// SIGKILL every process in the agent's cgroup — the agent plus all descendants,
-/// including `setsid`-detached ones. Does NOT remove the directory (the caller's
-/// teardown does that via [`kill_and_remove`]). Used by the watchdog hard-recycle,
-/// where the kill is what trips `agent_main`'s `child.wait()` race.
-pub fn kill(dir: &Path) {
-    write_kill(dir);
-}
-
-/// SIGKILL the whole subtree (see [`kill`]) and remove the now-empty leaf.
-/// Idempotent / fail-open — safe even if the agent already exited.
+/// SIGKILL the whole agent subtree — the agent plus all descendants, including
+/// `setsid`-detached ones — and remove the now-empty leaf. Idempotent / fail-open
+/// — safe even if the agent already exited. Called from `agent_main` teardown so
+/// a leaked child (e.g. an unbounded `until …; do sleep; done` poll loop) can't
+/// outlive the agent.
 pub fn kill_and_remove(dir: &Path) {
     write_kill(dir);
     // `cgroup.kill` is synchronous in killing, but the kernel may take a beat to

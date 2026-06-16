@@ -1171,28 +1171,30 @@ function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
   el.scrollTop += delta;
 }
 
-/** Hide the streaming caret after the last streamed item stops growing for this
- *  long, even while the session still reads `Busy`. Defense-in-depth (Layer 5):
- *  the backend watchdog clears a genuinely wedged turn server-side within ~5 min;
- *  this caps the VISIBLE blinking caret much sooner. Long enough to never flicker
- *  during a normal between-chunk pause (partial messages stream thinking too). */
-const CARET_IDLE_MS = 60_000;
+/** After a Busy turn has been quiet (no timeline growth) this many minutes, show
+ *  a count-up "still waiting" badge. cowboy deliberately does NOT auto-kill a
+ *  silent turn — idle time can't distinguish a slow turn from a wedged one (Zed,
+ *  the ACP author, reaches the same conclusion), so the human stays the judge:
+ *  the badge makes the silence visible and the user recovers manually via Stop. */
+const QUIET_BADGE_MIN = 5;
 
-/** True while `signature` is still changing; flips false `idleMs` after it last
- *  changed, true again the moment it changes. Purely cosmetic — never touches
- *  session state. The caret gates on this so a wedged stream stops blinking. */
-function useCaretLive(signature: string, idleMs: number): boolean {
-  const [live, setLive] = useState(true);
-  const lastRef = useRef(signature);
+/** Whole minutes since `signature` (last-item size + count) last changed — i.e.
+ *  since the last streamed activity. Refs are updated during render (derived from
+ *  the prop) so there's no frame lag; a coarse 30s tick re-reads the clock. This
+ *  is a human-facing minute counter, not precise timing, and never touches state. */
+function useQuietMinutes(signature: string): number {
+  const changedAt = useRef(Date.now());
+  const prevSig = useRef(signature);
+  const [, tick] = useState(0);
+  if (signature !== prevSig.current) {
+    prevSig.current = signature;
+    changedAt.current = Date.now();
+  }
   useEffect(() => {
-    if (signature !== lastRef.current) {
-      lastRef.current = signature;
-      setLive(true);
-    }
-    const t = setTimeout(() => setLive(false), idleMs);
-    return () => clearTimeout(t);
-  }, [signature, idleMs]);
-  return live;
+    const id = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return Math.max(0, Math.floor((Date.now() - changedAt.current) / 60_000));
 }
 
 export function Transcript({
@@ -1285,7 +1287,7 @@ export function Transcript({
   // new item is appended — drives the caret idle-cap (Layer 5). Cheap: serializes
   // only the last item.
   const lastSig = lastItem ? `${items.length}:${JSON.stringify(lastItem).length}` : "";
-  const caretLive = useCaretLive(lastSig, CARET_IDLE_MS);
+  const quietMin = useQuietMinutes(lastSig);
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
@@ -1627,6 +1629,23 @@ export function Transcript({
           // item's STABLE key (first envelope seq) so prepending older history
           // doesn't re-mount/jump rows.
           <>
+            {/* Still-waiting badge: after QUIET_BADGE_MIN of no timeline activity on
+                a working turn, surface the silence (count-up) so the user can decide
+                to ⏹ Stop. cowboy no longer auto-kills a silent turn (see acp.rs). */}
+            {working && quietMin >= QUIET_BADGE_MIN && (
+              <Box sx={{ py: 0.5, display: "flex", justifyContent: "center" }}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  label={`⏱ 已等待 ${quietMin} 分钟无响应 · 可点 ⏹ 中断`}
+                  sx={{
+                    height: "auto",
+                    "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 },
+                  }}
+                />
+              </Box>
+            )}
             {showTrailingDots && (
               <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
                 <ThinkingIndicator provider={provider} />
@@ -1669,7 +1688,7 @@ export function Transcript({
                     containIntrinsicSize: "auto 96px",
                   }}
                 >
-                  <ItemView item={item} streaming={working && i === lastIdx && caretLive} />
+                  <ItemView item={item} streaming={working && i === lastIdx} />
                 </Box>
               ))}
           </>
