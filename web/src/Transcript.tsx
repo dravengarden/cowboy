@@ -44,6 +44,7 @@ import {
   Psychology,
   Refresh,
   Search,
+  Stop,
   Terminal,
   UnfoldLess,
   WarningAmberRounded,
@@ -59,8 +60,10 @@ import {
   loadOlder,
   type QueuedMessage,
   retryMessage,
+  send,
   useStore,
 } from "./store";
+import { haptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
 import {
   resetSticky,
@@ -1629,21 +1632,37 @@ export function Transcript({
           // item's STABLE key (first envelope seq) so prepending older history
           // doesn't re-mount/jump rows.
           <>
-            {/* Still-waiting badge: after QUIET_BADGE_MIN of no timeline activity on
-                a working turn, surface the silence (count-up) so the user can decide
-                to ⏹ Stop. cowboy no longer auto-kills a silent turn (see acp.rs). */}
+            {/* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
+                working turn, surface the silence (count-up) + a REAL red Stop button.
+                cowboy no longer auto-kills a silent turn (see acp.rs) — the human
+                decides, so the recovery action is a first-class control here. */}
             {working && quietMin >= QUIET_BADGE_MIN && (
-              <Box sx={{ py: 0.5, display: "flex", justifyContent: "center" }}>
-                <Chip
+              <Box
+                sx={{
+                  py: 0.5,
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  gap: 1,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  ⏱ 已等待 {quietMin} 分钟无响应
+                </Typography>
+                <Button
                   size="small"
-                  variant="outlined"
-                  color="warning"
-                  label={`⏱ 已等待 ${quietMin} 分钟无响应 · 可点 ⏹ 中断`}
-                  sx={{
-                    height: "auto",
-                    "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 },
+                  variant="contained"
+                  color="error"
+                  startIcon={<Stop sx={{ fontSize: 16 }} />}
+                  onClick={(): void => {
+                    haptic(24); // medium — interrupting a turn is significant
+                    send({ type: "cancel", session_id: sessionId });
                   }}
-                />
+                  sx={{ textTransform: "none", minHeight: 28, py: 0.25 }}
+                >
+                  中断
+                </Button>
               </Box>
             )}
             {showTrailingDots && (
