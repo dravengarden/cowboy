@@ -135,6 +135,40 @@ externally-observable "Busy + silent + nothing pending" rather than guessing the
 cause. The real upstream fix lives in the agent: don't write unbounded poll
 loops (use a bounded `timeout` / max-iterations).
 
+## Scheduled wakeups (`ScheduleWakeup`)
+
+`ScheduleWakeup` is a built-in Claude Code `/loop` tool: the agent calls it to be
+re-invoked at a future time (a loop iteration, a deferred self-check). In a
+normal CLI the loop runtime fires it — but under ACP **cowboy is the runtime**,
+and it used to ignore the tool, so the wakeup never fired: the deferred work
+latched until the user's next message, which it then *consumed* (the user's real
+message went unanswered). cowboy now honors it:
+
+```mermaid
+flowchart LR
+    TC["ScheduleWakeup tool_call<br/>rawInput.{prompt,delaySeconds}"] -->|intercept| H["handle_session_notification"]
+    H -->|arm + persist| SCH["scheduler task<br/>(one pending / session)"]
+    SCH -->|fire at T| SUB["hub.submit(__wake__…)"]
+    SUB --> TURN["own turn<br/>(idle→dispatch, busy→queue)"]
+    style SCH fill:#eef2ff,stroke:#6366f1
+    style TURN fill:#dcfce7,stroke:#16a34a
+```
+
+- **Intercept** (`handle_session_notification`): the `ScheduleWakeup` `tool_call`
+  is still pushed verbatim (timeline unchanged); the side effect is arming
+  `crate::scheduler` with `{prompt, delaySeconds}`.
+- **Scheduler** (`src/scheduler.rs`): one background task, one pending wakeup per
+  session (latest wins — the `/loop` re-arms each turn), `sleep`-until-soonest.
+- **Fire**: `hub.submit(…, "__wake__…")` — the wakeup runs as its OWN turn
+  (idle → dispatch, busy → queue), so it never piggybacks on a user message
+  (fixing the eats-the-turn symptom). The `__wake__` cmid flags the echo so the
+  UI shows a "↻" self-fired turn, not a user bubble.
+- **Persisted** (migration `0011_scheduled_wakeups`, `ON DELETE CASCADE`):
+  upsert on arm, delete on fire; re-armed on startup with overdue ones firing
+  immediately (catch-up), so a deploy/restart doesn't drop a pending wakeup.
+- **Runaway guard**: a consecutive-fire cap (reset by any human turn) stops a
+  self-re-arming loop from burning the token pool unattended.
+
 ## Accepted limitation
 
 ACP is a lowest-common-denominator surface; native CLI features it can't express
