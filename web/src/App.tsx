@@ -778,6 +778,14 @@ function NewSessionDialog({
                     onChange={(e): void => setTitle(e.target.value)}
                     inputRef={titleRef}
                     autoFocus
+                    onFocus={(e): void => {
+                        // Select the whole default ("New session N") on EVERY focus, so
+                        // tapping the field replaces it in one go. Deferred a frame — iOS
+                        // collapses a synchronous select() back to a caret. Same logic as
+                        // the session-rename field (Composer.tsx).
+                        const input = e.target as HTMLInputElement;
+                        requestAnimationFrame(() => input.select());
+                    }}
                     placeholder="Name this session"
                     helperText="Clear to auto-name from the first message"
                 />
