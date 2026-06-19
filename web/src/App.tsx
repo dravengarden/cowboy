@@ -767,6 +767,7 @@ function NewSessionDialog({
                     </Button>
                     <Button onClick={create} variant="contained">
                         Create
+                        <Kbd keys={ENTER_LABEL} />
                     </Button>
                 </>
             }
@@ -785,6 +786,16 @@ function NewSessionDialog({
                         // the session-rename field (Composer.tsx).
                         const input = e.target as HTMLInputElement;
                         requestAnimationFrame(() => input.select());
+                    }}
+                    onKeyDown={(e): void => {
+                        // Enter from the title field confirms (matches the ⏎ keycap on
+                        // Create). Field-level, NOT a global useConfirmEnter: this modal
+                        // has Provider/Working-dir Selects, and a global capture handler
+                        // would hijack the Enter that picks an open dropdown option.
+                        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                            e.preventDefault();
+                            create();
+                        }
                     }}
                     placeholder="Name this session"
                     helperText="Clear to auto-name from the first message"
@@ -2737,7 +2748,7 @@ function SessionInfoShell(
             open
             onClose={onClose}
             title="Session info"
-            actions={<Button onClick={onClose} color="inherit">Close</Button>}
+            actions={<Button onClick={onClose} color="inherit">Close<Kbd keys="Esc" /></Button>}
         >
             {body}
         </Sheet>
