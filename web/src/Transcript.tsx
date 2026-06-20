@@ -1210,6 +1210,7 @@ export function Transcript({
   connected,
   topInset,
   bottomInset,
+  onScrollableChange,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -1235,6 +1236,12 @@ export function Transcript({
    *  scrolling UNDER it mid-scroll. column-reverse → padding-bottom is the
    *  visual bottom (newest side). Undefined = none. */
   bottomInset?: string | undefined;
+  /** Notified when the scroll container's content starts/stops OVERFLOWING the
+   *  viewport (i.e. there's real content that lives behind the floating composer
+   *  glass). The composer slab uses it to show its "floating above the scroll"
+   *  up-shadow only when something actually scrolls under it — an empty/short
+   *  conversation shouldn't cast that shadow. Read-only: never writes scrollTop. */
+  onScrollableChange?: ((scrollable: boolean) => void) | undefined;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -1305,6 +1312,22 @@ export function Transcript({
   // completes while waiting for the model to start text again).
   const showTrailingDots = working && !lastIsStreamingAssistant;
   const parentRef = useRef<HTMLDivElement>(null);
+  // Report scroll-overflow (content taller than the viewport) to the parent so
+  // the composer slab can gate its up-shadow on real scrollable content. Kept in
+  // refs so the once-wired scroll effect calls the latest callback without
+  // re-binding, and only fires on a CHANGE (cheap to call every scroll/chunk).
+  const onScrollableChangeRef = useRef(onScrollableChange);
+  onScrollableChangeRef.current = onScrollableChange;
+  const lastScrollableRef = useRef<boolean | null>(null);
+  const reportScrollableRef = useRef<() => void>(() => undefined);
+  reportScrollableRef.current = (): void => {
+    const el = parentRef.current;
+    if (!el) return;
+    const v = el.scrollHeight > el.clientHeight + 1;
+    if (v === lastScrollableRef.current) return;
+    lastScrollableRef.current = v;
+    onScrollableChangeRef.current?.(v);
+  };
   // Shared FREEZE-WHILE-DETACHED anchor (captured by the scroll listener,
   // restored by the per-chunk timeline effect). See the scroll effect below.
   const freezeRef = useRef<FreezeAnchor>({ key: null, top: 0, self: false });
@@ -1431,6 +1454,7 @@ export function Transcript({
       if (fromTop < el.clientHeight * 2) {
         void loadOlder(sessionIdRef.current);
       }
+      reportScrollableRef.current();
     };
     el.addEventListener("wheel", detach, { passive: true });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -1464,6 +1488,7 @@ export function Transcript({
       if (++roTries < 5) roRaf = requestAnimationFrame(repin);
     };
     const ro = new ResizeObserver(() => {
+      reportScrollableRef.current(); // viewport resized → overflow may have flipped
       if (!stick.current) {
         // Detached: don't follow the bottom — hold the reader's view against the
         // streaming bottom bubble's upward growth (see FREEZE-WHILE-DETACHED).
@@ -1474,6 +1499,7 @@ export function Transcript({
       if (roRaf === 0) roRaf = requestAnimationFrame(repin);
     });
     ro.observe(el);
+    reportScrollableRef.current(); // initial measure once the container exists
     return () => {
       el.removeEventListener("wheel", detach);
       el.removeEventListener("touchstart", onTouchStart);
@@ -1530,6 +1556,12 @@ export function Transcript({
     } else {
       restoreFreezeAnchor(el, freezeRef.current);
     }
+    // Content grew/shrank → overflow may have flipped, and neither the RO (the
+    // viewport didn't resize) nor `scroll` fires. Re-measure AFTER paint: the
+    // virtualizer re-measures the now-visible rows over the next frame, so
+    // `scrollHeight` is briefly stale this layout pass.
+    const sRaf = requestAnimationFrame(() => reportScrollableRef.current());
+    return () => cancelAnimationFrame(sRaf);
   }, [timeline]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the

@@ -935,6 +935,11 @@ export function App({
     );
     // Disconnect the shared observer on unmount.
     useEffect(() => (): void => roRef.current?.disconnect(), []);
+    // Whether the transcript actually overflows (has content scrolling under the
+    // floating composer glass). Gates the composer slab's up-shadow: an
+    // empty/short conversation has nothing beneath the glass, so the "floating
+    // above the scroll" shadow would be a lie — the Transcript reports this.
+    const [transcriptScrollable, setTranscriptScrollable] = useState(false);
     // The focus id we restored from localStorage at mount (PWA relaunch / reload).
     // Held in a ref so the gone-check fires exactly once after the first session
     // list arrives — if that session was deleted while we were away, the
@@ -1422,7 +1427,7 @@ export function App({
                             // Hide under an open cover sheet — its own frosted surface
                             // replaces this chrome; leaving it on double-frosts.
                             opacity: anySheetOpen ? 0 : 1,
-                            transition: "opacity 200ms ease",
+                            transition: "opacity 200ms ease, box-shadow 200ms ease",
                             // Milkier than a clear pane + heavy blur + saturate → thick
                             // iOS frosted material; content scrolling under it diffuses
                             // (not shows) through the blur. Up-shadow + top hairline give
@@ -1432,8 +1437,14 @@ export function App({
                             WebkitBackdropFilter: "blur(30px) saturate(200%)",
                             borderTop: 1,
                             borderColor: "divider",
-                            boxShadow: (t) =>
-                                `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`,
+                            // Up-shadow ("floating above the scroll" depth) ONLY when the
+                            // transcript actually overflows under the glass. An empty/short
+                            // conversation has nothing beneath it, so the shadow would read
+                            // as a stray smudge under the header — gate it on real overflow.
+                            boxShadow: transcriptScrollable
+                                ? (t) =>
+                                    `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`
+                                : "none",
                     }}
                 />
                 )}
@@ -1734,6 +1745,9 @@ export function App({
                                 // While the WS is down the "working" spinner must not
                                 // keep spinning on a stale status (daemon restart).
                                 connected={connected}
+                                // Gate the composer slab's up-shadow on real
+                                // scroll-overflow (content under the glass).
+                                onScrollableChange={setTranscriptScrollable}
                                 // Reserve the top frosted bar at the transcript's top so
                                 // content clears it at rest: the status-bar strip in
                                 // mobile mode, the full navbar height in desktop mode.
