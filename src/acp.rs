@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use parking_lot::Mutex;
 
 use agent_client_protocol::schema::{
@@ -40,6 +41,35 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use crate::cgroup;
 use crate::core::{Event, Hub, Status};
 use crate::provider::LaunchSpec;
+
+/// How long the ACP handshake (`initialize` + optional `session/load` +
+/// `session/new`) may take before the spawn is declared stalled. Generous on
+/// purpose: a real stall is *indefinite* — a hung `npx` registry version-check
+/// on an ESTABLISHED-but-dead socket with no npm timeout (observed wedging a
+/// session in `Starting` for minutes) — so this only has to comfortably clear a
+/// legitimate cold start (npx cache-miss download + SDK + MCP-server bootstrap),
+/// not race it. Too tight would false-trip a slow-but-healthy start into a
+/// pointless respawn; a real stall is caught either way. `run_agent` auto-retries
+/// the spawn once before this ever surfaces as `Crashed`.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The ACP handshake did not complete within [`HANDSHAKE_TIMEOUT`]. Carried as
+/// an `anyhow` cause so [`run_agent`] can tell a transient spawn stall (retry
+/// once, silently) apart from a genuine connection error (surface immediately).
+#[derive(Debug)]
+struct HandshakeTimeout(u64);
+
+impl std::fmt::Display for HandshakeTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "agent did not complete the ACP handshake within {}s (likely an npx/registry stall)",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for HandshakeTimeout {}
 
 /// A command from a client, routed by the supervisor to an agent thread.
 #[derive(Debug)]
@@ -101,7 +131,7 @@ pub fn run_agent(
     session_id: &str,
     cwd: PathBuf,
     resume: Option<String>,
-    cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread()
@@ -118,7 +148,37 @@ pub fn run_agent(
     // loop) runs cooperatively inside the single `connect_with` future, so a
     // plain `block_on` suffices — no `LocalSet` needed now that the crate is
     // `Send`-based.
-    let result = rt.block_on(agent_main(spec, session_id, cwd, resume, cmd_rx, hub));
+    //
+    // Auto-retry once on a handshake stall (Layer 2). `agent_main` bounds the
+    // handshake with `HANDSHAKE_TIMEOUT` and reports a `HandshakeTimeout` when a
+    // freshly-spawned `npx` adapter hangs on its registry check (a transient
+    // network/proxy blip). We re-spawn ONCE before surfacing it, so the common
+    // transient case self-heals and the user never sees an error. The queued
+    // prompts are safe across the retry: they live in the Hub queue (pg) until
+    // the session reaches `Running`, never in `cmd_rx`, so `cmd_rx` is empty here
+    // — we keep it alive across both attempts only so the supervisor's sender
+    // stays valid. A SECOND stall is a persistent failure → `Crashed` + the UI's
+    // manual Retry (which routes back through revive).
+    let result = rt.block_on(async {
+        let mut result =
+            agent_main(spec, session_id, cwd.clone(), resume.clone(), &mut cmd_rx, hub).await;
+        let stalled = result
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.downcast_ref::<HandshakeTimeout>().is_some());
+        if stalled {
+            tracing::warn!(session = session_id, "ACP handshake stalled; auto-retrying spawn once");
+            // Stay in `Starting` (a spinner), not `Crashed`: this blip is
+            // expected to self-heal, so don't flash an error for it.
+            hub.set_status(
+                session_id,
+                Status::Starting,
+                Some("agent slow to start — retrying…".to_owned()),
+            );
+            result = agent_main(spec, session_id, cwd, resume, &mut cmd_rx, hub).await;
+        }
+        result
+    });
     match result {
         Ok(()) => hub.set_status(session_id, Status::Exited, None),
         Err(e) => {
@@ -128,12 +188,13 @@ pub fn run_agent(
     }
 }
 
+#[allow(clippy::too_many_lines)] // one cohesive spawn + connection + watchdog
 async fn agent_main(
     spec: &LaunchSpec,
     session_id: &str,
     cwd: PathBuf,
     resume: Option<String>,
-    cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
 ) -> Result<()> {
     let cwd =
@@ -180,6 +241,13 @@ async fn agent_main(
     let notif_state = state.clone();
     let perm_state = state.clone();
     let main_state = state.clone();
+
+    // Set true by `run_session` the instant the handshake completes (session is
+    // `Running`). The watchdog below arms a `HANDSHAKE_TIMEOUT` deadline that
+    // only fires while this is still false, so it bounds a stuck spawn without
+    // ever tripping a healthy long-lived session.
+    let handshake_done = Arc::new(AtomicBool::new(false));
+    let run_done = handshake_done.clone();
 
     let conn = Client
         .builder()
@@ -267,7 +335,7 @@ async fn agent_main(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id).await
+            run_session(&main_state, cx, resume, cwd, cmd_rx, spec.id, &run_done).await
         });
 
     // Race the connection against the subprocess's OWN exit. The connection
@@ -282,6 +350,19 @@ async fn agent_main(
     // and the hung turn is torn down with the dropped connection future. The Err
     // here lands as `Status::Crashed` in `run_agent` (queue holds; resend
     // revives). `biased` prefers a clean `run_session` return when both are ready.
+    //
+    // A THIRD ground truth `child.wait()` can't catch: a spawned-but-wedged
+    // adapter (the `npx` registry-check hang) — the process is alive (so
+    // `child.wait()` never fires) but never speaks ACP (so `conn` hangs in
+    // `initialize`), wedging the session in `Starting` forever. The watchdog
+    // sleeps `HANDSHAKE_TIMEOUT`, then fires ONLY if the handshake hasn't landed;
+    // once it has, it pends forever so a healthy long session is never disturbed.
+    let watchdog = async {
+        tokio::time::sleep(HANDSHAKE_TIMEOUT).await;
+        if handshake_done.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
+    };
     let result = tokio::select! {
         biased;
         r = conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
@@ -292,6 +373,7 @@ async fn agent_main(
                 Err(e) => format!("wait failed: {e}"),
             }
         )),
+        () = watchdog => Err(anyhow::Error::new(HandshakeTimeout(HANDSHAKE_TIMEOUT.as_secs()))),
     };
 
     // Keep the child alive for the whole connection; dropping it here lets the
@@ -378,8 +460,9 @@ async fn run_session(
     cx: ConnectionTo<Agent>,
     resume: Option<String>,
     cwd: PathBuf,
-    mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
     provider_id: &str,
+    handshake_done: &AtomicBool,
 ) -> Result<(), Error> {
     let session_id = state.session_id.clone();
 
@@ -440,6 +523,8 @@ async fn run_session(
         session.session_id
     };
     state.hub.set_status(&session_id, Status::Running, None);
+    // Handshake landed — disarm the spawn watchdog (see `agent_main`).
+    handshake_done.store(true, Ordering::SeqCst);
 
     // Match Zed's claude-acp default UX: open at `bypassPermissions` if the
     // upstream advertises it. This is what most users want for an agent panel

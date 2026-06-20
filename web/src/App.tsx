@@ -93,12 +93,7 @@ import {
     setPadding,
     useReadingSettings,
 } from "./readingSettings";
-import {
-    type NavbarPosition,
-    setNavbarPosition,
-    useNavbarAtBottom,
-    useNavbarPosition,
-} from "./navbarSettings";
+import { useNavbarAtBottom } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl, useAnyDetentSheetOpen } from "./_shell";
@@ -2111,12 +2106,7 @@ function SettingsShell({
         transition: "border-color 0.15s ease",
         "&:hover": { borderColor: active ? "primary.main" : "text.secondary" },
     });
-    const navbarPos = useNavbarPosition();
     const navbarAtBottom = useNavbarAtBottom();
-    const theme = useTheme();
-    // Navbar position is offered on the whole compact tier (`< lg`, tablets
-    // included); desktop is always top.
-    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -2388,41 +2378,6 @@ function SettingsShell({
                         inputProps={{ "aria-label": "Vibration alert" }}
                     />
                 </Stack>
-                {mobile && (
-                    <>
-                        <Divider />
-                        <Stack
-                            direction="row"
-                            alignItems="center"
-                            justifyContent="space-between"
-                            spacing={2}
-                        >
-                            <Stack>
-                                <Typography variant="body2">
-                                    Navbar position
-                                </Typography>
-                                <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                >
-                                    Bottom = mobile-browser style
-                                </Typography>
-                            </Stack>
-                            <Select
-                                size="small"
-                                value={navbarPos}
-                                onChange={(e): void =>
-                                    setNavbarPosition(
-                                        e.target.value as NavbarPosition,
-                                    )}
-                                sx={{ minWidth: 104 }}
-                            >
-                                <MenuItem value="top">Top</MenuItem>
-                                <MenuItem value="bottom">Bottom</MenuItem>
-                            </Select>
-                        </Stack>
-                    </>
-                )}
                 {desktop && (
                     <>
                         <Divider />
