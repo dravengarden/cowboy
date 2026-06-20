@@ -254,11 +254,6 @@ function ComposeBar(
         width: "100%",
         pt: 1,
         borderTop: (t) => `1px solid ${t.palette.divider}`,
-        // iOS repaint fix (same as the attachment previews + editor): inside the
-        // position:fixed, transformed cover sheet, WebKit sometimes fails to paint
-        // this freshly-inserted bar on open — it shows up faded / half-painted. A
-        // GPU layer forces an immediate paint.
-        transform: "translateZ(0)",
       }}
     >
       {/* IMAGES render inline in the editor (Obsidian-style); the docked tray now
@@ -1649,12 +1644,6 @@ function AttachmentPreviews({
         overflowX: "auto",
         scrollbarWidth: "thin",
         "&::-webkit-scrollbar": { height: 6 },
-        // iOS repaint fix, same root cause as the editor (cmTheme): inside the
-        // position:fixed body WebKit may not paint freshly-inserted nodes —
-        // here the thumbnail that appears after returning from the native photo
-        // picker. Promoting the strip to its own compositing layer forces the
-        // paint, so the preview shows up immediately.
-        transform: "translateZ(0)",
       }}
     >
       {attachments.map((a, i) => (
