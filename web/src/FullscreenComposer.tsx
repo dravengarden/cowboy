@@ -15,7 +15,6 @@ import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
-import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 
@@ -126,14 +125,12 @@ export function FullscreenComposer({
   return createPortal(
     <Box
       sx={{
-        // `position: fixed` in the PWA; `absolute` in the NATIVE shell. The empty-area
-        // long-press menu was actually fixed by scrollPastEnd (see the editor Box +
-        // cmTheme) — NOT by this. But `absolute` is kept defensively: iOS WebKit text
-        // interaction inside a position:fixed contenteditable is historically flaky,
-        // the shell resizes the WebView for the keyboard so `body` is normal-flow at
-        // viewport height, and `absolute inset:0` covers the screen identically.
-        // (Obsidian's editor isn't in a fixed overlay either.)
-        position: isNativeShell() ? "absolute" : "fixed",
+        // `position: absolute` (not fixed): the native shell resizes the WebView for
+        // the keyboard, so `body` is normal-flow at viewport height and `absolute
+        // inset:0` covers the screen. iOS WebKit text interaction inside a
+        // position:fixed contenteditable is historically flaky; Obsidian's editor
+        // isn't in a fixed overlay either.
+        position: "absolute",
         inset: 0,
         zIndex: theme.zIndex.modal,
         bgcolor: "background.default",

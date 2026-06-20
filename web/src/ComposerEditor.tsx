@@ -47,7 +47,6 @@ import {
   removeImageTokenById,
 } from "./inlineImages";
 import type { Attachment } from "./attachments";
-import { isNativeShell } from "./nativeShell";
 import {
   fileCompletionSource,
   slashCompletionSource,
@@ -611,76 +610,13 @@ export const ComposerEditor = forwardRef<
           onPasteFilesRef.current(files);
           return true;
         },
-        // iOS IME fix. The `.cm-scroller` compositing layer (translateZ(0) in
-        // cmTheme — there to force WebKit to repaint typed text inside the
-        // position:fixed body) corrupts IME marked-text rendering on iOS Safari:
-        // mid-composition the pinyin paints at the line start, IN FRONT of the
-        // already-committed characters (WebKit mis-places the composition overlay
-        // relative to the promoted layer). Drop the layer for the duration of the
-        // composition — the IME paints its own marked text while composing, so the
-        // repaint hack isn't needed then — and restore it on commit, with a
-        // one-frame opacity nudge so the just-committed glyphs repaint (the same
-        // trick clear() uses). Composition events aren't `key*`, so CM's
-        // ignoreDuringComposition lets them through to these handlers. Returning
-        // false leaves CM's own composition handling untouched.
-        compositionstart: (_event, view): boolean => {
-          // Native shell: no position:fixed → no translateZ layer → none of this
-          // transform/nudge dance is needed (it's the source of the IME bugs).
-          if (isNativeShell()) return false;
-          // Drop the scroller's compositing layer for the composition (it mis-paints
-          // the IME overlay — pinyin at line start). The compositionupdate nudge
-          // below re-forces repaint so marked text stays visible.
-          // NOTE: a v177 experiment ALSO promoted the editor ROOT (view.dom) here to
-          // keep repaint continuous — but that broke IME input at the doc START
-          // (composition at the promoted layer's origin failed). Reverted; do NOT
-          // re-promote an ancestor during composition.
-          view.scrollDOM.style.transform = "none";
-          return false;
-        },
-        // The flip side of dropping the compositing layer above. With
-        // `transform: none` the marked text positions correctly, but the
-        // `position: fixed` body's "editable won't repaint on input" bug is back
-        // for the duration of the composition — so the pinyin you're typing paints
-        // to nowhere and looks SWALLOWED. It's worst right after an attachment chip
-        // appears (its reflow leaves the editor's paint rect stale); a direct
-        // keystroke would force a repaint, which is why typing a few spaces
-        // "unblocks" it. Force that repaint ourselves on every composition update so
-        // the marked text stays visible. Nudge the SCROLLER's opacity, NOT the
-        // contentDOM's: contentDOM is the contenteditable host, and mutating the
-        // host's style mid-composition risks the IME aborting; the scroller is its
-        // non-editable parent, so toggling it repaints the subtree (marked text
-        // included) without touching the composition. Paint-only, one frame.
-        compositionupdate: (_event, view): boolean => {
-          if (isNativeShell()) return false;
-          view.scrollDOM.style.opacity = "0.999";
-          requestAnimationFrame(() => {
-            view.scrollDOM.style.opacity = "";
-          });
-          return false;
-        },
-        compositionend: (_event, view): boolean => {
-          if (isNativeShell()) return false;
-          view.scrollDOM.style.transform = "";
-          const content = view.contentDOM;
-          content.style.opacity = "0.999";
-          requestAnimationFrame(() => {
-            content.style.opacity = "";
-          });
-          return false;
-        },
-        // Self-heal the compositing layer on focus loss. Safari can interrupt a
-        // composition WITHOUT firing compositionend — most notably the native
-        // photo picker (the attach button) stealing focus mid-pinyin. That would
-        // strand the scroller at `transform: none` (set on compositionstart),
-        // reviving the very "typed text won't repaint" bug the layer exists to
-        // fix — so after attaching an image, the next keystrokes misbehave.
-        // A blur always restores the layer, so whatever state a half-finished
-        // composition left, losing focus puts it back.
-        blur: (_event, view): boolean => {
-          if (isNativeShell()) return false;
-          view.scrollDOM.style.transform = "";
-          return false;
-        },
+        // NOTE: the iOS IME composition "dance" (drop the .cm-scroller translateZ
+        // layer on compositionstart, opacity-nudge on update/end, self-heal on
+        // blur) lived here ONLY to serve the PWA's translateZ repaint hack — which
+        // existed only because the PWA locked the body position:fixed. The native
+        // shell runs in normal flow, so there is no repaint bug, no translateZ
+        // layer, and nothing to fight: native IME / caret / paste work directly.
+        // Removed at the root (PWA mobile path retired). Do NOT re-add.
       }),
       history(),
       placeholderExt(placeholder ?? ""),

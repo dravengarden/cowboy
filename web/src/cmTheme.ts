@@ -1,7 +1,6 @@
 import { alpha, type Theme } from "@mui/material";
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-import { isNativeShell } from "./nativeShell";
 
 // Map a MUI theme to a CodeMirror theme so the editor surface — and its
 // autocomplete tooltip — read as native Material: palette, typography, the
@@ -11,7 +10,6 @@ import { isNativeShell } from "./nativeShell";
 export function cmTheme(theme: Theme, mono = false): Extension {
   const dark = theme.palette.mode === "dark";
   const accent = theme.palette.primary.main;
-  const nativeShell = isNativeShell();
   // Match the MUI theme's own typography so the editor text is indistinguishable
   // from a real MUI input.
   const fontStack =
@@ -101,11 +99,10 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         fontFamily: editorFont,
         fontSize: "1rem",
         lineHeight: "var(--cowboy-reading-line-height, 1.5)",
-        // The translateZ(0) repaint hack is ONLY needed under the PWA's
-        // position:fixed body. In the native shell the body is normal flow (no
-        // position:fixed → no repaint bug), so drop it — it's exactly this
-        // compositing layer that mis-paints the IME overlay. (cowboy-native-keyboard-ime)
-        ...(nativeShell ? {} : { transform: "translateZ(0)" }),
+        // No compositing-layer hack here: the native shell runs in normal flow
+        // (no position:fixed body), so there is no WebKit "won't repaint inside
+        // position:fixed" bug to work around. The old translateZ(0) layer (PWA
+        // only) is what broke the iOS long-press paste menu — removed at the root.
       },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: accent },
       // Vim block ("fat") cursor → Zed look. @replit/codemirror-vim defaults to a
