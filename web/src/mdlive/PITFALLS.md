@@ -1,5 +1,24 @@
 # mdlive — iOS / CM6 pitfalls & the Obsidian-alignment contract
 
+> **⚠️ TEARDOWN IN PROGRESS — task `cowboy-composer-drop-pwa-hacks` (branch of
+> the same name).** The whole PWA iOS hack tower documented below has been
+> **REMOVED IN CODE** on that branch: the composer now runs ONE native-shell
+> code path in normal flow. Specifically gone — `.cm-scroller { translateZ(0) }`
+> (cmTheme), the `compositionstart/update/end/blur` transform+opacity dance
+> (ComposerEditor), `drawSelection()` + `dropCursor()` + the `.cm-composing`
+> dance (composerExtensions), the `position: fixed` body (index.html), the
+> `FullscreenComposer` fixed overlay, and the two unconditional `translateZ(0)`
+> repaint nudges (Composer.tsx). Root cause confirmed against the Capacitor
+> keyboard source (Obsidian's mechanism): the entire tower existed ONLY to work
+> around the PWA's `position: fixed` keyboard lock; the native Tauri shell
+> resizes the WebView instead, so none of it is needed.
+>
+> **These entries are RETAINED as the WHY-history (and the "do NOT re-add" rule)
+> until the Phase-2 on-device matrix confirms the root fix.** Do not re-introduce
+> any hack below. After device verification, the resolved pitfalls (#1d, #2, #2a,
+> #3, #10) get marked "removed at the root." NOT yet device-verified — the IME
+> proof needs a real device, not the Simulator.
+
 > **READ THIS BEFORE TOUCHING the composer editor (`ComposerEditor.tsx`,
 > `composerExtensions.ts`, `FullscreenComposer.tsx`, `ComposerTextarea.tsx`, the
 > vendored `mdlive/*`).** The CM6 markdown editor on **iOS WebKit** has a dense
