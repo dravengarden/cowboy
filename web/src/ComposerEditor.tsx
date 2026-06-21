@@ -581,41 +581,17 @@ export const ComposerEditor = forwardRef<
   const extensions = useMemo<Extension[]>(
     () => [
       // Fill editor (fullscreen composer) ONLY: scrollPastEnd adds a `padding-bottom`
-      // (≈ one viewport) below the text, exactly like Obsidian's mobile editor. That
-      // padding is the long-pressable empty area — a long-press there snaps the caret
-      // to the line end (a real position) and the iOS Paste menu appears. This
-      // REPLACES the old `min-height: 100%` content-fill (cmTheme), which stretched
-      // the content box and made the empty-area long-press land mid-air on the
-      // `.cm-line` element → no menu. The compact composer is content-height, so it
-      // gets neither (it never had the empty-area problem).
-      ...(fill
-        ? [
-          scrollPastEnd(),
-          // iOS empty-area Paste menu: a long-press (or tap) BELOW the last line
-          // places the native caret at the doc end, so the OS Paste/Select callout
-          // has something to anchor to. Without this the press lands in
-          // scrollPastEnd's padding — not a text line — so iOS resolves NO caret
-          // target and shows no menu (the "长按空白区不弹粘贴" bug). Obsidian behaves
-          // the same: tapping empty space drops the cursor at the end. Guarded to
-          // strictly BELOW the last line's bottom so an on-text long-press keeps its
-          // native selection + loupe untouched. This relies on the caret being the
-          // VISIBLE native one — true since the drawSelection/translateZ teardown,
-          // which is why this works where the earlier (transparent-caret) attempts
-          // (v201/v202, ruled "upstream") could not.
-          EditorView.domEventHandlers({
-            pointerdown: (e, view): boolean => {
-              const end = view.state.doc.length;
-              const lastBottom = view.documentTop + view.lineBlockAt(end).bottom;
-              if (e.clientY <= lastBottom) return false; // on/above text → leave to iOS
-              const sel = view.state.selection.main;
-              if (!(sel.empty && sel.head === end)) {
-                view.dispatch({ selection: { anchor: end } });
-              }
-              return false; // don't preventDefault — let the long-press proceed
-            },
-          }),
-        ]
-        : []),
+      // (≈ one viewport) below the text, exactly like Obsidian's mobile editor — the
+      // long-pressable empty area. Obsidian's setup is just THIS + the native
+      // (visible) caret; iOS owns the long-press gesture from there.
+      //
+      // Do NOT add a pointerdown handler that places the caret at the doc end on an
+      // empty-area press: dispatching a selection change at pointerdown CANCELS iOS's
+      // in-progress long-press recognizer, so the empty-area Paste menu never opens
+      // (it then only worked when long-pressing directly ON the placeholder/text).
+      // A prior build tried exactly that and it broke the very thing it meant to fix.
+      // The compact composer is content-height, so it gets neither.
+      ...(fill ? [scrollPastEnd()] : []),
       EditorView.lineWrapping,
       // Publish selection-empty state to the fullscreen keyboard toolbar so it can
       // swap insert↔wrap actions. Ref-routed so the memo never rebuilds for it.
