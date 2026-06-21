@@ -53,10 +53,17 @@ const TEXT_EXT = new Set([
   "dockerfile", "makefile", "lock", "log",
 ]);
 
-let attachSeq = 0;
 function nextId(): string {
-  attachSeq += 1;
-  return `att${attachSeq}`;
+  // A GLOBALLY-unique id, not a reload-resettable counter. Inline-image tokens
+  // `![](cowboy-att:<id>)` persist inside restored drafts / queued messages and
+  // keep their original ids (blocksToAttachments reuses them). A module-level
+  // counter resets to 0 on every page reload, so the FIRST fresh paste after a
+  // reload minted `att1` — colliding with a restored `att1` and overwriting its
+  // bytes in the inline-image registry (which is keyed by id): the first image
+  // silently became the newly-pasted one ("末尾粘贴图片覆盖第一张"). A UUID can never
+  // collide with a restored id. (crypto.randomUUID is available in every secure
+  // context cowboy runs in — https + the WKWebView shell + localhost dev.)
+  return `att-${globalThis.crypto.randomUUID()}`;
 }
 
 function extOf(name: string): string {
