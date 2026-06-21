@@ -1211,6 +1211,7 @@ export function Transcript({
   topInset,
   bottomInset,
   onScrollableChange,
+  awaitingUser,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -1236,6 +1237,11 @@ export function Transcript({
    *  scrolling UNDER it mid-scroll. column-reverse → padding-bottom is the
    *  visual bottom (newest side). Undefined = none. */
   bottomInset?: string | undefined;
+  /** The session's `awaiting_user` flag — the agent ended its turn asking for
+   *  input. When set, the "agent is working" trailing indicator is suppressed
+   *  even if a tool is still settling, so it never shows alongside the
+   *  "Waiting for your reply" overlay (they are mutually exclusive states). */
+  awaitingUser: boolean;
   /** Notified when the scroll container's content starts/stops OVERFLOWING the
    *  viewport (i.e. there's real content that lives behind the floating composer
    *  glass). The composer slab uses it to show its "floating above the scroll"
@@ -1284,7 +1290,14 @@ export function Transcript({
   // a perpetual "thinking" spinner is wrong (the reported bug — it spun for the
   // whole restart). The connection banner conveys the disconnect instead; on
   // reconnect the daemon re-broadcasts the real status (Exited after a restart).
-  const working = connected && (busy || toolInFlight);
+  // `toolInFlight` bridges the brief status-race where the daemon flips status →
+  // running a beat before the turn's `turn_end` settles the last tool. But once
+  // the agent is AWAITING the user (it ended its turn asking a question), it is
+  // NOT working — a straggler/abandoned tool (e.g. a rate-limited sub-agent left
+  // a task `pending`) must not keep the "Beboppin'…" spinner alive next to the
+  // "Waiting for your reply" overlay (the reported "状态不对"). So the in-flight
+  // bridge only counts when NOT awaiting; `busy` (a genuinely live turn) always does.
+  const working = connected && (busy || (toolInFlight && !awaitingUser));
   // No messages yet + a LIVE session (a freshly created session is Running-idle,
   // waiting for the first prompt) → show the "send a message to start" empty state
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are

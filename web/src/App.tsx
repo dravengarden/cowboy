@@ -1705,6 +1705,7 @@ export function App({
                                         cwd={active.cwd}
                                         loading={!hydrated.has(active.id)}
                                         connected={connected}
+                                        awaitingUser={active.awaiting_user ?? false}
                                         // No floating chrome over this column: the AppBar is
                                         // in-flow above it and the composer is a sibling
                                         // column, so neither inset reserves anything.
@@ -1740,6 +1741,10 @@ export function App({
                                 // While the WS is down the "working" spinner must not
                                 // keep spinning on a stale status (daemon restart).
                                 connected={connected}
+                                // Suppress the "working" spinner while the agent is
+                                // awaiting the user, so it never shows next to the
+                                // "Waiting for your reply" overlay.
+                                awaitingUser={active.awaiting_user ?? false}
                                 // Gate the composer slab's up-shadow on real
                                 // scroll-overflow (content under the glass).
                                 onScrollableChange={setTranscriptScrollable}
