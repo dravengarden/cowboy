@@ -69,16 +69,19 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         padding: "0",
         caretColor: accent,
         lineHeight: "var(--cowboy-reading-line-height, 1.5)",
-        // NO `min-height: 100%` here. Filling `.cm-content` to the editor height
-        // (the old approach) is exactly what BROKE the iOS long-press Paste menu in
-        // the fullscreen editor: a stretched content box makes a long-press on the
-        // empty area land MID-AIR inside the box, so iOS drops the caret on the
-        // `.cm-line` ELEMENT (not a #text run) and shows no menu. Obsidian's mobile
-        // editor instead leaves `.cm-content` content-height and uses `scrollPastEnd`
-        // (a `padding-bottom`) to make the empty scroll area — a long-press in that
-        // PADDING snaps the caret to the line end (a real position) and the menu
-        // appears. We match it: `scrollPastEnd()` is added only to the fill editor
-        // (ComposerEditor), and the compact composer stays content-height as before.
+        // `min-height: 100%` makes the contenteditable FILL the scroller, so the
+        // empty area below the text is part of `.cm-content` — a long-press there
+        // lands on the editable element, iOS resolves a caret (doc end), and the
+        // Paste menu appears. This is exactly what Obsidian's mobile editor does
+        // (verified against its `.cm-content` CSS: `min-height:100%`). Without it
+        // the empty area is the non-editable `.cm-scroller`, so iOS finds no caret
+        // target and shows nothing — the long-press only worked ON the text. (An
+        // earlier note here claimed min-height BROKE the menu; that was a
+        // misdiagnosis confounded by the now-removed drawSelection/translateZ
+        // hacks — the transparent caret had no anchor regardless of the fill.)
+        // No effect on the compact composer: its scroller is content-height, so
+        // 100% resolves to that — it only fills the fixed-height fullscreen editor.
+        minHeight: "100%",
       },
       // iOS PWA repaint fix lives on the SCROLLER, not `.cm-content`. On
       // iPad/iPhone the composer's contenteditable sits inside the
