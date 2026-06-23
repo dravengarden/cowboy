@@ -76,7 +76,7 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
-import { latestPendingPermission, latestPlan } from "./derive";
+import { derive, latestPendingPermission, latestPlan } from "./derive";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -676,6 +676,22 @@ export function Composer({
   // restart) — the composer treats it like exited/crashed: "send to resume".
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
+  // A tool / background task still in flight (after turn_end settling) means the
+  // agent is WORKING even when the turn status momentarily reads "running". Used
+  // to suppress the turn-status overlay (Queue paused / done / …) while work is in
+  // progress, so it never shows "Resume" beside an actively-running background
+  // task. Excludes awaiting-user (an awaiting turn has ended → a straggler tool
+  // isn't "work"). Mirrors Transcript's working-spinner gate.
+  const toolInFlight = useMemo(
+    () =>
+      !dead &&
+      derive(timelines.get(sessionId) ?? []).some(
+        (it) =>
+          it.kind === "tool" && (it.status === "pending" || it.status === "in_progress"),
+      ),
+    [dead, timelines, sessionId],
+  );
+  const turnWorking = busy || (toolInFlight && !(session?.awaiting_user ?? false));
   // A dead session is still sendable: sending resumes it (the daemon revives
   // the agent via session/load — see supervisor.rs). Matches Zed, where a
   // thread is never permanently unusable just because its agent process ended.
@@ -934,6 +950,7 @@ export function Composer({
         <TurnStatusOverlay
           sessionId={sessionId}
           status={status}
+          working={turnWorking}
           awaitingUser={session?.awaiting_user ?? false}
           done={session?.done ?? false}
           judging={session?.judging ?? false}
