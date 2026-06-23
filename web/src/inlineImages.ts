@@ -47,6 +47,15 @@ export function registerInlineAttachment(a: Attachment): void {
 export function seedInlineAttachments(list: readonly Attachment[]): void {
   for (const a of list) registry.set(a.id, a);
 }
+/// Look up a registered inline attachment by id. The registry holds EVERY inline
+/// image across all editor surfaces (main composer, draft/queue edit, the
+/// fullscreen overlay — each seeds/registers into it), so this resolves an image
+/// regardless of which editor's local `attachments` array it lives in. Use it for
+/// the tap popover's Preview so the lightbox opens even in the expanded/overlay
+/// editor (where the singleton tap handler's `attachments` is the wrong array).
+export function getInlineAttachment(id: string): Attachment | undefined {
+  return registry.get(id);
+}
 export function forgetInlineAttachment(id: string): void {
   registry.delete(id);
 }

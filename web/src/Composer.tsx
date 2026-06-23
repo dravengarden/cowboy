@@ -90,6 +90,7 @@ import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { type Attachment, filesToAttachments, stripImageTokens } from "./attachments";
 import {
+  getInlineAttachment,
   registerInlineAttachment,
   seedInlineAttachments,
   setImageTapHandler,
@@ -1476,25 +1477,53 @@ export function Composer({
         onClose={closeImgSel}
         anchorOrigin={{ vertical: "center", horizontal: "center" }}
         transformOrigin={{ vertical: "center", horizontal: "center" }}
-        slotProps={{ paper: { sx: { borderRadius: 3 } } }}
+        slotProps={{
+          paper: {
+            // A floating frosted PILL — matches the app's glass chrome instead of a
+            // flat white box. backgroundImage:none kills MUI Paper's elevation
+            // gradient so the translucent fill reads cleanly through the blur.
+            sx: {
+              mt: 0.5,
+              borderRadius: 999,
+              overflow: "hidden",
+              border: 1,
+              borderColor: "divider",
+              boxShadow: 8,
+              backgroundImage: "none",
+              bgcolor: (t) =>
+                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.74 : 0.82),
+              backdropFilter: "blur(16px) saturate(180%)",
+              WebkitBackdropFilter: "blur(16px) saturate(180%)",
+            },
+          },
+        }}
       >
-        <Stack direction="row" sx={{ p: 0.5 }} spacing={0.25}>
+        <Stack
+          direction="row"
+          alignItems="stretch"
+          divider={<Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />}
+        >
           <Button
-            size="small"
             color="inherit"
-            startIcon={<Visibility />}
+            startIcon={<Visibility sx={{ fontSize: 18 }} />}
             onClick={(): void => {
-              const att = attachments.find((a) => a.id === imgSel?.id);
+              // Resolve from the INLINE-IMAGE REGISTRY (all surfaces register there),
+              // not the local `attachments` — otherwise Preview no-ops in the
+              // expanded/overlay editor whose image lives in editAttachments (the
+              // reported "展开页面无法预览"). Fall back to the local array just in case.
+              const id = imgSel?.id;
+              const att = (id ? getInlineAttachment(id) : undefined) ??
+                attachments.find((a) => a.id === id);
               if (att) openLightbox([att], 0);
               closeImgSel();
             }}
+            sx={{ textTransform: "none", fontWeight: 600, gap: 0.5, px: 1.75, py: 1, borderRadius: 0 }}
           >
             Preview
           </Button>
           <Button
-            size="small"
             color="error"
-            startIcon={<DeleteOutline />}
+            startIcon={<DeleteOutline sx={{ fontSize: 18 }} />}
             onClick={(): void => {
               if (imgSel) {
                 editorRef.current?.deleteImage(imgSel.id);
@@ -1502,6 +1531,7 @@ export function Composer({
               }
               closeImgSel();
             }}
+            sx={{ textTransform: "none", fontWeight: 600, gap: 0.5, px: 1.75, py: 1, borderRadius: 0 }}
           >
             Delete
           </Button>
