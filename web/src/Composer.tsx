@@ -2498,7 +2498,15 @@ function PendingRow({
         // footer chip and never rendered inline in the editor (the reported bug).
         added.forEach(registerInlineAttachment);
         setEditAttachments((prev) => [...prev, ...added]);
-        added.forEach((a) => editorRef.current?.insertImage(a));
+        // Insert the token into whichever editor is actually MOUNTED: the
+        // fullscreen overlay owns the edit while open (overlayEditorRef), and the
+        // inline editor is unmounted then (`{!overlayOpen && …}`). Hardcoding
+        // editorRef dropped the token when pasting in the expanded/overlay editor
+        // — insertImage no-op'd on the null inline ref, so the image became a
+        // gallery-only chip with no inline token (collapsed showed it, expanded
+        // didn't — the reported "展开末尾粘贴图片还是有 bug").
+        const active = overlayOpen ? overlayEditorRef : editorRef;
+        added.forEach((a) => active.current?.insertImage(a));
       });
     };
     // Editing IS the composer surface now: the same editor (vim + completions), the
