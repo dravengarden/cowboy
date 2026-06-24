@@ -977,12 +977,13 @@ export function Composer({
       {(queue.length > 0 || draftList.length > 0) && (
         <Box
           sx={{
+            // Plain BLOCK scroll container — NOT flex-column: with flex, the panels
+            // (flex-shrink:1 children) get squished to fit instead of overflowing +
+            // scrolling, which crushed the last panel's (drafts) header. Block stacks
+            // them at natural height and `overflowY: auto` scrolls the overflow.
             overflowY: "auto",
             overscrollBehavior: "contain",
-            minHeight: 0,
             maxHeight: "40vh",
-            display: "flex",
-            flexDirection: "column",
           }}
         >
           {/* Queued prompts: while the agent is busy, messages stack here and
