@@ -966,34 +966,53 @@ export function Composer({
         />
       )}
       {
-        /* Queued prompts (top): while the agent is busy, messages stack here and
-          drain one per turn-end. Hidden when empty. */
+        /* Pending stack (queue + drafts) in ONE bounded scroll region so they
+          scroll TOGETHER and never strand the editor. Before, each panel had its
+          own 30vh internal scroll; stacked (queue + drafts + plan) they overflowed
+          the phone with no unified scroll and the input got pushed off-screen
+          ("都展开页面无法滚动"). Now they share a single capped scroller (editor +
+          navbar below stay visible); `unbounded` drops each panel's own cap so the
+          scroll isn't nested. minHeight:0 lets it shrink + scroll in the flex column. */
       }
-      {queue.length > 0 && (
-        <PendingPanel
-          kind="queued"
-          sessionId={sessionId}
-          items={queue}
-          status={status}
-          commands={(): AvailableCommand[] => availableCommands}
-        />
-      )}
-      {
-        /* Drafts (below the queue, above the input): parked messages the user
-          holds and activates on demand. Persisted across reloads. */
-      }
-      {draftList.length > 0 && (
-        <PendingPanel
-          kind="draft"
-          sessionId={sessionId}
-          items={draftList}
-          status={status}
-          commands={(): AvailableCommand[] => availableCommands}
-          // Only offer "move" when there's somewhere to move to.
-          onMoveDraft={otherSessions.length > 0
-            ? (id: string): void => setMoveSrcId(id)
-            : undefined}
-        />
+      {(queue.length > 0 || draftList.length > 0) && (
+        <Box
+          sx={{
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            minHeight: 0,
+            maxHeight: "40vh",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {/* Queued prompts: while the agent is busy, messages stack here and
+              drain one per turn-end. */}
+          {queue.length > 0 && (
+            <PendingPanel
+              kind="queued"
+              sessionId={sessionId}
+              items={queue}
+              status={status}
+              commands={(): AvailableCommand[] => availableCommands}
+              unbounded
+            />
+          )}
+          {/* Drafts: parked messages the user holds + activates on demand. */}
+          {draftList.length > 0 && (
+            <PendingPanel
+              kind="draft"
+              sessionId={sessionId}
+              items={draftList}
+              status={status}
+              commands={(): AvailableCommand[] => availableCommands}
+              unbounded
+              // Only offer "move" when there's somewhere to move to.
+              onMoveDraft={otherSessions.length > 0
+                ? (id: string): void => setMoveSrcId(id)
+                : undefined}
+            />
+          )}
+        </Box>
       )}
       {
         /* Staged NON-image files sit above the editor ("what will be sent"). Images
@@ -2052,6 +2071,7 @@ function PendingPanel({
   status,
   commands,
   onMoveDraft,
+  unbounded,
 }: {
   kind: "queued" | "draft";
   sessionId: string;
@@ -2064,6 +2084,10 @@ function PendingPanel({
       Owned by the Composer so it survives this panel unmounting when the last
       draft leaves. Absent → the row's kebab omits the Move action. */
   onMoveDraft?: ((id: string) => void) | undefined;
+  /** Rendered inside the composer's SHARED queue+drafts scroll region, so this
+   *  panel must NOT apply its own maxHeight/overflow — nesting scrollers would
+   *  trap the gesture. The outer region owns the cap + scroll. */
+  unbounded?: boolean;
 }): React.JSX.Element {
   // Collapsed state is an APP-LEVEL (per-device) UI pref, NOT service state: it
   // persists in localStorage per panel kind so it survives reloads + session
@@ -2285,10 +2309,10 @@ function PendingPanel({
             // with the input box, not the rows.
             px: 0.5,
             pb: 0.5,
-            // Cap so a long backlog scrolls instead of pushing the editor off
-            // a phone viewport; the editor must always stay reachable.
-            maxHeight: "30vh",
-            overflowY: "auto",
+            // Standalone: cap so a long backlog scrolls instead of pushing the
+            // editor off a phone viewport. `unbounded`: the composer's shared
+            // queue+drafts scroller owns the cap, so don't nest a second scroller.
+            ...(unbounded ? {} : { maxHeight: "30vh", overflowY: "auto" }),
           }}
         >
           {sortable.order.map((id) => {
