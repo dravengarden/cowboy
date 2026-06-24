@@ -1457,6 +1457,13 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 {
                     state.supervisor.send(&session_id, AgentCommand::Cancel)
                 } else {
+                    // Not busy: force_submit front-inserted the prompt but nothing
+                    // dispatched it — a PAUSED (or awaiting-user) queue HOLDS the
+                    // auto-drain. A force-push is an explicit "send this now", so
+                    // drain the head MANUALLY here: bypass the hold and run it now,
+                    // WITHOUT resuming the rest of the held queue. No-op when the
+                    // head already dispatched (idle + empty queue).
+                    state.hub.drain_now(&session_id);
                     Ok(())
                 }
             } else if front {

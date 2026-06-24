@@ -2467,6 +2467,14 @@ impl Hub {
         self.drain_head(session_id, false, false);
     }
 
+    /// MANUAL drain of the queue head: bypasses the paused / awaiting-user holds
+    /// (the user explicitly chose "send now") and revives a dormant session. Used
+    /// by force-push so a ⚡ on a PAUSED queue runs the front message immediately
+    /// WITHOUT resuming the rest of the held queue.
+    pub fn drain_now(&self, session_id: &str) {
+        self.drain_head(session_id, true, true);
+    }
+
     /// Clear the in-flight guard (used by the dispatcher when a send fails) and
     /// try the next queued prompt.
     pub fn clear_in_flight(&self, session_id: &str) {
