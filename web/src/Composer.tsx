@@ -673,6 +673,9 @@ export function Composer({
 
   const busy = status === "busy";
   const starting = status === "starting";
+  // Queue manually paused: keep the ⚡ force button usable so a message can still
+  // be pushed PAST the held queue (run now) even while the agent is idle.
+  const paused = session?.paused ?? false;
   // Interrupted is a dead/resumable state too (a turn cut off by a daemon
   // restart) — the composer treats it like exited/crashed: "send to resume".
   const dead = status === "exited" || status === "crashed" ||
@@ -1393,7 +1396,9 @@ export function Composer({
             <IconButton
               color="warning"
               aria-label="force push"
-              disabled={!sendable || !(busy || starting)}
+              // Usable while a turn runs (busy/starting) OR the queue is paused —
+              // in both cases ⚡ pushes this message ahead of the held/queued work.
+              disabled={!sendable || !(busy || starting || paused)}
               sx={TOOLBAR_ICON_BTN}
               onClick={(e): void => setForceAnchor(e.currentTarget)}
             >
@@ -1437,7 +1442,9 @@ export function Composer({
             color="text.secondary"
             sx={{ display: "block", lineHeight: 1.5 }}
           >
-            Interrupt the current turn and run this now, skipping the queue.
+            {busy || starting
+              ? "Interrupt the current turn and run this now, skipping the queue."
+              : "Send this now, ahead of the paused queue."}
           </Typography>
           <Stack
             direction="row"
