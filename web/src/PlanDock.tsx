@@ -129,7 +129,22 @@ export function PlanDock({
         sx={{ height: 4 }}
       />
       <Collapse in={expanded}>
-        <Stack spacing={0.5} sx={{ p: 1.25 }}>
+        {/* Bounded, self-contained scroller — same strategy as the queue/draft
+            PendingPanels. Without a cap a long plan grew unbounded and, sitting
+            above the composer + the queue/draft scroller, pushed the editor off
+            the phone AND chained its touch-scroll into the page (the reported
+            jank). `overscrollBehavior: contain` stops the scroll-chaining;
+            `maxHeight` keeps the dock from crowding out the editor. */}
+        <Stack
+          spacing={0.5}
+          sx={{
+            p: 1.25,
+            maxHeight: "30vh",
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           {entries.map((e, j) => {
             const completed = e.status === "completed";
             const inProgress = e.status === "in_progress";
