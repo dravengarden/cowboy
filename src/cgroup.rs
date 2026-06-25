@@ -21,6 +21,16 @@ use std::path::{Path, PathBuf};
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
+/// The deterministic leaf-cgroup path for a session, or None if cowboy's own
+/// cgroup can't be resolved (cgroup-v1 host / parse failure). Pure path math —
+/// does NOT create anything — so a reader (e.g. the proc-watcher) can find an
+/// agent's cgroup the same way [`create`] laid it out, without threading the
+/// `PathBuf` through every caller.
+#[must_use]
+pub fn agent_dir(session_id: &str) -> Option<PathBuf> {
+    Some(own_cgroup()?.join(format!("agent-{session_id}")))
+}
+
 /// Create a leaf cgroup for one agent under cowboy's own (delegated) cgroup and
 /// return its absolute path, or None on any failure (fail-open).
 ///
@@ -29,12 +39,25 @@ const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 /// processes" rule (cowboy's own process may stay in the parent).
 #[must_use]
 pub fn create(session_id: &str) -> Option<PathBuf> {
-    let dir = own_cgroup()?.join(format!("agent-{session_id}"));
+    let dir = agent_dir(session_id)?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::warn!(error = %e, dir = %dir.display(), "cgroup: create failed — agent runs uncontained");
         return None;
     }
     Some(dir)
+}
+
+/// Read the PIDs currently in an agent's leaf cgroup (`cgroup.procs`), or an
+/// empty vec if the cgroup is gone / unreadable. `cgroup.procs` lists process
+/// leaders (TGIDs), one per line — NOT threads — which is exactly the grain the
+/// proc-watcher classifies (a spawned background command is a new TGID; the
+/// agent's own threads share its TGID and don't show up separately).
+#[must_use]
+pub fn read_procs(dir: &Path) -> Vec<u32> {
+    let Ok(raw) = std::fs::read_to_string(dir.join("cgroup.procs")) else {
+        return Vec::new();
+    };
+    raw.lines().filter_map(|l| l.trim().parse().ok()).collect()
 }
 
 /// Move a freshly-spawned agent PID — and thus every process it later forks —

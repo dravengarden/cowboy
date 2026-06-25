@@ -955,6 +955,7 @@ export function Composer({
           sessionId={sessionId}
           status={status}
           working={turnWorking}
+          backgroundTask={session?.background_task ?? false}
           awaitingUser={session?.awaiting_user ?? false}
           done={session?.done ?? false}
           judging={session?.judging ?? false}

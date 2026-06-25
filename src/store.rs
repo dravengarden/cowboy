@@ -729,6 +729,9 @@ impl SessionRow {
             // Transient — the manual pause is in-memory only (not persisted), so a
             // restored session always comes back un-paused.
             paused: false,
+            // Transient — recomputed live from the cgroup once the agent revives;
+            // a restored (dead-agent) session has no cgroup, so it starts false.
+            background_task: false,
         }
     }
 }

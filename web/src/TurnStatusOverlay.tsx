@@ -16,7 +16,16 @@ import {
 import { openJudgeInspector } from "./JudgeInspector";
 import { haptic } from "./haptic";
 
-type Kind = "offline" | "judging" | "awaiting" | "paused" | "done" | "interrupted" | "error" | "no-key";
+type Kind =
+  | "offline"
+  | "background"
+  | "judging"
+  | "awaiting"
+  | "paused"
+  | "done"
+  | "interrupted"
+  | "error"
+  | "no-key";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
 // The unified "turn status" overlay (replaces the old AwaitingBar): one floating
@@ -32,6 +41,7 @@ function deriveKind(args: {
   offline: boolean;
   status: Status;
   working: boolean;
+  backgroundTask: boolean;
   judging: boolean;
   awaitingUser: boolean;
   done: boolean;
@@ -39,7 +49,8 @@ function deriveKind(args: {
   queueLen: number;
   hasKey: boolean;
 }): Kind | null {
-  const { offline, status, working, judging, awaitingUser, done, paused, queueLen, hasKey } = args;
+  const { offline, status, working, backgroundTask, judging, awaitingUser, done, paused, queueLen, hasKey } =
+    args;
   // Connection loss outranks everything: while the socket is down the `status` is
   // stale (we can't know the real turn state), so surface "Reconnecting…" instead —
   // even mid-turn — so you're never silently typing into a dead socket.
@@ -53,6 +64,13 @@ function deriveKind(args: {
   if (working) return null;
   if (status === "crashed") return "error";
   if (status === "interrupted") return "interrupted";
+  // The agent ended its turn but a background process it spawned is STILL running
+  // in its cgroup (a `run_in_background` build it's waiting on) — ACP reports no
+  // tool in flight, so `working` is false and the status reads idle. Surface "still
+  // working in the background" so the queue/awaiting pills don't claim the agent is
+  // idle. Outranks judging/awaiting/paused/done — those all mean "your move", which
+  // is wrong while real work runs. (Source: crate::procwatch reading the cgroup.)
+  if (backgroundTask) return "background";
   // The async judge is in flight: show the loading pill INSTEAD of the provisional
   // "awaiting" (which the daemon sets at the same moment) so it doesn't flash
   // purple then settle.
@@ -71,6 +89,7 @@ function deriveKind(args: {
 
 const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
   offline: { color: "warning", label: "Reconnecting…" },
+  background: { color: "info", label: "Background task running…" },
   judging: { color: "info", label: "Judging…" },
   awaiting: { color: "primary", label: "Waiting for your reply" },
   done: { color: "success", label: "Task complete" },
@@ -84,6 +103,7 @@ export function TurnStatusOverlay({
   sessionId,
   status,
   working,
+  backgroundTask,
   judging,
   awaitingUser,
   done,
@@ -99,6 +119,10 @@ export function TurnStatusOverlay({
    *  The whole overlay is hidden while true — the working spinner owns the slot,
    *  so a "Queue paused / done / …" pill never shows next to a running task. */
   working: boolean;
+  /** A background process the agent spawned is still running between turns
+   *  (cgroup-derived; see crate::procwatch). Shows the "Background task running"
+   *  pill in place of any idle/awaiting state. */
+  backgroundTask: boolean;
   judging: boolean;
   awaitingUser: boolean;
   done: boolean;
@@ -126,6 +150,7 @@ export function TurnStatusOverlay({
     offline,
     status,
     working,
+    backgroundTask,
     judging,
     awaitingUser,
     done,
@@ -404,7 +429,7 @@ export function TurnStatusOverlay({
               ].join(", "),
           }}
         >
-          {(kind === "judging" || kind === "offline") && (
+          {(kind === "judging" || kind === "offline" || kind === "background") && (
             <CircularProgress
               size={14}
               thickness={5}
