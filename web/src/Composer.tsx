@@ -2220,7 +2220,6 @@ function PendingPanel({
               flexShrink: 0,
             }}
           >
-            <Pause sx={{ fontSize: "0.875rem" }} />
             <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
               Paused
             </Typography>
