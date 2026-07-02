@@ -1736,7 +1736,6 @@ export function Composer({
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
-          sendable={sendable}
           attachmentsSlot={attachments.some((a) => !a.isImage)
             ? (
               <AttachmentPreviews
@@ -2784,7 +2783,6 @@ function PendingRow({
             sessionId={sessionId}
             commands={commands}
             placeholder="Edit message…"
-            sendable={!!draft.trim() || editAttachments.length > 0}
             attachmentsSlot={editAttachments.some((a) => !a.isImage)
               ? (
                 <AttachmentPreviews

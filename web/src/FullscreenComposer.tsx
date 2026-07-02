@@ -10,7 +10,7 @@ import {
   Tooltip,
   useTheme,
 } from "@mui/material";
-import { CloseFullscreen, Send, Tune } from "@mui/icons-material";
+import { CloseFullscreen, Tune } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
@@ -20,7 +20,7 @@ import { haptic } from "./haptic";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
 // 100dvh overlay modeled on Obsidian's mobile note editor — a light top bar
-// (collapse + send), a full-height CM6 + mdlive live-preview canvas, and a
+// (collapse), a full-height CM6 + mdlive live-preview canvas, and a
 // SELECTION-AWARE markdown toolbar pinned just above the keyboard. The editor is
 // the same engine as every other surface, so markdown stays the literal value and
 // nothing re-serializes on open/close. The native iOS keyboard accessory bar is
@@ -36,7 +36,6 @@ export function FullscreenComposer({
   sessionId,
   commands,
   placeholder,
-  sendable,
   attachmentsSlot,
   editorRef,
   autoFocus = true,
@@ -51,7 +50,6 @@ export function FullscreenComposer({
   sessionId: string;
   commands: () => AvailableCommand[];
   placeholder: string;
-  sendable: boolean;
   attachmentsSlot?: ReactNode;
   // The SHARED composer editor handle. Must be the same ref the parent's
   // `addFiles`/submit/clear use — else paste-an-image here inserts the inline
@@ -149,7 +147,7 @@ export function FullscreenComposer({
         elevation={0}
         sx={{
           // No bottom divider: a hard hairline on the near-white surface read as a
-          // cheap seam under a bare top bar. The collapse/send float on the same
+          // cheap seam under a bare top bar. The collapse button floats on the same
           // calm writing surface — a seamless, focused editor (Bear / iA Writer
           // style) instead of a boxed-off pale band.
           bgcolor: "background.default",
@@ -157,23 +155,15 @@ export function FullscreenComposer({
         }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 48, gap: 1 }}>
+          {/* Collapse only, pinned to the RIGHT. No Send button here: the fullscreen
+              surface is for WRITING — you collapse (the text syncs back to the inline
+              composer) and send from the main bar, and ⌘⏎ still submits directly. A
+              Send here duplicated that and read as confusing. */}
+          <Box sx={{ flex: 1 }} />
           <Tooltip title="Collapse">
             <IconButton aria-label="collapse editor" onClick={act(onCollapse)}>
               <CloseFullscreen />
             </IconButton>
-          </Tooltip>
-          <Box sx={{ flex: 1 }} />
-          <Tooltip title="Send">
-            <span>
-              <IconButton
-                aria-label="send"
-                color="primary"
-                disabled={!sendable}
-                onClick={act(onSubmit)}
-              >
-                <Send />
-              </IconButton>
-            </span>
           </Tooltip>
         </Toolbar>
       </AppBar>
