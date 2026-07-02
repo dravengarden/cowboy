@@ -156,6 +156,10 @@ export interface WireQueued {
 
 export type Outbound =
   | { type: "sessions"; sessions: SessionMeta[] }
+  // App-level heartbeat (see src/core.rs Outbound::Ping). Carries nothing; its
+  // ARRIVAL is the signal — the client tracks the last-message time to detect a
+  // half-open socket that never fires `onclose` and reconnect.
+  | { type: "ping" }
   // The RECENT log tail (last SNAPSHOT_TAIL events). `reached_start` = these are
   // the whole log (nothing older to page to). Older history is fetched on demand
   // over HTTP — see loadOlder + GET /api/history/:id/:page.

@@ -193,6 +193,59 @@ let openedSessionId: string | undefined;
 // kept here is the single pending-attempt timer.
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
+// --- Liveness watchdog (half-open detection) --------------------------------
+// A WebSocket can go HALF-OPEN — TCP still "connected" but no data flows and
+// `onclose` NEVER fires — which is common on mobile/5G (NAT drops, radio
+// handoffs, app suspend). The socket then silently stops delivering updates and
+// the UI freezes at the last-seen state (e.g. a status stuck mid-turn → a
+// spinner that never resolves). The daemon sends an app-level heartbeat
+// (Outbound::Ping) on a fixed interval, so on a HEALTHY socket some message
+// always arrives within it; prolonged silence means the socket is dead. We
+// track the last-message time and, if it goes stale, force-close → `onclose` →
+// reconnect → fresh snapshot (self-healing the frozen state).
+const STALE_MS = 60_000; // ~2.4 missed 25s heartbeats → dead (conservative)
+const FOREGROUND_STALE_MS = 30_000; // on app-foreground, suspend likely killed it
+const LIVENESS_CHECK_MS = 15_000;
+let lastMessageAt = 0;
+let livenessTimer: ReturnType<typeof setInterval> | undefined;
+
+function markAlive(): void {
+  lastMessageAt = Date.now();
+}
+function stopLiveness(): void {
+  if (livenessTimer !== undefined) {
+    clearInterval(livenessTimer);
+    livenessTimer = undefined;
+  }
+}
+function startLiveness(ws: WebSocket): void {
+  stopLiveness();
+  livenessTimer = setInterval(() => {
+    if (
+      socket === ws && ws.readyState === WebSocket.OPEN &&
+      Date.now() - lastMessageAt > STALE_MS
+    ) {
+      ws.close(); // → onclose → scheduleReconnect → fresh snapshot
+    }
+  }, LIVENESS_CHECK_MS);
+}
+
+// Mobile suspends a backgrounded tab (freezing timers AND often killing the
+// socket without an `onclose`); on return the socket may be a zombie. Timers
+// were frozen, so the watchdog above hasn't run — probe immediately on
+// foreground and reconnect if we haven't heard from the server recently.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (
+      document.visibilityState === "visible" && socket &&
+      socket.readyState === WebSocket.OPEN &&
+      Date.now() - lastMessageAt > FOREGROUND_STALE_MS
+    ) {
+      socket.close();
+    }
+  });
+}
+
 function emit(): void {
   for (const l of listeners) l();
 }
@@ -306,6 +359,10 @@ function setPagination(
 
 function handle(msg: Outbound): void {
   switch (msg.type) {
+    case "ping":
+      // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
+      // the liveness watchdog). Nothing to render.
+      break;
     case "sessions": {
       // No alert here: a status flip (busy → running) fired on mid-turn churn and
       // missed permission pauses. The chime/vibration is now driven precisely by
@@ -554,6 +611,8 @@ function openSocket(): void {
   }, 8000);
   ws.onopen = (): void => {
     clearTimeout(connectGuard);
+    markAlive(); // seed liveness so the watchdog doesn't fire before the snapshot
+    startLiveness(ws);
     setState({ ...state, connected: true });
     // Clears the failure count, flashes green if an outage was surfaced, and
     // probes /version for a redeploy (banner state lives in `conn`).
@@ -585,6 +644,7 @@ function openSocket(): void {
     }
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
+    markAlive(); // any frame (incl. the heartbeat) proves the socket is alive
     try {
       handle(JSON.parse(e.data) as Outbound);
     } catch (err) {
@@ -593,6 +653,7 @@ function openSocket(): void {
   };
   ws.onclose = (): void => {
     clearTimeout(connectGuard);
+    stopLiveness();
     setState({ ...state, connected: false });
     // Raises the red banner past the failure threshold and hands back the
     // exponential-backoff delay to wait before retrying (banner lives in `conn`).

@@ -993,6 +993,11 @@ async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
         .into_response()
 }
 
+/// App-level WS heartbeat interval. 25s stays under the common 60s proxy/idle
+/// timeout (the 75% rule) and keeps NAT mappings warm; the client treats missing
+/// ~2 of these as a dead socket. See [`crate::core::Outbound::Ping`].
+const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
+
 async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
@@ -1113,19 +1118,33 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    // Fan-out task: broadcast events → this socket.
+    // Fan-out task: broadcast events → this socket, plus a periodic app-level
+    // heartbeat (Outbound::Ping) so a client can detect a HALF-OPEN socket that
+    // never fires `onclose` (see Outbound::Ping). Per-client interval — a failed
+    // heartbeat send reaps a dead client here too.
     let mut fanout = tokio::spawn(async move {
+        let mut heartbeat = tokio::time::interval(HEARTBEAT);
+        // The first tick fires immediately; consume it so the first ping waits a
+        // full interval (the connect snapshot is fresh traffic already).
+        heartbeat.tick().await;
         loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    if send_json(&mut sink, &msg).await.is_err() {
+            tokio::select! {
+                msg = rx.recv() => match msg {
+                    Ok(msg) => {
+                        if send_json(&mut sink, &msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Lagged: the client missed events; it can reconnect for a
+                    // fresh snapshot. Keep going rather than dropping the socket.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                _ = heartbeat.tick() => {
+                    if send_json(&mut sink, &Outbound::Ping).await.is_err() {
                         break;
                     }
                 }
-                // Lagged: the client missed events; it can reconnect for a fresh
-                // snapshot. Keep going rather than dropping the socket.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });

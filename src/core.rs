@@ -689,6 +689,15 @@ pub enum Outbound {
     },
     /// A single live event.
     Event { envelope: Envelope },
+    /// Application-level heartbeat, sent to each client on a fixed interval.
+    /// Browsers don't expose WS protocol ping/pong to JS, so a client can't tell
+    /// a live-but-silent (idle) connection from a HALF-OPEN one (TCP alive, no
+    /// data — common on mobile/5G, where `onclose` never fires and the status
+    /// silently freezes). This gives the client a steady signal: no message —
+    /// heartbeat included — for a couple of intervals means the socket is dead,
+    /// so reconnect (→ fresh snapshot). A failed send also reaps a dead client
+    /// server-side. Carries no data; the client only reads its arrival time.
+    Ping,
     /// Agent-advertised per-session config options (mode / model / effort and
     /// whatever else upstream adds). Sent (a) on client connect for every
     /// session whose options were captured during this daemon's lifetime,
