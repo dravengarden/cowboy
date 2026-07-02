@@ -151,6 +151,20 @@ function deleteEmptyMarkerPairBackward(view: EditorView): boolean {
   return false;
 }
 
+// The custom Backspace chain, by SPECIFICITY: empty marker pair → inline-image
+// token → empty code fence → @/​/ token. Each no-ops (false) when it doesn't
+// apply, so order is safe; returns true once one consumes the delete. Shared by
+// BOTH delete channels — the keymap (physical keyboard `keydown`) and the
+// beforeinput handler (phone soft keyboards, which emit no Backspace keydown).
+// Inline-image sits after the @-token deliberately: its token contains spaces,
+// so the @-token regex can't match it.
+function backspaceChain(view: EditorView): boolean {
+  return deleteEmptyMarkerPairBackward(view) ||
+    deleteImageTokenBackward(view) ||
+    deleteEmptyCodeFenceBackward(view) ||
+    deleteTokenBackward(view);
+}
+
 // Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
 // device has a precise pointer + hover (a real keyboard) — touch never imports
 // it, so it costs the mobile bundle nothing. (Plan Step 11 / REQ-2.) Also
@@ -700,20 +714,29 @@ export const ComposerEditor = forwardRef<
           },
         }),
       ),
-      // Backspace removes a whole `@path` / `/skill` chip in one press (above
-      // the default char-delete).
+      // Physical-keyboard path: a real `keydown` drives the chain via the keymap.
       Prec.high(keymap.of([
-        // Empty symmetric marker pair (`**|**`, `~~|~~`, `==|==`, …) deletes both
-        // sides — runs FIRST + before composerExtensions' closeBrackets so the
-        // multi-char markers clear whole. Inline-image token delete next (its token
-        // contains spaces, so the @-token regex can't match it), then the
-        // empty-code-fence delete, then the @/​/ token delete. Each no-ops when it
-        // doesn't apply, so order is by specificity.
-        { key: "Backspace", run: deleteEmptyMarkerPairBackward },
-        { key: "Backspace", run: deleteImageTokenBackward },
-        { key: "Backspace", run: deleteEmptyCodeFenceBackward },
-        { key: "Backspace", run: deleteTokenBackward },
+        { key: "Backspace", run: backspaceChain },
       ])),
+      // SOFT-KEYBOARD path (iOS/Android): a phone's Backspace emits NO `keydown`
+      // — it fires `beforeinput` with inputType "deleteContentBackward", which the
+      // keymap above never sees. Without this, an inline image / @-token / empty
+      // pair is UNDELETABLE on a phone (CM6's native atomic-range delete no-ops on
+      // the block-image line, and the trailing-line filter re-adds it). Route the
+      // SAME chain from beforeinput; only preventDefault when a handler actually
+      // consumed the delete, so normal char-deletion falls through untouched. On a
+      // physical keyboard the keymap already handled + preventDefaulted the keydown,
+      // so no beforeinput fires here — no double delete.
+      Prec.high(
+        EditorView.domEventHandlers({
+          beforeinput: (e, view): boolean => {
+            if (e.inputType !== "deleteContentBackward") return false;
+            if (!backspaceChain(view)) return false;
+            e.preventDefault();
+            return true;
+          },
+        }),
+      ),
       // Escape: in vim insert mode, yield (return false) so the vim extension
       // takes it as exit-to-normal — the SECOND Esc, now in normal mode, reaches
       // onEscape. With vim off, or already in normal/visual, Esc goes straight to

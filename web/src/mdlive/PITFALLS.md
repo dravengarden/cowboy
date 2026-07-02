@@ -198,6 +198,28 @@ here says otherwise.
     composition risks the IME aborting. The sim can't verify this (no reliable IME);
     confirm on a device.
 
+11. **A phone soft keyboard can't delete an inline image / @-token / empty pair
+    ("输入框无法用删除键删除图片").** The custom Backspace handlers
+    (`deleteImageTokenBackward` — the two-stage image delete — plus the empty-pair,
+    code-fence, and @-token deleters) are CM6 **keymap `{key:"Backspace"}`**
+    bindings, i.e. keydown-only. iOS/Android soft keyboards emit **no Backspace
+    `keydown`** — they fire `beforeinput` with `inputType:"deleteContentBackward"`,
+    which a keymap never sees. So on a phone those handlers never run; for a block
+    image CM6's native atomic-range delete then no-ops (the `inlineImageTrailingLine`
+    filter re-adds the line it removed) → the picture is undeletable from the
+    keyboard. **Fix (`ComposerEditor.tsx`):** hoist the four deleters into one
+    `backspaceChain(view)` and run it from BOTH channels — the existing `Prec.high`
+    keymap (physical keyboard) AND a new `Prec.high EditorView.domEventHandlers({
+    beforeinput })` that catches `deleteContentBackward` and `preventDefault`s ONLY
+    when a handler actually consumed the delete (normal char-deletion falls
+    through). No double-delete on desktop: the keymap already `preventDefault`s the
+    keydown, so no `beforeinput` follows. Same soft-keyboard gap would hit any
+    future keymap-only editing command. **Status: fix verified headlessly through
+    the beforeinput channel** (Playwright: a synthetic `deleteContentBackward`
+    removes the image after the fix, no-ops before it; keydown path unchanged).
+    **NOT yet device-verified** — the full iOS caret/IME/paste-menu matrix can't be
+    reproduced in emulated Chrome; confirm on the Simulator/device before landing.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
@@ -211,6 +233,9 @@ fullscreen editor:
 - [ ] Type inline → expand → type → collapse: text is preserved (pitfall #6).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
+- [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
+      twice — the image is ringed then deleted (pitfall #11; keydown-only handlers
+      don't fire on a phone, so this is the beforeinput path).
 - [ ] Headings/bold/italic/code/list render (inactive line) + reveal (active line).
 
 Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove
