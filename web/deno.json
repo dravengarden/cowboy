@@ -8,6 +8,7 @@
     "build": "node node_modules/.bin/tsc --noEmit && node node_modules/.bin/vite build",
     "preview": "node node_modules/.bin/vite preview",
     "typecheck": "node node_modules/.bin/tsc --noEmit",
-    "lint": "node_modules/.bin/oxlint"
+    "lint": "node_modules/.bin/oxlint",
+    "test": "deno test --no-check --sloppy-imports --allow-read src/"
   }
 }

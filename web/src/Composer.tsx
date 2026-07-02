@@ -40,10 +40,12 @@ import {
 import {
   AlternateEmail,
   AttachFile,
+  CleaningServices,
   Bolt,
   ChevronRight,
   Close,
   CloseFullscreen,
+  Compress,
   DeleteOutline,
   DragIndicator,
   DriveFileMoveOutlined,
@@ -66,6 +68,7 @@ import {
   Visibility,
 } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
@@ -734,6 +737,28 @@ export function Composer({
     [timelines, sessionId],
   );
 
+  // Session-lifecycle one-tap actions (Compact / Clear). Resolved per agent from
+  // the agent's advertised command list + a provider default (see
+  // agentCommands.ts); `null` when this agent offers no equivalent, so the button
+  // hides rather than sending a command the agent can't parse. A tap opens a
+  // confirm dialog first (Clear drops history — not undoable); confirming sends
+  // the slash-command down the SAME prompt path as a typed message, so it queues
+  // if the agent is mid-turn, exactly like sending "/compact" by hand.
+  const provider = session?.provider ?? "";
+  const compactAction = useMemo(
+    () => resolveSessionAction("compact", provider, availableCommands),
+    [provider, availableCommands],
+  );
+  const clearAction = useMemo(
+    () => resolveSessionAction("clear", provider, availableCommands),
+    [provider, availableCommands],
+  );
+  const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  function runSessionAction(a: SessionAction): void {
+    haptic();
+    submitPrompt(sessionId, a.command, []);
+  }
+
   // Vim is opt-in and desktop-only — ComposerEditor gates the actual
   // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
   // pays for it. The reactive setting is flipped by the Settings toggle.
@@ -1244,7 +1269,20 @@ export function Composer({
           sx={{
             px: 0.5,
             pb: 0.5,
-            ...(compact && { justifyContent: "space-evenly" }),
+            // Compact (mobile): spread the icons when they fit, but let the row
+            // SCROLL horizontally when they don't (space-evenly collapses to a
+            // flex-start pack once there's no free space, so it never clips as
+            // more buttons are added — Compact/Clear today, whatever tomorrow).
+            // Buttons keep their full tap target (flexShrink:0 via TOOLBAR_ICON_BTN)
+            // instead of squeezing. Scrollbar hidden — it's a thin touch strip.
+            ...(compact && {
+              justifyContent: "space-evenly",
+              flexWrap: "nowrap",
+              overflowX: "auto",
+              overflowY: "hidden",
+              scrollbarWidth: "none",
+              "&::-webkit-scrollbar": { display: "none" },
+            }),
             ...TOOLBAR_MIN_H,
           }}
         >
@@ -1301,6 +1339,38 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
+        {/* Session-lifecycle actions (Compact / Clear). Each resolves to the
+            running agent's real slash-command (agentCommands.ts) — hidden when the
+            agent offers no equivalent — and opens a confirm dialog before firing.
+            Disabled while dead (no live agent to run the command). */}
+        {compactAction && (
+          <Tooltip title="Compact conversation">
+            <span>
+              <IconButton
+                aria-label="compact conversation"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => setCmdConfirm(compactAction)}
+              >
+                <Compress fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+        {clearAction && (
+          <Tooltip title="Clear conversation">
+            <span>
+              <IconButton
+                aria-label="clear conversation"
+                disabled={dead}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => setCmdConfirm(clearAction)}
+              >
+                <CleaningServices fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         {/* Spacer (desktop only) → pins the send/queue cluster to the right edge
             while the left group (slash / @ / attach) stays left. On compact the row
             is space-evenly instead, so the spacer would defeat the even spread.
@@ -1311,7 +1381,7 @@ export function Composer({
             card; the long-press force-push ring + haptics are preserved. */}
         {busy || starting
           ? (
-            <Box component="span" sx={{ position: "relative", display: "inline-flex" }}>
+            <Box component="span" sx={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
                 <IconButton
                   ref={queueBtnRef}
                   color="primary"
@@ -1565,6 +1635,65 @@ export function Composer({
           </Button>
         </Stack>
       </Popover>
+      {/* Confirm for the session-lifecycle actions (Compact / Clear). Both send a
+          slash-command that meaningfully changes the agent's context, so neither
+          fires on a bare tap; Clear is styled destructive (it discards history). */}
+      <Dialog
+        open={cmdConfirm !== null}
+        onClose={(): void => setCmdConfirm(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        {cmdConfirm !== null && (
+          <>
+            <DialogTitle>{cmdConfirm.label}?</DialogTitle>
+            <DialogContent>
+              <DialogContentText>{cmdConfirm.detail}</DialogContentText>
+              <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+                Sends{" "}
+                <Box
+                  component="code"
+                  sx={{
+                    fontFamily: "ui-monospace, monospace",
+                    px: 0.5,
+                    py: 0.125,
+                    borderRadius: 0.75,
+                    bgcolor: "action.hover",
+                  }}
+                >
+                  {cmdConfirm.command}
+                </Box>{" "}
+                to {provider || "the agent"}
+                {busy || starting ? " (queued — the agent is mid-turn)" : ""}.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                color="inherit"
+                onClick={(): void => setCmdConfirm(null)}
+                sx={{ textTransform: "none" }}
+              >
+                Cancel
+                <Kbd keys="Esc" />
+              </Button>
+              <Button
+                variant="contained"
+                color={cmdConfirm.destructive ? "error" : "primary"}
+                autoFocus
+                onClick={(): void => {
+                  const a = cmdConfirm;
+                  setCmdConfirm(null);
+                  runSessionAction(a);
+                }}
+                sx={{ textTransform: "none" }}
+              >
+                {cmdConfirm.destructive ? "Clear" : "Compact"}
+                <Kbd keys={ENTER_LABEL} />
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
       {/* Mobile fullscreen compose (the ↗ on touch). A near-full-screen sheet for
           comfortable long-form writing — the first-class editor + future home of a
           markdown / rich-text toolbar + preview. Shares the composer's `text` +

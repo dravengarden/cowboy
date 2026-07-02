@@ -26,5 +26,5 @@
     "noEmit": true
   },
   "include": ["src"],
-  "exclude": ["src/_sync/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts"]
 }
