@@ -34,6 +34,7 @@ import { alpha } from "@mui/material/styles";
 import {
   Bedtime,
   ChatBubbleOutline,
+  CleaningServices,
   Close,
   Code,
   Construction,
@@ -1053,6 +1054,27 @@ const ItemView = memo(function ItemView({
         </Stack>
       );
     }
+    case "cleared":
+      // "Conversation cleared" divider (the Clear action reset the agent's
+      // context here). A centered label between two rules — everything above is
+      // transcript-only now; the agent starts fresh below.
+      return (
+        <Stack
+          direction="row"
+          spacing={1.25}
+          alignItems="center"
+          sx={{ color: "text.disabled", alignSelf: "stretch", my: 0.5 }}
+        >
+          <Box sx={{ flex: 1, height: "1px", bgcolor: "divider" }} />
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+            <CleaningServices sx={{ fontSize: "0.95rem" }} />
+            <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: 0.3 }}>
+              Conversation cleared
+            </Typography>
+          </Stack>
+          <Box sx={{ flex: 1, height: "1px", bgcolor: "divider" }} />
+        </Stack>
+      );
   }
 });
 

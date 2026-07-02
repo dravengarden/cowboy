@@ -1,26 +1,30 @@
-// Session-lifecycle actions the composer exposes as one-tap buttons: "compact"
-// (summarise the running context so the agent keeps going with less history) and
-// "clear" (drop the history and start fresh). Each maps to a real agent slash-
-// command whose SPELLING differs per CLI, so we resolve the concrete command at
-// click time from two sources, in order:
+// The two session-lifecycle actions the composer exposes as one-tap buttons.
+// They dispatch DIFFERENTLY, because the two concepts live on opposite sides of
+// the ACP boundary:
 //
-//   1. What the running agent advertises over ACP (`available_commands_update`).
-//      This is authoritative — it follows the actual agent (and any upstream
-//      rename) with zero code change here. We match by an alias set, not an
-//      exact name, because the same concept is spelled differently per agent.
-//   2. A per-provider default, for agents that don't advertise the command over
-//      ACP. Best-effort; the advertised list always wins when present.
+//   • "compact" is an AGENT operation — the agent summarises its own context.
+//     Claude/Codex/Gemini expose it as a real slash-command, so we resolve the
+//     concrete `/command` and send it as a prompt (kind: "slash"). The spelling
+//     differs per CLI, so we resolve it from (1) what the agent advertises over
+//     ACP (`available_commands_update`, authoritative — matched by an alias set),
+//     then (2) a per-provider default. No match ⇒ null ⇒ the button hides.
 //
-// An unknown provider with nothing advertised resolves to `null` → the button is
-// hidden, so a new backend provider degrades gracefully until its mapping lands.
+//   • "clear" is a CLIENT operation — dropping the conversation and starting
+//     fresh. No agent exposes a `clear` command over ACP (verified: the Claude
+//     adapter advertises `compact` but no clear/new/reset), because clearing is
+//     the client's job. So clear is NOT a slash-command: it's a cowboy session
+//     RESET (kind: "reset") that respawns the agent with a fresh session/new.
+//     It works for every agent, so it's always available.
 import type { AvailableCommand } from "./protocol";
 
 export type SessionActionId = "compact" | "clear";
 
 export interface SessionAction {
   id: SessionActionId;
-  /** The `/command` string to send (leading slash included). */
-  command: string;
+  /** "slash" ⇒ send `command` as a prompt; "reset" ⇒ a cowboy session reset. */
+  kind: "slash" | "reset";
+  /** The `/command` to send (leading slash). Present only when kind === "slash". */
+  command?: string;
   /** Button + confirm-dialog title. */
   label: string;
   /** One-line consequence, shown in the confirm dialog. */
@@ -29,61 +33,53 @@ export interface SessionAction {
   destructive: boolean;
 }
 
-// The same concept, spelled differently across the agents cowboy drives. Matched
-// case-insensitively against the agent's advertised command names, so an upstream
-// rename inside the alias family is picked up without touching this file.
-const ALIASES: Record<SessionActionId, readonly string[]> = {
-  compact: ["compact", "compress", "summarize", "summarise"],
-  clear: ["clear", "new", "reset"],
+// Compact's concept spelled differently across agents. Matched case-insensitively
+// against advertised command names, so an upstream rename inside the family is
+// picked up without touching this file.
+const COMPACT_ALIASES = ["compact", "compress", "summarize", "summarise"];
+
+// Per-provider fallback compact command NAME (no slash) when the agent advertises
+// nothing yet (the cold-start window before the first available_commands_update).
+const COMPACT_DEFAULT: Record<string, string> = {
+  "claude-code": "compact",
+  "codex": "compact",
+  "gemini": "compress",
 };
 
-// Per-provider fallback command NAMES (no slash) when the agent advertises no
-// matching command. Kept minimal on purpose — the advertised list is the real
-// source of truth; these only cover the cold-start window before the first
-// `available_commands_update` arrives.
-const DEFAULT_NAME: Record<string, Partial<Record<SessionActionId, string>>> = {
-  "claude-code": { compact: "compact", clear: "clear" },
-  "codex": { compact: "compact", clear: "new" },
-  "gemini": { compact: "compress", clear: "clear" },
-};
-
-const LABEL: Record<SessionActionId, string> = {
-  compact: "Compact conversation",
-  clear: "Clear conversation",
-};
-
-const DETAIL: Record<SessionActionId, string> = {
-  compact:
-    "Summarise the conversation so far into a shorter context. The agent keeps working, with the condensed history in place of the full transcript.",
-  clear:
-    "Start a fresh context, discarding the conversation history so far. The transcript stays on screen, but the agent forgets it. This can't be undone.",
-};
-
-function resolveName(
-  id: SessionActionId,
+function resolveCompact(
   provider: string,
   available: readonly AvailableCommand[],
-): string | null {
-  const aliases = ALIASES[id];
-  const advertised = available.find((c) => aliases.includes(c.name.toLowerCase()));
-  if (advertised) return advertised.name;
-  return DEFAULT_NAME[provider]?.[id] ?? null;
+): SessionAction | null {
+  const advertised = available.find((c) => COMPACT_ALIASES.includes(c.name.toLowerCase()));
+  const name = advertised?.name ?? COMPACT_DEFAULT[provider];
+  if (name === undefined) return null;
+  return {
+    id: "compact",
+    kind: "slash",
+    command: `/${name}`,
+    label: "Compact conversation",
+    detail:
+      "Summarise the conversation so far into a shorter context. The agent keeps working, with the condensed history in place of the full transcript.",
+    destructive: false,
+  };
 }
 
-/** Resolve a composer session-action to the concrete slash-command for this
- *  session's agent, or `null` when the agent offers no equivalent. */
+// Clear is a client-side reset — always available, no agent command involved.
+const CLEAR_ACTION: SessionAction = {
+  id: "clear",
+  kind: "reset",
+  label: "Clear conversation",
+  detail:
+    "Start the agent on a fresh context, discarding the conversation so far — it won't remember anything above. The transcript stays on screen (a divider marks the cut) so you keep the record. This can't be undone.",
+  destructive: true,
+};
+
+/** Resolve a composer session-action for this session's agent, or `null` when
+ *  it doesn't apply (only compact can be null — clear is always available). */
 export function resolveSessionAction(
   id: SessionActionId,
   provider: string,
   available: readonly AvailableCommand[],
 ): SessionAction | null {
-  const name = resolveName(id, provider, available);
-  if (name === null) return null;
-  return {
-    id,
-    command: `/${name}`,
-    label: LABEL[id],
-    detail: DETAIL[id],
-    destructive: id === "clear",
-  };
+  return id === "clear" ? CLEAR_ACTION : resolveCompact(provider, available);
 }

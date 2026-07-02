@@ -42,6 +42,9 @@ export type RenderItem = { key: string } & (
       chosen: string | null;
     }
   | { kind: "lifecycle"; status: Status; detail: string | null }
+  // "Clear conversation" divider: the agent was reset to a fresh context here.
+  // Everything ABOVE is transcript-only (the agent no longer remembers it).
+  | { kind: "cleared"; at: number }
 );
 
 /// Convert an ACP content block into a renderable chunk (or null if we don't
@@ -189,6 +192,17 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               if (u["rawInput"] !== undefined) existing.rawInput = u["rawInput"];
               if (u["content"] !== undefined) existing.content = u["content"];
             }
+            break;
+          }
+          case "context_cleared": {
+            // The "Clear conversation" reset (src/core.rs mark_context_cleared):
+            // render a divider so the user sees where the agent's memory was cut.
+            const at = u["at"];
+            items.push({
+              kind: "cleared",
+              at: typeof at === "number" ? at : 0,
+              key: String(env.seq),
+            });
             break;
           }
           // `plan` is NOT rendered inline — it's surfaced by the pinned PlanDock

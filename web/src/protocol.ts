@@ -276,6 +276,11 @@ export type Inbound =
   // Client opened/selected a session — revive its agent if it died with a
   // daemon restart, without sending a turn. Idempotent. See src/core.rs.
   | { type: "open_session"; session_id: string }
+  // "Clear conversation": the daemon respawns the agent with a fresh session/new
+  // (dropping its context) and drops a `context_cleared` timeline marker. Over
+  // ACP, clearing is the client's job — no agent exposes a `clear` command — so
+  // this is a session reset, not a slash command. See src/core.rs Inbound.
+  | { type: "reset_session"; session_id: string }
   // --- Server-authoritative queue + drafts (synced across terminals) --------
   // The Web UI sends these; the daemon owns the per-session queue/drafts and the
   // drain, so every terminal sees identical state. (The bridge keeps using

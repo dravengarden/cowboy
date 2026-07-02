@@ -545,6 +545,15 @@ pub enum Inbound {
     /// Handled in server.rs via [`crate::supervisor::Supervisor::ensure_alive`].
     OpenSession { session_id: String },
 
+    /// Reset a session's agent context ("clear conversation"). Over ACP, clearing
+    /// is the CLIENT's job — Claude/Codex/Gemini expose no `clear` agent command
+    /// (only `compact`), so this can't be a slash command. The daemon tears the
+    /// agent down and respawns it with a FRESH `session/new` (dropping the prior
+    /// `agent_session_id` so it does NOT `session/load`), then drops a
+    /// `context_cleared` marker into the timeline for the UI's divider. The
+    /// transcript history is kept (a scroll-back record); only the agent forgets.
+    ResetSession { session_id: String },
+
     // --- Server-authoritative queue + drafts (synced across all terminals) ----
     //
     // The Web UI sends these instead of dispatching prompts itself: the daemon
@@ -2207,6 +2216,39 @@ impl Hub {
                 agent_session_id,
             });
         }
+    }
+
+    /// Forget a session's resumable agent id so the NEXT spawn starts a fresh
+    /// `session/new` (a clean agent context) instead of `session/load`. The
+    /// "clear conversation" reset (see [`Inbound::ResetSession`]) calls this
+    /// before respawning. In-memory only: the freshly-spawned agent's own
+    /// `session/new` re-persists a new id within a second or two, so there's no
+    /// separate NULL write-behind (a daemon restart in that tiny window just
+    /// leaves the old context — rare, and re-clearable).
+    pub fn clear_agent_session_id(&self, session_id: &str) {
+        let mut sessions = self.inner.sessions.lock();
+        if let Some(s) = sessions.get_mut(session_id) {
+            s.meta.agent_session_id = None;
+        }
+    }
+
+    /// Drop a `context_cleared` marker into a session's timeline so every client
+    /// renders a "conversation cleared" divider. Pushed as a normal ACP-shaped
+    /// `update` (the frontend's `derive` maps `sessionUpdate: "context_cleared"`
+    /// to a divider item); `at` is unix-ms for the divider's timestamp.
+    pub fn mark_context_cleared(&self, session_id: &str) {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        self.push(
+            session_id,
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "context_cleared",
+                    "at": at,
+                }),
+            },
+        );
     }
 
     /// Update a session's status, emit a `Lifecycle` event, refresh the list.

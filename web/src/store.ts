@@ -1305,6 +1305,14 @@ export function clearQueue(sessionId: string): void {
   send({ type: "clear_queue", session_id: sessionId });
 }
 
+// "Clear conversation": reset the agent's context (fresh session/new) while
+// keeping the transcript. The daemon respawns the agent + emits a
+// `context_cleared` marker the transcript renders as a divider. This is the
+// Clear composer action — NOT a slash command (no agent exposes `clear`).
+export function resetSession(sessionId: string): void {
+  send({ type: "reset_session", session_id: sessionId });
+}
+
 // Lift the confirm-detect "awaiting user" hold (the awaiting widget's dismiss /
 // Send). `false` = "the agent wasn't really asking" → the queue drains. Non-
 // optimistic: the daemon `broadcast_sessions()` reflects the cleared flag within

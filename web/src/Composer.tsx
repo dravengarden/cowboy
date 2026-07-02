@@ -108,6 +108,7 @@ import {
   editDraft,
   editQueued,
   forcePrompt,
+  resetSession,
   frontPrompt,
   forcePushQueued,
   moveDraft,
@@ -756,7 +757,13 @@ export function Composer({
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
   function runSessionAction(a: SessionAction): void {
     haptic();
-    submitPrompt(sessionId, a.command, []);
+    if (a.kind === "reset") {
+      // Clear: a cowboy session reset (fresh agent context), not a prompt.
+      resetSession(sessionId);
+    } else if (a.command !== undefined) {
+      // Compact: send the agent's slash-command down the normal prompt path.
+      submitPrompt(sessionId, a.command, []);
+    }
   }
 
   // Vim is opt-in and desktop-only — ComposerEditor gates the actual
@@ -1635,9 +1642,10 @@ export function Composer({
           </Button>
         </Stack>
       </Popover>
-      {/* Confirm for the session-lifecycle actions (Compact / Clear). Both send a
-          slash-command that meaningfully changes the agent's context, so neither
-          fires on a bare tap; Clear is styled destructive (it discards history). */}
+      {/* Confirm for the session-lifecycle actions. Compact sends the agent's
+          slash-command; Clear is a cowboy session RESET (fresh agent context).
+          Both meaningfully change context, so neither fires on a bare tap; Clear
+          is styled destructive (it discards the agent's memory of the chat). */}
       <Dialog
         open={cmdConfirm !== null}
         onClose={(): void => setCmdConfirm(null)}
@@ -1650,21 +1658,29 @@ export function Composer({
             <DialogContent>
               <DialogContentText>{cmdConfirm.detail}</DialogContentText>
               <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-                Sends{" "}
-                <Box
-                  component="code"
-                  sx={{
-                    fontFamily: "ui-monospace, monospace",
-                    px: 0.5,
-                    py: 0.125,
-                    borderRadius: 0.75,
-                    bgcolor: "action.hover",
-                  }}
-                >
-                  {cmdConfirm.command}
-                </Box>{" "}
-                to {provider || "the agent"}
-                {busy || starting ? " (queued — the agent is mid-turn)" : ""}.
+                {cmdConfirm.kind === "slash" && cmdConfirm.command !== undefined
+                  ? (
+                    <>
+                      Sends{" "}
+                      <Box
+                        component="code"
+                        sx={{
+                          fontFamily: "ui-monospace, monospace",
+                          px: 0.5,
+                          py: 0.125,
+                          borderRadius: 0.75,
+                          bgcolor: "action.hover",
+                        }}
+                      >
+                        {cmdConfirm.command}
+                      </Box>{" "}
+                      to {provider || "the agent"}
+                      {busy || starting ? " (queued — the agent is mid-turn)" : ""}.
+                    </>
+                  )
+                  : `Resets ${provider || "the agent"} to a fresh context now${
+                    busy || starting ? " (ends the current turn)" : ""
+                  }.`}
               </DialogContentText>
             </DialogContent>
             <DialogActions>

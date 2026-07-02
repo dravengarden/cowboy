@@ -1221,6 +1221,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::RetryTurn { session_id }
         | Inbound::SetConfigOption { session_id, .. }
         | Inbound::OpenSession { session_id }
+        | Inbound::ResetSession { session_id }
         | Inbound::Submit { session_id, .. }
         | Inbound::RemoveQueued { session_id, .. }
         | Inbound::EditQueued { session_id, .. }
@@ -1436,6 +1437,25 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                         );
                         Ok(())
                     }
+                }
+            }
+        }
+        Inbound::ResetSession { session_id } => {
+            // "Clear conversation" (see Inbound::ResetSession). Order matters:
+            // 1. Tear the current agent down (Cancel + drop its sender) so it
+            //    stops and frees its slot before we respawn.
+            // 2. Forget the resumable agent id so the respawn does a FRESH
+            //    session/new (clean context) instead of session/load.
+            // 3. Drop the timeline divider marker (kept history, agent forgets).
+            // 4. Respawn a fresh agent so it's warm and ready to type into.
+            state.supervisor.delete_session(&session_id);
+            state.hub.clear_agent_session_id(&session_id);
+            state.hub.mark_context_cleared(&session_id);
+            match state.supervisor.ensure_alive(&session_id) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    tracing::warn!(session_id = %session_id, error = %e, "reset: respawn failed");
+                    Ok(())
                 }
             }
         }
