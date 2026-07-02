@@ -108,6 +108,21 @@ mod tests {
     // function avoids racing a separate defaults test running in parallel.
     #[test]
     fn defaults_and_env_override() {
+        // Hermetic: clear any AMBIENT override first. In production the daemon
+        // sets these (services/cowboy), and a cowboy-spawned test process inherits
+        // them — without this the "default" assertions below see the deployed
+        // /opt/npm-global paths instead of npx.
+        for k in [
+            "COWBOY_ACP_CLAUDE_CODE_CMD",
+            "COWBOY_ACP_CLAUDE_CODE_ARGS",
+            "COWBOY_ACP_CODEX_CMD",
+            "COWBOY_ACP_CODEX_ARGS",
+            "COWBOY_ACP_GEMINI_CMD",
+            "COWBOY_ACP_GEMINI_ARGS",
+        ] {
+            std::env::remove_var(k);
+        }
+
         // Default (no env): npx + the pinned adapter args; unknown id → None.
         let claude = super::lookup("claude-code").expect("claude-code registered");
         assert_eq!(claude.command, "npx");
