@@ -183,6 +183,28 @@ pub fn run_agent(
         Ok(()) => hub.set_status(session_id, Status::Exited, None),
         Err(e) => {
             tracing::error!(session = session_id, error = %e, "agent session ended with error");
+            // Salvage un-consumed prompts. A cold-start / handshake failure returns
+            // BEFORE the command loop (`while let Some(cmd) = cmd_rx.recv()`) drains
+            // cmd_rx, so a prompt the dispatcher delivered to this (revived) agent is
+            // still sitting here un-logged. Without this it dies with the thread —
+            // the user's message vanishes from every surface (see
+            // `Hub::requeue_prompt`). Put it back on the durable queue so it's
+            // visible and re-drains once the session recovers. Cancel/Permission
+            // commands are transient and intentionally dropped.
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                if let AgentCommand::Prompt(blocks, cmid) = cmd {
+                    let content: Vec<serde_json::Value> = blocks
+                        .iter()
+                        .map(|b| serde_json::to_value(b).unwrap_or(serde_json::Value::Null))
+                        .collect();
+                    let text = content
+                        .iter()
+                        .filter_map(|v| v.get("text").and_then(serde_json::Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    hub.requeue_prompt(session_id, text, content, cmid);
+                }
+            }
             hub.set_status(session_id, Status::Crashed, Some(e.to_string()));
         }
     }

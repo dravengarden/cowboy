@@ -2518,6 +2518,44 @@ impl Hub {
         self.try_drain(session_id);
     }
 
+    /// Put a dispatched-but-never-run prompt BACK on the queue front.
+    ///
+    /// A prompt sent to a session that had to REVIVE rides `cmd_rx` into the
+    /// freshly-spawned agent thread. If that agent dies during cold-start (e.g.
+    /// the `npx` adapter fails to install) it returns BEFORE the command loop
+    /// consumes `cmd_rx`, so the prompt is never logged and — without this —
+    /// evaporates with the dead thread: gone from the composer (cleared on send),
+    /// the queue (it was dispatched straight through), the transcript (never
+    /// echoed), and even Retry (which reads the log). `run_agent` salvages the
+    /// un-consumed prompt here so it lands back in the durable queue — visible
+    /// again, and re-drained the moment the session next reaches `Running`.
+    /// Idempotent on `cmid` (a racing re-revive must not double-queue it).
+    pub fn requeue_prompt(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            // The in-flight turn is over (it crashed); free the guard so the queue
+            // can drain again once an agent is alive.
+            s.in_flight = false;
+            if let Some(c) = cmid.as_deref() {
+                if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
+                    return;
+                }
+            }
+            let id = self.next_qid();
+            s.queue.insert(0, QueuedMessage { id, text, content, cmid });
+        }
+        self.emit_pending(session_id);
+    }
+
     /// Queue-aware send: dispatch immediately when the session is idle and
     /// nothing is queued/in-flight; otherwise append to the queue. The single
     /// entry point the Web composer uses (the bridge/API still use `Prompt`).
@@ -3063,6 +3101,37 @@ mod confirm_hold_tests {
         assert!(hub.is_awaiting("s2"), "judge held the queue");
         hub.set_awaiting("s2", false);
         assert!(!hub.is_awaiting("s2"), "clearing resumes the drain");
+    }
+
+    // The queue texts as clients would see them (via the resync patch).
+    fn queue_texts(hub: &Hub, id: &str) -> Vec<String> {
+        match hub.queue_resync(id) {
+            Some(Outbound::SyncPatch { value, .. }) => value["queue"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|m| m["text"].as_str().unwrap_or_default().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => vec![],
+        }
+    }
+
+    // A prompt salvaged from a crashed cold-start lands back on the queue (so it's
+    // never lost) and is idempotent on cmid (a racing re-revive can't double it).
+    #[test]
+    fn requeue_prompt_restores_and_dedupes() {
+        let hub = hub_with_session("r1");
+        assert!(queue_texts(&hub, "r1").is_empty());
+        hub.requeue_prompt("r1", "hello agent".to_owned(), vec![], Some("c1".to_owned()));
+        assert_eq!(queue_texts(&hub, "r1"), vec!["hello agent".to_owned()]);
+        // Same cmid (the delivery raced a re-revive) → not double-queued.
+        hub.requeue_prompt("r1", "hello agent".to_owned(), vec![], Some("c1".to_owned()));
+        assert_eq!(queue_texts(&hub, "r1").len(), 1, "same cmid must not double-queue");
+        // A different message DOES stack (front-inserted).
+        hub.requeue_prompt("r1", "second".to_owned(), vec![], Some("c2".to_owned()));
+        assert_eq!(queue_texts(&hub, "r1"), vec!["second".to_owned(), "hello agent".to_owned()]);
     }
 }
 

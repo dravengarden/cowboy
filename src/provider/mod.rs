@@ -48,35 +48,88 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
     m.insert(
         "claude-code",
-        LaunchSpec {
-            id: "claude-code",
-            command: "npx".into(),
-            args: vec!["-y".into(), "@agentclientprotocol/claude-agent-acp".into()],
-        },
+        spec("claude-code", "npx", &["-y", "@agentclientprotocol/claude-agent-acp"]),
     );
-    m.insert(
-        "codex",
-        LaunchSpec {
-            id: "codex",
-            command: "npx".into(),
-            args: vec!["-y".into(), "@zed-industries/codex-acp".into()],
-        },
-    );
+    m.insert("codex", spec("codex", "npx", &["-y", "@zed-industries/codex-acp"]));
     m.insert(
         "gemini",
-        LaunchSpec {
-            id: "gemini",
-            // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's
-            // no separate npm package like the others.
-            command: "npx".into(),
-            args: vec!["-y".into(), "@google/gemini-cli".into(), "--acp".into()],
-        },
+        // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's no
+        // separate npm package like the others.
+        spec("gemini", "npx", &["-y", "@google/gemini-cli", "--acp"]),
     );
     m
+}
+
+/// Build a provider's launch spec, letting the deployment OVERRIDE how the ACP
+/// adapter is launched via env — `COWBOY_ACP_<ID>_CMD` (+ optional
+/// whitespace-split `COWBOY_ACP_<ID>_ARGS`), where `<ID>` is the upper-cased id
+/// with `-`→`_` (e.g. `COWBOY_ACP_CLAUDE_CODE_CMD`).
+///
+/// Why: the default `npx -y <pkg>` cold-installs the adapter into the shared
+/// `~/.npm/_npx` cache on EVERY session start. Concurrent starts race npm's
+/// atomic rename (ENOTEMPTY → the adapter exits 217 → the session crashes), an
+/// interrupted install leaves stale staging dirs that poison every later start,
+/// and each start pays a registry round-trip. Pointing this at a PRE-INSTALLED
+/// adapter binary (the hawk `services/cowboy` module, matching the host's
+/// bootstrap-wrapper convention for the CLIs) removes `npx` from the hot path
+/// entirely — no install-at-spawn, no race, no poison, no network dependency.
+/// Unset ⇒ the npx default, so nothing changes until the deployment opts in.
+fn spec(id: &'static str, default_cmd: &str, default_args: &[&str]) -> LaunchSpec {
+    let key = id.to_uppercase().replace('-', "_");
+    let arg_override = std::env::var(format!("COWBOY_ACP_{key}_ARGS"))
+        .ok()
+        .map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+    match std::env::var(format!("COWBOY_ACP_{key}_CMD")) {
+        // A custom command replaces npx: the default args are npx-specific
+        // (`-y <pkg>`), so they do NOT carry over — args come solely from
+        // `_ARGS` (absent ⇒ none). Lets a deployment point at a pre-installed
+        // adapter binary with just `_CMD` set.
+        Ok(command) => LaunchSpec { id, command, args: arg_override.unwrap_or_default() },
+        // Default command (npx): `_ARGS` may still override the pinned adapter args.
+        Err(_) => LaunchSpec {
+            id,
+            command: default_cmd.to_owned(),
+            args: arg_override
+                .unwrap_or_else(|| default_args.iter().map(|s| (*s).to_owned()).collect()),
+        },
+    }
 }
 
 /// Look up a built-in provider's launch spec by id.
 #[must_use]
 pub fn lookup(id: &str) -> Option<LaunchSpec> {
     builtin().remove(id)
+}
+
+#[cfg(test)]
+mod tests {
+    // Defaults AND the env override, in ONE test: the override sets a
+    // process-global env var, so keeping both assertions in a single (serial)
+    // function avoids racing a separate defaults test running in parallel.
+    #[test]
+    fn defaults_and_env_override() {
+        // Default (no env): npx + the pinned adapter args; unknown id → None.
+        let claude = super::lookup("claude-code").expect("claude-code registered");
+        assert_eq!(claude.command, "npx");
+        assert_eq!(claude.args, ["-y", "@agentclientprotocol/claude-agent-acp"]);
+        assert_eq!(super::lookup("codex").map(|s| s.command), Some("npx".to_owned()));
+        assert_eq!(super::lookup("gemini").map(|s| s.command), Some("npx".to_owned()));
+        assert!(super::lookup("nope").is_none());
+
+        // Override just _CMD: the npx-specific default args are dropped (not
+        // carried onto the custom binary) — the pre-installed-adapter case.
+        std::env::set_var("COWBOY_ACP_CLAUDE_CODE_CMD", "/opt/npm-global/bin/claude-agent-acp");
+        let o = super::lookup("claude-code").unwrap();
+        assert_eq!(o.command, "/opt/npm-global/bin/claude-agent-acp");
+        assert!(o.args.is_empty(), "custom command drops the npx default args");
+
+        // _ARGS overrides independently (e.g. gemini's `--acp`).
+        std::env::set_var("COWBOY_ACP_CLAUDE_CODE_ARGS", "--acp --foo");
+        assert_eq!(super::lookup("claude-code").unwrap().args, ["--acp", "--foo"]);
+
+        std::env::remove_var("COWBOY_ACP_CLAUDE_CODE_CMD");
+        std::env::remove_var("COWBOY_ACP_CLAUDE_CODE_ARGS");
+        // Back to the default once unset.
+        assert_eq!(super::lookup("claude-code").unwrap().command, "npx");
+    }
 }
