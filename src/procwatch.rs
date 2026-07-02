@@ -26,11 +26,15 @@
 //!    BEFORE its first turn (the agent-ready edge): everything alive then is
 //!    infrastructure — agent chain + startup MCP. No per-agent list.
 //! 2. A cgroup process not in `infra` is a **candidate** (spawned by a tool).
-//! 3. **Promotion** absorbs config drift: a candidate that stays CPU-quiescent
-//!    (≈0 jiffies growth) for [`PROMOTE_QUIESCENT`] is folded into `infra` — a
-//!    lazily-started MCP / idle helper just sits there, so it self-classifies as
-//!    infrastructure. A background *task* burns CPU (or churns children) and is
-//!    never promoted while it works.
+//! 3. **Promotion** absorbs config drift: a candidate that stays *quiescent* —
+//!    no CPU growth (≈0 jiffies) AND no I/O growth (`rchar+wchar`) — for
+//!    [`PROMOTE_QUIESCENT`] is folded into `infra`: a lazily-started MCP / idle
+//!    helper just sits there, so it self-classifies as infrastructure. A
+//!    background *task* burns CPU or moves bytes and is never promoted while it
+//!    works. I/O is in the liveness test because the tasks that end a turn are
+//!    often I/O-bound, not CPU-bound (an upload, a download, a device install):
+//!    they'd read as idle on CPU alone, but their `read()`/`write()` byte
+//!    counters — which include sockets, not just disk — keep climbing.
 //! 4. **A session is flagged** when a non-promoted candidate has outlived the
 //!    [`SETTLE`] delay (which lets a tool's transient children exit first).
 //!
@@ -45,12 +49,16 @@
 //!   only things that survive between turns are infra + genuine harness-managed
 //!   background tasks — which keeps the candidate set clean.
 //!
-//! Known corners (documented, accepted for v1): a background task that idles
-//! CPU-quiescent for [`PROMOTE_QUIESCENT`] (e.g. blocked on a slow download) can
-//! be mis-promoted; and on a daemon restart a task already running is baked into
-//! the fresh seed. Both self-heal (the task exits) and are rare. Thread-level
-//! stalls (a hung thread inside the agent's own process) are out of scope —
-//! `cgroup.procs` is per-process.
+//! Known corners (documented, accepted for v1): a task that produces NO local
+//! signal at all — neither CPU nor I/O — for [`PROMOTE_QUIESCENT`] can be
+//! mis-promoted. The residual case after adding the I/O test is a task whose
+//! work is entirely on another host behind a silent connection (an `ssh` to a
+//! remote build that streams nothing back): the local process genuinely does
+//! nothing, and is indistinguishable from an idle held connection — no local
+//! observer can tell them apart. On a daemon restart a task already running is
+//! baked into the fresh seed. Both self-heal (the task exits) and are rare.
+//! Thread-level stalls (a hung thread inside the agent's own process) are out of
+//! scope — `cgroup.procs` is per-process.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -78,8 +86,14 @@ struct Candidate {
     first_seen: Instant,
     /// Last CPU sample (utime+stime jiffies) for the quiescence test.
     last_cpu: u64,
-    /// When CPU growth first fell to ~0 in an unbroken run; reset to `None` on
-    /// any activity. `Some(t)` past [`PROMOTE_QUIESCENT`] → promote.
+    /// Last I/O sample (`rchar+wchar` bytes) for the quiescence test. Catches
+    /// the I/O-bound task that burns ~0 CPU (upload / download / device install)
+    /// but keeps moving bytes. `None` if `/proc/<pid>/io` is unreadable — then
+    /// the test falls back to CPU alone.
+    last_io: Option<u64>,
+    /// When activity (CPU *or* I/O growth) first ceased in an unbroken run;
+    /// reset to `None` on any activity. `Some(t)` past [`PROMOTE_QUIESCENT`] →
+    /// promote.
     quiescent_since: Option<Instant>,
 }
 
@@ -123,6 +137,26 @@ fn read_stat(pid: u32) -> Option<Stat> {
         starttime,
         cpu: utime + stime,
     })
+}
+
+/// Sum `rchar + wchar` from `/proc/<pid>/io` — total bytes the process has read
+/// and written across ALL fds, sockets included (not just block I/O, so a
+/// network transfer counts). Monotonic per process. Returns None when the file
+/// is unreadable (process gone, or — for a differing-cred target — permission
+/// denied); the agent's tool children share our uid, so in practice it reads.
+/// A None just drops this tick's I/O signal, leaving the CPU test intact.
+fn read_io(pid: u32) -> Option<u64> {
+    let raw = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
+    let mut sum = 0u64;
+    for line in raw.lines() {
+        if let Some(v) = line
+            .strip_prefix("rchar:")
+            .or_else(|| line.strip_prefix("wchar:"))
+        {
+            sum += v.trim().parse::<u64>().ok()?;
+        }
+    }
+    Some(sum)
 }
 
 /// Background-process watcher. Spawned once at startup; runs for the daemon's
@@ -212,19 +246,28 @@ impl SessionWatch {
                             starttime: s.starttime,
                             first_seen: now,
                             last_cpu: s.cpu,
+                            last_io: read_io(pid),
                             quiescent_since: Some(now),
                         },
                     );
                     continue;
                 }
             };
-            // Quiescence track: any CPU growth resets the idle clock.
-            if s.cpu > c.last_cpu {
+            // Quiescence track: CPU *or* I/O growth resets the idle clock. I/O is
+            // only compared when both this and the last sample are readable — a
+            // transient None must not masquerade as a byte drop (then a spurious
+            // rise) and reset the clock on a truly idle process.
+            let io = read_io(pid);
+            let io_grew = matches!((io, c.last_io), (Some(now_io), Some(prev)) if now_io > prev);
+            if s.cpu > c.last_cpu || io_grew {
                 c.quiescent_since = None;
             } else if c.quiescent_since.is_none() {
                 c.quiescent_since = Some(now);
             }
             c.last_cpu = s.cpu;
+            if io.is_some() {
+                c.last_io = io;
+            }
             // Promote a sustained-quiescent candidate to infrastructure.
             if c
                 .quiescent_since
