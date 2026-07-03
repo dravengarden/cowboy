@@ -22,16 +22,29 @@
 //! So we don't count — we **classify**, and learn the baseline from the running
 //! system rather than hardcoding any agent/MCP knowledge:
 //!
-//! 1. **Seed** `infra` from a snapshot taken while the session is idle and
-//!    BEFORE its first turn (the agent-ready edge): everything alive then is
-//!    infrastructure — agent chain + startup MCP. No per-agent list.
+//! 1. **Seed** `infra` from what's alive while the session is idle and BEFORE
+//!    its first turn: everything then is infrastructure — agent chain + startup
+//!    MCP. No per-agent list. Crucially this is NOT a single-instant snapshot:
+//!    a background task can only be spawned by a tool *during a turn* (see the
+//!    gap above), so until the session has been Busy even once we keep folding
+//!    every live pid into the baseline. This absorbs the startup storm — Claude
+//!    Code lazily spawns MCP servers (`chrome-devtools-mcp`, …) that appear
+//!    AFTER the first tick and burn CPU/I/O while they initialize; a one-shot
+//!    seed would miss them and flag them as a "background task" on a session
+//!    that has never run a turn.
 //! 2. A cgroup process not in `infra` is a **candidate** (spawned by a tool).
-//! 3. **Promotion** absorbs config drift: a candidate that stays *quiescent* —
-//!    no CPU growth (≈0 jiffies) AND no I/O growth (`rchar+wchar`) — for
-//!    [`PROMOTE_QUIESCENT`] is folded into `infra`: a lazily-started MCP / idle
-//!    helper just sits there, so it self-classifies as infrastructure. A
-//!    background *task* burns CPU or moves bytes and is never promoted while it
-//!    works. I/O is in the liveness test because the tasks that end a turn are
+//! 3. **Promotion** absorbs config drift: a candidate that has been *quiescent*
+//!    — no CPU growth (≈0 jiffies) AND no I/O growth (`rchar+wchar`) — *since we
+//!    first saw it*, for [`PROMOTE_QUIESCENT`], is folded into `infra`: a
+//!    lazily-started MCP / idle helper just sits there, so it self-classifies as
+//!    infrastructure. The "since we first saw it" is load-bearing: a candidate
+//!    that has EVER shown activity is a genuine spawned task and is NEVER
+//!    promoted, even after it later goes quiescent — otherwise a background task
+//!    that works in bursts with lulls (e.g. narration synthesizing chapters
+//!    batch-by-batch) gets mis-promoted into `infra` during a >10s gap and then
+//!    never flags again when the next burst starts, so the UI shows "Task
+//!    complete" while real work is still running. I/O is in the liveness test
+//!    because the tasks that end a turn are
 //!    often I/O-bound, not CPU-bound (an upload, a download, a device install):
 //!    they'd read as idle on CPU alone, but their `read()`/`write()` byte
 //!    counters — which include sockets, not just disk — keep climbing.
@@ -91,9 +104,17 @@ struct Candidate {
     /// but keeps moving bytes. `None` if `/proc/<pid>/io` is unreadable — then
     /// the test falls back to CPU alone.
     last_io: Option<u64>,
+    /// Has this candidate EVER shown activity (CPU or I/O growth) since we first
+    /// saw it? A candidate that has worked at all is a genuine spawned task and
+    /// must NEVER be promoted to infra — otherwise a bursty task (narration
+    /// synthesizing chapters with lulls between batches) gets folded into infra
+    /// during a >[`PROMOTE_QUIESCENT`] gap and never flags again on the next
+    /// burst. Only a candidate quiescent *since first seen* (a lazy MCP that just
+    /// sits there) self-classifies as infrastructure.
+    ever_active: bool,
     /// When activity (CPU *or* I/O growth) first ceased in an unbroken run;
     /// reset to `None` on any activity. `Some(t)` past [`PROMOTE_QUIESCENT`] →
-    /// promote.
+    /// promote (only while `!ever_active`).
     quiescent_since: Option<Instant>,
 }
 
@@ -106,6 +127,11 @@ struct SessionWatch {
     /// promotion, pruned as entries exit.
     infra: HashMap<u32, u64>,
     candidates: HashMap<u32, Candidate>,
+    /// Has this session ever run a turn (been Busy)? A background task can only
+    /// be spawned by a tool DURING a turn, so before the first one there is
+    /// nothing to detect — we keep folding the still-spawning launch chain +
+    /// lazy MCP servers into `infra` and never flag. Set once, never cleared.
+    seen_turn: bool,
     /// Last value pushed to the Hub — avoids redundant broadcasts.
     flagged: bool,
 }
@@ -179,6 +205,12 @@ pub async fn run_proc_watch(hub: Hub) {
             // care about the BETWEEN-turns window, so clear any stale flag and
             // keep the classifier state warm for the next idle period.
             if meta.status != Status::Running {
+                // Busy is the turn-in-flight state: seeing it once means this
+                // session has run a turn, so the classifier may start looking
+                // for background tasks in the next idle window (see `seen_turn`).
+                if meta.status == Status::Busy {
+                    watches.entry(meta.id.clone()).or_default().seen_turn = true;
+                }
                 if let Some(w) = watches.get_mut(&meta.id) {
                     if w.flagged {
                         w.flagged = false;
@@ -219,6 +251,20 @@ impl SessionWatch {
         self.infra
             .retain(|p, st| stats.get(p).is_some_and(|s| s.starttime == *st));
 
+        // Pre-first-turn: everything alive is infrastructure by definition (a
+        // background task can only be spawned by a tool DURING a turn). Keep
+        // folding the still-spawning launch chain + lazily-started MCP servers
+        // into the baseline every tick — a one-shot seed misses the MCP servers
+        // that appear after it and busily initialize, which then read as a bogus
+        // background task on a session that has never run. Never flag here.
+        if !self.seen_turn {
+            for (&p, s) in &stats {
+                self.infra.insert(p, s.starttime);
+            }
+            self.candidates.clear();
+            return false;
+        }
+
         // Seed when infra is bare: the FIRST idle observation (agent chain +
         // startup MCP, before any turn → no background task possible yet), AND
         // again after a session REVIVAL prunes the old chain away (the restarted
@@ -247,6 +293,7 @@ impl SessionWatch {
                             first_seen: now,
                             last_cpu: s.cpu,
                             last_io: read_io(pid),
+                            ever_active: false,
                             quiescent_since: Some(now),
                         },
                     );
@@ -261,6 +308,7 @@ impl SessionWatch {
             let io_grew = matches!((io, c.last_io), (Some(now_io), Some(prev)) if now_io > prev);
             if s.cpu > c.last_cpu || io_grew {
                 c.quiescent_since = None;
+                c.ever_active = true;
             } else if c.quiescent_since.is_none() {
                 c.quiescent_since = Some(now);
             }
@@ -268,10 +316,15 @@ impl SessionWatch {
             if io.is_some() {
                 c.last_io = io;
             }
-            // Promote a sustained-quiescent candidate to infrastructure.
-            if c
-                .quiescent_since
-                .is_some_and(|t| now.duration_since(t) >= PROMOTE_QUIESCENT)
+            // Promote a sustained-quiescent candidate to infrastructure — but
+            // ONLY if it has been idle since we first saw it (`!ever_active`). A
+            // candidate that has ever worked is a real task and stays tracked, so
+            // a bursty task in a between-batch lull keeps flagging instead of
+            // being mis-folded into infra and going silent forever.
+            if !c.ever_active
+                && c
+                    .quiescent_since
+                    .is_some_and(|t| now.duration_since(t) >= PROMOTE_QUIESCENT)
             {
                 self.infra.insert(pid, s.starttime);
                 self.candidates.remove(&pid);
