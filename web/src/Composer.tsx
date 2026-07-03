@@ -197,51 +197,52 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-// Context-window "fullness" ring — the agent reports usage over ACP `usage_update`
-// (used/size tokens); we show a Zed-style circular fill + %, sitting right next to
-// Compact/Clear so a filling context reads as "compact/clear soon". A track ring
-// under a value ring makes the fill legible; colour crosses to amber at 70% and
-// red at 90% (the auto-compaction zone). Hidden until the agent reports a window
-// size. A `%` label rides alongside so it's glanceable on touch (no hover).
-function ContextRing({ used, size }: { used: number; size: number }): React.JSX.Element | null {
-  if (!(size > 0)) return null;
+// Context-window fullness (agent-reported over ACP `usage_update`, used/size
+// tokens) drawn as a Zed-style ring AROUND the Compact glyph — so ONE button both
+// shows how full the window is and compacts it. No % label: the fill + colour
+// carry it at a glance (amber ≥70%, red ≥90% — the auto-compaction zone), and the
+// exact numbers live in the Compact tooltip. Before the agent reports a size it's
+// just the bare Compress icon.
+function CompactIcon({ used, size }: { used: number; size: number }): React.JSX.Element {
+  if (!(size > 0)) return <Compress fontSize="small" />;
   const pct = Math.min(100, (used / size) * 100);
-  const shown = used > 0 ? Math.max(1, Math.round(pct)) : 0; // never read "0%" mid-use
   const color = pct >= 90 ? "error.main" : pct >= 70 ? "warning.main" : "success.main";
   return (
-    <Tooltip title={`Context ${shown}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`}>
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={0.5}
-        sx={{ flexShrink: 0, px: 0.25 }}
-        aria-label={`context ${shown} percent full`}
-      >
-        <Box sx={{ position: "relative", display: "inline-flex" }}>
-          <CircularProgress
-            variant="determinate"
-            value={100}
-            size={18}
-            thickness={5}
-            sx={{ color: "action.disabledBackground" }}
-          />
-          <CircularProgress
-            variant="determinate"
-            value={pct}
-            size={18}
-            thickness={5}
-            sx={{ color, position: "absolute", left: 0 }}
-          />
-        </Box>
-        <Typography
-          variant="caption"
-          sx={{ color, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontSize: "0.7rem" }}
-        >
-          {shown}%
-        </Typography>
-      </Stack>
-    </Tooltip>
+    <Box
+      sx={{
+        position: "relative",
+        width: 26,
+        height: 26,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <CircularProgress
+        variant="determinate"
+        value={100}
+        size={26}
+        thickness={3}
+        sx={{ color: "action.disabledBackground", position: "absolute", top: 0, left: 0 }}
+      />
+      <CircularProgress
+        variant="determinate"
+        value={pct}
+        size={26}
+        thickness={3}
+        sx={{ color, position: "absolute", top: 0, left: 0 }}
+      />
+      <Compress sx={{ fontSize: "1.05rem" }} />
+    </Box>
   );
+}
+
+// The Compact tooltip — names the action and, when known, the context fullness it
+// acts on ("Compact · context 79% · 780K / 1M tokens").
+function compactTooltip(used: number, size: number): string {
+  if (!(size > 0)) return "Compact conversation";
+  const pct = used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0;
+  return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`;
 }
 
 // The mobile fullscreen compose/edit docked BAR — ONE shared bar so Compose and
@@ -1400,18 +1401,14 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Context-window fullness (usage_update) — sits right before the
-            Compact/Clear actions it motivates. Hidden until the agent reports it. */}
-        <ContextRing
-          used={session?.context_used ?? 0}
-          size={session?.context_size ?? 0}
-        />
         {/* Session-lifecycle actions (Compact / Clear). Each resolves to the
             running agent's real slash-command (agentCommands.ts) — hidden when the
             agent offers no equivalent — and opens a confirm dialog before firing.
-            Disabled while dead (no live agent to run the command). */}
+            Disabled while dead (no live agent to run the command). Compact doubles
+            as the context-fullness indicator: the ring around its glyph shows how
+            full the window is (no separate %-label button). */}
         {compactAction && (
-          <Tooltip title="Compact conversation">
+          <Tooltip title={compactTooltip(session?.context_used ?? 0, session?.context_size ?? 0)}>
             <span>
               <IconButton
                 aria-label="compact conversation"
@@ -1419,7 +1416,10 @@ export function Composer({
                 sx={TOOLBAR_ICON_BTN}
                 onClick={(): void => setCmdConfirm(compactAction)}
               >
-                <Compress fontSize="small" />
+                <CompactIcon
+                  used={session?.context_used ?? 0}
+                  size={session?.context_size ?? 0}
+                />
               </IconButton>
             </span>
           </Tooltip>
