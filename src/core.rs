@@ -1797,42 +1797,80 @@ impl Hub {
         let sid = session_id.to_owned();
         tokio::spawn(async move {
             let ds = crate::inference::deepseek::DeepSeek::new(key, model.clone());
-            let started = std::time::Instant::now();
-            match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text).await
-            {
-                Ok(o) => {
-                    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    let (hit, miss) = o.usage.as_ref().map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
-                    tracing::info!(
-                        session = %sid, awaiting = o.verdict.awaiting_user, done = o.verdict.done,
-                        confidence = o.verdict.confidence, reason = %o.verdict.reason, latency_ms,
-                        "confirm-detect verdict"
-                    );
-                    let at = now_ms();
-                    hub.emit_and_record_judge(&sid, JudgeRun {
-                        id: format!("{at}-{seq}"),
-                        at,
-                        layer: o.layer.to_owned(),
-                        awaiting_user: o.verdict.awaiting_user,
-                        done: o.verdict.done,
-                        confidence: o.verdict.confidence,
-                        reason: o.verdict.reason.clone(),
-                        model,
-                        input: final_text,
-                        output: o.raw_output,
-                        cache_hit: hit,
-                        cache_miss: miss,
-                        latency_ms,
-                    });
-                    hub.apply_verdict(&sid, seq, &o.verdict);
-                    hub.set_judging(&sid, false);
+            // The confirm-detect backend (deepseek, via the proxy) fails several
+            // times a day — a transient `request failed`, or an unparseable
+            // `parse verdict`. Retry a couple of times with a short backoff before
+            // giving up, so a blip doesn't strand the turn.
+            let mut last_err = String::new();
+            for attempt in 0u32..3 {
+                if attempt > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * u64::from(attempt))).await;
                 }
-                // Error → STAY held (the provisional true stands).
-                Err(e) => {
-                    tracing::warn!(session = %sid, error = %e, "confirm-detect judge failed; holding queue");
-                    hub.set_judging(&sid, false);
+                let started = std::time::Instant::now();
+                match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text).await
+                {
+                    Ok(o) => {
+                        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        let (hit, miss) = o.usage.as_ref().map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
+                        tracing::info!(
+                            session = %sid, awaiting = o.verdict.awaiting_user, done = o.verdict.done,
+                            confidence = o.verdict.confidence, reason = %o.verdict.reason, latency_ms, attempt,
+                            "confirm-detect verdict"
+                        );
+                        let at = now_ms();
+                        hub.emit_and_record_judge(&sid, JudgeRun {
+                            id: format!("{at}-{seq}"),
+                            at,
+                            layer: o.layer.to_owned(),
+                            awaiting_user: o.verdict.awaiting_user,
+                            done: o.verdict.done,
+                            confidence: o.verdict.confidence,
+                            reason: o.verdict.reason.clone(),
+                            model: model.clone(),
+                            input: final_text.clone(),
+                            output: o.raw_output,
+                            cache_hit: hit,
+                            cache_miss: miss,
+                            latency_ms,
+                        });
+                        hub.apply_verdict(&sid, seq, &o.verdict);
+                        hub.set_judging(&sid, false);
+                        return;
+                    }
+                    Err(e) => {
+                        last_err = e.to_string();
+                        tracing::warn!(session = %sid, error = %last_err, attempt, "confirm-detect judge attempt failed");
+                    }
                 }
             }
+            // Every attempt failed. Do NOT leave the turn stranded at the provisional
+            // "awaiting" hold — that renders a PERMANENT, false "Waiting for your
+            // reply" (the confirmed bug: a transient judge outage pinned the pill
+            // with no verdict behind it). Fail OPEN to a neutral verdict (neither
+            // awaiting nor done) so the pill reads honest idle and the queue drains,
+            // and record the failure so the judge inspector shows why there's no
+            // real verdict. Losing the queue-hold on a rare judge outage is strictly
+            // better than a session that's stuck "Waiting" until the user intervenes.
+            tracing::warn!(session = %sid, error = %last_err, "confirm-detect judge failed after retries; clearing provisional hold");
+            let at = now_ms();
+            let reason = format!("judge failed: {last_err}");
+            hub.emit_and_record_judge(&sid, JudgeRun {
+                id: format!("{at}-{seq}"),
+                at,
+                layer: "L2".to_owned(),
+                awaiting_user: false,
+                done: false,
+                confidence: 0.0,
+                reason: reason.clone(),
+                model,
+                input: final_text,
+                output: String::new(),
+                cache_hit: 0,
+                cache_miss: 0,
+                latency_ms: 0,
+            });
+            hub.apply_verdict(&sid, seq, &crate::skills::Verdict { reason, ..Default::default() });
+            hub.set_judging(&sid, false);
         });
     }
 
