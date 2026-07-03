@@ -1135,9 +1135,19 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    // Lagged: the client missed events; it can reconnect for a
-                    // fresh snapshot. Keep going rather than dropping the socket.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    // Lagged: a slow client (mobile/5G, or backgrounded) fell
+                    // >1024 events behind, so the broadcast DROPPED events for it.
+                    // Its timeline is now permanently inconsistent — e.g. it missed
+                    // the tool_call_update that completed a tool, so the UI shows a
+                    // stuck "pending" tool / "working" spinner on an idle session
+                    // (the observed bug). Continuing would keep serving newer events
+                    // over that hole forever. Instead CLOSE the socket: the client
+                    // reconnects and rebuilds a consistent state from a fresh
+                    // snapshot (the connect path re-sends sessions + snapshots).
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(dropped = n, "WS client lagged; closing to force a resync");
+                        break;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
                 _ = heartbeat.tick() => {

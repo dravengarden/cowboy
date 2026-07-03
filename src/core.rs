@@ -992,7 +992,13 @@ impl Hub {
     /// DB writer task (spawned in `crate::server`).
     #[must_use]
     pub fn with_store(store_tx: Option<mpsc::UnboundedSender<StoreWrite>>) -> Self {
-        let (tx, _) = broadcast::channel(1024);
+        // Shared fan-out buffer. A client that falls this many events behind
+        // LAGS and the broadcast drops its missed events (the server then closes
+        // it to force a resync — see server.rs). One long autonomous turn (a book
+        // chapter) can emit hundreds of chunks, so a roomy buffer keeps a briefly
+        // slow mobile client from lagging on a normal blip. It's a SINGLE shared
+        // ring of small events, so the memory cost is negligible.
+        let (tx, _) = broadcast::channel(4096);
         Self {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
