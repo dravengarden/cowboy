@@ -65,6 +65,11 @@ export interface SessionMeta {
    *  (crate::procwatch). Suppresses the idle/awaiting overlay and drives the
    *  "Background task running" pill. Transient, never persisted. */
   background_task?: boolean;
+  /** Context-window usage the agent reports over ACP `usage_update`:
+   *  `context_used` tokens of a `context_size`-token window (drives the composer's
+   *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
+  context_used?: number;
+  context_size?: number;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.

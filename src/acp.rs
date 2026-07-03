@@ -433,6 +433,19 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     match serde_json::to_value(&notif.update) {
         Ok(update) => {
+            // `usage_update` carries the context-window fill (`used`/`size`). It's
+            // ephemeral LIVE state, not conversation, and the agent re-emits it
+            // several times per turn — so intercept it onto SessionMeta (drives the
+            // composer's "context X% full" ring) instead of appending a copy to the
+            // timeline every time (which bloated the persisted log). Matched on the
+            // serialized shape so it's robust to the ACP crate's representation.
+            if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
+                == Some("usage_update")
+            {
+                let field = |k| update.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+                state.hub.set_context_usage(&state.session_id, field("used"), field("size"));
+                return;
+            }
             // Honor a ScheduleWakeup BEFORE pushing — the event is still stored
             // verbatim (timeline/UI unchanged); this just adds the side effect of
             // actually firing the wakeup, which the ACP runtime otherwise drops.

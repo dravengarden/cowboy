@@ -190,6 +190,60 @@ const TOOLBAR_MIN_H = {
   "@media (pointer: coarse)": { minHeight: 40 },
 } as const;
 
+// Compact "K/M" token count for the context tooltip (48436 → "48K", 1_000_000 → "1M").
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 9_950_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
+
+// Context-window "fullness" ring — the agent reports usage over ACP `usage_update`
+// (used/size tokens); we show a Zed-style circular fill + %, sitting right next to
+// Compact/Clear so a filling context reads as "compact/clear soon". A track ring
+// under a value ring makes the fill legible; colour crosses to amber at 70% and
+// red at 90% (the auto-compaction zone). Hidden until the agent reports a window
+// size. A `%` label rides alongside so it's glanceable on touch (no hover).
+function ContextRing({ used, size }: { used: number; size: number }): React.JSX.Element | null {
+  if (!(size > 0)) return null;
+  const pct = Math.min(100, (used / size) * 100);
+  const shown = used > 0 ? Math.max(1, Math.round(pct)) : 0; // never read "0%" mid-use
+  const color = pct >= 90 ? "error.main" : pct >= 70 ? "warning.main" : "success.main";
+  return (
+    <Tooltip title={`Context ${shown}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={0.5}
+        sx={{ flexShrink: 0, px: 0.25 }}
+        aria-label={`context ${shown} percent full`}
+      >
+        <Box sx={{ position: "relative", display: "inline-flex" }}>
+          <CircularProgress
+            variant="determinate"
+            value={100}
+            size={18}
+            thickness={5}
+            sx={{ color: "action.disabledBackground" }}
+          />
+          <CircularProgress
+            variant="determinate"
+            value={pct}
+            size={18}
+            thickness={5}
+            sx={{ color, position: "absolute", left: 0 }}
+          />
+        </Box>
+        <Typography
+          variant="caption"
+          sx={{ color, fontWeight: 600, fontVariantNumeric: "tabular-nums", fontSize: "0.7rem" }}
+        >
+          {shown}%
+        </Typography>
+      </Stack>
+    </Tooltip>
+  );
+}
+
 // The mobile fullscreen compose/edit docked BAR — ONE shared bar so Compose and
 // Edit look + behave identically (Send, not Cancel/Save). Stacked in the sticky
 // docked footer (above the keyboard): attachment thumbnails, then — only when the
@@ -1346,6 +1400,12 @@ export function Composer({
             </IconButton>
           </span>
         </Tooltip>
+        {/* Context-window fullness (usage_update) — sits right before the
+            Compact/Clear actions it motivates. Hidden until the agent reports it. */}
+        <ContextRing
+          used={session?.context_used ?? 0}
+          size={session?.context_size ?? 0}
+        />
         {/* Session-lifecycle actions (Compact / Clear). Each resolves to the
             running agent's real slash-command (agentCommands.ts) — hidden when the
             agent offers no equivalent — and opens a confirm dialog before firing.

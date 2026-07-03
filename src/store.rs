@@ -732,6 +732,9 @@ impl SessionRow {
             // Transient — recomputed live from the cgroup once the agent revives;
             // a restored (dead-agent) session has no cgroup, so it starts false.
             background_task: false,
+            // Not persisted — a fresh usage_update re-seeds it right after revive.
+            context_used: 0,
+            context_size: 0,
         }
     }
 }

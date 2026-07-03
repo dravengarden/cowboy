@@ -266,6 +266,17 @@ pub struct SessionMeta {
     /// clients + the restore path.
     #[serde(default)]
     pub background_task: bool,
+    /// Context-window usage the agent reports over ACP `usage_update`:
+    /// `context_used` tokens of a `context_size`-token window (so the UI shows a
+    /// "context X% full" ring — see the composer). `0`/`0` = not yet reported.
+    /// Transient live state (intercepted onto the meta rather than bloating the
+    /// timeline with a copy per turn — see acp.rs); `serde(default)` covers old
+    /// clients + the restore path. Not persisted — a fresh `usage_update` re-seeds
+    /// it right after any revive.
+    #[serde(default)]
+    pub context_used: u64,
+    #[serde(default)]
+    pub context_size: u64,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -1325,6 +1336,8 @@ impl Hub {
             paused: false,
             system,
             background_task: false,
+            context_used: 0,
+            context_size: 0,
         };
         {
             let mut sessions = self.inner.sessions.lock();
@@ -1631,6 +1644,28 @@ impl Hub {
             match sessions.get_mut(session_id) {
                 Some(s) if s.meta.background_task != background_task => {
                     s.meta.background_task = background_task;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
+    /// Record the agent-reported context-window usage (ACP `usage_update`):
+    /// `used` tokens of a `size`-token window. Broadcast-only (transient, not
+    /// persisted). Deduped — the agent re-emits identical usage several times per
+    /// turn, so we only broadcast when the numbers actually move, keeping the
+    /// session-list churn (and mobile bandwidth) down.
+    pub fn set_context_usage(&self, session_id: &str, used: u64, size: u64) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.context_used != used || s.meta.context_size != size => {
+                    s.meta.context_used = used;
+                    s.meta.context_size = size;
                     true
                 }
                 _ => false,
