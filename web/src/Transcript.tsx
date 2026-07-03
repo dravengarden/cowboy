@@ -54,7 +54,7 @@ import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { derive, type ContentChunk, type RenderItem } from "./derive";
+import { COMPACTING_NOTICE, derive, type ContentChunk, type RenderItem } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
   discardMessage,
@@ -332,13 +332,13 @@ function StreamingCaret(): React.JSX.Element {
   );
 }
 
-// Claude Code's auto-compaction notice. When its context window fills, the
-// agent streams a STANDALONE assistant message whose entire text is the literal
-// "Compacting..." (its own messageId, no `_meta`) while it condenses history,
-// then continues the turn under a fresh message. Rendered verbatim it reads as a
-// stray one-word reply, so this widget gives it a purpose-built treatment.
-const COMPACTING_TEXT = "Compacting...";
-
+// Claude Code's auto-compaction notice (`COMPACTING_NOTICE`, shared with derive):
+// when its context window fills, the agent streams a STANDALONE assistant message
+// whose entire text is the literal "Compacting..." (its own messageId, no
+// `_meta`) while it condenses history, then continues the turn under a fresh
+// message. Rendered verbatim it reads as a stray one-word reply, so this widget
+// gives it a purpose-built treatment.
+//
 // True when a message item is exactly that compaction notice — every chunk is
 // text and the concatenation trims to the literal. Concatenate (not "first
 // chunk") so a split stream still matches.
@@ -349,7 +349,7 @@ function isCompactingMessage(chunks: ContentChunk[]): boolean {
     if (c.type !== "text") return false;
     text += c.text;
   }
-  return text.trim() === COMPACTING_TEXT;
+  return text.trim() === COMPACTING_NOTICE;
 }
 
 // The fold icon's gentle vertical squeeze — "condensing" made literal. Compositor

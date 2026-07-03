@@ -345,6 +345,30 @@ export function latestPendingPermission(timeline: Envelope[]): PendingPermission
   return last;
 }
 
+/// Claude Code's auto-compaction notice: while it condenses history it streams a
+/// standalone assistant message whose entire text is this literal, then continues
+/// the turn under a fresh message. Shared with the Transcript's CompactingWidget.
+export const COMPACTING_NOTICE = "Compacting...";
+
+/// True while a compaction is running RIGHT NOW — the `COMPACTING_NOTICE` message
+/// is the live tail of the turn. Once the agent continues (a new item follows) or
+/// the turn ends, the tail changes and this goes false. The composer uses it to
+/// disable + spin its Compact button so you can't fire a second /compact mid-run
+/// (mirrors the Transcript's active CompactingWidget). Pair with `busy` at the
+/// call site — a persisted notice sitting as the last item of an IDLE, ended turn
+/// is scrollback, not an in-flight compaction.
+export function isCompactingTail(timeline: Envelope[]): boolean {
+  const items = derive(timeline);
+  const last = items[items.length - 1];
+  if (last?.kind !== "message" || last.role !== "assistant") return false;
+  let text = "";
+  for (const c of last.chunks) {
+    if (c.type !== "text") return false;
+    text += c.text;
+  }
+  return text.trim() === COMPACTING_NOTICE;
+}
+
 function titleOfToolCall(tc: unknown): string {
   if (tc && typeof tc === "object" && "title" in tc) {
     const t = (tc as { title?: unknown }).title;

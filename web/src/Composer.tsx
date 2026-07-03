@@ -79,7 +79,7 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
-import { derive, latestPendingPermission, latestPlan } from "./derive";
+import { derive, isCompactingTail, latestPendingPermission, latestPlan } from "./derive";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -203,7 +203,34 @@ function fmtTokens(n: number): string {
 // carry it at a glance (amber ≥70%, red ≥90% — the auto-compaction zone), and the
 // exact numbers live in the Compact tooltip. Before the agent reports a size it's
 // just the bare Compress icon.
-function CompactIcon({ used, size }: { used: number; size: number }): React.JSX.Element {
+function CompactIcon(
+  { used, size, active }: { used: number; size: number; active: boolean },
+): React.JSX.Element {
+  // Compaction running right now → an indeterminate terracotta (Claude accent,
+  // matching the transcript's CompactingWidget) spinner around a dimmed glyph, in
+  // the same 26px footprint so the toolbar doesn't shift. The button is disabled
+  // in this state, so the ring reads as "working", not an affordance.
+  if (active) {
+    return (
+      <Box
+        sx={{
+          position: "relative",
+          width: 26,
+          height: 26,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <CircularProgress
+          size={26}
+          thickness={3}
+          sx={{ color: "#D97757", position: "absolute", top: 0, left: 0 }}
+        />
+        <Compress sx={{ fontSize: "1.05rem", color: "text.disabled" }} />
+      </Box>
+    );
+  }
   if (!(size > 0)) return <Compress fontSize="small" />;
   const pct = Math.min(100, (used / size) * 100);
   const color = pct >= 90 ? "error.main" : pct >= 70 ? "warning.main" : "success.main";
@@ -732,6 +759,14 @@ export function Composer({
 
   const busy = status === "busy";
   const starting = status === "starting";
+  // A compaction is running right now: the turn is busy AND the live tail is
+  // Claude Code's "Compacting..." notice (covers both a hand-fired /compact and
+  // the agent's own auto-compaction). Drives the Compact button's disabled +
+  // spinner state so a second /compact can't be fired mid-run.
+  const compacting = useMemo(
+    () => busy && isCompactingTail(timelines.get(sessionId) ?? []),
+    [busy, timelines, sessionId],
+  );
   // Queue manually paused: keep the ⚡ force button usable so a message can still
   // be pushed PAST the held queue (run now) even while the agent is idle.
   const paused = session?.paused ?? false;
@@ -1408,17 +1443,22 @@ export function Composer({
             as the context-fullness indicator: the ring around its glyph shows how
             full the window is (no separate %-label button). */}
         {compactAction && (
-          <Tooltip title={compactTooltip(session?.context_used ?? 0, session?.context_size ?? 0)}>
+          <Tooltip
+            title={compacting
+              ? "Compacting…"
+              : compactTooltip(session?.context_used ?? 0, session?.context_size ?? 0)}
+          >
             <span>
               <IconButton
                 aria-label="compact conversation"
-                disabled={dead}
+                disabled={dead || compacting}
                 sx={TOOLBAR_ICON_BTN}
                 onClick={(): void => setCmdConfirm(compactAction)}
               >
                 <CompactIcon
                   used={session?.context_used ?? 0}
                   size={session?.context_size ?? 0}
+                  active={compacting}
                 />
               </IconButton>
             </span>
