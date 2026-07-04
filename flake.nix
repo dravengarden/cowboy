@@ -40,7 +40,7 @@
         # crates via python-requests, which sends a User-Agent. crates.io now
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-h36xRafN5a8ia+lxIV5ytZ0n0gvoIgBwAEnoefpw9eU=";
+        cargoHash = "sha256-5Sx3rsA5nPZnNcAa9x6Z8uDjf6hNTtoEdkZPNeyBGlM=";
         # The memory store shells out to `git` (store::Store::commit/ensure_git_repo,
         # ported from mnemosyne). Its unit tests `git init` a temp store + commit
         # entirely offline, so `git` must be on the checkPhase PATH (the build

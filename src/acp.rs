@@ -25,10 +25,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use parking_lot::Mutex;
 
-use agent_client_protocol::schema::{
+// ACP 1.0 versioned the wire schema: the message types that were flat under
+// `schema::` in 0.14 now live under `schema::v1::` (v1 is the stable line; v2 is
+// unstable/feature-gated). `ProtocolVersion` stayed at the `schema::` root
+// (version-agnostic), and the `Agent`/`Client` traits at the crate root.
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
     CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
     LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
-    ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionConfigOption, SessionConfigSelectOption, SessionId,
     SessionModeId, SessionNotification, SessionUpdate, SetSessionModeRequest,
 };

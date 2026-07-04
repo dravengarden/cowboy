@@ -387,7 +387,7 @@ impl Janitor {
     /// `agent_message_chunk` text in envelopes after the mark.
     async fn wake_and_read(&self, prompt: String) -> Result<String, String> {
         let mark = self.max_seq();
-        let blocks = vec![agent_client_protocol::schema::ContentBlock::from(prompt)];
+        let blocks = vec![agent_client_protocol::schema::v1::ContentBlock::from(prompt)];
         self.supervisor
             .send(&self.session_id, crate::acp::AgentCommand::Prompt(blocks, None))
             .map_err(|e| format!("send prompt: {e}"))?;

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use agent_client_protocol::schema::ContentBlock;
+use agent_client_protocol::schema::v1::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
