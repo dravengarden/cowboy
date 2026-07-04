@@ -198,11 +198,21 @@ export function TurnStatusOverlay({
     setHidden(false);
     setExpanded(false);
   }, [kind]);
-  // "done" used to auto-fade after 4s — but the judge's own latency (~5–10s) made
-  // the green pill appear LATE and vanish before it could register, and returning
-  // to a finished session then showed nothing. It now PERSISTS like "awaiting":
-  // cleared when the next turn supersedes it (status → busy resets `kind`) or via
-  // the × dismiss, so "the agent finished" is actually legible.
+  // "done" is a ONE-SHOT NOTICE, not a persistent state. `done` (task complete) is
+  // a confidence judgment the LLM judge makes about a subjective "is it finished" —
+  // it has NO protocol ground truth and DOES misfire (the reported false "Task
+  // complete" while still working). A wrong PERSISTENT pill sits there until you
+  // dismiss it; a wrong NOTICE just fades. So it auto-dismisses ~10s after it lands
+  // (the pill appears when the verdict arrives, ~5–10s post turn-end, then fades) —
+  // a ping that the turn finished, never a status that can be "wrong" later. Every
+  // other kind (awaiting/paused/interrupted/error) reflects something actionable and
+  // still persists until superseded or dismissed. See the reliability rework: source
+  // states from ground truth; demote the ones that can only be guessed.
+  useEffect(() => {
+    if (kind !== "done") return undefined;
+    const t = globalThis.setTimeout(() => setHidden(true), 10_000);
+    return () => globalThis.clearTimeout(t);
+  }, [kind]);
 
   // Publish the pill height so the transcript reserves it (sticky-not-covering).
   const measureRef = useRef<HTMLDivElement | null>(null);

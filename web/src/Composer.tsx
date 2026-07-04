@@ -79,7 +79,7 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
-import { derive, isCompactingTail, latestPendingPermission, latestPlan } from "./derive";
+import { isCompactingTail, latestPendingPermission, latestPlan } from "./derive";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -774,22 +774,16 @@ export function Composer({
   // restart) — the composer treats it like exited/crashed: "send to resume".
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
-  // A tool / background task still in flight (after turn_end settling) means the
-  // agent is WORKING even when the turn status momentarily reads "running". Used
-  // to suppress the turn-status overlay (Queue paused / done / …) while work is in
-  // progress, so it never shows "Resume" beside an actively-running background
-  // task. Excludes awaiting-user (an awaiting turn has ended → a straggler tool
-  // isn't "work"). Mirrors Transcript's working-spinner gate.
-  const toolInFlight = useMemo(
-    () =>
-      !dead &&
-      derive(timelines.get(sessionId) ?? []).some(
-        (it) =>
-          it.kind === "tool" && (it.status === "pending" || it.status === "in_progress"),
-      ),
-    [dead, timelines, sessionId],
-  );
-  const turnWorking = busy || (toolInFlight && !(session?.awaiting_user ?? false));
+  // "Working" is EXACTLY the ACP turn being in flight (`busy` = a session/prompt
+  // request that hasn't returned a stop_reason) — the same predicate Zed uses
+  // (`ThreadStatus::Generating == running_turn.is_some()`). We deliberately do NOT
+  // re-derive it from tool-call status in the transcript: claude-agent-acp emits no
+  // `in_progress`, and its terminal `completed`/`failed` updates are unreliable
+  // (measured: dangling tool calls survive 1–27 later turns — mostly lost
+  // terminals, not live work), so a tool-in-flight heuristic showed false "working"
+  // on long-finished sessions. A tool only ever runs while the prompt is in flight,
+  // so `busy` already covers it; nothing reliable exists to add between turns.
+  const turnWorking = busy;
   // A dead session is still sendable: sending resumes it (the daemon revives
   // the agent via session/load — see supervisor.rs). Matches Zed, where a
   // thread is never permanently unusable just because its agent process ended.
