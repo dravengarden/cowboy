@@ -1233,7 +1233,6 @@ export function Transcript({
   topInset,
   bottomInset,
   onScrollableChange,
-  awaitingUser,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -1259,11 +1258,6 @@ export function Transcript({
    *  scrolling UNDER it mid-scroll. column-reverse → padding-bottom is the
    *  visual bottom (newest side). Undefined = none. */
   bottomInset?: string | undefined;
-  /** The session's `awaiting_user` flag — the agent ended its turn asking for
-   *  input. When set, the "agent is working" trailing indicator is suppressed
-   *  even if a tool is still settling, so it never shows alongside the
-   *  "Waiting for your reply" overlay (they are mutually exclusive states). */
-  awaitingUser: boolean;
   /** Notified when the scroll container's content starts/stops OVERFLOWING the
    *  viewport (i.e. there's real content that lives behind the floating composer
    *  glass). The composer slab uses it to show its "floating above the scroll"
@@ -1290,36 +1284,19 @@ export function Transcript({
   // lives in the COMPOSER (sharing the floating slot + mutual-exclusivity with the
   // turn-status pill). The timeline here keeps only a record marker (PermissionCard).
   const busy = status === "busy";
-  const dead =
-    status === "exited" || status === "crashed" || status === "interrupted";
-  // "Working" is broader than the raw `busy` status: a tool call still in flight
-  // means the agent is mid-work even when the session status momentarily reads
-  // "running". The daemon flips status → running the instant a turn's prompt()
-  // resolves, and reconnects re-broadcast status before replaying the timeline,
-  // so a pending/in_progress tool can coexist with a non-busy status for a beat.
-  // Keying the indicator off status alone made it blink out then (the reported
-  // bug). `derive` settles tools to terminal on turn_end, so this can't latch on
-  // a finished turn; the `dead` guard stops it latching on a crashed one.
-  const toolInFlight =
-    !dead &&
-    items.some(
-      (it) =>
-        it.kind === "tool" &&
-        (it.status === "pending" || it.status === "in_progress"),
-    );
-  // Require a live connection: while the WS is down (daemon restart / deploy /
-  // network drop) the last-known status is stale and the agent is unreachable, so
-  // a perpetual "thinking" spinner is wrong (the reported bug — it spun for the
-  // whole restart). The connection banner conveys the disconnect instead; on
-  // reconnect the daemon re-broadcasts the real status (Exited after a restart).
-  // `toolInFlight` bridges the brief status-race where the daemon flips status →
-  // running a beat before the turn's `turn_end` settles the last tool. But once
-  // the agent is AWAITING the user (it ended its turn asking a question), it is
-  // NOT working — a straggler/abandoned tool (e.g. a rate-limited sub-agent left
-  // a task `pending`) must not keep the "Beboppin'…" spinner alive next to the
-  // "Waiting for your reply" overlay (the reported "状态不对"). So the in-flight
-  // bridge only counts when NOT awaiting; `busy` (a genuinely live turn) always does.
-  const working = connected && (busy || (toolInFlight && !awaitingUser));
+  // "Working" == the ACP turn in flight (`busy`) — the SAME predicate the composer
+  // and the status dot use, mirroring Zed's `Generating == running_turn.is_some()`.
+  // Deliberately NOT keyed off tool-call status: a `pending`/`in_progress` tool is
+  // an unreliable signal — agents never emit `in_progress`, and a dangling `pending`
+  // (a lost tool terminal, or a backgrounded sub-agent) survives many later turns,
+  // so keying off it latched the "Actioning…" spinner on a FINISHED turn (the
+  // reported bug: a green idle dot beside a live spinner). `busy` spans the whole
+  // turn — every tool call included, since the ACP `session/prompt` request stays
+  // in flight until turn end — so it can't blink out between tools. Require a live
+  // connection: while the WS is down the last-known status is stale, so a perpetual
+  // spinner is wrong; the ConnectionBanner conveys the disconnect and reconnect
+  // re-broadcasts the real status.
+  const working = connected && busy;
   // No messages yet + a LIVE session (a freshly created session is Running-idle,
   // waiting for the first prompt) → show the "send a message to start" empty state
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
