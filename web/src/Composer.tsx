@@ -32,6 +32,7 @@ import {
   Popover,
   Snackbar,
   Stack,
+  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -59,8 +60,6 @@ import {
   Refresh,
   Schedule,
   Send,
-  Pause,
-  PlayArrow,
   Stop,
   SwapVert,
   Tune,
@@ -3284,8 +3283,6 @@ export function AutoScrollAndStop({
   dense?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
-  const { sessions } = useStore();
-  const paused = sessions.find((s) => s.id === sessionId)?.paused ?? false;
   const [cancelOpen, setCancelOpen] = useState(false);
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
@@ -3310,24 +3307,6 @@ export function AutoScrollAndStop({
           }}
         >
           <VerticalAlignBottom fontSize={size} />
-        </IconButton>
-      </Tooltip>
-      {/* Queue pause/resume — a SESSION-level control, orthogonal to what's queued:
-          togglable any time (even with an empty queue) to pre-arm the hold, so a
-          later queued message OR a fired scheduled draft lands held instead of
-          auto-running. Holds only the drain — a running turn still finishes.
-          Always shown (no reflow); warning-tinted while held. */}
-      <Tooltip title={paused ? "Resume queue" : "Pause queue"}>
-        <IconButton
-          size={size}
-          aria-label={paused ? "resume queue" : "pause queue"}
-          color={paused ? "warning" : "default"}
-          onClick={(): void => {
-            haptic();
-            setPaused(sessionId, !paused);
-          }}
-        >
-          {paused ? <PlayArrow fontSize={size} /> : <Pause fontSize={size} />}
         </IconButton>
       </Tooltip>
       {/* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —
@@ -3464,6 +3443,7 @@ function ComposerSheet({
   return (
     <Sheet open={open} onClose={onClose} forceSheet={navbarAtBottom}>
       {session && <SessionInfoSection session={session} />}
+      {session && <QueueSection session={session} />}
       {(loading || options.length > 0) && (
         <>
           <Divider />
@@ -3588,6 +3568,57 @@ function SessionInfoSection({
           />
         ))}
       </List>
+    </>
+  );
+}
+
+// The queue pause/resume control. Session-level and orthogonal to what's queued,
+// but infrequently used — so it lives in the session sheet (not the always-visible
+// navbar). Togglable any time (even with an empty queue): pre-arm the hold and a
+// later queued message OR a fired scheduled draft lands held for review instead
+// of auto-running. Holds only the drain — a running turn still finishes.
+function QueueSection({
+  session,
+}: {
+  session: SessionMeta;
+}): React.JSX.Element {
+  const paused = session.paused ?? false;
+  return (
+    <>
+      <Divider />
+      <Box sx={{ py: 1.5 }}>
+        <Typography
+          variant="overline"
+          color="text.secondary"
+          sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
+        >
+          Queue
+        </Typography>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={2}
+          sx={{ mt: 0.5 }}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2">Pause queue</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Hold the queue: a running turn still finishes, but queued and
+              scheduled sends wait until you resume.
+            </Typography>
+          </Box>
+          <Switch
+            edge="end"
+            checked={paused}
+            color="warning"
+            inputProps={{ "aria-label": "pause queue" }}
+            onChange={(e): void => {
+              haptic();
+              setPaused(session.id, e.target.checked);
+            }}
+          />
+        </Stack>
+      </Box>
     </>
   );
 }
