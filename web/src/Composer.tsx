@@ -144,6 +144,7 @@ import type {
   AcpUpdate,
   AvailableCommand,
   ConfigOption,
+  Delivery,
   DraftSchedule,
   Envelope,
   SessionMeta,
@@ -1007,13 +1008,13 @@ export function Composer({
   const [scheduleTarget, setScheduleTarget] = useState<
     { id: string | undefined; initial: DraftSchedule | null } | null
   >(null);
-  function commitSchedule(fireAtMs: number): void {
+  function commitSchedule(fireAtMs: number, delivery: Delivery): void {
     if (scheduleTarget?.id !== undefined) {
-      scheduleDraft(sessionId, { id: scheduleTarget.id, fireAtMs });
+      scheduleDraft(sessionId, { id: scheduleTarget.id, fireAtMs, delivery });
       return;
     }
     // Fresh: schedule the composer's content, then clear the input like saveDraft.
-    scheduleDraft(sessionId, { text: text.trimEnd(), attachments, fireAtMs });
+    scheduleDraft(sessionId, { text: text.trimEnd(), attachments, fireAtMs, delivery });
     editorRef.current?.clear();
     setText("");
     setAttachments([]);
@@ -1158,6 +1159,10 @@ export function Composer({
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
+              // With no live queue, the queued panel (which owns the ⏸ toggle) is
+              // absent — surface pause/resume here so a scheduled send can be
+              // parked into a held queue.
+              pauseControl={queue.length === 0}
               // Only offer "move" when there's somewhere to move to.
               onMoveDraft={otherSessions.length > 0
                 ? (id: string): void => setMoveSrcId(id)
@@ -2365,6 +2370,7 @@ function PendingPanel({
   commands,
   onMoveDraft,
   onScheduleDraft,
+  pauseControl,
   unbounded,
 }: {
   kind: "queued" | "draft";
@@ -2374,6 +2380,10 @@ function PendingPanel({
   status: Status;
   /** Agent-advertised `/` commands, threaded into the row's inline editor. */
   commands: () => AvailableCommand[];
+  /** Draft panel only: surface the queue pause/resume toggle here (used when the
+   *  live queue is empty, so a scheduled draft can be set to fire into a held
+   *  queue). Ignored for the queued panel, which always owns the toggle. */
+  pauseControl?: boolean;
   /** Open the "move to another session" picker for a draft (draft kind only).
       Owned by the Composer so it survives this panel unmounting when the last
       draft leaves. Absent → the row's kebab omits the Move action. */
@@ -2405,12 +2415,19 @@ function PendingPanel({
   // like `collapsed`. Per-panel state → drafts and queue toggle independently.
   const [reordering, setReordering] = useState(false);
   const count = items.length;
-  // The manual queue pause holds the QUEUE drain only (drafts never auto-drain),
-  // so the "Paused" badge shows on the queued panel — that's why its messages
-  // aren't advancing. Read live so it tracks the toggle.
+  // The manual queue pause holds the QUEUE drain (drafts never auto-drain). The
+  // ⏸ toggle + "Paused" badge live on the queued panel — but also on the drafts
+  // panel when it's the one surfacing the control (`pauseControl`, set when the
+  // live queue is empty), so a scheduled send can be parked into a held queue.
   const { sessions } = useStore();
-  const queueHeld = kind === "queued" &&
-    (sessions.find((s) => s.id === sessionId)?.paused ?? false);
+  const sessionPaused = sessions.find((s) => s.id === sessionId)?.paused ?? false;
+  const hasScheduled = items.some((m) => m.schedule);
+  // Show the pause toggle where it's meaningful: always on the queued panel;
+  // on the drafts panel only when asked (empty live queue) AND there's a reason
+  // to (a scheduled send that will hit the queue, or the queue is already held).
+  const showPause = kind === "queued" ||
+    (kind === "draft" && (pauseControl ?? false) && (hasScheduled || sessionPaused));
+  const queueHeld = showPause && sessionPaused;
   // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
   // toggle) so a cleared/sent-down panel never sits stuck in an empty mode.
   useEffect(() => {
@@ -2554,11 +2571,12 @@ function PendingPanel({
             onConfirm={(): void => activateAllDrafts(sessionId)}
           />
         )}
-        {/* Pause / Resume the queue drain (queued panel only — drafts never
-            auto-drain). Tap ⏸ to hold the queue: the running turn still finishes,
-            but the next queued message waits until you tap ▶. Warning-tinted while
-            held; the same release is also offered by the "Queue paused" overlay. */}
-        {kind === "queued" && (
+        {/* Pause / Resume the queue drain. Tap ⏸ to hold the queue: the running
+            turn still finishes, but the next queued message waits until you tap ▶.
+            Shown on the queued panel, and on the drafts panel when the live queue
+            is empty (so a scheduled send can be parked into a held queue).
+            Warning-tinted while held. */}
+        {showPause && (
           <Tooltip title={queueHeld ? "Resume queue" : "Pause queue"}>
             <IconButton
               size="small"
@@ -3097,7 +3115,9 @@ function PendingRow({
             color="info"
             variant="outlined"
             icon={<Schedule sx={{ fontSize: 14 }} />}
-            label={fireLabel(message.schedule.fire_at_ms)}
+            label={`${fireLabel(message.schedule.fire_at_ms)} · ${
+              message.schedule.delivery === "front" ? "队首" : "队尾"
+            }`}
             onClick={onSchedule}
             sx={{ mt: 0.5, height: 20, fontSize: 11, "& .MuiChip-label": { px: 0.75 } }}
           />

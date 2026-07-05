@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { Box, Button, Stack, TextField, Typography } from "@mui/material";
 import { Sheet } from "./Sheet";
+import { SegmentedPill } from "./SegmentedPill";
 import { haptic } from "./haptic";
-import type { DraftSchedule } from "./protocol";
+import type { Delivery, DraftSchedule } from "./protocol";
 import { fireLabel, fireRel, parseDtLocal, toDtLocal } from "./scheduleTime";
 
 // The schedule picker: a single custom date+time (one native datetime-local
-// field) plus a live human confirm line. Used both to schedule a fresh draft
-// (from the composer clock) and to reschedule/cancel an existing one (its chip).
-// Delivery is always "queue" (fires into the queue: idle → send now, busy → wait
-// for the current turn) — the server default, no UI toggle. Mobile-first: lives
-// inside cowboy's frosted `Sheet` (content-sized, ≤75dvh).
+// field), a queue-position choice (tail/head), and a live human confirm line.
+// Used both to schedule a fresh draft (from the composer clock) and to
+// reschedule/cancel an existing one (its chip). Both positions wait for a running
+// turn to finish and respect a paused queue — neither ever bypasses the ⏸ hold.
+// Mobile-first: lives inside cowboy's frosted `Sheet` (content-sized, ≤75dvh).
 export function ScheduleSheet({
   open,
   onClose,
@@ -25,15 +26,17 @@ export function ScheduleSheet({
   initial: DraftSchedule | null;
   /** True when editing an existing scheduled draft (shows the "取消定时" action). */
   editing: boolean;
-  onCommit: (fireAtMs: number) => void;
+  onCommit: (fireAtMs: number, delivery: Delivery) => void;
   onUnschedule: () => void;
 }): React.JSX.Element {
   const [value, setValue] = useState("");
+  const [delivery, setDelivery] = useState<Delivery>("back");
 
   // Re-seed each time the sheet opens so a reopen reflects current state.
   useEffect(() => {
     if (!open) return;
     setValue(initial ? toDtLocal(initial.fire_at_ms) : "");
+    setDelivery(initial?.delivery ?? "back");
   }, [open, initial]);
 
   const now = Date.now();
@@ -43,7 +46,7 @@ export function ScheduleSheet({
   const commit = (): void => {
     if (!valid || fireAt === null) return;
     haptic(24);
-    onCommit(fireAt);
+    onCommit(fireAt, delivery);
     onClose();
   };
 
@@ -60,13 +63,35 @@ export function ScheduleSheet({
           onChange={(e): void => setValue(e.target.value)}
         />
 
+        {/* Queue position — both wait for the running turn + respect the pause. */}
+        <Stack spacing={0.75}>
+          <SegmentedPill<Delivery>
+            value={delivery}
+            onChange={(v): void => {
+              haptic(8);
+              setDelivery(v);
+            }}
+            options={[
+              { value: "back", label: "队列后方" },
+              { value: "front", label: "队列前方" },
+            ]}
+            sx={{ alignSelf: "flex-start" }}
+          />
+          <Typography variant="caption" color="text.secondary">
+            {delivery === "back"
+              ? "到点排到队尾：前面排队的消息发完后再发。"
+              : "到点插到队首：先于其他排队消息。"}
+            {" 两者都等当前回合结束、遵守队列暂停。"}
+          </Typography>
+        </Stack>
+
         {/* Live confirm line */}
         <Typography
           variant="body2"
           sx={{ color: valid ? "info.main" : "text.disabled", fontWeight: 600, minHeight: 22 }}
         >
           {valid && fireAt !== null
-            ? `${fireLabel(fireAt)} · ${fireRel(fireAt)}`
+            ? `${fireLabel(fireAt)} · ${delivery === "front" ? "队首" : "队尾"} · ${fireRel(fireAt)}`
             : "选一个未来的时间"}
         </Typography>
 

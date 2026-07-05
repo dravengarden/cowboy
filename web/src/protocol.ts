@@ -159,9 +159,11 @@ export interface WireQueued {
   schedule?: DraftSchedule;
 }
 
-/** How a scheduled draft enters at fire time. `queue` = polite (runs if free,
- *  else waits behind the current turn); `now` = jump ahead past holds. */
-export type Delivery = "queue" | "now";
+/** Where a fired scheduled draft lands in the send-queue. `back` = tail (runs
+ *  after everything queued; default); `front` = head (runs before other queued
+ *  prompts). BOTH wait for a running turn to finish and BOTH respect a paused
+ *  queue — neither bypasses the ⏸ hold. */
+export type Delivery = "back" | "front";
 
 /** A draft's future auto-send instruction. Mirrors src/core.rs `DraftSchedule`. */
 export interface DraftSchedule {

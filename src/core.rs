@@ -317,23 +317,30 @@ pub struct DraftSchedule {
     /// mean "9am tomorrow" without a delay clamp) and armed verbatim — unlike the
     /// agent's `ScheduleWakeup`, this is NOT clamped to the [60s,1h] wakeup band.
     pub fire_at_ms: i64,
-    /// How the prompt enters at fire time: politely queued, or run ASAP.
+    /// Where the prompt lands in the send-queue at fire time: tail (default) or
+    /// head. BOTH always respect a paused queue (a fired draft never bypasses the
+    /// ⏸ hold) and never interrupt a running turn.
     #[serde(default)]
     pub delivery: Delivery,
 }
 
-/// Fire-time delivery mode for a scheduled draft.
+/// Fire-time queue position for a scheduled draft. The two modes differ ONLY in
+/// where the fired prompt lands; both wait for any in-flight turn to finish and
+/// both honour a paused queue (fire → enqueue-and-hold, never bypass).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Delivery {
-    /// Append to the send-queue: runs now if the agent is free, otherwise waits
-    /// behind the current turn and respects a paused queue. Never interrupts.
+    /// Append to the TAIL of the send-queue (default): runs after everything
+    /// already queued. `queue` alias keeps drafts persisted by the first cut
+    /// (which had a queue/now split) deserializing.
     #[default]
-    Queue,
-    /// Jump to the FRONT and drain past a paused/awaiting hold so it runs as soon
-    /// as possible — but still lets an actively-running turn finish first (no
-    /// hard interrupt; nuking a live turn at a scheduled instant is too blunt).
-    Now,
+    #[serde(alias = "queue")]
+    Back,
+    /// Insert at the HEAD of the send-queue: runs before other queued prompts,
+    /// but still lets a live turn finish and still respects the pause. `now` alias
+    /// maps the retired bypass-pause mode onto plain front-insert.
+    #[serde(alias = "now")]
+    Front,
 }
 
 /// A request from the Hub to the background dispatcher task (in `crate::server`)
@@ -3203,18 +3210,64 @@ impl Hub {
         let Some(m) = fired else {
             return;
         };
+        // The draft left the drafts list → refresh the pending panel and the
+        // session list (its next_schedule_ms just changed).
         self.emit_pending(session_id);
         self.broadcast_sessions();
-        let delivery = m.schedule.as_ref().map_or(Delivery::Queue, |sc| sc.delivery);
+
+        let front = m.schedule.as_ref().is_some_and(|sc| sc.delivery == Delivery::Front);
         let cmid = Some(format!("{SCHED_PREFIX}{session_id}-{draft_id}"));
-        match delivery {
-            Delivery::Queue => self.submit(session_id, m.text, m.content, cmid),
-            Delivery::Now => {
-                // Jump to the front (no interrupt), then force the drain past a
-                // paused/awaiting hold so a "run now" schedule actually runs.
-                let _ = self.force_submit(session_id, m.text, m.content, cmid, false);
-                self.drain_now(session_id);
+
+        // Land it in the queue. A scheduled fire ALWAYS respects a paused queue —
+        // it never bypasses the ⏸ hold — and never interrupts a live turn. It
+        // dispatches straight through ONLY when the session is idle, unpaused, and
+        // the queue is empty; otherwise it enqueues (head for Front, tail for Back)
+        // and the normal drain runs it when the queue resumes / the turn ends.
+        let wired = self.inner.dispatch_tx.lock().is_some();
+        let mut dispatch = None;
+        let mut cleared_awaiting = false;
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if let Some(c) = cmid.as_deref() {
+                if s.queue.iter().any(|q| q.cmid.as_deref() == Some(c)) {
+                    return;
+                }
             }
+            // A fired schedule is the user's pre-committed "reply" → clear any
+            // awaiting-user hold so it isn't stranded behind that widget. (Pause is
+            // a separate, deliberate hold and is NOT cleared here.)
+            if s.meta.awaiting_user || s.meta.done {
+                s.meta.awaiting_user = false;
+                s.meta.done = false;
+                cleared_awaiting = true;
+            }
+            if wired && !s.meta.paused && Self::ready(s, true) && s.queue.is_empty() {
+                s.in_flight = true;
+                dispatch = Some(DispatchReq {
+                    session_id: session_id.to_owned(),
+                    text: m.text,
+                    content: m.content,
+                    cmid,
+                });
+            } else {
+                let id = self.next_qid();
+                let msg = QueuedMessage { id, text: m.text, content: m.content, cmid, schedule: None };
+                if front {
+                    s.queue.insert(0, msg);
+                } else {
+                    s.queue.push(msg);
+                }
+            }
+        }
+        if cleared_awaiting {
+            self.broadcast_sessions();
+        }
+        match dispatch {
+            Some(req) => self.send_dispatch(req),
+            None => self.emit_pending(session_id),
         }
     }
 
