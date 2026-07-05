@@ -664,6 +664,7 @@ async fn run_session(
                 let auto_resumed = cmid.as_deref().is_some_and(|c| {
                     c.starts_with(crate::core::AUTO_CONTINUE_PREFIX)
                         || c.starts_with(crate::scheduler::WAKEUP_PREFIX)
+                        || c.starts_with(crate::core::SCHED_PREFIX)
                 });
                 for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);

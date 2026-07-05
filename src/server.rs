@@ -153,6 +153,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             Err(e) => tracing::warn!(error = %e, "loading scheduled wakeups (skipping re-arm)"),
         }
     }
+    // Re-arm user-scheduled DRAFTS across the restart. These persist inside the
+    // restored sessions' drafts jsonb (not a separate table), so re-arm scans the
+    // now-restored in-memory sessions. An overdue one fires immediately (catch-up).
+    hub.rearm_scheduled_drafts();
 
     // Headless auto-resume. A turn cut off by THIS restart had its continuation
     // enqueued + the session marked Interrupted during `hub.restore` above — but
@@ -1261,6 +1265,8 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         | Inbound::ActivateDraft { session_id, .. }
         | Inbound::ActivateAllDrafts { session_id }
         | Inbound::MoveDraft { session_id, .. }
+        | Inbound::ScheduleDraft { session_id, .. }
+        | Inbound::UnscheduleDraft { session_id, .. }
         | Inbound::ReorderQueue { session_id, .. }
         | Inbound::ReorderDrafts { session_id, .. }
         | Inbound::RemoveJudgeRun { session_id, .. }
@@ -1618,6 +1624,24 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             to_session,
         } => {
             state.hub.move_draft(&session_id, &id, &to_session);
+            Ok(())
+        }
+        Inbound::ScheduleDraft {
+            session_id,
+            id,
+            cmid,
+            text,
+            content,
+            fire_at_ms,
+            delivery,
+        } => {
+            state
+                .hub
+                .schedule_draft(&session_id, id, cmid, text, content, fire_at_ms, delivery);
+            Ok(())
+        }
+        Inbound::UnscheduleDraft { session_id, id } => {
+            state.hub.unschedule_draft(&session_id, &id);
             Ok(())
         }
         Inbound::ReorderSessions { order } => {

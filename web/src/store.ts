@@ -25,6 +25,8 @@ import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import type {
   ConfigOption,
   ContentBlock,
+  Delivery,
+  DraftSchedule,
   Envelope,
   Inbound,
   InferenceProviderView,
@@ -79,6 +81,9 @@ export interface QueuedMessage {
    *  (still unconfirmed past the delay → gradient shimmer), `failed` (WS down /
    *  timed out → red + retry). A confirmed server row carries no status. */
   status?: "pending" | "sending" | "failed";
+  /** Present only on a DRAFT with a future fire time — the server auto-activates
+   *  it then. Drives the draft-row clock chip. Absent on plain drafts. */
+  schedule?: DraftSchedule;
 }
 
 /** Result of a dev inference probe (Info sheet "Test"). */
@@ -277,6 +282,7 @@ function fromWire(list: WireQueued[]): QueuedMessage[] {
     // Carried so an optimistic row can reconcile against its confirmed twin by
     // id. `?? undefined` keeps `exactOptionalPropertyTypes` happy.
     ...(m.cmid !== undefined && { cmid: m.cmid }),
+    ...(m.schedule !== undefined && { schedule: m.schedule }),
   }));
 }
 
@@ -1473,6 +1479,32 @@ export function activateDraft(sessionId: string, id: string): void {
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
 export function activateAllDrafts(sessionId: string): void {
   send({ type: "activate_all_drafts", session_id: sessionId });
+}
+
+// Give a draft a future fire time (or reschedule one). `id` targets an existing
+// draft; omit it to CREATE a scheduled draft from the composer's content (a fresh
+// cmid dedups a retry). The server auto-activates it at `fireAtMs` — fires even
+// with every client offline. A plain command: the server's queue patch reflects
+// the new schedule (no optimistic add needed for this deliberate, rare action).
+export function scheduleDraft(
+  sessionId: string,
+  opts: { id?: string; text?: string; attachments?: Attachment[]; fireAtMs: number; delivery: Delivery },
+): void {
+  const { id, text = "", attachments = [], fireAtMs, delivery } = opts;
+  send({
+    type: "schedule_draft",
+    session_id: sessionId,
+    ...(id !== undefined ? { id } : { cmid: newCmid() }),
+    text: text.trimEnd(),
+    content: contentOf(text.trimEnd(), attachments),
+    fire_at_ms: fireAtMs,
+    delivery,
+  });
+}
+
+// Strip the schedule off a draft (it stays a plain parked draft).
+export function unscheduleDraft(sessionId: string, id: string): void {
+  send({ type: "unschedule_draft", session_id: sessionId, id });
 }
 
 // Move a queued prompt back to drafts.

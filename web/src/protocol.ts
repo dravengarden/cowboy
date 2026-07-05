@@ -64,6 +64,9 @@ export interface SessionMeta {
    *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
   context_used?: number;
   context_size?: number;
+  /** Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
+   *  absent if none. Drives the session-row clock badge. Transient. */
+  next_schedule_ms?: number;
 }
 
 // A serialized ACP SessionUpdate. Internally tagged on `sessionUpdate`.
@@ -151,6 +154,20 @@ export interface WireQueued {
   /** Client message id, round-tripped so the originating client can reconcile
    *  its optimistic row by id (never text). Absent for bridge/API-staged items. */
   cmid?: string;
+  /** Present only on a DRAFT with a future fire time — the server auto-activates
+   *  it then. Absent on plain drafts / queued items. Mirrors src/core.rs. */
+  schedule?: DraftSchedule;
+}
+
+/** How a scheduled draft enters at fire time. `queue` = polite (runs if free,
+ *  else waits behind the current turn); `now` = jump ahead past holds. */
+export type Delivery = "queue" | "now";
+
+/** A draft's future auto-send instruction. Mirrors src/core.rs `DraftSchedule`. */
+export interface DraftSchedule {
+  /** Absolute epoch-ms fire time. */
+  fire_at_ms: number;
+  delivery: Delivery;
 }
 
 export type Outbound =
@@ -327,6 +344,20 @@ export type Inbound =
   | { type: "clear_drafts"; session_id: string }
   | { type: "activate_draft"; session_id: string; id: string }
   | { type: "activate_all_drafts"; session_id: string }
+  // Attach/replace a future fire time on a draft (creates it if id/cmid match
+  // nothing). The server auto-activates it at fire_at_ms — fires even offline.
+  | {
+      type: "schedule_draft";
+      session_id: string;
+      id?: string;
+      cmid?: string;
+      text?: string;
+      content?: ContentBlock[];
+      fire_at_ms: number;
+      delivery?: Delivery;
+    }
+  // Strip the schedule off a draft (it stays a plain parked draft).
+  | { type: "unschedule_draft"; session_id: string; id: string }
   // Move a draft to another session's drafts (the "wrong session" fix).
   | { type: "move_draft"; session_id: string; id: string; to_session: string }
   // Drag-to-arrange (server-authoritative, synced). `order` is the full list of

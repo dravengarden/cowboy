@@ -46,11 +46,41 @@ pub enum ScheduleCmd {
     },
     /// A human turn arrived → reset that session's consecutive-fire guard.
     HumanTurn { session_id: String },
+    /// Arm (replace) a user-scheduled DRAFT's timer. Distinct from `Arm`: a
+    /// session can hold many scheduled drafts (keyed by draft id), each fires
+    /// once by activating the draft (see `Hub::fire_scheduled_draft`), and the
+    /// absolute `fire_at_ms` is NOT clamped to the wakeup band.
+    ArmDraft {
+        session_id: String,
+        draft_id: String,
+        fire_at_ms: i64,
+    },
+    /// Cancel a scheduled draft's timer (unscheduled / removed / activated).
+    CancelDraft {
+        session_id: String,
+        draft_id: String,
+    },
+}
+
+/// Identity of a pending timer. Wakeups are one-per-session (latest wins, the
+/// `/loop` re-arms each turn); scheduled drafts are one-per-draft.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Key {
+    Wakeup(String),
+    Draft(String, String),
+}
+
+/// What a fired timer does.
+enum Action {
+    /// Fire the agent's wakeup prompt as its own turn (runaway-guarded).
+    Wakeup { session_id: String, prompt: String },
+    /// Activate a user-scheduled draft (one-shot, not guarded).
+    Draft { session_id: String, draft_id: String },
 }
 
 struct Pending {
     fire_at_ms: i64,
-    prompt: String,
+    action: Action,
 }
 
 /// Absolute fire time (epoch ms) for a `delaySeconds`, clamped to the tool's
@@ -71,8 +101,8 @@ fn now_ms() -> i64 {
 /// Background task: own the pending-wakeup table and fire due ones via
 /// `Hub::submit`. Returns when the command channel closes (Hub dropped).
 pub async fn run_scheduler(hub: Hub, mut rx: mpsc::UnboundedReceiver<ScheduleCmd>) {
-    let mut pending: HashMap<String, Pending> = HashMap::new();
-    // Consecutive autonomous fires since the last human turn, per session.
+    let mut pending: HashMap<Key, Pending> = HashMap::new();
+    // Consecutive autonomous wakeup fires since the last human turn, per session.
     let mut fires: HashMap<String, u32> = HashMap::new();
     loop {
         let now = now_ms();
@@ -85,10 +115,22 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::UnboundedReceiver<ScheduleCmd
             cmd = rx.recv() => match cmd {
                 None => return,
                 Some(ScheduleCmd::Arm { session_id, fire_at_ms, prompt }) => {
-                    pending.insert(session_id, Pending { fire_at_ms, prompt });
+                    pending.insert(
+                        Key::Wakeup(session_id.clone()),
+                        Pending { fire_at_ms, action: Action::Wakeup { session_id, prompt } },
+                    );
                 }
                 Some(ScheduleCmd::HumanTurn { session_id }) => {
                     fires.remove(&session_id);
+                }
+                Some(ScheduleCmd::ArmDraft { session_id, draft_id, fire_at_ms }) => {
+                    pending.insert(
+                        Key::Draft(session_id.clone(), draft_id.clone()),
+                        Pending { fire_at_ms, action: Action::Draft { session_id, draft_id } },
+                    );
+                }
+                Some(ScheduleCmd::CancelDraft { session_id, draft_id }) => {
+                    pending.remove(&Key::Draft(session_id, draft_id));
                 }
             },
             // Only armed when something is pending; fires the soonest-due batch.
@@ -96,32 +138,45 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::UnboundedReceiver<ScheduleCmd
                 if next_delay.is_some() =>
             {
                 let now = now_ms();
-                let due: Vec<String> = pending
+                let due: Vec<Key> = pending
                     .iter()
                     .filter(|(_, p)| p.fire_at_ms <= now)
-                    .map(|(s, _)| s.clone())
+                    .map(|(k, _)| k.clone())
                     .collect();
-                for sid in due {
-                    let Some(p) = pending.remove(&sid) else { continue };
-                    // Consumed (whether we fire or cap-drop it) → clear the
-                    // persisted record so it can't re-fire on the next restart. A
-                    // re-arm during the fired turn re-persists a fresh one.
-                    hub.clear_persisted_wakeup(&sid);
-                    let n = fires.entry(sid.clone()).or_insert(0);
-                    *n += 1;
-                    if *n > MAX_CONSECUTIVE_FIRES {
-                        tracing::warn!(
-                            session = %sid, fires = *n,
-                            "scheduler: consecutive-wakeup cap hit; dropping (send a message to resume)",
-                        );
-                        continue;
+                for key in due {
+                    let Some(p) = pending.remove(&key) else { continue };
+                    match p.action {
+                        Action::Wakeup { session_id: sid, prompt } => {
+                            // Consumed (fire or cap-drop) → clear the persisted
+                            // record so it can't re-fire on restart. A re-arm during
+                            // the fired turn re-persists a fresh one.
+                            hub.clear_persisted_wakeup(&sid);
+                            let n = fires.entry(sid.clone()).or_insert(0);
+                            *n += 1;
+                            if *n > MAX_CONSECUTIVE_FIRES {
+                                tracing::warn!(
+                                    session = %sid, fires = *n,
+                                    "scheduler: consecutive-wakeup cap hit; dropping (send a message to resume)",
+                                );
+                                continue;
+                            }
+                            tracing::info!(session = %sid, "scheduler: firing scheduled wakeup");
+                            // Own turn: idle → dispatch, busy → queue. The `__wake__`
+                            // cmid tags the echo as a "↻ scheduled wakeup" note.
+                            let cmid = format!("{WAKEUP_PREFIX}{sid}-{now}");
+                            hub.submit(&sid, prompt, Vec::new(), Some(cmid));
+                        }
+                        Action::Draft { session_id: sid, draft_id } => {
+                            // One-shot: activate the parked draft per its delivery.
+                            // Persistence is the draft itself, which the fire removes;
+                            // no runaway guard (a scheduled draft fires exactly once).
+                            tracing::info!(
+                                session = %sid, draft = %draft_id,
+                                "scheduler: firing scheduled draft",
+                            );
+                            hub.fire_scheduled_draft(&sid, &draft_id);
+                        }
                     }
-                    tracing::info!(session = %sid, "scheduler: firing scheduled wakeup");
-                    // Own turn: idle → dispatch immediately, busy → queue behind
-                    // the running turn. The `__wake__` cmid tags the echo so the
-                    // UI shows a "↻ scheduled wakeup" note, not a user bubble.
-                    let cmid = format!("{WAKEUP_PREFIX}{sid}-{now}");
-                    hub.submit(&sid, p.prompt, Vec::new(), Some(cmid));
                 }
             }
         }

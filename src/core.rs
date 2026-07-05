@@ -121,6 +121,11 @@ const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
 /// risk is.) Also read in `acp.rs` to flag the echo as `autoResumed` so the UI
 /// renders it as a continuation note rather than a user bubble.
 pub(crate) const AUTO_CONTINUE_PREFIX: &str = "__cont__";
+/// cmid prefix tagging a fired SCHEDULED DRAFT's turn — a user parked a draft
+/// with a future fire time, and the scheduler auto-submitted it at that time.
+/// Recognized in `acp.rs` (alongside the wakeup/continue prefixes) so the echo
+/// renders as a "↻ scheduled" note rather than a fresh user bubble.
+pub(crate) const SCHED_PREFIX: &str = "__sched__";
 /// Built-in continuation template used when the operator hasn't customized one.
 /// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
 /// one source of truth the revived agent's own store lacks. It MUST self-identify
@@ -267,6 +272,12 @@ pub struct SessionMeta {
     pub context_used: u64,
     #[serde(default)]
     pub context_size: u64,
+    /// Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
+    /// `None` if none are scheduled. Derived from the drafts in `session_list`
+    /// (not stored on the struct proper) so the session-row clock badge can show
+    /// "next fires at …" without shipping every draft to the list. Transient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_schedule_ms: Option<i64>,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -289,6 +300,40 @@ pub struct QueuedMessage {
     /// needs no schema column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmid: Option<String>,
+    /// Present only on a DRAFT that's been given a future fire time — the
+    /// server-side scheduler auto-activates it then (see `Hub::schedule_draft`).
+    /// `None` for a plain draft / any queued message. Rides the same jsonb
+    /// drafts blob (no schema column), so it persists and survives a restart
+    /// (the startup re-arm scans drafts for it). Queue items never carry one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<DraftSchedule>,
+}
+
+/// A draft's future auto-send instruction. Server-controlled (fires even with
+/// every client offline). One-shot — cleared when it fires.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DraftSchedule {
+    /// Absolute epoch-ms fire time. Computed on the client at commit (so it can
+    /// mean "9am tomorrow" without a delay clamp) and armed verbatim — unlike the
+    /// agent's `ScheduleWakeup`, this is NOT clamped to the [60s,1h] wakeup band.
+    pub fire_at_ms: i64,
+    /// How the prompt enters at fire time: politely queued, or run ASAP.
+    #[serde(default)]
+    pub delivery: Delivery,
+}
+
+/// Fire-time delivery mode for a scheduled draft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// Append to the send-queue: runs now if the agent is free, otherwise waits
+    /// behind the current turn and respects a paused queue. Never interrupts.
+    #[default]
+    Queue,
+    /// Jump to the FRONT and drain past a paused/awaiting hold so it runs as soon
+    /// as possible — but still lets an actively-running turn finish first (no
+    /// hard interrupt; nuking a live turn at a scheduled instant is too blunt).
+    Now,
 }
 
 /// A request from the Hub to the background dispatcher task (in `crate::server`)
@@ -641,6 +686,26 @@ pub enum Inbound {
     ActivateDraft { session_id: String, id: String },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },
+    /// Attach/replace a future fire time on a draft (create it if `id`/`cmid`
+    /// match nothing). The server-side scheduler auto-activates it at `fire_at_ms`
+    /// — fires even with every client offline. `text`/`content` overwrite the
+    /// target only when non-empty. See `Hub::schedule_draft`.
+    ScheduleDraft {
+        session_id: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        cmid: Option<String>,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        content: Vec<serde_json::Value>,
+        fire_at_ms: i64,
+        #[serde(default)]
+        delivery: Delivery,
+    },
+    /// Strip the schedule off a draft (it stays a plain parked draft).
+    UnscheduleDraft { session_id: String, id: String },
     /// Move a draft to another session's drafts (the "parked it in the wrong
     /// session" fix). The whole message — text + attachments — relocates to the
     /// END of `to_session`'s drafts. `session_id` is the SOURCE.
@@ -1074,6 +1139,56 @@ impl Hub {
         }
     }
 
+    /// Arm (or replace) a scheduled DRAFT's timer at absolute `fire_at_ms`. The
+    /// draft itself (with its `schedule`) is the persisted record — this only
+    /// drives the in-memory timer, so it's used both for a fresh schedule and
+    /// the startup re-arm (an overdue time fires immediately, catch-up).
+    fn arm_draft_timer(&self, session_id: &str, draft_id: &str, fire_at_ms: i64) {
+        if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
+            let _ = tx.send(crate::scheduler::ScheduleCmd::ArmDraft {
+                session_id: session_id.to_owned(),
+                draft_id: draft_id.to_owned(),
+                fire_at_ms,
+            });
+        }
+    }
+
+    /// Cancel a scheduled draft's timer — called whenever the draft leaves its
+    /// scheduled state (unscheduled, removed, manually activated, moved, cleared)
+    /// so a dropped draft can't still fire. No-op if the scheduler isn't wired.
+    fn cancel_draft_timer(&self, session_id: &str, draft_id: &str) {
+        if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
+            let _ = tx.send(crate::scheduler::ScheduleCmd::CancelDraft {
+                session_id: session_id.to_owned(),
+                draft_id: draft_id.to_owned(),
+            });
+        }
+    }
+
+    /// Re-arm every persisted scheduled draft on startup (absolute fire times, no
+    /// re-persist — they're already in the drafts jsonb). Scans in-memory sessions
+    /// AFTER restore. An already-overdue schedule fires immediately (catch-up for
+    /// downtime), mirroring [`Self::rearm_wakeup`].
+    pub fn rearm_scheduled_drafts(&self) {
+        let arms: Vec<(String, String, i64)> = {
+            let sessions = self.inner.sessions.lock();
+            sessions
+                .values()
+                .flat_map(|s| {
+                    let sid = s.meta.id.clone();
+                    s.drafts.iter().filter_map(move |m| {
+                        m.schedule
+                            .as_ref()
+                            .map(|sc| (sid.clone(), m.id.clone(), sc.fire_at_ms))
+                    })
+                })
+                .collect()
+        };
+        for (sid, did, fire_at_ms) in arms {
+            self.arm_draft_timer(&sid, &did, fire_at_ms);
+        }
+    }
+
     /// Populate the in-memory state from a previously-stored snapshot.
     /// Should be called once at startup, BEFORE any client connects, so the
     /// `Sessions` broadcast on first connect already includes everything.
@@ -1229,7 +1344,19 @@ impl Hub {
         let order = self.inner.order.lock();
         order
             .iter()
-            .filter_map(|id| sessions.get(id).map(|s| s.meta.clone()))
+            .filter_map(|id| {
+                sessions.get(id).map(|s| {
+                    let mut meta = s.meta.clone();
+                    // Surface the soonest scheduled-draft fire so the session-row
+                    // clock badge can show it, without shipping the drafts here.
+                    meta.next_schedule_ms = s
+                        .drafts
+                        .iter()
+                        .filter_map(|m| m.schedule.as_ref().map(|sc| sc.fire_at_ms))
+                        .min();
+                    meta
+                })
+            })
             .collect()
     }
 
@@ -1333,6 +1460,7 @@ impl Hub {
             system,
             context_used: 0,
             context_size: 0,
+            next_schedule_ms: None,
         };
         {
             let mut sessions = self.inner.sessions.lock();
@@ -2021,7 +2149,7 @@ impl Hub {
             // FRONT of the queue: the interrupted turn was running BEFORE anything
             // queued behind it, so its continuation must run first (the queue was
             // *waiting on* that turn), not after the backlog.
-            s.queue.insert(0, QueuedMessage { id, text, content: Vec::new(), cmid: Some(cmid) });
+            s.queue.insert(0, QueuedMessage { id, text, content: Vec::new(), cmid: Some(cmid), schedule: None });
             // A continuation is the system telling the agent to finish its OWN work
             // — never an answer to a question — so it must not sit behind a stale
             // confirm-detect hold. (The death-edge clear above usually handles this;
@@ -2650,7 +2778,7 @@ impl Hub {
                 }
             }
             let id = self.next_qid();
-            s.queue.insert(0, QueuedMessage { id, text, content, cmid });
+            s.queue.insert(0, QueuedMessage { id, text, content, cmid, schedule: None });
         }
         self.emit_pending(session_id);
     }
@@ -2712,6 +2840,7 @@ impl Hub {
                     text,
                     content,
                     cmid,
+                    schedule: None,
                 });
             }
         }
@@ -2773,7 +2902,7 @@ impl Hub {
                 // next; ask the caller to interrupt the in-flight turn only when
                 // this is a force push (not a no-interrupt "jump to front").
                 let id = self.next_qid();
-                s.queue.insert(0, QueuedMessage { id, text, content, cmid });
+                s.queue.insert(0, QueuedMessage { id, text, content, cmid, schedule: None });
                 interrupt = interrupt_on_busy;
             }
         }
@@ -2968,9 +3097,125 @@ impl Hub {
                 text,
                 content,
                 cmid,
+                schedule: None,
             });
         }
         self.emit_pending(session_id);
+    }
+
+    /// Attach (or update) a future fire time on a draft — the user-driven analog
+    /// of the agent's `ScheduleWakeup`. Targets an existing draft by `id`, else
+    /// by `cmid`, else creates a fresh draft carrying the schedule. `text`/
+    /// `content` overwrite the target only when non-empty (a reschedule-in-place
+    /// from the chip passes the current text; a bare time-change can pass empty).
+    /// Persists via the drafts jsonb and arms the server-side timer. Broadcasts
+    /// the session list too so the row clock badge updates promptly.
+    pub fn schedule_draft(
+        &self,
+        session_id: &str,
+        id: Option<String>,
+        cmid: Option<String>,
+        text: String,
+        content: Vec<serde_json::Value>,
+        fire_at_ms: i64,
+        delivery: Delivery,
+    ) {
+        let draft_id = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let pos = id
+                .as_deref()
+                .and_then(|i| s.drafts.iter().position(|m| m.id == i))
+                .or_else(|| {
+                    cmid.as_deref()
+                        .and_then(|c| s.drafts.iter().position(|m| m.cmid.as_deref() == Some(c)))
+                });
+            let schedule = Some(DraftSchedule { fire_at_ms, delivery });
+            match pos {
+                Some(p) => {
+                    let m = &mut s.drafts[p];
+                    if !text.trim().is_empty() || !content.is_empty() {
+                        m.text = text;
+                        m.content = content;
+                    }
+                    m.schedule = schedule;
+                    m.id.clone()
+                }
+                None => {
+                    let did = self.next_qid();
+                    s.drafts.push(QueuedMessage {
+                        id: did.clone(),
+                        text,
+                        content,
+                        cmid,
+                        schedule,
+                    });
+                    did
+                }
+            }
+        };
+        self.emit_pending(session_id);
+        self.broadcast_sessions();
+        self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
+    }
+
+    /// Strip the schedule off a draft, leaving it a plain parked draft, and cancel
+    /// its timer. No-op if the draft is gone or wasn't scheduled.
+    pub fn unschedule_draft(&self, session_id: &str, id: &str) {
+        let cleared = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            match s.drafts.iter_mut().find(|m| m.id == id) {
+                Some(m) if m.schedule.is_some() => {
+                    m.schedule = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if cleared {
+            self.emit_pending(session_id);
+            self.broadcast_sessions();
+            self.cancel_draft_timer(session_id, id);
+        }
+    }
+
+    /// Fire a scheduled draft (called by the scheduler at its fire time): remove
+    /// it from drafts and submit it per its `delivery`. Tagged with `SCHED_PREFIX`
+    /// so the echo renders as a "↻ scheduled" note. No-op if the draft is gone
+    /// (the user removed/activated it before it fired — the timer was cancelled,
+    /// but a fire already in-flight is harmless here).
+    pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
+        let fired = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.drafts
+                .iter()
+                .position(|m| m.id == draft_id)
+                .map(|pos| s.drafts.remove(pos))
+        };
+        let Some(m) = fired else {
+            return;
+        };
+        self.emit_pending(session_id);
+        self.broadcast_sessions();
+        let delivery = m.schedule.as_ref().map_or(Delivery::Queue, |sc| sc.delivery);
+        let cmid = Some(format!("{SCHED_PREFIX}{session_id}-{draft_id}"));
+        match delivery {
+            Delivery::Queue => self.submit(session_id, m.text, m.content, cmid),
+            Delivery::Now => {
+                // Jump to the front (no interrupt), then force the drain past a
+                // paused/awaiting hold so a "run now" schedule actually runs.
+                let _ = self.force_submit(session_id, m.text, m.content, cmid, false);
+                self.drain_now(session_id);
+            }
+        }
     }
 
     /// Edit a draft in place. Empty text + content removes it.
@@ -2981,31 +3226,46 @@ impl Hub {
         text: String,
         content: Vec<serde_json::Value>,
     ) {
-        {
+        let unscheduled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             if text.trim().is_empty() && content.is_empty() {
+                let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
                 s.drafts.retain(|m| m.id != id);
+                had
             } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
                 m.text = text;
                 m.content = content;
+                false
+            } else {
+                false
             }
-        }
+        };
         self.emit_pending(session_id);
+        if unscheduled {
+            self.cancel_draft_timer(session_id, id);
+            self.broadcast_sessions();
+        }
     }
 
     /// Drop one draft.
     pub fn remove_draft(&self, session_id: &str, id: &str) {
-        {
+        let unscheduled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
             s.drafts.retain(|m| m.id != id);
-        }
+            had
+        };
         self.emit_pending(session_id);
+        if unscheduled {
+            self.cancel_draft_timer(session_id, id);
+            self.broadcast_sessions();
+        }
     }
 
     /// Move a draft out of `from`'s draft list and onto the END of `to`'s. The
@@ -3017,7 +3277,7 @@ impl Hub {
         if from == to {
             return;
         }
-        {
+        let scheduled = {
             let mut sessions = self.inner.sessions.lock();
             // Take the draft out of `from`, but only if `to` exists to receive it.
             let Some(msg) = (if sessions.contains_key(to) {
@@ -3032,26 +3292,48 @@ impl Hub {
             }) else {
                 return;
             };
+            let scheduled = msg.schedule.as_ref().map(|sc| sc.fire_at_ms);
             // `to` existed at the top of this lock and we still hold it, so this
             // can't miss; the `if let` just avoids an unwrap.
             if let Some(dst) = sessions.get_mut(to) {
                 dst.drafts.push(msg);
             }
-        }
+            scheduled
+        };
         self.emit_pending(from);
         self.emit_pending(to);
+        // A scheduled draft keeps its fire time across the move — retarget the
+        // timer from the source session to the destination (same draft id).
+        if let Some(fire_at_ms) = scheduled {
+            self.cancel_draft_timer(from, id);
+            self.arm_draft_timer(to, id, fire_at_ms);
+            self.broadcast_sessions();
+        }
     }
 
     /// Drop a session's whole draft list.
     pub fn clear_drafts(&self, session_id: &str) {
-        {
+        let scheduled_ids: Vec<String> = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let ids = s
+                .drafts
+                .iter()
+                .filter(|m| m.schedule.is_some())
+                .map(|m| m.id.clone())
+                .collect();
             s.drafts.clear();
-        }
+            ids
+        };
         self.emit_pending(session_id);
+        for did in &scheduled_ids {
+            self.cancel_draft_timer(session_id, did);
+        }
+        if !scheduled_ids.is_empty() {
+            self.broadcast_sessions();
+        }
     }
 
     /// Activate one draft: remove it from drafts and submit it (send-or-queue).
@@ -3068,6 +3350,11 @@ impl Hub {
         };
         if let Some(m) = msg {
             self.emit_pending(session_id);
+            // Manually sending a scheduled draft now → cancel its pending fire.
+            if m.schedule.is_some() {
+                self.cancel_draft_timer(session_id, id);
+                self.broadcast_sessions();
+            }
             // Activating a draft is a server-side move, not a fresh client
             // optimistic send — no cmid.
             self.submit(session_id, m.text, m.content, None);
@@ -3087,10 +3374,19 @@ impl Hub {
             return;
         }
         self.emit_pending(session_id);
+        let mut had_scheduled = false;
         for m in msgs {
+            // Manually sending a scheduled draft now → cancel its pending fire.
+            if m.schedule.is_some() {
+                self.cancel_draft_timer(session_id, &m.id);
+                had_scheduled = true;
+            }
             // Activating a draft is a server-side move, not a fresh client
             // optimistic send — no cmid.
             self.submit(session_id, m.text, m.content, None);
+        }
+        if had_scheduled {
+            self.broadcast_sessions();
         }
     }
 

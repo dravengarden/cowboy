@@ -12,6 +12,7 @@ import {
   alpha,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -56,6 +57,7 @@ import {
   MoreVert,
   OpenInFull,
   Refresh,
+  Schedule,
   Send,
   Pause,
   PlayArrow,
@@ -121,13 +123,17 @@ import {
   reorderQueue,
   requestSendQueued,
   retryQueued,
+  scheduleDraft,
   send,
   setPaused,
   setQueueEditing,
   submitPrompt,
+  unscheduleDraft,
   useInferenceConfig,
   useStore,
 } from "./store";
+import { ScheduleSheet } from "./ScheduleSheet";
+import { fireLabel } from "./scheduleTime";
 import { haptic } from "./haptic";
 import { useSortable } from "./useSortable";
 import { getDraft, setDraft } from "./draftStore";
@@ -138,6 +144,8 @@ import type {
   AcpUpdate,
   AvailableCommand,
   ConfigOption,
+  Delivery,
+  DraftSchedule,
   Envelope,
   SessionMeta,
   Status,
@@ -994,6 +1002,24 @@ export function Composer({
     setAttachments([]);
   }
 
+  // The schedule picker: `null` = closed; `{id}` present = editing an existing
+  // scheduled draft (reschedule/cancel); `{id: undefined}` = scheduling the
+  // composer's CURRENT content into a fresh draft.
+  const [scheduleTarget, setScheduleTarget] = useState<
+    { id: string | undefined; initial: DraftSchedule | null } | null
+  >(null);
+  function commitSchedule(fireAtMs: number, delivery: Delivery): void {
+    if (scheduleTarget?.id !== undefined) {
+      scheduleDraft(sessionId, { id: scheduleTarget.id, fireAtMs, delivery });
+      return;
+    }
+    // Fresh: schedule the composer's content, then clear the input like saveDraft.
+    scheduleDraft(sessionId, { text: text.trimEnd(), attachments, fireAtMs, delivery });
+    editorRef.current?.clear();
+    setText("");
+    setAttachments([]);
+  }
+
   return (
     <Box
       sx={{
@@ -1081,6 +1107,16 @@ export function Composer({
           onConfigure={onOpenInfo}
         />
       )}
+      <ScheduleSheet
+        open={scheduleTarget !== null}
+        onClose={(): void => setScheduleTarget(null)}
+        initial={scheduleTarget?.initial ?? null}
+        editing={scheduleTarget?.id !== undefined}
+        onCommit={commitSchedule}
+        onUnschedule={(): void => {
+          if (scheduleTarget?.id !== undefined) unscheduleDraft(sessionId, scheduleTarget.id);
+        }}
+      />
       {
         /* Pending stack (queue + drafts) in ONE bounded scroll region so they
           scroll TOGETHER and never strand the editor. Before, each panel had its
@@ -1127,6 +1163,11 @@ export function Composer({
               onMoveDraft={otherSessions.length > 0
                 ? (id: string): void => setMoveSrcId(id)
                 : undefined}
+              onScheduleDraft={(id: string): void =>
+                setScheduleTarget({
+                  id,
+                  initial: draftList.find((d) => d.id === id)?.schedule ?? null,
+                })}
             />
           )}
         </Box>
@@ -1563,6 +1604,20 @@ export function Composer({
               onClick={saveDraft}
             >
               <EditNoteOutlined fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        {/* Schedule the current content: park it as a draft that the SERVER
+            auto-sends at a future time (fires even with every client offline). */}
+        <Tooltip title="定时发送">
+          <span>
+            <IconButton
+              aria-label="schedule send"
+              disabled={!sendable}
+              sx={TOOLBAR_ICON_BTN}
+              onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
+            >
+              <Schedule fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
@@ -2310,6 +2365,7 @@ function PendingPanel({
   status,
   commands,
   onMoveDraft,
+  onScheduleDraft,
   unbounded,
 }: {
   kind: "queued" | "draft";
@@ -2323,6 +2379,9 @@ function PendingPanel({
       Owned by the Composer so it survives this panel unmounting when the last
       draft leaves. Absent → the row's kebab omits the Move action. */
   onMoveDraft?: ((id: string) => void) | undefined;
+  /** Open the schedule picker for a draft (draft kind only) — set/reschedule/
+      cancel its future auto-send. Owned by the Composer (survives unmount). */
+  onScheduleDraft?: ((id: string) => void) | undefined;
   /** Rendered inside the composer's SHARED queue+drafts scroll region, so this
    *  panel must NOT apply its own maxHeight/overflow — nesting scrollers would
    *  trap the gesture. The outer region owns the cap + scroll. */
@@ -2606,6 +2665,9 @@ function PendingPanel({
                         onMove={onMoveDraft
                           ? (): void => onMoveDraft(m.id)
                           : undefined}
+                        onSchedule={onScheduleDraft
+                          ? (): void => onScheduleDraft(m.id)
+                          : undefined}
                       />
                     )}
                 </Box>
@@ -2644,6 +2706,7 @@ function PendingRow({
   onEdit,
   onEditDone,
   onMove,
+  onSchedule,
 }: {
   kind: "queued" | "draft";
   sessionId: string;
@@ -2655,6 +2718,9 @@ function PendingRow({
   onEditDone: () => void;
   /** Open the move-to-another-session picker for this row (draft kind only). */
   onMove?: (() => void) | undefined;
+  /** Open the schedule picker for this row (draft kind only) — set/reschedule
+   *  its future auto-send. Absent → the row omits the schedule chip + action. */
+  onSchedule?: (() => void) | undefined;
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
   // Per-row kebab (⋮) anchor — holds the draft's secondary actions (Edit / Move
@@ -2923,6 +2989,14 @@ function PendingRow({
         icon: <EditOutlined fontSize="small" />,
         onClick: onEdit,
       },
+      ...(onSchedule
+        ? [{
+          key: "schedule",
+          label: message.schedule ? "改期 / 取消定时…" : "定时发送…",
+          icon: <Schedule fontSize="small" />,
+          onClick: onSchedule,
+        }]
+        : []),
       ...(onMove
         ? [{
           key: "move",
@@ -3014,6 +3088,22 @@ function PendingRow({
         )}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
+        )}
+        {/* Scheduled-draft badge: a calm info chip showing when it auto-fires;
+            tap to reschedule/cancel. Info (blue), never accent/red — a pending
+            schedule is a notice, not a failure (conventions/ui.md §4). */}
+        {message.schedule && (
+          <Chip
+            size="small"
+            color="info"
+            variant="outlined"
+            icon={<Schedule sx={{ fontSize: 14 }} />}
+            label={`${fireLabel(message.schedule.fire_at_ms)} · ${
+              message.schedule.delivery === "now" ? "立即" : "排队"
+            }`}
+            onClick={onSchedule}
+            sx={{ mt: 0.5, height: 20, fontSize: 11, "& .MuiChip-label": { px: 0.75 } }}
+          />
         )}
       </Box>
       <Stack direction="row" alignItems="center" sx={{ flexShrink: 0 }}>

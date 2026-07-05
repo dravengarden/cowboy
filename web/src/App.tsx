@@ -44,6 +44,7 @@ import {
     InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
+    Schedule,
     Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { AutoScrollAndStop, Composer, SessionControls } from "./Composer";
@@ -102,6 +103,7 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { SegmentedPill } from "./SegmentedPill";
+import { fireLabel, fireRel } from "./scheduleTime";
 import { ConfirmSendModal } from "./ConfirmSendModal";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
@@ -394,6 +396,20 @@ function AutoResumeBadge({
     );
 }
 
+// Scheduled-draft indicator: shown when a session has ≥1 draft with a future
+// fire time (`next_schedule_ms` = the soonest). A calm clock glyph in info blue
+// (a pending schedule is a notice, not a status/failure — conventions/ui.md §4),
+// orthogonal to StatusDot, mirroring AutoResumeBadge. Tooltip spells out when.
+function ScheduleBadge({ meta }: { meta: SessionMeta }): React.JSX.Element | null {
+    const ms = meta.next_schedule_ms;
+    if (ms === undefined) return null;
+    return (
+        <Tooltip title={`定时发送 · ${fireLabel(ms)}（${fireRel(ms)}）`} enterDelay={300}>
+            <Schedule sx={{ fontSize: 15, flexShrink: 0, color: "info.main" }} />
+        </Tooltip>
+    );
+}
+
 function originColor(
     o: SessionOrigin | undefined,
 ): "primary" | "secondary" | "default" {
@@ -533,6 +549,7 @@ function SessionList({
                                         }}
                                     />
                                     <AutoResumeBadge meta={s} defaultOn={autoResumeDefault} />
+                                    <ScheduleBadge meta={s} />
                                 </Stack>
                             }
                             secondary={s.cwd}
