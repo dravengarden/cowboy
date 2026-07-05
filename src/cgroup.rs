@@ -47,19 +47,6 @@ pub fn create(session_id: &str) -> Option<PathBuf> {
     Some(dir)
 }
 
-/// Read the PIDs currently in an agent's leaf cgroup (`cgroup.procs`), or an
-/// empty vec if the cgroup is gone / unreadable. `cgroup.procs` lists process
-/// leaders (TGIDs), one per line — NOT threads — which is exactly the grain the
-/// proc-watcher classifies (a spawned background command is a new TGID; the
-/// agent's own threads share its TGID and don't show up separately).
-#[must_use]
-pub fn read_procs(dir: &Path) -> Vec<u32> {
-    let Ok(raw) = std::fs::read_to_string(dir.join("cgroup.procs")) else {
-        return Vec::new();
-    };
-    raw.lines().filter_map(|l| l.trim().parse().ok()).collect()
-}
-
 /// Move a freshly-spawned agent PID — and thus every process it later forks —
 /// into the agent's cgroup. Fail-open. Call this right after spawn, before the
 /// agent has had a chance to fork its own children, so the whole future subtree

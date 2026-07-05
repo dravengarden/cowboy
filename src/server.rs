@@ -137,11 +137,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let (sched_tx, sched_rx) = mpsc::unbounded_channel::<crate::scheduler::ScheduleCmd>();
     hub.set_scheduler_tx(sched_tx);
     tokio::spawn(crate::scheduler::run_scheduler(hub.clone(), sched_rx));
-    // Watch each agent's cgroup for background processes still running between
-    // turns (a `run_in_background` build the agent ended its turn to wait on),
-    // which ACP can't signal — keeps the UI from showing "idle/awaiting" while
-    // real work runs. See crate::procwatch.
-    tokio::spawn(crate::procwatch::run_proc_watch(hub.clone()));
     // Re-arm wakeups that were pending across this restart; any already overdue
     // fire immediately (catch-up for the downtime).
     if let Some(store) = store.as_ref() {

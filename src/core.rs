@@ -256,16 +256,6 @@ pub struct SessionMeta {
     /// (migration 0010) so it survives a daemon restart. See mnemosyne.
     #[serde(default)]
     pub system: bool,
-    /// True while the agent has a **background process still running between
-    /// turns** — e.g. a `run_in_background` build it ended its turn to wait on.
-    /// ACP gives no signal for this; it's derived by the proc-watcher reading the
-    /// agent's cgroup (see [`crate::procwatch`]). Like `working`, it suppresses
-    /// the "Waiting for your reply" / "Queue paused" overlay (the agent isn't
-    /// idle, it's waiting on its own work) and drives a "background task" widget.
-    /// Transient — never persisted, recomputed live; `serde(default)` covers old
-    /// clients + the restore path.
-    #[serde(default)]
-    pub background_task: bool,
     /// Context-window usage the agent reports over ACP `usage_update`:
     /// `context_used` tokens of a `context_size`-token window (so the UI shows a
     /// "context X% full" ring — see the composer). `0`/`0` = not yet reported.
@@ -1341,7 +1331,6 @@ impl Hub {
             judging: false,
             paused: false,
             system,
-            background_task: false,
             context_used: 0,
             context_size: 0,
         };
@@ -1637,26 +1626,6 @@ impl Hub {
             if !paused {
                 self.try_drain(session_id);
             }
-        }
-    }
-
-    /// Set whether a session has a background process running between turns —
-    /// driven by [`crate::procwatch`] reading the agent's cgroup. Broadcast-only
-    /// (transient, never persisted); no-op if unchanged. Drives the
-    /// "background task" widget and suppresses the idle/awaiting overlay.
-    pub fn set_background_task(&self, session_id: &str, background_task: bool) {
-        let changed = {
-            let mut sessions = self.inner.sessions.lock();
-            match sessions.get_mut(session_id) {
-                Some(s) if s.meta.background_task != background_task => {
-                    s.meta.background_task = background_task;
-                    true
-                }
-                _ => false,
-            }
-        };
-        if changed {
-            self.broadcast_sessions();
         }
     }
 

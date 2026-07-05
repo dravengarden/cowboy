@@ -6,7 +6,6 @@ mod inference;
 mod memory;
 mod skills;
 mod files;
-mod procwatch;
 mod provider;
 mod scheduler;
 mod server;

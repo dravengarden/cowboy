@@ -324,27 +324,19 @@ function statusLabel(s: Status): string {
 // the surrounding chrome).
 function StatusDot({
     status,
-    backgroundTask,
     sx,
 }: {
     status: Status;
-    /** A background process is still running between turns (cgroup-derived; see
-     *  crate::procwatch). The status reads "running" (idle) but the agent isn't
-     *  done, so animate the dot like an active turn instead of a static green. */
-    backgroundTask?: boolean;
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
     const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
     // "busy" and "starting" are the *active* states — a turn is in flight, or the
-    // process is spinning up — so a static dot would read as idle/stuck. A
-    // `running` session with a background task still going is ALSO active (the
-    // agent ended its turn to wait on it), so it spins too. Render the active
-    // states as a tiny spinner sized to the dot, with the stroke following
+    // process is spinning up — so a static dot would read as idle/stuck. Render the
+    // active states as a tiny spinner sized to the dot, with the stroke following
     // statusColor for palette continuity. running / exited / crashed are settled,
     // so they stay a color-coded dot. `color="inherit"` lets the sx `color`
     // (statusColor) drive the stroke instead of a fixed MUI palette slot.
-    const active = status === "busy" || status === "starting" ||
-        (status === "running" && backgroundTask === true);
+    const active = status === "busy" || status === "starting";
     const indicator = active ? (
             <CircularProgress
                 size={11}
@@ -509,7 +501,7 @@ function SessionList({
                         >
                             <DragIndicator sx={{ fontSize: 24 }} />
                         </IconButton>
-                        <StatusDot status={s.status} backgroundTask={s.background_task ?? false} sx={{ mr: 1 }} />
+                        <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
                                 <Stack
@@ -1567,7 +1559,7 @@ export function App({
                                 spacing={0.75}
                                 sx={{ flex: 1, minWidth: 0 }}
                             >
-                                <StatusDot status={active.status} backgroundTask={active.background_task ?? false} />
+                                <StatusDot status={active.status} />
                                 <ProviderIcon
                                     provider={active.provider}
                                     fontSize="small"

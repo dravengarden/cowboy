@@ -59,12 +59,6 @@ export interface SessionMeta {
    *  isn't interrupted. Released by the user to resume. Transient, never
    *  persisted (resets to false on a daemon restart). */
   paused?: boolean;
-  /** True while the agent has a background process still running BETWEEN turns
-   *  (e.g. a `run_in_background` build it ended its turn to wait on). ACP carries
-   *  no signal for this — it's derived by the daemon reading the agent's cgroup
-   *  (crate::procwatch). Suppresses the idle/awaiting overlay and drives the
-   *  "Background task running" pill. Transient, never persisted. */
-  background_task?: boolean;
   /** Context-window usage the agent reports over ACP `usage_update`:
    *  `context_used` tokens of a `context_size`-token window (drives the composer's
    *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
