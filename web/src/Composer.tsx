@@ -144,7 +144,6 @@ import type {
   AcpUpdate,
   AvailableCommand,
   ConfigOption,
-  Delivery,
   DraftSchedule,
   Envelope,
   SessionMeta,
@@ -1008,13 +1007,13 @@ export function Composer({
   const [scheduleTarget, setScheduleTarget] = useState<
     { id: string | undefined; initial: DraftSchedule | null } | null
   >(null);
-  function commitSchedule(fireAtMs: number, delivery: Delivery): void {
+  function commitSchedule(fireAtMs: number): void {
     if (scheduleTarget?.id !== undefined) {
-      scheduleDraft(sessionId, { id: scheduleTarget.id, fireAtMs, delivery });
+      scheduleDraft(sessionId, { id: scheduleTarget.id, fireAtMs });
       return;
     }
     // Fresh: schedule the composer's content, then clear the input like saveDraft.
-    scheduleDraft(sessionId, { text: text.trimEnd(), attachments, fireAtMs, delivery });
+    scheduleDraft(sessionId, { text: text.trimEnd(), attachments, fireAtMs });
     editorRef.current?.clear();
     setText("");
     setAttachments([]);
@@ -3098,9 +3097,7 @@ function PendingRow({
             color="info"
             variant="outlined"
             icon={<Schedule sx={{ fontSize: 14 }} />}
-            label={`${fireLabel(message.schedule.fire_at_ms)} · ${
-              message.schedule.delivery === "now" ? "立即" : "排队"
-            }`}
+            label={fireLabel(message.schedule.fire_at_ms)}
             onClick={onSchedule}
             sx={{ mt: 0.5, height: 20, fontSize: 11, "& .MuiChip-label": { px: 0.75 } }}
           />

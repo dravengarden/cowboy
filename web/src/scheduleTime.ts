@@ -42,43 +42,11 @@ function startOfDay(ms: number): number {
   return d.getTime();
 }
 
-// The next occurrence of a wall-clock time (hour:min) at/after `now` — today if
-// still ahead, else tomorrow. Used by the "今晚 20:00" / "明早 9:00" presets.
-function nextAt(hour: number, minute: number, now: number = Date.now()): number {
-  const d = new Date(now);
-  d.setHours(hour, minute, 0, 0);
-  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
-  return d.getTime();
-}
-
-export interface Preset {
-  key: string;
-  label: string;
-  ms: number;
-}
-
-// Quick chips offered in the schedule sheet. Computed at open time; a preset in
-// the past (e.g. "今晚 20:00" after 20:00) is dropped by the caller via `future`.
-export function quickPresets(now: number = Date.now()): Preset[] {
-  const inHour = now + 3_600_000;
-  const tonight = nextAt(20, 0, now);
-  const tmrMorning = nextAt(9, 0, now);
-  // "明早" must be strictly tomorrow morning even if it's before 9am today.
-  const d = new Date(now);
-  const beforeNine = d.getHours() < 9;
-  const morning = beforeNine ? tmrMorning + 86_400_000 : tmrMorning;
-  const tmrEvening = tonight <= now + 86_400_000 ? tonight + 86_400_000 : tonight;
-  return [
-    { key: "1h", label: "1 小时后", ms: inHour },
-    { key: "tonight", label: "今晚 20:00", ms: tonight },
-    { key: "morning", label: "明早 9:00", ms: morning },
-    { key: "evening", label: "明晚 20:00", ms: tmrEvening },
-  ];
-}
-
-// Combine a native <input type="date"> (YYYY-MM-DD) + <input type="time">
-// (HH:MM) into epoch-ms in LOCAL time. Returns null if either is blank/invalid.
-export function combineDateTime(date: string, time: string): number | null {
+// Parse a native <input type="datetime-local"> value ("YYYY-MM-DDTHH:MM") into
+// epoch-ms in LOCAL time. Returns null if blank/invalid.
+export function parseDtLocal(value: string): number | null {
+  if (!value) return null;
+  const [date, time] = value.split("T");
   if (!date || !time) return null;
   const [y, mo, da] = date.split("-").map(Number);
   const [h, mi] = time.split(":").map(Number);
@@ -88,12 +56,9 @@ export function combineDateTime(date: string, time: string): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-// Split an epoch-ms into the local {date, time} strings the native inputs want.
-export function splitDateTime(ms: number): { date: string; time: string } {
+// Format an epoch-ms as the local "YYYY-MM-DDTHH:MM" a datetime-local input wants.
+export function toDtLocal(ms: number): string {
   const d = new Date(ms);
   const p = (n: number): string => String(n).padStart(2, "0");
-  return {
-    date: `${String(d.getFullYear())}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
-    time: `${p(d.getHours())}:${p(d.getMinutes())}`,
-  };
+  return `${String(d.getFullYear())}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }

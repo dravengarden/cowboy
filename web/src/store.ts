@@ -25,7 +25,6 @@ import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import type {
   ConfigOption,
   ContentBlock,
-  Delivery,
   DraftSchedule,
   Envelope,
   Inbound,
@@ -1488,9 +1487,9 @@ export function activateAllDrafts(sessionId: string): void {
 // the new schedule (no optimistic add needed for this deliberate, rare action).
 export function scheduleDraft(
   sessionId: string,
-  opts: { id?: string; text?: string; attachments?: Attachment[]; fireAtMs: number; delivery: Delivery },
+  opts: { id?: string; text?: string; attachments?: Attachment[]; fireAtMs: number },
 ): void {
-  const { id, text = "", attachments = [], fireAtMs, delivery } = opts;
+  const { id, text = "", attachments = [], fireAtMs } = opts;
   send({
     type: "schedule_draft",
     session_id: sessionId,
@@ -1498,7 +1497,9 @@ export function scheduleDraft(
     text: text.trimEnd(),
     content: contentOf(text.trimEnd(), attachments),
     fire_at_ms: fireAtMs,
-    delivery,
+    // Delivery is always "queue" — the server default. No UI toggle (a scheduled
+    // draft simply enters the queue at fire time). Backend defaults absent → Queue.
+    delivery: "queue",
   });
 }
 
