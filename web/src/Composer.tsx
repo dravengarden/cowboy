@@ -1159,10 +1159,6 @@ export function Composer({
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
-              // With no live queue, the queued panel (which owns the ⏸ toggle) is
-              // absent — surface pause/resume here so a scheduled send can be
-              // parked into a held queue.
-              pauseControl={queue.length === 0}
               // Only offer "move" when there's somewhere to move to.
               onMoveDraft={otherSessions.length > 0
                 ? (id: string): void => setMoveSrcId(id)
@@ -2370,7 +2366,6 @@ function PendingPanel({
   commands,
   onMoveDraft,
   onScheduleDraft,
-  pauseControl,
   unbounded,
 }: {
   kind: "queued" | "draft";
@@ -2380,10 +2375,6 @@ function PendingPanel({
   status: Status;
   /** Agent-advertised `/` commands, threaded into the row's inline editor. */
   commands: () => AvailableCommand[];
-  /** Draft panel only: surface the queue pause/resume toggle here (used when the
-   *  live queue is empty, so a scheduled draft can be set to fire into a held
-   *  queue). Ignored for the queued panel, which always owns the toggle. */
-  pauseControl?: boolean;
   /** Open the "move to another session" picker for a draft (draft kind only).
       Owned by the Composer so it survives this panel unmounting when the last
       draft leaves. Absent → the row's kebab omits the Move action. */
@@ -2415,19 +2406,14 @@ function PendingPanel({
   // like `collapsed`. Per-panel state → drafts and queue toggle independently.
   const [reordering, setReordering] = useState(false);
   const count = items.length;
-  // The manual queue pause holds the QUEUE drain (drafts never auto-drain). The
-  // ⏸ toggle + "Paused" badge live on the queued panel — but also on the drafts
-  // panel when it's the one surfacing the control (`pauseControl`, set when the
-  // live queue is empty), so a scheduled send can be parked into a held queue.
+  // The manual queue pause holds the QUEUE drain only (drafts never auto-drain),
+  // so the "Paused" badge shows on the queued panel — that's why its messages
+  // aren't advancing. The pause/resume CONTROL itself is session-level and lives
+  // in the navbar (AutoScrollAndStop), reachable even with an empty queue; here we
+  // only surface the status badge. Read live so it tracks the toggle.
   const { sessions } = useStore();
-  const sessionPaused = sessions.find((s) => s.id === sessionId)?.paused ?? false;
-  const hasScheduled = items.some((m) => m.schedule);
-  // Show the pause toggle where it's meaningful: always on the queued panel;
-  // on the drafts panel only when asked (empty live queue) AND there's a reason
-  // to (a scheduled send that will hit the queue, or the queue is already held).
-  const showPause = kind === "queued" ||
-    (kind === "draft" && (pauseControl ?? false) && (hasScheduled || sessionPaused));
-  const queueHeld = showPause && sessionPaused;
+  const queueHeld = kind === "queued" &&
+    (sessions.find((s) => s.id === sessionId)?.paused ?? false);
   // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
   // toggle) so a cleared/sent-down panel never sits stuck in an empty mode.
   useEffect(() => {
@@ -2570,27 +2556,6 @@ function PendingPanel({
             color="primary"
             onConfirm={(): void => activateAllDrafts(sessionId)}
           />
-        )}
-        {/* Pause / Resume the queue drain. Tap ⏸ to hold the queue: the running
-            turn still finishes, but the next queued message waits until you tap ▶.
-            Shown on the queued panel, and on the drafts panel when the live queue
-            is empty (so a scheduled send can be parked into a held queue).
-            Warning-tinted while held. */}
-        {showPause && (
-          <Tooltip title={queueHeld ? "Resume queue" : "Pause queue"}>
-            <IconButton
-              size="small"
-              aria-label={queueHeld ? "resume queue" : "pause queue"}
-              color={queueHeld ? "warning" : "default"}
-              sx={{ flexShrink: 0 }}
-              onClick={(): void => {
-                haptic();
-                setPaused(sessionId, !queueHeld);
-              }}
-            >
-              {queueHeld ? <PlayArrow fontSize="small" /> : <Pause fontSize="small" />}
-            </IconButton>
-          </Tooltip>
         )}
         <ConfirmButton
           label="Clear All"
@@ -3319,6 +3284,8 @@ export function AutoScrollAndStop({
   dense?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
+  const { sessions } = useStore();
+  const paused = sessions.find((s) => s.id === sessionId)?.paused ?? false;
   const [cancelOpen, setCancelOpen] = useState(false);
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
@@ -3343,6 +3310,24 @@ export function AutoScrollAndStop({
           }}
         >
           <VerticalAlignBottom fontSize={size} />
+        </IconButton>
+      </Tooltip>
+      {/* Queue pause/resume — a SESSION-level control, orthogonal to what's queued:
+          togglable any time (even with an empty queue) to pre-arm the hold, so a
+          later queued message OR a fired scheduled draft lands held instead of
+          auto-running. Holds only the drain — a running turn still finishes.
+          Always shown (no reflow); warning-tinted while held. */}
+      <Tooltip title={paused ? "Resume queue" : "Pause queue"}>
+        <IconButton
+          size={size}
+          aria-label={paused ? "resume queue" : "pause queue"}
+          color={paused ? "warning" : "default"}
+          onClick={(): void => {
+            haptic();
+            setPaused(sessionId, !paused);
+          }}
+        >
+          {paused ? <PlayArrow fontSize={size} /> : <Pause fontSize={size} />}
         </IconButton>
       </Tooltip>
       {/* Stop is ALWAYS shown so the row doesn't reflow when a turn starts/ends —
