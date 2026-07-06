@@ -3076,14 +3076,24 @@ function PendingRow({
         {message.schedule && (
           <Chip
             size="small"
-            color="info"
-            variant="outlined"
-            icon={<Schedule sx={{ fontSize: 14 }} />}
+            clickable
+            icon={<Schedule sx={{ fontSize: 15 }} />}
             label={`${fireLabel(message.schedule.fire_at_ms)} · ${
               message.schedule.delivery === "front" ? "队首" : "队尾"
             }`}
             onClick={onSchedule}
-            sx={{ mt: 0.5, height: 20, fontSize: 11, "& .MuiChip-label": { px: 0.75 } }}
+            sx={{
+              mt: 0.75,
+              height: 24,
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 600,
+              color: "info.main",
+              bgcolor: (t) => alpha(t.palette.info.main, 0.14),
+              "& .MuiChip-label": { px: 0.875 },
+              "& .MuiChip-icon": { ml: 0.75, mr: -0.25, color: "info.main" },
+              "&:hover": { bgcolor: (t) => alpha(t.palette.info.main, 0.22) },
+            }}
           />
         )}
       </Box>

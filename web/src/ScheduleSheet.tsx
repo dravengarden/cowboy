@@ -53,15 +53,25 @@ export function ScheduleSheet({
   return (
     <Sheet open={open} onClose={onClose} title="定时发送">
       <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
-        <TextField
-          type="datetime-local"
-          size="small"
-          fullWidth
-          label="发送时间"
-          InputLabelProps={{ shrink: true }}
-          value={value}
-          onChange={(e): void => setValue(e.target.value)}
-        />
+        {/* Caption label ABOVE the field, not a floating notch label — a shrunk
+            CJK label clips against the outlined notch on a datetime-local input. */}
+        <Box>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mb: 0.75, fontWeight: 600 }}
+          >
+            发送时间
+          </Typography>
+          <TextField
+            type="datetime-local"
+            size="small"
+            fullWidth
+            value={value}
+            onChange={(e): void => setValue(e.target.value)}
+            inputProps={{ "aria-label": "发送时间" }}
+          />
+        </Box>
 
         {/* Queue position — both wait for the running turn + respect the pause. */}
         <Stack spacing={0.75}>
