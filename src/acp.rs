@@ -34,8 +34,9 @@ use agent_client_protocol::schema::v1::{
     CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
     LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionConfigOption, SessionConfigSelectOption, SessionId,
-    SessionModeId, SessionNotification, SessionUpdate, SetSessionModeRequest,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
@@ -57,6 +58,8 @@ use crate::provider::LaunchSpec;
 /// pointless respawn; a real stall is caught either way. `run_agent` auto-retries
 /// the spawn once before this ever surfaces as `Crashed`.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
+const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "bypassPermissions";
 
 /// The ACP handshake did not complete within [`HANDSHAKE_TIMEOUT`]. Carried as
 /// an `anyhow` cause so [`run_agent`] can tell a transient spawn stall (retry
@@ -75,6 +78,75 @@ impl std::fmt::Display for HandshakeTimeout {
 }
 
 impl std::error::Error for HandshakeTimeout {}
+
+fn codex_full_access_available(options: &[SessionConfigOption]) -> bool {
+    options.iter().any(|option| {
+        option.id.0.as_ref() == CODEX_FULL_ACCESS_CONFIG_ID
+            && match &option.kind {
+                SessionConfigKind::Select(select) => {
+                    select.current_value.0.as_ref() != CODEX_FULL_ACCESS_CONFIG_VALUE
+                        && config_select_options_contain(
+                            &select.options,
+                            CODEX_FULL_ACCESS_CONFIG_VALUE,
+                        )
+                }
+                #[allow(unreachable_patterns)]
+                _ => false,
+            }
+    })
+}
+
+fn config_select_options_contain(options: &SessionConfigSelectOptions, value: &str) -> bool {
+    match options {
+        SessionConfigSelectOptions::Ungrouped(options) => {
+            options.iter().any(|option| option.value.0.as_ref() == value)
+        }
+        SessionConfigSelectOptions::Grouped(groups) => groups.iter().any(|group| {
+            group
+                .options
+                .iter()
+                .any(|option| option.value.0.as_ref() == value)
+        }),
+        #[allow(unreachable_patterns)]
+        _ => false,
+    }
+}
+
+async fn set_startup_config_option(
+    cx: &ConnectionTo<Agent>,
+    session_id: &str,
+    acp_id: &SessionId,
+    config_id: &str,
+    value: &str,
+) -> Option<serde_json::Value> {
+    let req =
+        SetSessionConfigOptionRequest::new(acp_id.clone(), config_id.to_owned(), value.to_owned());
+    match cx.send_request(req).block_task().await {
+        Ok(resp) => match serde_json::to_value(&resp.config_options) {
+            Ok(opts) => Some(opts),
+            Err(e) => {
+                tracing::warn!(
+                    session = %session_id,
+                    config_id,
+                    value,
+                    error = %e,
+                    "serializing startup config options failed"
+                );
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                session = %session_id,
+                config_id,
+                value,
+                error = ?e,
+                "setting startup config option failed"
+            );
+            None
+        }
+    }
+}
 
 /// A command from a client, routed by the supervisor to an agent thread.
 #[derive(Debug)]
@@ -565,6 +637,29 @@ async fn run_session(
     state.hub.set_status(&session_id, Status::Running, None);
     // Handshake landed — disarm the spawn watchdog (see `agent_main`).
     handshake_done.store(true, Ordering::SeqCst);
+
+    // Codex ACP exposes its approval preset as a config option instead of a
+    // session mode. Default new/revived Codex panels to Full Access when the
+    // adapter advertises it; a failed set falls back to the adapter default.
+    if provider_id == "codex"
+        && config_options
+            .as_ref()
+            .is_some_and(|opts| codex_full_access_available(opts))
+    {
+        if let Some(updated_options) = set_startup_config_option(
+            &cx,
+            &session_id,
+            &acp_id,
+            CODEX_FULL_ACCESS_CONFIG_ID,
+            CODEX_FULL_ACCESS_CONFIG_VALUE,
+        )
+        .await
+        {
+            tracing::info!(session = %session_id, "codex approval preset -> full access");
+            state.hub.set_config_options(&session_id, updated_options);
+            config_options = None;
+        }
+    }
 
     // Match Zed's claude-acp default UX: open at `bypassPermissions` if the
     // upstream advertises it. This is what most users want for an agent panel

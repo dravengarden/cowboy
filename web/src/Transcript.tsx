@@ -1330,6 +1330,7 @@ export function Transcript({
   // re-binding, and only fires on a CHANGE (cheap to call every scroll/chunk).
   const onScrollableChangeRef = useRef(onScrollableChange);
   onScrollableChangeRef.current = onScrollableChange;
+  const [scrollable, setScrollable] = useState(false);
   const lastScrollableRef = useRef<boolean | null>(null);
   const reportScrollableRef = useRef<() => void>(() => undefined);
   reportScrollableRef.current = (): void => {
@@ -1338,6 +1339,7 @@ export function Transcript({
     const v = el.scrollHeight > el.clientHeight + 1;
     if (v === lastScrollableRef.current) return;
     lastScrollableRef.current = v;
+    setScrollable(v);
     onScrollableChangeRef.current?.(v);
   };
   // Shared FREEZE-WHILE-DETACHED anchor (captured by the scroll listener,
@@ -1623,9 +1625,13 @@ export function Transcript({
           overflowX: "hidden",
           // column-reverse → the browser anchors from the bottom. Rows are
           // rendered newest-first below and flipped to oldest-top / newest-bottom
-          // on screen; a short transcript sits at the bottom (chat convention).
+          // on screen. Once the content overflows, keep the bottom-anchor model.
+          // While it is still shorter than the viewport, push the group to the
+          // visual top; otherwise a short Codex turn sits above the composer with
+          // an empty wall over it on tall phones.
           display: "flex",
           flexDirection: "column-reverse",
+          justifyContent: scrollable ? "flex-start" : "flex-end",
           // User-controlled side gutter (px, breakpoint-independent like
           // liveview's reading margin).
           px: `${padding}px`,
