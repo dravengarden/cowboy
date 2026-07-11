@@ -31,7 +31,7 @@ use parking_lot::Mutex;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::cli::ServeAcpArgs;
@@ -39,6 +39,9 @@ use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 const CONFIG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const HISTORY_PAGE_LIMIT: usize = 10_000;
 const EVENT_CACHE_LIMIT: usize = 1_000;
 const STATUS_EXTENSION_VERSION: u32 = 1;
@@ -113,8 +116,14 @@ enum PromptOutcome {
     Failed(String),
 }
 
+enum ConnectedExit {
+    Disconnected(Option<Inbound>),
+    CommandsClosed,
+}
+
 #[derive(Default)]
 struct BridgeState {
+    connected: bool,
     sessions: HashMap<String, CachedSession>,
     pending_prompts: HashMap<String, VecDeque<PendingPrompt>>,
     config_options: HashMap<String, Vec<SessionConfigOption>>,
@@ -127,6 +136,7 @@ struct Bridge {
     base_url: Url,
     http: reqwest::Client,
     state: Arc<Mutex<BridgeState>>,
+    connected_notify: Arc<Notify>,
     command_tx: mpsc::UnboundedSender<Inbound>,
     next_cmid: Arc<AtomicU64>,
 }
@@ -137,13 +147,7 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
     }
 
     let base_url = normalized_base_url(&args.daemon_url)?;
-    let ws_url = websocket_url(&base_url)?;
-    let (mut socket, _) = connect_async(ws_url.as_str())
-        .await
-        .with_context(|| format!("connecting to cowboy daemon at {ws_url}"))?;
-
     let state = Arc::new(Mutex::new(BridgeState::default()));
-    wait_for_bootstrap(&mut socket, &state).await?;
 
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let bridge = Bridge {
@@ -151,6 +155,7 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
         base_url,
         http: reqwest::Client::new(),
         state,
+        connected_notify: Arc::new(Notify::new()),
         command_tx,
         next_cmid: Arc::new(AtomicU64::new(1)),
     };
@@ -158,10 +163,10 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
     tracing::info!(
         provider = %bridge.provider,
         daemon = %bridge.base_url,
-        "cowboy ACP bridge ready"
+        "cowboy ACP bridge ready; daemon connection runs independently"
     );
 
-    run_acp_server(bridge, socket, command_rx)
+    run_acp_server(bridge, command_rx)
         .await
         .map_err(|error| anyhow!("ACP bridge: {error}"))
 }
@@ -169,7 +174,6 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
 #[allow(clippy::too_many_lines)] // Declarative ACP handler registration is clearest in one chain.
 async fn run_acp_server(
     bridge: Bridge,
-    socket: Socket,
     command_rx: mpsc::UnboundedReceiver<Inbound>,
 ) -> Result<(), agent_client_protocol::Error> {
     let initialize_bridge = bridge.clone();
@@ -399,7 +403,7 @@ async fn run_acp_server(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(Stdio::new(), async move |cx: ConnectionTo<Client>| {
-            main_bridge.run_daemon(socket, command_rx, cx).await
+            main_bridge.run_daemon(command_rx, cx).await
         })
         .await
 }
@@ -498,7 +502,23 @@ impl Bridge {
         cached.replay_buffer.clear();
     }
 
+    async fn wait_for_daemon(&self) -> Result<(), String> {
+        let wait = async {
+            loop {
+                let notified = self.connected_notify.notified();
+                if self.state.lock().connected {
+                    return;
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(DAEMON_READY_TIMEOUT, wait)
+            .await
+            .map_err(|_| "timed out waiting for the cowboy daemon to reconnect".to_owned())
+    }
+
     async fn create_session(&self, cwd: PathBuf) -> Result<String, String> {
+        self.wait_for_daemon().await?;
         let url = self
             .base_url
             .join("api/sessions")
@@ -770,46 +790,232 @@ impl Bridge {
 
     async fn run_daemon(
         &self,
-        socket: Socket,
         mut command_rx: mpsc::UnboundedReceiver<Inbound>,
         cx: ConnectionTo<Client>,
     ) -> Result<(), agent_client_protocol::Error> {
+        let mut reconnect_delay = RECONNECT_INITIAL_DELAY;
+        let mut retry_command = None;
+        let mut connected_once = false;
+
+        loop {
+            let socket = match self.connect_daemon().await {
+                Ok(socket) => socket,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        retry_ms = reconnect_delay.as_millis(),
+                        "cowboy daemon unavailable; ACP bridge will retry"
+                    );
+                    tokio::time::sleep(reconnect_delay).await;
+                    reconnect_delay = reconnect_delay.saturating_mul(2).min(RECONNECT_MAX_DELAY);
+                    continue;
+                }
+            };
+
+            self.set_connected(true);
+            self.publish_attached_state(&cx);
+            if connected_once {
+                tracing::info!(daemon = %self.base_url, "cowboy daemon WebSocket reconnected");
+            } else {
+                tracing::info!(daemon = %self.base_url, "cowboy daemon WebSocket connected");
+                connected_once = true;
+            }
+            reconnect_delay = RECONNECT_INITIAL_DELAY;
+
+            match self
+                .drive_connected(socket, &mut command_rx, &cx, &mut retry_command)
+                .await
+            {
+                ConnectedExit::CommandsClosed => return Ok(()),
+                ConnectedExit::Disconnected(retry) => retry_command = retry,
+            }
+
+            self.set_connected(false);
+            self.fail_all_prompts("cowboy daemon disconnected; reconnecting");
+            self.publish_reconnecting_state(&cx);
+            tracing::warn!(
+                retry_ms = reconnect_delay.as_millis(),
+                "cowboy daemon WebSocket disconnected; keeping ACP server alive"
+            );
+            tokio::time::sleep(reconnect_delay).await;
+            reconnect_delay = reconnect_delay.saturating_mul(2).min(RECONNECT_MAX_DELAY);
+        }
+    }
+
+    async fn connect_daemon(&self) -> anyhow::Result<Socket> {
+        let ws_url = websocket_url(&self.base_url)?;
+        let (mut socket, _) = connect_async(ws_url.as_str())
+            .await
+            .with_context(|| format!("connecting to cowboy daemon at {ws_url}"))?;
+        wait_for_bootstrap(&mut socket, &self.state).await?;
+        Ok(socket)
+    }
+
+    async fn drive_connected(
+        &self,
+        socket: Socket,
+        command_rx: &mut mpsc::UnboundedReceiver<Inbound>,
+        cx: &ConnectionTo<Client>,
+        retry_command: &mut Option<Inbound>,
+    ) -> ConnectedExit {
         let (mut sink, mut stream) = socket.split();
+
+        for session_id in self.attached_session_ids() {
+            let command = Inbound::OpenSession { session_id };
+            if send_daemon_command(&mut sink, &command).await.is_err() {
+                return ConnectedExit::Disconnected(None);
+            }
+        }
+        if let Some(command) = retry_command.take() {
+            if self.should_send_command(&command)
+                && send_daemon_command(&mut sink, &command).await.is_err()
+            {
+                return ConnectedExit::Disconnected(Some(command));
+            }
+        }
+
         loop {
             tokio::select! {
                 command = command_rx.recv() => {
                     let Some(command) = command else {
-                        return Ok(());
+                        return ConnectedExit::CommandsClosed;
                     };
-                    let text = serde_json::to_string(&command).map_err(|error| {
-                        agent_client_protocol::util::internal_error(error)
-                    })?;
-                    sink.send(Message::Text(text.into())).await.map_err(|error| {
-                        agent_client_protocol::util::internal_error(error)
-                    })?;
+                    if self.should_send_command(&command)
+                        && send_daemon_command(&mut sink, &command).await.is_err()
+                    {
+                        return ConnectedExit::Disconnected(Some(command));
+                    }
                 }
                 message = stream.next() => {
                     match message {
                         Some(Ok(Message::Text(text))) => {
-                            let outbound = serde_json::from_str::<Outbound>(&text).map_err(|error| {
-                                agent_client_protocol::util::internal_error(error)
-                            })?;
-                            self.handle_outbound(outbound, &cx)?;
+                            match serde_json::from_str::<Outbound>(&text) {
+                                Ok(outbound) => {
+                                    if let Err(error) = self.handle_outbound(outbound, cx) {
+                                        tracing::warn!(%error, "failed to forward daemon update to ACP client");
+                                    }
+                                }
+                                Err(error) => tracing::warn!(%error, "invalid cowboy daemon WebSocket message"),
+                            }
                         }
                         Some(Ok(Message::Ping(payload))) => {
-                            sink.send(Message::Pong(payload)).await.map_err(|error| {
-                                agent_client_protocol::util::internal_error(error)
-                            })?;
+                            if sink.send(Message::Pong(payload)).await.is_err() {
+                                return ConnectedExit::Disconnected(None);
+                            }
                         }
                         Some(Ok(Message::Close(_)) | Err(_)) | None => {
-                            self.fail_all_prompts("cowboy daemon WebSocket disconnected");
-                            return Err(agent_client_protocol::util::internal_error(
-                                "cowboy daemon WebSocket disconnected",
-                            ));
+                            return ConnectedExit::Disconnected(None);
                         }
                         Some(Ok(Message::Binary(_) | Message::Pong(_) | Message::Frame(_))) => {}
                     }
                 }
+            }
+        }
+    }
+
+    fn set_connected(&self, connected: bool) {
+        self.state.lock().connected = connected;
+        if connected {
+            self.connected_notify.notify_waiters();
+        }
+    }
+
+    fn attached_session_ids(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .sessions
+            .iter()
+            .filter(|(_, cached)| cached.attached && cached.meta.is_some())
+            .map(|(session_id, _)| session_id.clone())
+            .collect()
+    }
+
+    fn should_send_command(&self, command: &Inbound) -> bool {
+        let pending = |session_id: &str, cmid: &str| {
+            self.state
+                .lock()
+                .pending_prompts
+                .get(session_id)
+                .is_some_and(|prompts| prompts.iter().any(|prompt| prompt.cmid == cmid))
+        };
+        match command {
+            Inbound::Submit {
+                session_id,
+                cmid: Some(cmid),
+                ..
+            }
+            | Inbound::CancelSubmitted {
+                session_id, cmid, ..
+            } => pending(session_id, cmid),
+            _ => true,
+        }
+    }
+
+    fn publish_attached_state(&self, cx: &ConnectionTo<Client>) {
+        let (statuses, config_options) = {
+            let state = self.state.lock();
+            let statuses = state
+                .sessions
+                .values()
+                .filter(|cached| cached.attached)
+                .filter_map(|cached| {
+                    cached
+                        .meta
+                        .as_ref()
+                        .map(|meta| Self::status_from_cached(meta, Some(cached)))
+                })
+                .collect::<Vec<_>>();
+            let config_options = state
+                .sessions
+                .iter()
+                .filter(|(_, cached)| cached.attached)
+                .filter_map(|(session_id, _)| {
+                    state
+                        .config_options
+                        .get(session_id)
+                        .cloned()
+                        .map(|options| (session_id.clone(), options))
+                })
+                .collect::<Vec<_>>();
+            (statuses, config_options)
+        };
+        for status in statuses {
+            if let Err(error) = send_status(cx, status) {
+                tracing::debug!(%error, "ACP client closed while publishing reconnected status");
+                return;
+            }
+        }
+        for (session_id, options) in config_options {
+            if let Err(error) = cx.send_notification(SessionNotification::new(
+                session_id,
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
+            )) {
+                tracing::debug!(%error, "ACP client closed while restoring config options");
+                return;
+            }
+        }
+    }
+
+    fn publish_reconnecting_state(&self, cx: &ConnectionTo<Client>) {
+        let statuses = {
+            let state = self.state.lock();
+            state
+                .sessions
+                .values()
+                .filter(|cached| cached.attached)
+                .filter_map(|cached| {
+                    let meta = cached.meta.as_ref()?;
+                    let mut status = Self::status_from_cached(meta, Some(cached));
+                    "reconnecting".clone_into(&mut status.state);
+                    status.agent_alive = false;
+                    status.detail = Some("cowboy daemon disconnected; reconnecting".to_owned());
+                    Some(status)
+                })
+                .collect::<Vec<_>>()
+        };
+        for status in statuses {
+            if send_status(cx, status).is_err() {
+                return;
             }
         }
     }
@@ -1097,6 +1303,16 @@ impl Bridge {
     }
 }
 
+async fn send_daemon_command(
+    sink: &mut futures::stream::SplitSink<Socket, Message>,
+    command: &Inbound,
+) -> anyhow::Result<()> {
+    let text = serde_json::to_string(command).context("encoding cowboy daemon command")?;
+    sink.send(Message::Text(text.into()))
+        .await
+        .context("sending cowboy daemon command")
+}
+
 async fn wait_for_bootstrap(
     socket: &mut Socket,
     state: &Arc<Mutex<BridgeState>>,
@@ -1127,10 +1343,22 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
     let mut state = state.lock();
     match outbound {
         Outbound::Sessions { sessions } => {
+            let live_ids = sessions
+                .iter()
+                .map(|meta| meta.id.clone())
+                .collect::<HashSet<_>>();
+            for (session_id, cached) in &mut state.sessions {
+                if !live_ids.contains(session_id) {
+                    cached.meta = None;
+                }
+            }
             for meta in sessions {
                 let id = meta.id.clone();
                 state.sessions.entry(id).or_default().meta = Some(meta);
             }
+            state.sessions.retain(|_, cached| {
+                cached.meta.is_some() || cached.attached || !cached.events.is_empty()
+            });
         }
         Outbound::Snapshot {
             session_id,

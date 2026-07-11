@@ -4,26 +4,26 @@ Zed starts `cowboy serve-acp` as a stdio External Agent. The bridge connects to
 the already-running cowboy daemon (`http://127.0.0.1:3333` by default); it does
 not start another Hub or another copy of a provider session.
 
-Override the three official Registry IDs with custom commands so a thread's Zed
-agent identity stays fixed to its Cowboy provider while Zed keeps the official
-provider display name and icon:
+Add three custom agents alongside Zed's official Registry agents so native
+Codex/Claude/Gemini remain available and each Cowboy thread stays fixed to its
+provider:
 
 ```json
 {
   "agent_servers": {
-    "codex-acp": {
+    "cowboy-codex": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "codex"],
       "env": {}
     },
-    "claude-acp": {
+    "cowboy-claude": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "claude-code"],
       "env": {}
     },
-    "gemini": {
+    "cowboy-gemini": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "gemini"],
@@ -33,10 +33,10 @@ provider display name and icon:
 }
 ```
 
-The Registry IDs are intentional. Current Zed resolves display metadata and
-SVG icons by agent ID even when the executable is overridden with
-`type: "custom"`. Using unrelated IDs such as `cowboy-codex` works, but Zed
-renders its generic sparkle icon instead.
+Do not override the official IDs (`codex-acp`, `claude-acp`, and `gemini`) unless
+replacing the native agents is intentional. Zed's custom-agent settings have no
+icon field, so the independent Cowboy entries use its generic sparkle icon.
+Distinct provider icons require separate published ACP Registry entries.
 
 When Zed is attached to a remote project, the command must resolve on that
 remote host. Set `COWBOY_DAEMON_URL` or add `--daemon-url` when the daemon is not
@@ -49,6 +49,9 @@ The bridge supports:
 - complete retained-history replay on `session/load`;
 - prompt streaming, permission requests, cancellation, and session config
   options;
+- daemon WebSocket recovery without terminating Zed's stdio ACP process:
+  disconnects publish `reconnecting`, commands wait in the bridge, and a fresh
+  bootstrap restores attached sessions, statuses, and config options;
 - provider-filtered import/load, preventing a thread from acquiring the wrong
   provider identity;
 - `_cowboy/session/status` snapshots and
@@ -58,9 +61,9 @@ The bridge supports:
 
 ## Known TODOs
 
-- Formal `Cowboy · Provider` names with provider icons would require published
-  ACP Registry entries. The official-ID overrides above preserve the original
-  provider names and icons without modifying Zed-owned Registry files.
+- `Cowboy · Provider` names with provider icons require published ACP Registry
+  entries. Reusing an official provider ID preserves its icon but replaces the
+  native agent, so it is not appropriate when both must coexist.
 - Zed-provided MCP servers and `additionalDirectories` are logged but not yet
   forwarded into the daemon-owned provider session.
 - Codex foreground turns and commands are authoritative today. Detached

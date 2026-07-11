@@ -73,11 +73,17 @@ the standard pending-`session/prompt` lifecycle plus the optional
 `_cowboy/session/status` request and `_cowboy/session/status_changed`
 notification for clients that need an out-of-band status snapshot.
 
-Use the official Registry IDs (`codex-acp`, `claude-acp`, and `gemini`) for the
-three custom command overrides. Zed uses those IDs to retain the providers'
-official names and SVG icons while starting `cowboy serve-acp`; unrelated IDs
-receive the generic custom-agent sparkle icon. Formal `Cowboy · Provider`
-Registry identities remain optional future work.
+Use independent custom IDs (`cowboy-codex`, `cowboy-claude`, and
+`cowboy-gemini`) when the native Registry agents must remain available. Zed
+gives those settings its generic sparkle icon because custom agents have no
+icon field. Reusing the official provider IDs preserves their icons but replaces
+the native agents; distinct Cowboy provider icons require published Registry
+entries.
+
+The stdio ACP process outlives daemon WebSocket disconnects. It publishes a
+`reconnecting` status, retries with bounded exponential backoff, buffers commands,
+then bootstraps again and reopens every attached session. A daemon restart
+therefore does not become Zed's terminal `Failed to Launch` state.
 
 TODO: expose Codex `subAgentActivity` and `thread/backgroundTerminals/list`
 through the upstream Codex ACP adapter, then populate the bridge's currently
