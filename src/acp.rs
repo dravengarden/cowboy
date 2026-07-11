@@ -190,7 +190,7 @@ struct ClientState {
     /// loop resolves exactly one (first-response-wins).
     pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
     /// Assistant text captured for an internal prompt that requested a direct
-    /// completion result (the memory janitor). Ordinary UI prompts leave it off.
+    /// completion result. Ordinary UI prompts leave it off.
     capture: Mutex<Option<String>>,
     /// Monotonic counter for synthesizing permission request ids.
     next_perm: AtomicU64,
@@ -387,8 +387,7 @@ async fn agent_main(
                         responder,
                         cx: ConnectionTo<Agent>|
                         -> Result<(), Error> {
-                // System sessions (machine-driven, immutable, unattended — the
-                // memory janitor and any future machine session) have no human
+                // System sessions (machine-driven, immutable, unattended) have no human
                 // to answer an approval. Auto-approve tool calls the way the
                 // try-agent path does; without this a system session hangs on
                 // its first MCP tool approval forever (the per-tool approval a

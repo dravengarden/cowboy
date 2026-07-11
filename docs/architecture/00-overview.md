@@ -55,7 +55,7 @@ survives daemon restarts by reviving agents from persisted state.
 
 | Layer | Module | Role |
 |---|---|---|
-| Entry / CLI | `src/main.rs`, `src/cli.rs` | clap dispatch: `serve`, `serve-acp`, `try-agent`, `mem` |
+| Entry / CLI | `src/main.rs`, `src/cli.rs` | clap dispatch: `serve`, `serve-acp`, `try-agent` |
 | Core / bus | `src/core.rs` | `Hub`, `Event`/`Inbound`/`Outbound`, `seq`, fan-out |
 | Transport | `src/acp.rs` | the **only** module touching `agent-client-protocol` |
 | Lifetime | `src/supervisor.rs` | spawn / revive / `ensure_alive` / resume |
@@ -63,7 +63,6 @@ survives daemon restarts by reviving agents from persisted state.
 | Server | `src/server.rs` | axum REST + WS + embedded SPA |
 | Storage | `src/store.rs`, `migrations/*` | Postgres write-behind, restore |
 | Confirm | `src/skills/`, `src/inference/` | turn-end L1/L2 judge, DeepSeek |
-| Memory | `src/memory/*` | the in-process mnemosyne port + janitor |
 | Files | `src/files.rs` | gitignore-aware `@` file picker |
 | Frontend | `web/src/*` | React SPA, embedded via `rust-embed` |
 
@@ -93,6 +92,6 @@ Read the chapters in order; each one zooms into a box above:
 5. [Storage](05-storage.md)
 6. [Server & wire API](06-server-api.md)
 7. [Confirm-detect & inference](07-confirm-inference.md)
-8. [Memory subsystem](08-memory.md)
+8. [Codex-owned memory boundary](08-memory.md)
 9. [Frontend](09-frontend.md)
 10. [Build & deploy](10-deploy-build.md)

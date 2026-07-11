@@ -26,9 +26,7 @@ flowchart TB
   `web/dist`, which the `#[folder = "web/dist"]` `rust-embed` macro embeds at
   compile time. It pins crates via **`cargoHash` / `fetchCargoVendor`** (not
   `cargoLock`): crates.io now 403s the download endpoint for requests with no
-  User-Agent, and the plain-fetchurl `cargoLock` path sends none. `git` is on the
-  build's `nativeBuildInputs` because the memory store's unit tests `git init` a
-  temp store offline.
+  User-Agent, and the plain-fetchurl `cargoLock` path sends none.
 
 ## Dev workflow
 
@@ -57,22 +55,17 @@ crane/cargo caching instead.
 | `--bind` | `127.0.0.1:3333` | listen address |
 | `--workspace-root` | `.` | root the session pickers scope to |
 | `--postgres-url` | — | enable persistence ([Storage](05-storage.md)); in-memory if absent |
-| `--memory-enabled` | off | turn on the memory subsystem ([Memory](08-memory.md)) |
-| `--memory-root` | `~/.agents/memory` | the memory store path |
-| `--memory-janitor-provider` | `codex` | which agent runs the janitor |
-
 Other subcommands: `serve-acp` (the ACP server face for Zed), `try-agent`
-(one-shot provider smoke test), `mem` (the memory write CLI).
+(one-shot provider smoke test).
 
 ## NixOS service shape
 
 cowboy is consumed by the hawk config via a `git+file://` flake input from this
 repo. To ship a change: commit here, then on hawk `nix flake update cowboy` +
 `nixos-rebuild`. The unit runs **as the human SSH user** (so the agent and a
-Zed-over-SSH session share one identity and one view of the files), points
-`--workspace-root` under that user's home, and sets
-`CLAUDE_CODE_REMOTE_MEMORY_DIR` so spawned agents' auto-memory lands in the
-machine store.
+Zed-over-SSH session share one identity and one view of the files), and points
+`--workspace-root` under that user's home. Agent-owned local state remains in
+the user's normal tool-managed home.
 
 ## Safe activation from a cowboy session
 

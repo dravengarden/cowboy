@@ -16,9 +16,7 @@ the same binary is both frontend and backend.
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
 | `POST /api/sessions` | create a session, returns the cowboy `session_id` |
-| `POST /api/sessions/{id}/prompt` | machine wake (used by the memory janitor) |
-| `POST /api/memory/record` | enqueue a memory proposal (gated by `--memory-enabled`) |
-| `POST /api/memory/forget` | soft-archive a memory (gated) |
+| `POST /api/sessions/{id}/prompt` | machine-driven session wake |
 | `GET /api/history/{id}/{page}` | fixed-size, seq-aligned history page (`immutable` once the next page exists) |
 | `ANY /ws` | WebSocket upgrade |
 | `*` (fallback) | the embedded SPA (`index.html` for client routes) |
@@ -28,10 +26,9 @@ so a release binary is fully self-contained — no static-file directory to depl
 
 ## The `/api/workspaces` picker
 
-This is what makes per-project memory + `AGENTS.md` load correctly: the New
-Session picker lets you open a session in **any Columbus project's worktree**.
-The chosen `cwd` becomes the agent's working directory, so the agent inherits
-that project's guidance files and the memory store keys by the cwd-slug.
+The New Session picker lets you open a session in **any Columbus project's
+worktree**. The chosen `cwd` becomes the agent's working directory, so Codex
+loads that project's guidance files and trusted project configuration.
 
 ## History pagination
 
@@ -72,8 +69,6 @@ TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 - **store writer** — drains `StoreWrite` intents ([Storage](05-storage.md))
 - **purge sweeper** — hard-deletes soft-deleted sessions past 3 days (every 6h)
 - **dispatcher** — drains the Hub→supervisor hand-off and forwards prompts
-- **memory subsystem** — reconcile loop + 12h tidy timer, only when
-  `--memory-enabled` ([Memory subsystem](08-memory.md))
 
 ## Auth
 

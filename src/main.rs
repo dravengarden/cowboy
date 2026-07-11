@@ -4,7 +4,6 @@ mod cli;
 mod core;
 mod files;
 mod inference;
-mod memory;
 mod persistence;
 mod provider;
 mod scheduler;

@@ -77,8 +77,8 @@ are continued proactively.
 
 ## System sessions
 
-The memory janitor ([Memory subsystem](08-memory.md)) runs as a **system
-session** (`system = true`): same supervisor machinery, but its permission
-requests are auto-approved in the ACP handler, and it is hidden from the normal
-session list. It is restored and reused across restarts by matching
-`system && cwd == memory_root && provider == configured`.
+The session schema retains a `system` marker for machine-driven, view-only
+sessions. They use the same supervisor machinery but can be hidden from normal
+interactive surfaces and driven through the backend prompt endpoint. No
+production subsystem currently creates one; the marker remains as a generic
+control-plane primitive and for persisted-schema compatibility.

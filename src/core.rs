@@ -261,10 +261,9 @@ pub struct SessionMeta {
     /// daemon restart); `serde(default)` covers old clients + the restore path.
     #[serde(default)]
     pub paused: bool,
-    /// True for the machine-driven memory janitor SYSTEM session: visible and
-    /// watchable in the UI but VIEW-ONLY — the composer is hidden and user turns
-    /// are rejected; only the backend wake endpoint drives it. Persisted
-    /// (migration 0010) so it survives a daemon restart. See mnemosyne.
+    /// True for a machine-driven system session: visible and watchable in the
+    /// UI but view-only. The composer is hidden and user turns are rejected;
+    /// only the backend wake endpoint drives it. Persisted for compatibility.
     #[serde(default)]
     pub system: bool,
     /// Context-window usage the agent reports over ACP `usage_update`:
@@ -1483,10 +1482,9 @@ impl Hub {
         })
     }
 
-    /// Whether a session is a machine-driven VIEW-ONLY system session (the
-    /// mnemosyne memory janitor). The WS dispatch rejects user-driven turns for
-    /// these; only the backend wake endpoint (`POST /api/sessions/{id}/prompt`)
-    /// drives them.
+    /// Whether a session is machine-driven and view-only. The WS dispatch
+    /// rejects user-driven turns for these; only the backend wake endpoint
+    /// (`POST /api/sessions/{id}/prompt`) drives them.
     #[must_use]
     pub fn session_is_system(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();

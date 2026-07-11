@@ -41,15 +41,6 @@
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
         cargoHash = "sha256-u6C4neMxWuXg2rsVwHI1NGGBBDuFK+m0Tn8k6LsJb44=";
-        # The memory store shells out to `git` (store::Store::commit/ensure_git_repo,
-        # ported from mnemosyne). Its unit tests `git init` a temp store + commit
-        # entirely offline, so `git` must be on the checkPhase PATH (the build
-        # sandbox has none by default). HOME is set so git's local-config writes
-        # don't fail looking for ~/.gitconfig.
-        nativeBuildInputs = [ pkgs.git ];
-        preCheck = ''
-          export HOME=$(mktemp -d)
-        '';
         preBuild = ''
           mkdir -p web/dist
           cp -R ${cowboy-web}/. web/dist/

@@ -46,7 +46,7 @@ Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
 | `0007_inference` | `inference_config` + `inference_secrets` tables |
 | `0008_turn_verdict` | `awaiting_user` + `done` (persisted confirm verdict) |
 | `0009_judge_runs` | `judge_runs` JSONB history |
-| `0010_system_session` | `system` flag (the memory janitor session) |
+| `0010_system_session` | `system` flag for machine-driven, view-only sessions |
 | `0011_scheduled_wakeups` | persisted agent wakeups |
 | `0012_compact_event_log` | drops the duplicate event index, removes transient telemetry, folds legacy tool updates into their initial row |
 

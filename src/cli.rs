@@ -22,10 +22,6 @@ enum Command {
     Serve(ServeArgs),
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     TryAgent(TryAgentArgs),
-    /// Memory write path. Reads are plain `rg`/`cat` over the store (see the
-    /// `memory` skill); `mem` is the validated WRITE: it enqueues a proposal to
-    /// the running daemon's queue → the janitor dedups/judges/commits.
-    Mem(MemArgs),
 }
 
 #[derive(Args)]
@@ -38,44 +34,6 @@ pub struct TryAgentArgs {
     cwd: PathBuf,
     /// The prompt to send.
     prompt: String,
-}
-
-/// `cowboy mem …` — the validated memory WRITE path (reads are `rg`/`cat`).
-#[derive(Args)]
-pub struct MemArgs {
-    #[command(subcommand)]
-    pub command: MemCommand,
-}
-
-#[derive(Subcommand)]
-pub enum MemCommand {
-    /// Record a memory candidate: validate, then enqueue a PROPOSAL to the
-    /// daemon (the janitor dedups/judges/commits — this never writes a file).
-    Record(MemRecordArgs),
-    /// Soft-archive a memory by name (move to archive/; never hard-delete).
-    Forget {
-        /// Memory name (the `.md` stem).
-        name: String,
-    },
-}
-
-#[derive(Args)]
-pub struct MemRecordArgs {
-    /// Memory name (kebab-case; the `.md` stem).
-    #[arg(long)]
-    pub name: String,
-    /// One-line description — the recall hook.
-    #[arg(long)]
-    pub description: String,
-    /// Memory type: user | feedback | project | reference.
-    #[arg(long = "type", default_value = "reference")]
-    pub mem_type: String,
-    /// Target tier (a project cwd-slug); omit for the machine tier.
-    #[arg(long)]
-    pub tier: Option<String>,
-    /// The memory body (everything after `--`).
-    #[arg(trailing_var_arg = true)]
-    pub body: Vec<String>,
 }
 
 #[derive(Args)]
@@ -100,27 +58,6 @@ pub struct ServeArgs {
     /// `cowboy`; that's the production URL.
     #[arg(long, env = "COWBOY_POSTGRES_URL")]
     pub postgres_url: Option<String>,
-
-    /// Enable the in-process memory subsystem (the fold of mnemosyne, p5): the
-    /// queue + debounce, the `/api/memory/record` + `/api/memory/forget`
-    /// endpoints, the memory-janitor system session, the reconcile + tidy
-    /// loops. DEFAULT OFF — when false NOTHING memory-related starts and the
-    /// daemon behaves exactly as before.
-    #[arg(long, env = "COWBOY_MEMORY_ENABLED", default_value_t = false)]
-    pub memory_enabled: bool,
-
-    /// Root of the tiered memory store (`<root>/{machine,projects/<slug>/memory,
-    /// archive}/`). A leading `~` is expanded to `$HOME`. Defaults to
-    /// `~/.agents/memory` (matches Claude Code's `CLAUDE_CODE_REMOTE_MEMORY_DIR`
-    /// keying). Only consulted when `--memory-enabled`.
-    #[arg(long, env = "COWBOY_MEMORY_ROOT", default_value = "~/.agents/memory")]
-    pub memory_root: PathBuf,
-
-    /// Provider id the memory-janitor system session runs as (the in-process
-    /// judge that dedups/merges/tiers candidates and emits resolve-ops). Only
-    /// consulted when `--memory-enabled`.
-    #[arg(long, env = "COWBOY_MEMORY_JANITOR_PROVIDER", default_value = "codex")]
-    pub memory_janitor_provider: String,
 }
 
 impl Cli {
@@ -136,7 +73,6 @@ impl Cli {
                     .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
                     .await
             }
-            Command::Mem(args) => crate::memory::mem_cli(args).await,
         }
     }
 }

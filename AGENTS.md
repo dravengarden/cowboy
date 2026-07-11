@@ -29,11 +29,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   (memory: cowboy-shell-symlink-fresh-worktree)
 
 ## Memory / sessions
-- cowboy-spawned agents inherit `CLAUDE_CODE_REMOTE_MEMORY_DIR` (set on
-  `cowboy.service`) → their CC auto-memory lands in the machine-level mnemosyne
-  store, keyed by the session's cwd-slug. The New Session picker
-  (`GET /api/workspaces`) lets you open a session in any columbus project's
-  worktree, which is what makes per-project memory + AGENTS.md load.
+- cowboy does not own agent memory. Codex uses its native local-memory feature
+  through the normal user `CODEX_HOME`; required project guidance stays in
+  `AGENTS.md`, docs, tests, hooks, and skills.
+- The New Session picker (`GET /api/workspaces`) opens sessions in a Columbus
+  project's worktree so the correct project guidance and trusted config load.
 
 ## Frontend
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),

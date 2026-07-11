@@ -36,8 +36,8 @@ export interface SessionMeta {
   title: string;
   status: Status;
   origin?: SessionOrigin;
-  /** True for the machine-driven VIEW-ONLY system session (the mnemosyne memory
-   *  janitor): the UI hides its composer and shows a "System" badge. Persisted. */
+  /** True for a machine-driven, view-only system session: the UI hides its
+   *  composer and shows a "System" badge. Persisted. */
   system?: boolean;
   /** Per-session auto-resume OVERRIDE: `null`/absent = inherit the global
    *  default (`settings['session.autoResume.default']`); `true`/`false` = force.

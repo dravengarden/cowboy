@@ -1664,7 +1664,7 @@ export function App({
                                 >
                                     {active.system ? (
                                         <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
-                                            View-only system session — managed by mnemosyne
+                                            View-only system session — managed by cowboy
                                         </Box>
                                     ) : (
                                         <Composer
@@ -1802,7 +1802,7 @@ export function App({
                         >
                             {active.system ? (
                                 <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
-                                    View-only system session — managed by mnemosyne
+                                    View-only system session — managed by cowboy
                                 </Box>
                             ) : (
                                 <Composer
