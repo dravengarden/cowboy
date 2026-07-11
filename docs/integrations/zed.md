@@ -4,25 +4,26 @@ Zed starts `cowboy serve-acp` as a stdio External Agent. The bridge connects to
 the already-running cowboy daemon (`http://127.0.0.1:3333` by default); it does
 not start another Hub or another copy of a provider session.
 
-Add three custom agents so a thread's Zed agent identity stays fixed to its
-Cowboy provider:
+Override the three official Registry IDs with custom commands so a thread's Zed
+agent identity stays fixed to its Cowboy provider while Zed keeps the official
+provider display name and icon:
 
 ```json
 {
   "agent_servers": {
-    "cowboy-codex": {
+    "codex-acp": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "codex"],
       "env": {}
     },
-    "cowboy-claude": {
+    "claude-acp": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "claude-code"],
       "env": {}
     },
-    "cowboy-gemini": {
+    "gemini": {
       "type": "custom",
       "command": "cowboy",
       "args": ["serve-acp", "--provider", "gemini"],
@@ -31,6 +32,11 @@ Cowboy provider:
   }
 }
 ```
+
+The Registry IDs are intentional. Current Zed resolves display metadata and
+SVG icons by agent ID even when the executable is overridden with
+`type: "custom"`. Using unrelated IDs such as `cowboy-codex` works, but Zed
+renders its generic sparkle icon instead.
 
 When Zed is attached to a remote project, the command must resolve on that
 remote host. Set `COWBOY_DAEMON_URL` or add `--daemon-url` when the daemon is not
@@ -52,9 +58,9 @@ The bridge supports:
 
 ## Known TODOs
 
-- Custom `settings.json` agents have no icon field. Publish three ACP Registry
-  entries (or a small Zed extension) with the Codex, Claude, and Gemini SVGs.
-  One dynamic Cowboy agent cannot change icons per session in stock Zed.
+- Formal `Cowboy · Provider` names with provider icons would require published
+  ACP Registry entries. The official-ID overrides above preserve the original
+  provider names and icons without modifying Zed-owned Registry files.
 - Zed-provided MCP servers and `additionalDirectories` are logged but not yet
   forwarded into the daemon-owned provider session.
 - Codex foreground turns and commands are authoritative today. Detached
