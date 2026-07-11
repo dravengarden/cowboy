@@ -94,6 +94,7 @@ pub struct LoadedSession {
 #[derive(Clone)]
 pub struct Store {
     pool: PgPool,
+    artifacts: crate::artifacts::ArtifactStore,
 }
 
 impl Store {
@@ -102,14 +103,17 @@ impl Store {
     /// # Errors
     /// If the URL is malformed or the DB is unreachable within the connect
     /// timeout.
-    pub async fn connect(url: &str) -> Result<Self> {
+    pub async fn connect(url: &str, artifact_dir: std::path::PathBuf) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(8)
             .acquire_timeout(Duration::from_secs(5))
             .connect(url)
             .await
             .with_context(|| format!("connecting to postgres {url}"))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            artifacts: crate::artifacts::ArtifactStore::new(artifact_dir)?,
+        })
     }
 
     /// Run embedded migrations under `./migrations/`. Idempotent.
@@ -210,40 +214,27 @@ impl Store {
         Ok(out)
     }
 
-    /// Read one seq-aligned history page directly from Postgres. A page becomes
-    /// immutable as soon as any later seq exists.
+    /// Read one cursor-addressed history page directly from Postgres.
     pub async fn history_page(
         &self,
         session_id: &str,
-        page: usize,
+        before_seq: u64,
         page_size: usize,
-    ) -> Result<(Vec<Envelope>, bool)> {
-        let lo = u64::try_from(page)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(u64::try_from(page_size).unwrap_or(u64::MAX));
-        let hi = lo.saturating_add(u64::try_from(page_size).unwrap_or(u64::MAX));
-        let lo_i64 = i64::try_from(lo).context("history lower seq overflow")?;
-        let hi_i64 = i64::try_from(hi).context("history upper seq overflow")?;
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        let before_i64 = i64::try_from(before_seq).context("history cursor overflow")?;
+        let limit = i64::try_from(page_size).context("history page size overflow")?;
         let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
             "SELECT seq, payload, 0::bigint AS total_count FROM events \
-             WHERE session_id = $1 AND seq >= $2 AND seq < $3 ORDER BY seq ASC",
+             WHERE session_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3",
         )
         .bind(session_id)
-        .bind(lo_i64)
-        .bind(hi_i64)
+        .bind(before_i64)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .with_context(|| format!("SELECT history page for {session_id}"))?;
-        let immutable: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = $1 AND seq >= $2)",
-        )
-        .bind(session_id)
-        .bind(hi_i64)
-        .fetch_one(&self.pool)
-        .await
-        .with_context(|| format!("SELECT history watermark for {session_id}"))?;
         let mut events = Vec::with_capacity(rows.len());
-        for row in rows {
+        for row in rows.into_iter().rev() {
             match serde_json::from_value::<Event>(row.payload) {
                 Ok(event) => events.push(Envelope {
                     session_id: session_id.to_owned(),
@@ -259,7 +250,20 @@ impl Store {
                 ),
             }
         }
-        Ok((events, immutable))
+        let oldest = events.first().map(|event| event.seq);
+        let reached_start = match oldest {
+            Some(seq) => !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = $1 AND seq < $2)",
+            )
+            .bind(session_id)
+            .bind(i64::try_from(seq).unwrap_or(i64::MAX))
+            .fetch_one(&self.pool)
+            .await
+            .with_context(|| format!("SELECT history start for {session_id}"))?,
+            None => true,
+        };
+        let next_before_seq = (!reached_start).then_some(oldest.unwrap_or(before_seq));
+        Ok((events, next_before_seq, reached_start))
     }
 
     /// Insert a brand-new session. Caller is expected to set `next_seq = 0`
@@ -495,6 +499,7 @@ impl Store {
         for env in events {
             let mut payload = serde_json::to_value(&env.event).context("serialize event")?;
             strip_nul(&mut payload);
+            self.artifacts.externalize_images(&mut payload)?;
             let seq = i64::try_from(env.seq).context("seq i64 overflow")?;
             sqlx::query(
                 "INSERT INTO events(session_id, seq, payload) VALUES ($1, $2, $3) \
@@ -521,6 +526,10 @@ impl Store {
         }
         tx.commit().await.context("commit event batch")?;
         Ok(())
+    }
+
+    pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.artifacts.path(name)
     }
 
     /// Persist a session's queue + drafts (whole lists, as JSONB). Called on

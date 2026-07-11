@@ -124,7 +124,7 @@ export const FONT_PRESETS: FontPreset[] = [
   },
 ];
 
-export const DEFAULT_FONT_ID = "source-serif-4";
+export const DEFAULT_FONT_ID = "system";
 
 // The fallback face for an unset / unknown id — the product default. Resolved
 // from DEFAULT_FONT_ID so read()'s `getFontPreset("")` lands on it.

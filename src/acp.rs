@@ -40,6 +40,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
+use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -326,7 +327,7 @@ async fn agent_main(
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("spawning provider {} ({})", spec.id, spec.command))?;
 
@@ -342,6 +343,21 @@ async fn agent_main(
 
     let child_stdin = child.stdin.take().context("child stdin")?;
     let child_stdout = child.stdout.take().context("child stdout")?;
+    let child_stderr = child.stderr.take().context("child stderr")?;
+    let stderr_session = session_id.to_owned();
+    let stderr_provider = spec.id.to_owned();
+    let stderr_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(child_stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::warn!(
+                session = %stderr_session,
+                provider = %stderr_provider,
+                child = true,
+                message = %line,
+                "agent stderr"
+            );
+        }
+    });
 
     // Connect the crate directly to the child's pipes. The 0.4-era custom
     // stdio interceptors are gone: `config_option_update` now decodes natively
@@ -502,6 +518,7 @@ async fn agent_main(
     if let Some(dir) = &agent_cgroup {
         cgroup::kill_and_remove(dir);
     }
+    stderr_task.abort();
     result
 }
 

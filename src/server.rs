@@ -10,6 +10,7 @@
 //! design §9 auth/pairing is a follow-up.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -35,6 +36,7 @@ use crate::core::{
     SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::persistence::EventReducer;
+use crate::runtime::RuntimeHealth;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
 use tokio::sync::{mpsc, watch};
@@ -46,6 +48,7 @@ struct AppState {
     store: Option<Store>,
     persistence_health: Option<Arc<PersistenceHealth>>,
     shutdown: watch::Receiver<bool>,
+    runtime_health: Arc<RuntimeHealth>,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -54,6 +57,7 @@ const STORE_QUEUE_CAPACITY: usize = 8_192;
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     init_tracing();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let runtime_health = Arc::new(RuntimeHealth::default());
 
     // Phase 2: when --postgres-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
@@ -61,72 +65,91 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // clients can connect. Without --postgres-url the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host that doesn't have the cowboy-private postgres yet.
-    let (hub, store, persistence_health, writer_task) =
-        if let Some(url) = args.postgres_url.as_deref() {
-            let store = Store::connect(url).await.context("connecting postgres")?;
-            store.migrate().await.context("running migrations")?;
-            let (tx, rx) = mpsc::channel::<StoreWrite>(STORE_QUEUE_CAPACITY);
-            let health = Arc::new(PersistenceHealth::default());
-            let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
-            // Warm restore — sessions + events come back exactly as the daemon
-            // left them, so on a fresh process every WS client's first snapshot
-            // is correct.
-            let loaded = store.load_all().await.context("loading persisted state")?;
-            let restored: Vec<_> = loaded
-                .into_iter()
-                .map(|ls| RestoredSession {
-                    meta: ls.meta,
-                    log: ls.events,
-                    event_count: ls.event_count,
-                    reached_start: ls.reached_start,
-                    next_seq: ls.next_seq,
-                    queue: ls.queue,
-                    drafts: ls.drafts,
-                    judge_runs: ls.judge_runs,
-                })
-                .collect();
-            let restored_count = restored.len();
-            // Seed the global settings (auto-resume default + continuation template)
-            // BEFORE restore, so restore can compute each session's effective
-            // auto-resume (override ?? default) and enqueue a continuation for the
-            // opted-in interrupted ones.
-            match store.load_settings().await {
-                Ok(entries) => hub.load_settings(entries),
-                Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
-            }
-            // Inference provider configs + keys (the judge reads the key from memory).
-            let inf_cfg = store.load_inference_config().await.unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "loading inference config");
-                Vec::new()
-            });
-            let inf_keys = store.load_inference_secrets().await.unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "loading inference secrets");
-                Vec::new()
-            });
-            hub.load_inference(inf_cfg, inf_keys);
-            hub.restore(restored);
-            tracing::info!(
-                postgres = url,
-                restored = restored_count,
-                "persistence wired",
-            );
-            // Background DB writer: dequeues StoreWrite intents and applies them.
-            // Errors are logged but don't bring the daemon down — the in-memory
-            // state remains authoritative for the current process.
-            let writer_task = tokio::spawn(run_store_writer(
-                store.clone(),
-                rx,
-                Arc::clone(&health),
-                shutdown_rx.clone(),
-            ));
-            // Background sweeper: hard-delete sessions soft-deleted past the
-            // retention window, reclaiming their event storage.
-            tokio::spawn(run_purge_sweeper(store.clone()));
-            (hub, Some(store), Some(health), Some(writer_task))
-        } else {
-            tracing::info!("no --postgres-url: running in-memory only");
-            (Hub::new(), None, None, None)
-        };
+    let (hub, store, persistence_health, writer_task, purge_task) = if let Some(url) =
+        args.postgres_url.as_deref()
+    {
+        let store = Store::connect(url, args.data_dir.join("artifacts"))
+            .await
+            .context("connecting postgres")?;
+        store.migrate().await.context("running migrations")?;
+        let (tx, rx) = mpsc::channel::<StoreWrite>(STORE_QUEUE_CAPACITY);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
+        // Warm restore — sessions + events come back exactly as the daemon
+        // left them, so on a fresh process every WS client's first snapshot
+        // is correct.
+        let loaded = store.load_all().await.context("loading persisted state")?;
+        let restored: Vec<_> = loaded
+            .into_iter()
+            .map(|ls| RestoredSession {
+                meta: ls.meta,
+                log: ls.events,
+                event_count: ls.event_count,
+                reached_start: ls.reached_start,
+                next_seq: ls.next_seq,
+                queue: ls.queue,
+                drafts: ls.drafts,
+                judge_runs: ls.judge_runs,
+            })
+            .collect();
+        let restored_count = restored.len();
+        // Seed the global settings (auto-resume default + continuation template)
+        // BEFORE restore, so restore can compute each session's effective
+        // auto-resume (override ?? default) and enqueue a continuation for the
+        // opted-in interrupted ones.
+        match store.load_settings().await {
+            Ok(entries) => hub.load_settings(entries),
+            Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
+        }
+        // Inference provider configs + keys (the judge reads the key from memory).
+        let inf_cfg = store.load_inference_config().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "loading inference config");
+            Vec::new()
+        });
+        let inf_keys = store.load_inference_secrets().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "loading inference secrets");
+            Vec::new()
+        });
+        hub.load_inference(inf_cfg, inf_keys);
+        hub.restore(restored);
+        tracing::info!(
+            postgres = url,
+            restored = restored_count,
+            "persistence wired",
+        );
+        // Background DB writer: dequeues StoreWrite intents and applies them.
+        // Errors are logged but don't bring the daemon down — the in-memory
+        // state remains authoritative for the current process.
+        runtime_health.set_store_writer(true);
+        let writer_health = Arc::clone(&runtime_health);
+        let writer_store = store.clone();
+        let writer_persistence_health = Arc::clone(&health);
+        let writer_shutdown = shutdown_rx.clone();
+        let writer_task = tokio::spawn(async move {
+            run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown).await;
+            writer_health.set_store_writer(false);
+        });
+        // Background sweeper: hard-delete sessions soft-deleted past the
+        // retention window, reclaiming their event storage.
+        runtime_health.set_purge_sweeper(true);
+        let purge_health = Arc::clone(&runtime_health);
+        let purge_store = store.clone();
+        let purge_task = tokio::spawn(async move {
+            run_purge_sweeper(purge_store).await;
+            purge_health.set_purge_sweeper(false);
+            tracing::error!("purge sweeper exited unexpectedly");
+        });
+        (
+            hub,
+            Some(store),
+            Some(health),
+            Some(writer_task),
+            Some(purge_task),
+        )
+    } else {
+        tracing::info!("no --postgres-url: running in-memory only");
+        (Hub::new(), None, None, None, None)
+    };
     let supervisor = Arc::new(Supervisor::new(hub.clone(), args.workspace_root.clone()));
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
@@ -134,20 +157,31 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // used to live client-side. The Hub now makes the drain decision under its
     // lock and hands each ready prompt over this channel; we send it to the
     // agent here, off the lock. Wired before any client connects.
-    let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<DispatchReq>();
+    let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
-    tokio::spawn(run_dispatcher(
-        hub.clone(),
-        Arc::clone(&supervisor),
-        dispatch_rx,
-    ));
+    runtime_health.set_dispatcher(true);
+    let dispatcher_health = Arc::clone(&runtime_health);
+    let dispatcher_hub = hub.clone();
+    let dispatcher_supervisor = Arc::clone(&supervisor);
+    let dispatcher_task = tokio::spawn(async move {
+        run_dispatcher(dispatcher_hub, dispatcher_supervisor, dispatch_rx).await;
+        dispatcher_health.set_dispatcher(false);
+        tracing::error!("dispatcher exited unexpectedly");
+    });
 
     // Honor agent `ScheduleWakeup`s: fires a wake-prompt (via the same dispatch
     // path) at the scheduled time. Without this, an ACP-driven agent's scheduled
     // self-checks never fire and get consumed by the next user turn instead.
-    let (sched_tx, sched_rx) = mpsc::unbounded_channel::<crate::scheduler::ScheduleCmd>();
+    let (sched_tx, sched_rx) = mpsc::channel::<crate::scheduler::ScheduleCmd>(1_024);
     hub.set_scheduler_tx(sched_tx);
-    tokio::spawn(crate::scheduler::run_scheduler(hub.clone(), sched_rx));
+    runtime_health.set_scheduler(true);
+    let scheduler_health = Arc::clone(&runtime_health);
+    let scheduler_hub = hub.clone();
+    let scheduler_task = tokio::spawn(async move {
+        crate::scheduler::run_scheduler(scheduler_hub, sched_rx).await;
+        scheduler_health.set_scheduler(false);
+        tracing::error!("scheduler exited unexpectedly");
+    });
     // Re-arm wakeups that were pending across this restart; any already overdue
     // fire immediately (catch-up for the downtime).
     if let Some(store) = store.as_ref() {
@@ -212,10 +246,16 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             store,
             persistence_health,
             shutdown: shutdown_rx,
+            runtime_health,
         },
         shutdown_tx,
     )
     .await;
+    dispatcher_task.abort();
+    scheduler_task.abort();
+    if let Some(task) = purge_task {
+        task.abort();
+    }
     if let Some(task) = writer_task {
         match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
             Ok(Ok(())) => {}
@@ -513,7 +553,7 @@ async fn run_purge_sweeper(store: Store) {
 async fn run_dispatcher(
     hub: Hub,
     supervisor: Arc<Supervisor>,
-    mut rx: mpsc::UnboundedReceiver<DispatchReq>,
+    mut rx: mpsc::Receiver<DispatchReq>,
 ) {
     while let Some(req) = rx.recv().await {
         let DispatchReq {
@@ -584,12 +624,14 @@ async fn serve_axum(
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
+        .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/sessions", post(api_new_session))
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
-        .route("/api/history/{id}/{page}", get(api_history))
+        .route("/api/history/{id}", get(api_history))
+        .route("/api/artifacts/{name}", get(api_artifact))
         .route("/ws", any(ws_upgrade))
         // Everything else: the embedded SPA, with index.html fallback for
         // client-side routes.
@@ -641,6 +683,9 @@ pub(crate) fn init_tracing() {
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Response {
+    if !state.runtime_health.is_healthy(state.store.is_some()) {
+        return (StatusCode::SERVICE_UNAVAILABLE, "background task degraded").into_response();
+    }
     if state
         .persistence_health
         .as_ref()
@@ -703,6 +748,7 @@ struct Metrics {
     persistence_pending: usize,
     persistence_dropped: u64,
     persistence_failed_batches: u64,
+    persistence_last_error: Option<String>,
 }
 
 /// Resident set size of THIS process (the daemon, not its agent children) from
@@ -736,8 +782,49 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
             .persistence_health
             .as_ref()
             .map_or(0, |h| h.failed_batches()),
+        persistence_last_error: state
+            .persistence_health
+            .as_ref()
+            .and_then(|h| h.last_error()),
     })
     .into_response()
+}
+
+async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
+    let sessions_live = state.hub.session_list().len();
+    let (db_bytes, events_rows, sessions_deleted) = match &state.store {
+        Some(store) => store.storage_metrics().await.unwrap_or((0, 0, 0)),
+        None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
+    };
+    let health = state.persistence_health.as_ref();
+    let mut body = format!(
+        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n",
+        u8::from(state.runtime_health.is_healthy(state.store.is_some())),
+        daemon_rss_bytes(),
+        health.map_or(0, |h| h.pending()),
+        health.map_or(0, |h| h.dropped()),
+        health.map_or(0, |h| h.failed_batches()),
+        u8::from(health.is_none_or(|h| h.is_healthy())),
+    );
+    body.push_str("# TYPE cowboy_agent_memory_bytes gauge\n# TYPE cowboy_agent_pids gauge\n# TYPE cowboy_agent_cpu_seconds_total counter\n");
+    for (session, stats) in state.supervisor.resource_stats() {
+        let seconds = stats.cpu_usage_usec / 1_000_000;
+        let micros = stats.cpu_usage_usec % 1_000_000;
+        let _ = writeln!(
+            body,
+            "cowboy_agent_memory_bytes{{session=\"{session}\"}} {}\ncowboy_agent_pids{{session=\"{session}\"}} {}\ncowboy_agent_cpu_seconds_total{{session=\"{session}\"}} {seconds}.{micros:06}",
+            stats.memory_bytes,
+            stats.pids,
+        );
+    }
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 /// One selectable working directory for the New Session dialog's dropdown.
@@ -954,6 +1041,13 @@ async fn api_search_files(
 #[derive(Debug, Serialize)]
 struct HistoryResponse {
     events: Vec<Envelope>,
+    next_before_seq: Option<u64>,
+    reached_start: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryQuery {
+    before_seq: u64,
 }
 
 /// One seq-aligned page of a session's history (events `[k·HISTORY_PAGE,
@@ -965,7 +1059,8 @@ struct HistoryResponse {
 /// (it has the tail over WS). Unknown session → 404; out-of-range page → `[]`.
 async fn api_history(
     State(state): State<Arc<AppState>>,
-    Path((session_id, page)): Path<(String, usize)>,
+    Path(session_id): Path<String>,
+    Query(query): Query<HistoryQuery>,
 ) -> Response {
     if state.hub.session_info(&session_id).is_none() {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
@@ -973,31 +1068,63 @@ async fn api_history(
     let history = match &state.store {
         Some(store) => {
             store
-                .history_page(&session_id, page, crate::core::HISTORY_PAGE)
+                .history_page(&session_id, query.before_seq, crate::core::HISTORY_PAGE)
                 .await
         }
         None => Ok(state
             .hub
-            .history_page(&session_id, page)
+            .history_page(&session_id, query.before_seq)
             .unwrap_or_default()),
     };
-    let (events, immutable) = match history {
+    let (events, next_before_seq, reached_start) = match history {
         Ok(page) => page,
         Err(e) => {
-            tracing::warn!(session = %session_id, page, error = %e, "history query failed");
+            tracing::warn!(session = %session_id, before_seq = query.before_seq, error = %e, "history query failed");
             return (StatusCode::SERVICE_UNAVAILABLE, "history unavailable").into_response();
         }
     };
-    let cache = if immutable {
-        "public, max-age=31536000, immutable"
-    } else {
-        "no-store"
-    };
+    let cache = "public, max-age=31536000, immutable";
     (
         [(header::CACHE_CONTROL, cache)],
-        Json(HistoryResponse { events }),
+        Json(HistoryResponse {
+            events,
+            next_before_seq,
+            reached_start,
+        }),
     )
         .into_response()
+}
+
+async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> Response {
+    let Some(path) = state
+        .store
+        .as_ref()
+        .and_then(|store| store.artifact_path(&name))
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let content_type = mime_guess::from_path(&name)
+                .first_or_octet_stream()
+                .to_string();
+            (
+                [
+                    (header::CONTENT_TYPE, content_type),
+                    (
+                        header::CACHE_CONTROL,
+                        "public, max-age=31536000, immutable".to_owned(),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, artifact = %name, "reading artifact failed");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
 }
 
 /// The built web UI (Vite output), embedded at compile time. The flake builds

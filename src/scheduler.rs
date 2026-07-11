@@ -103,7 +103,7 @@ fn now_ms() -> i64 {
 
 /// Background task: own the pending-wakeup table and fire due ones via
 /// `Hub::submit`. Returns when the command channel closes (Hub dropped).
-pub async fn run_scheduler(hub: Hub, mut rx: mpsc::UnboundedReceiver<ScheduleCmd>) {
+pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
     let mut pending: HashMap<Key, Pending> = HashMap::new();
     // Consecutive autonomous wakeup fires since the last human turn, per session.
     let mut fires: HashMap<String, u32> = HashMap::new();

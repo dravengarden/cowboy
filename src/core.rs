@@ -17,6 +17,7 @@
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -28,8 +29,7 @@ pub const SNAPSHOT_TAIL: usize = 200;
 /// Postgres and are fetched by `/api/history`.
 pub const HOT_TAIL: usize = 1_000;
 const HOT_TAIL_TRIM_BATCH: usize = 200;
-/// Fixed history page size (events) for the HTTP `/api/history` route. Fixed +
-/// seq-aligned so each page has a STABLE url → safe to cache `immutable`.
+/// Fixed history page size (events) for the cursor-based HTTP history route.
 pub const HISTORY_PAGE: usize = 200;
 
 /// Who opened a session. Used by the UI to render an `origin` badge and
@@ -955,6 +955,7 @@ pub struct PersistenceHealth {
     dropped: AtomicU64,
     failed_batches: AtomicU64,
     degraded: AtomicBool,
+    last_error: Mutex<Option<String>>,
 }
 
 impl PersistenceHealth {
@@ -978,6 +979,11 @@ impl PersistenceHealth {
         !self.degraded.load(Ordering::Relaxed)
     }
 
+    #[must_use]
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().clone()
+    }
+
     pub(crate) fn consumed(&self, count: usize) {
         self.pending.fetch_sub(count, Ordering::Relaxed);
     }
@@ -985,6 +991,13 @@ impl PersistenceHealth {
     pub(crate) fn mark_failed_batch(&self) {
         self.failed_batches.fetch_add(1, Ordering::Relaxed);
         self.degraded.store(true, Ordering::Relaxed);
+        *self.last_error.lock() = Some("database write retries exhausted".to_owned());
+    }
+
+    fn mark_rejected(&self, error: &str) {
+        self.dropped.fetch_add(1, Ordering::Relaxed);
+        self.degraded.store(true, Ordering::Relaxed);
+        *self.last_error.lock() = Some(error.to_owned());
     }
 }
 
@@ -1007,10 +1020,33 @@ impl StoreSink {
         self.health.pending.fetch_add(1, Ordering::Relaxed);
         match self.tx.try_send(write) {
             Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(write))
+                if !matches!(write, StoreWrite::AppendEvent(_)) =>
+            {
+                // Low-volume state (queue, drafts, settings, lifecycle) must not
+                // disappear merely because a burst of stream events filled the
+                // bounded queue. Wait for capacity off the synchronous Hub path.
+                let tx = self.tx.clone();
+                let health = Arc::clone(&self.health);
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    runtime.spawn(async move {
+                        if let Err(error) = tx.send(write).await {
+                            health.consumed(1);
+                            health.mark_rejected(&error.to_string());
+                            tracing::error!(%error, "critical persistence intent was not accepted");
+                        }
+                    });
+                    true
+                } else {
+                    self.health.consumed(1);
+                    self.health
+                        .mark_rejected("persistence queue full outside Tokio runtime");
+                    false
+                }
+            }
             Err(error) => {
                 self.health.pending.fetch_sub(1, Ordering::Relaxed);
-                self.health.dropped.fetch_add(1, Ordering::Relaxed);
-                self.health.degraded.store(true, Ordering::Relaxed);
+                self.health.mark_rejected(&error.to_string());
                 tracing::error!(%error, "persistence queue rejected an intent");
                 false
             }
@@ -1120,11 +1156,11 @@ struct HubInner {
     /// Set once at startup via [`Hub::set_dispatch_tx`]; `None` until then (and
     /// in tests), in which case a drain decision is computed but no prompt is
     /// actually sent. See [`DispatchReq`].
-    dispatch_tx: Mutex<Option<mpsc::UnboundedSender<DispatchReq>>>,
+    dispatch_tx: Mutex<Option<mpsc::Sender<DispatchReq>>>,
     /// Hand-off to the background scheduler task that fires agent-armed
     /// `ScheduleWakeup`s. Set once at startup via [`Hub::set_scheduler_tx`];
     /// `None` until then (and in tests) ⇒ wakeups are simply not honored.
-    scheduler_tx: Mutex<Option<mpsc::UnboundedSender<crate::scheduler::ScheduleCmd>>>,
+    scheduler_tx: Mutex<Option<mpsc::Sender<crate::scheduler::ScheduleCmd>>>,
     /// Per-state arbiters for the generic optimistic-sync channel, keyed by
     /// state name (`"title"`, `"order"`, …). See [`SyncArbiter`].
     sync: Mutex<HashMap<String, SyncArbiter>>,
@@ -1179,13 +1215,13 @@ impl Hub {
     /// Wire the background dispatcher's hand-off channel. Called once at startup
     /// (in `crate::server`) after the dispatcher task is spawned, before any
     /// client connects. Until set, drains compute but dispatch nothing.
-    pub fn set_dispatch_tx(&self, tx: mpsc::UnboundedSender<DispatchReq>) {
+    pub fn set_dispatch_tx(&self, tx: mpsc::Sender<DispatchReq>) {
         *self.inner.dispatch_tx.lock() = Some(tx);
     }
 
     /// Wire the background scheduler's hand-off channel (mirrors
     /// [`Self::set_dispatch_tx`]). Until set, [`Self::schedule_wakeup`] is a no-op.
-    pub fn set_scheduler_tx(&self, tx: mpsc::UnboundedSender<crate::scheduler::ScheduleCmd>) {
+    pub fn set_scheduler_tx(&self, tx: mpsc::Sender<crate::scheduler::ScheduleCmd>) {
         *self.inner.scheduler_tx.lock() = Some(tx);
     }
 
@@ -1196,7 +1232,7 @@ impl Hub {
     pub fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String) {
         let fire_at_ms = crate::scheduler::fire_at_from_delay(delay_seconds);
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
-            let _ = tx.send(crate::scheduler::ScheduleCmd::Arm {
+            let _ = tx.try_send(crate::scheduler::ScheduleCmd::Arm {
                 session_id: session_id.to_owned(),
                 fire_at_ms,
                 prompt: prompt.clone(),
@@ -1216,7 +1252,7 @@ impl Hub {
     /// (catch-up for time the daemon was down).
     pub fn rearm_wakeup(&self, session_id: &str, fire_at_ms: i64, prompt: String) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
-            let _ = tx.send(crate::scheduler::ScheduleCmd::Arm {
+            let _ = tx.try_send(crate::scheduler::ScheduleCmd::Arm {
                 session_id: session_id.to_owned(),
                 fire_at_ms,
                 prompt,
@@ -1239,7 +1275,7 @@ impl Hub {
     /// consecutive-wakeup runaway guard. No-op if the scheduler isn't wired.
     fn notify_human_turn(&self, session_id: &str) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
-            let _ = tx.send(crate::scheduler::ScheduleCmd::HumanTurn {
+            let _ = tx.try_send(crate::scheduler::ScheduleCmd::HumanTurn {
                 session_id: session_id.to_owned(),
             });
         }
@@ -1251,7 +1287,7 @@ impl Hub {
     /// the startup re-arm (an overdue time fires immediately, catch-up).
     fn arm_draft_timer(&self, session_id: &str, draft_id: &str, fire_at_ms: i64) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
-            let _ = tx.send(crate::scheduler::ScheduleCmd::ArmDraft {
+            let _ = tx.try_send(crate::scheduler::ScheduleCmd::ArmDraft {
                 session_id: session_id.to_owned(),
                 draft_id: draft_id.to_owned(),
                 fire_at_ms,
@@ -1264,7 +1300,7 @@ impl Hub {
     /// so a dropped draft can't still fire. No-op if the scheduler isn't wired.
     fn cancel_draft_timer(&self, session_id: &str, draft_id: &str) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
-            let _ = tx.send(crate::scheduler::ScheduleCmd::CancelDraft {
+            let _ = tx.try_send(crate::scheduler::ScheduleCmd::CancelDraft {
                 session_id: session_id.to_owned(),
                 draft_id: draft_id.to_owned(),
             });
@@ -1513,31 +1549,25 @@ impl Hub {
         })
     }
 
-    /// One fixed-size, seq-aligned page of history for the HTTP history route:
-    /// page `k` is events with seq in `[k·HISTORY_PAGE, (k+1)·HISTORY_PAGE)`.
-    /// Since seqs are contiguous from 0, that's a direct index slice. Returns the
-    /// events plus `immutable` = whether the page can never change again (the
-    /// NEXT page has started, so nothing more will land in this one) — the HTTP
-    /// handler turns that into a long-lived `Cache-Control: immutable`. An
-    /// out-of-range page yields an empty slice.
+    /// Up to [`HISTORY_PAGE`] events older than `before_seq`. Cursor pagination
+    /// remains efficient when canonicalization leaves gaps in the durable seqs.
+    /// Returns ascending events plus the next cursor and whether the beginning
+    /// of the retained in-memory window was reached.
     #[must_use]
-    pub fn history_page(&self, session_id: &str, page: usize) -> Option<(Vec<Envelope>, bool)> {
+    pub fn history_page(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Option<(Vec<Envelope>, Option<u64>, bool)> {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|s| {
-            // Page k = events whose SEQ is in [k·P, (k+1)·P). Sliced by SEQ, not
-            // log index: seqs aren't always contiguous from 0 (some get assigned
-            // without landing in the log), so an index slice returns a window
-            // that doesn't line up with the client's seq-based paging and the
-            // client never advances. The log is seq-sorted → binary-search bounds.
-            let lo_seq = (page as u64).saturating_mul(HISTORY_PAGE as u64);
-            let hi_seq = lo_seq.saturating_add(HISTORY_PAGE as u64);
-            let lo = s.log.partition_point(|e| e.seq < lo_seq);
-            let hi = s.log.partition_point(|e| e.seq < hi_seq);
-            let events = s.log[lo..hi].to_vec();
-            // Complete (immutable) once an event with seq ≥ hi_seq exists —
-            // nothing more can land in this page. The latest page can still grow.
-            let immutable = hi < s.log.len();
-            (events, immutable)
+            let end = s.log.partition_point(|e| e.seq < before_seq);
+            let start = end.saturating_sub(HISTORY_PAGE);
+            let events = s.log[start..end].to_vec();
+            let reached_start = s.reached_start && start == 0;
+            let next_before_seq =
+                (!reached_start).then(|| events.first().map_or(before_seq, |event| event.seq));
+            (events, next_before_seq, reached_start)
         })
     }
 
@@ -2848,7 +2878,16 @@ impl Hub {
 
     fn send_dispatch(&self, req: DispatchReq) {
         if let Some(tx) = self.inner.dispatch_tx.lock().as_ref() {
-            let _ = tx.send(req);
+            if let Err(error) = tx.try_send(req) {
+                let req = error.into_inner();
+                tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
+                self.clear_in_flight(&req.session_id);
+                self.requeue_prompt(&req.session_id, req.text, req.content, req.cmid);
+                self.broadcast_error(
+                    Some(req.session_id),
+                    "dispatch queue is full; prompt remains queued".to_owned(),
+                );
+            }
         }
     }
 
@@ -3876,5 +3915,62 @@ mod confirm_hold_tests {
         let (snapshot, reached_start) = hub.snapshot("bounded").expect("session snapshot");
         assert_eq!(snapshot.len(), SNAPSHOT_TAIL);
         assert!(!reached_start);
+    }
+
+    #[test]
+    fn cursor_history_ignores_sequence_gaps() {
+        let hub = hub_with_session("cursor");
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut("cursor").expect("session");
+            session.log = (0..450)
+                .map(|index| Envelope {
+                    session_id: "cursor".to_owned(),
+                    seq: u64::try_from(index * 3).unwrap(),
+                    event: Event::TurnEnd {
+                        stop_reason: "done".to_owned(),
+                    },
+                    cmid: None,
+                })
+                .collect();
+            session.reached_start = true;
+        }
+        let (newer, cursor, reached_start) = hub.history_page("cursor", u64::MAX).unwrap();
+        assert_eq!(newer.len(), HISTORY_PAGE);
+        assert!(!reached_start);
+        let (older, cursor, reached_start) = hub.history_page("cursor", cursor.unwrap()).unwrap();
+        assert_eq!(older.len(), HISTORY_PAGE);
+        assert!(!reached_start);
+        let (oldest, cursor, reached_start) = hub.history_page("cursor", cursor.unwrap()).unwrap();
+        assert_eq!(oldest.len(), 50);
+        assert!(reached_start);
+        assert_eq!(cursor, None);
+    }
+
+    #[tokio::test]
+    async fn critical_persistence_waits_behind_a_full_event_queue() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let health = Arc::new(PersistenceHealth::default());
+        let sink = StoreSink::new(tx, Arc::clone(&health));
+        assert!(sink.send(StoreWrite::AppendEvent(Envelope {
+            session_id: "s".to_owned(),
+            seq: 1,
+            event: Event::TurnEnd {
+                stop_reason: "done".to_owned(),
+            },
+            cmid: None,
+        })));
+        assert!(sink.send(StoreWrite::UpdateTitle {
+            session_id: "s".to_owned(),
+            title: "durable".to_owned(),
+        }));
+        assert!(matches!(rx.recv().await, Some(StoreWrite::AppendEvent(_))));
+        assert!(matches!(
+            rx.recv().await,
+            Some(StoreWrite::UpdateTitle { .. })
+        ));
+        health.consumed(2);
+        assert_eq!(health.dropped(), 0);
+        assert_eq!(health.pending(), 0);
     }
 }

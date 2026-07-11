@@ -25,7 +25,7 @@ impl EventReducer {
         let sid = env.session_id.clone();
         let Event::Update { update } = &env.event else {
             self.text.remove(&sid);
-            if matches!(env.event, Event::TurnEnd { .. }) {
+            if matches!(env.event, Event::TurnEnd { .. } | Event::Lifecycle { .. }) {
                 self.tools.retain(|(session, _), _| session != &sid);
             }
             return Some(env);

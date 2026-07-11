@@ -47,6 +47,10 @@ export type RenderItem = { key: string } & (
   | { kind: "cleared"; at: number }
 );
 
+// Store timelines are immutable arrays. Transcript and Composer often derive
+// the same array in one render, so share the fold by identity.
+const DERIVE_CACHE = new WeakMap<Envelope[], RenderItem[]>();
+
 /// Convert an ACP content block into a renderable chunk (or null if we don't
 /// support that type yet).
 function chunkOf(update: AcpUpdate): ContentChunk | null {
@@ -122,6 +126,8 @@ function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void 
 }
 
 export function derive(timeline: Envelope[]): RenderItem[] {
+  const cached = DERIVE_CACHE.get(timeline);
+  if (cached) return cached;
   const items: RenderItem[] = [];
   const toolIndex = new Map<string, number>();
   const permIndex = new Map<string, number>();
@@ -270,7 +276,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   // forever, even after the turn ended, because that render path isn't gated on
   // session status. The transient "thinking, no text yet" state is covered by
   // the trailing indicator instead, so an empty thought carries nothing.
-  return items.filter((it) => it.kind !== "thought" || it.text.trim() !== "");
+  const result = items.filter((it) => it.kind !== "thought" || it.text.trim() !== "");
+  DERIVE_CACHE.set(timeline, result);
+  return result;
 }
 
 /// The session's current plan, or null if it has none.

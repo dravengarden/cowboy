@@ -28,6 +28,8 @@ tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
+base64 = "0.22"
+sha2 = "0.10"
 # parking_lot Mutex: non-poisoning. A panic inside a critical section drops the
 # guard and frees the lock instead of poisoning it, which would otherwise make
 # every other task's lock-acquire panic too — a daemon-wide cascade. Hub holds

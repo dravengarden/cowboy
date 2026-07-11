@@ -60,6 +60,15 @@ impl Supervisor {
         &self.workspace_root
     }
 
+    #[must_use]
+    pub fn resource_stats(&self) -> Vec<(String, crate::cgroup::Stats)> {
+        self.senders
+            .lock()
+            .keys()
+            .filter_map(|id| crate::cgroup::stats(id).map(|stats| (id.clone(), stats)))
+            .collect()
+    }
+
     /// Create a new session for `provider`, optionally rooted at `cwd`
     /// (resolved under the workspace root), tagged with the surface
     /// (`origin`) that opened it. Returns the cowboy session id.
@@ -133,6 +142,8 @@ impl Supervisor {
         if senders.contains_key(session_id) {
             return Ok(()); // already live
         }
+        // One in-flight turn per session is enforced by Hub, so this channel is
+        // logically bounded even though Tokio's transport is unbounded.
         let (tx, rx) = mpsc::unbounded_channel();
         let hub = self.hub.clone();
         let spec = spec.clone();
@@ -175,9 +186,9 @@ impl Supervisor {
             match senders.get(session_id) {
                 Some(tx) => match tx.send(cmd) {
                     Ok(()) => return Ok(()),
-                    Err(e) => {
+                    Err(error) => {
                         senders.remove(session_id);
-                        e.0
+                        error.0
                     }
                 },
                 None => cmd,

@@ -77,6 +77,34 @@ pub fn kill_and_remove(dir: &Path) {
     tracing::warn!(dir = %dir.display(), "cgroup: leaf not removable after kill (left empty)");
 }
 
+#[derive(Debug, Clone)]
+pub struct Stats {
+    pub memory_bytes: u64,
+    pub pids: u64,
+    pub cpu_usage_usec: u64,
+}
+
+/// Current resource use for one delegated agent subtree.
+#[must_use]
+pub fn stats(session_id: &str) -> Option<Stats> {
+    let dir = agent_dir(session_id)?;
+    let memory_bytes = read_number(&dir.join("memory.current"))?;
+    let pids = read_number(&dir.join("pids.current"))?;
+    let cpu = std::fs::read_to_string(dir.join("cpu.stat")).ok()?;
+    let cpu_usage_usec = cpu
+        .lines()
+        .find_map(|line| line.strip_prefix("usage_usec ")?.parse::<u64>().ok())?;
+    Some(Stats {
+        memory_bytes,
+        pids,
+        cpu_usage_usec,
+    })
+}
+
+fn read_number(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
 fn write_kill(dir: &Path) {
     if let Err(e) = std::fs::write(dir.join("cgroup.kill"), "1") {
         // ENOENT just means it was already torn down — only warn on real errors.

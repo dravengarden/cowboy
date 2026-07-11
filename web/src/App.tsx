@@ -68,6 +68,7 @@ import {
     notify,
     openSession,
     renameSession,
+    releaseInactiveHistory,
     reorderSessions,
     send,
     setSessionAutoResume,
@@ -851,8 +852,6 @@ export function App({
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-    const timelines = useStoreSelector((snapshot) => snapshot.timelines);
-    const hydrated = useStoreSelector((snapshot) => snapshot.hydrated);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
     const connected = useStoreSelector((snapshot) => snapshot.connected);
@@ -1042,6 +1041,20 @@ export function App({
     // Default to the first session once one exists.
     const active =
         sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+    // Subscribe the shell only to the active session's slice. A new event in a
+    // background session must not re-render this 2,700-line application tree.
+    const activeTimeline = useStoreSelector((snapshot) =>
+        active ? snapshot.timelines.get(active.id) : undefined
+    );
+    const activeHydrated = useStoreSelector((snapshot) =>
+        active ? snapshot.hydrated.has(active.id) : false
+    );
+    const previousActiveRef = useRef<string | null>(null);
+    useEffect(() => {
+        const previous = previousActiveRef.current;
+        if (previous && previous !== active?.id) releaseInactiveHistory(previous);
+        previousActiveRef.current = active?.id ?? null;
+    }, [active?.id]);
 
     // Persist the *resolved* focus so a reload reopens it. Keyed on `active.id`
     // (not raw `activeId`) so a stale stored id that fell back to sessions[0]
@@ -1720,11 +1733,11 @@ export function App({
                                 >
                                     <Transcript
                                         sessionId={active.id}
-                                        timeline={timelines.get(active.id) ?? []}
+                                        timeline={activeTimeline ?? []}
                                         status={active.status}
                                         provider={active.provider}
                                         cwd={active.cwd}
-                                        loading={!hydrated.has(active.id)}
+                                        loading={!activeHydrated}
                                         connected={connected}
                                         // No floating chrome over this column: the AppBar is
                                         // in-flow above it and the composer is a sibling
@@ -1751,13 +1764,13 @@ export function App({
                         >
                             <Transcript
                                 sessionId={active.id}
-                                timeline={timelines.get(active.id) ?? []}
+                                timeline={activeTimeline ?? []}
                                 status={active.status}
                                 provider={active.provider}
                                 cwd={active.cwd}
                                 // Skeleton until this session's history snapshot
                                 // lands (vs an empty session, which is hydrated).
-                                loading={!hydrated.has(active.id)}
+                                loading={!activeHydrated}
                                 // While the WS is down the "working" spinner must not
                                 // keep spinning on a stale status (daemon restart).
                                 connected={connected}

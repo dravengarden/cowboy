@@ -67,3 +67,41 @@ fn outbound_tags_match_typescript() {
         typescript_tags("Outbound", "export interface InferenceProviderView")
     );
 }
+
+#[test]
+fn event_field_serialization_matches_typescript_fixtures() {
+    use crate::core::{Event, Status};
+
+    let events = vec![
+        Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "hello"}
+            }),
+        },
+        Event::PermissionRequest {
+            request_id: "p1".to_owned(),
+            tool_call: serde_json::json!({"title": "Shell"}),
+            options: serde_json::json!([]),
+        },
+        Event::PermissionResolved {
+            request_id: "p1".to_owned(),
+            option_id: None,
+        },
+        Event::Lifecycle {
+            status: Status::Running,
+            detail: None,
+        },
+        Event::TurnEnd {
+            stop_reason: "end_turn".to_owned(),
+        },
+    ];
+    let values = events
+        .into_iter()
+        .map(|event| serde_json::to_value(event).expect("serialize event"))
+        .collect::<Vec<_>>();
+    assert_eq!(values[1]["request_id"], "p1");
+    assert!(values[2]["option_id"].is_null());
+    assert_eq!(values[3]["status"], "running");
+    assert_eq!(values[4]["stop_reason"], "end_turn");
+}

@@ -110,7 +110,7 @@ export interface State {
   // flight (one at a time); `nextPage` = the next (older) seq-aligned page index
   // to fetch, DECREMENTED each load. Tracked (not recomputed from the oldest
   // seq) so a seq gap at a page boundary can't stall progress.
-  pagination: Map<string, { reachedStart: boolean; loadingOlder: boolean; nextPage: number }>;
+  pagination: Map<string, { reachedStart: boolean; loadingOlder: boolean; beforeSeq: number | null }>;
   // True once the first "sessions" list has arrived. Lets the UI tell "no
   // sessions yet (still loading)" from "loaded — the persisted focus is gone".
   sessionsLoaded: boolean;
@@ -398,8 +398,6 @@ function mergeEvents(
 
 // History page size — MUST match the server's HISTORY_PAGE (src/core.rs). Pages
 // are seq-aligned so each has a stable, cacheable URL.
-const HISTORY_PAGE = 200;
-
 // Fetch the next OLDER page of a session's history and prepend it. Pages come
 // from the immutable HTTP route (GET /api/history/:id/:page) so a re-fetch
 // (scroll back, reload, post-recycle) is a cache hit — zero network. One fetch
@@ -413,32 +411,58 @@ const HISTORY_PAGE = 200;
 // loaded against; until the first /version probe lands it's a harmless "0".)
 export async function loadOlder(sessionId: string): Promise<void> {
   const pg = state.pagination.get(sessionId);
-  if (!pg || pg.reachedStart || pg.loadingOlder || pg.nextPage < 0) return;
-  const page = pg.nextPage;
+  if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return;
+  const beforeSeq = pg.beforeSeq;
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
     const res = await fetch(
-      `/api/history/${encodeURIComponent(sessionId)}/${String(page)}?v=${encodeURIComponent(conn.version() ?? "0")}`,
+      `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&v=${encodeURIComponent(conn.version() ?? "0")}`,
     );
     if (!res.ok) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
       return;
     }
-    const data = (await res.json()) as { events: Envelope[] };
+    const data = (await res.json()) as {
+      events: Envelope[];
+      next_before_seq: number | null;
+      reached_start: boolean;
+    };
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
     // Always step to the next OLDER page (don't recompute from the oldest seq —
     // a gap at a boundary would re-request the same page forever). Page 0 was
     // the last → reached start.
-    const nextPage = page - 1;
-    setPagination(sessionId, { reachedStart: nextPage < 0, loadingOlder: false, nextPage });
+    setPagination(sessionId, {
+      reachedStart: data.reached_start,
+      loadingOlder: false,
+      beforeSeq: data.next_before_seq,
+    });
   } catch {
     setPagination(sessionId, { ...pg, loadingOlder: false });
   }
 }
 
+const INACTIVE_HISTORY_TAIL = 800;
+
+/** Release deep scrollback after leaving a session. Recent context remains
+ * instant; immutable cursor pages can be fetched again if the user scrolls. */
+export function releaseInactiveHistory(sessionId: string): void {
+  const timeline = state.timelines.get(sessionId);
+  if (!timeline || timeline.length <= INACTIVE_HISTORY_TAIL) return;
+  const retained = timeline.slice(-INACTIVE_HISTORY_TAIL);
+  const timelines = new Map(state.timelines);
+  timelines.set(sessionId, retained);
+  const pagination = new Map(state.pagination);
+  pagination.set(sessionId, {
+    reachedStart: false,
+    loadingOlder: false,
+    beforeSeq: retained[0]?.seq ?? null,
+  });
+  setState({ ...state, timelines, pagination });
+}
+
 function setPagination(
   sessionId: string,
-  value: { reachedStart: boolean; loadingOlder: boolean; nextPage: number },
+  value: { reachedStart: boolean; loadingOlder: boolean; beforeSeq: number | null },
 ): void {
   const pagination = new Map(state.pagination);
   pagination.set(sessionId, value);
@@ -490,9 +514,7 @@ function handle(msg: Outbound): void {
             loadingOlder: false,
             // First older page = the one containing (oldestSeq − 1), so its lower
             // part (if any) is filled before going further back.
-            nextPage: msg.events.length
-              ? Math.floor(((msg.events[0]?.seq ?? 0) - 1) / HISTORY_PAGE)
-              : -1,
+            beforeSeq: msg.events[0]?.seq ?? null,
           });
       setState({ ...state, timelines, hydrated, pagination });
       break;

@@ -1,0 +1,35 @@
+# Operations and growth policy
+
+## Database migrations
+
+Daemon startup may run schema-only, bounded migrations. A migration must not
+rewrite an existing unbounded table or perform a data backfill: startup has no
+HTTP readiness endpoint until migrations finish, so such work turns a deploy
+into an outage.
+
+Large transformations use expand/contract:
+
+1. add the nullable column/table/index needed by both old and new code;
+2. deploy dual-read/dual-write code;
+3. backfill in small committed batches from an explicit maintenance command;
+4. verify counts and error metrics;
+5. switch reads, then remove the old representation in a later release.
+
+`0012_compact_event_log.sql` predates this rule and demonstrated the failure
+mode by blocking one startup for more than ten minutes. Do not repeat it.
+
+## Backups
+
+The NixOS service owns a daily custom-format `pg_dump` timer. Each dump is
+checked with `pg_restore --list` before publication and retained for 14 days in
+`/var/backup/cowboy`. A quarterly restore into a temporary database is the
+operator-level recovery drill; listing a dump only proves archive readability,
+not full restore semantics.
+
+## Artifacts
+
+Durable history externalizes large ACP image blocks into the content-addressed
+`$COWBOY_DATA_DIR/artifacts` directory. Live prompts remain inline ACP blocks,
+so providers see the original protocol. History stores immutable HTTP URLs.
+Back up this directory together with PostgreSQL; database-only restores retain
+the transcript but cannot render externalized images.
