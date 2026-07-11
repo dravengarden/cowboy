@@ -1,7 +1,7 @@
 # cowboy — agent guide
 
-Drive coding-agent CLIs (Claude Code, Codex, …) over ACP from anywhere. A
-single Rust (axum) process serves both the API and the embedded React SPA, with
+Drive Codex over ACP from anywhere. A single Rust (axum) process serves both
+the API and the embedded React SPA, with
 one agent subprocess per session. Deployed as a NixOS service on hawk (:3333).
 Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 
@@ -9,7 +9,7 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - cowboy is a NixOS service (`services/cowboy` on hawk), consumed via a
   `git+file://` flake input from this repo. To ship: commit here, then on hawk
   `nix flake update cowboy` + rebuild.
-- **Deploying restarts the daemon you may be driving Claude THROUGH.** A
+- **Deploying restarts the daemon you may be driving Codex through.** A
   `nixos-rebuild switch` that restarts cowboy kills the approval channel for the
   in-flight turn — the switch tool reports "rejected" even though the rebuild
   actually COMPLETED. Verify via `/run/current-system`; don't re-run. Web/bundle
