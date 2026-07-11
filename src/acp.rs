@@ -60,7 +60,30 @@ use crate::provider::LaunchSpec;
 /// the spawn once before this ever surfaces as `Crashed`.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
-const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "bypassPermissions";
+const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
+
+fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "claude-code" => Some("bypassPermissions"),
+        "gemini" => Some("yolo"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod startup_mode_tests {
+    use super::startup_full_access_mode;
+
+    #[test]
+    fn providers_use_their_native_full_access_mode() {
+        assert_eq!(
+            startup_full_access_mode("claude-code"),
+            Some("bypassPermissions")
+        );
+        assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
+        assert_eq!(startup_full_access_mode("codex"), None);
+    }
+}
 
 /// The ACP handshake did not complete within [`HANDSHAKE_TIMEOUT`]. Carried as
 /// an `anyhow` cause so [`run_agent`] can tell a transient spawn stall (retry
@@ -712,11 +735,10 @@ async fn run_session(
         }
     }
 
-    // Match Zed's claude-acp default UX: open at `bypassPermissions` if the
-    // upstream advertises it. This is what most users want for an agent panel
-    // — explicit permission prompts dominate the UX otherwise.
-    if let Some(modes) = modes.as_ref() {
-        let want = "bypassPermissions";
+    // Open every provider at its own full-access session mode when advertised.
+    // Codex exposes this as the config option handled above; Claude calls it
+    // `bypassPermissions`, while Gemini calls the equivalent mode `yolo`.
+    if let (Some(modes), Some(want)) = (modes.as_ref(), startup_full_access_mode(provider_id)) {
         let has = modes
             .available_modes
             .iter()
@@ -725,7 +747,7 @@ async fn run_session(
             let req = SetSessionModeRequest::new(acp_id.clone(), SessionModeId::new(want));
             match cx.send_request(req).block_task().await {
                 Ok(_) => {
-                    tracing::info!(session = %session_id, "mode → bypassPermissions");
+                    tracing::info!(session = %session_id, mode = want, "startup mode -> full access");
                     // Echo into the timeline so the UI mode chip is up to date
                     // without round-tripping through a session_update.
                     state.hub.push(
@@ -738,7 +760,9 @@ async fn run_session(
                         },
                     );
                 }
-                Err(e) => tracing::warn!(error = ?e, "set_session_mode bypassPermissions failed"),
+                Err(e) => {
+                    tracing::warn!(mode = want, error = ?e, "setting full-access startup mode failed")
+                }
             }
         }
     }

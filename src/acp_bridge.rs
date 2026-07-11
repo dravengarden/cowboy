@@ -39,6 +39,7 @@ use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 const CONFIG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const INITIAL_CONFIG_TIMEOUT: Duration = Duration::from_secs(10);
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -233,9 +234,11 @@ async fn run_acp_server(
                     match bridge.create_session(request.cwd).await {
                         Ok(session_id) => {
                             bridge.attach(&session_id, false);
+                            let config_options =
+                                bridge.wait_for_initial_config_options(&session_id).await;
                             responder.respond(
                                 NewSessionResponse::new(session_id.clone())
-                                    .config_options(bridge.config_options(&session_id))
+                                    .config_options(config_options)
                                     .meta(bridge.session_meta(&session_id)),
                             )?;
                         }
@@ -629,6 +632,29 @@ impl Bridge {
             .or_default()
             .push(tx);
         rx
+    }
+
+    async fn wait_for_initial_config_options(
+        &self,
+        session_id: &str,
+    ) -> Option<Vec<SessionConfigOption>> {
+        let receiver = {
+            let mut state = self.state.lock();
+            if let Some(options) = state.config_options.get(session_id) {
+                return Some(options.clone());
+            }
+            let (tx, rx) = oneshot::channel();
+            state
+                .config_waiters
+                .entry(session_id.to_owned())
+                .or_default()
+                .push(tx);
+            rx
+        };
+        tokio::time::timeout(INITIAL_CONFIG_TIMEOUT, receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
     }
 
     fn config_options(&self, session_id: &str) -> Option<Vec<SessionConfigOption>> {

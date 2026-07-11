@@ -77,10 +77,14 @@ flowchart TB
   re-attaches and replays — updates are suppressed because cowboy already holds
   the event log.
 - **Mode setup** uses a Zed-style default: if the agent advertises a
-  `bypassPermissions` mode, cowboy selects it to avoid permission UX friction.
+  provider-specific full-access mode, cowboy selects it to avoid permission UX
+  friction (`bypassPermissions` for Claude Code and `yolo` for Gemini; Codex
+  exposes the equivalent as a config option).
 - **Config options** (mode / model / effort chips in the UI) come from the agent.
   Codex returns them in the session response; Claude sends them later via a
-  notification. **Gemini** uses session *modes* instead of config options for
+  notification. The Zed bridge waits briefly for the first options before
+  completing `session/new`, then continues forwarding live updates. **Gemini**
+  uses session *modes* instead of config options for
   approval selection, so cowboy synthesizes a `"mode"` config chip for the UI.
 
 ## The command loop
