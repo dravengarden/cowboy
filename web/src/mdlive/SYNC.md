@@ -105,7 +105,7 @@ git -C atomic-editor diff eba2066..<new> -- \
   src/edit-helpers.ts src/styles/inline-preview.css
 
 # 3. Read the diff; apply the relevant fixes into web/src/mdlive/*, RE-APPLYING
-#    the two LOCAL edits above (banner + @ts-nocheck) where they overlap.
+#    every LOCAL edit in the ledger above where it overlaps.
 
 # 4. Bump the baseline in this file + every per-file banner: eba2066 → <new>.
 
