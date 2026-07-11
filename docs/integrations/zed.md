@@ -44,8 +44,9 @@ on the default loopback address.
 
 The bridge supports:
 
-- `initialize`, `session/new`, `session/list`, `session/load`, and
-  `session/delete`;
+- `initialize`, `session/new`, `session/list`, `session/load`, `session/close`,
+  and `session/delete`; `session/close` detaches released Zed threads so the
+  bridge stops publishing updates to dead thread entities;
 - complete retained-history replay on `session/load`;
 - prompt streaming, permission requests, cancellation, and session config
   options;
@@ -75,3 +76,8 @@ The bridge supports:
 - Stock Zed ignores the Cowboy status extension for its native spinner when a
   turn was started from Cowboy Web. It still receives the transcript updates;
   native out-of-band activity UI requires a small Zed-side integration.
+- Zed Preview 1.11.2 (and Zed `main` as of 2026-07-11) keeps an ACP connection
+  cached as connected after its stdio I/O task has failed. Cowboy keeps its
+  bridge alive across daemon restarts and supports `session/close`, but it
+  cannot repair a pipe that Zed itself has already closed; Zed must evict and
+  respawn that cached connection.

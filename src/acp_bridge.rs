@@ -13,11 +13,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ConfigOptionUpdate, DeleteSessionRequest,
-    DeleteSessionResponse, Implementation, InitializeRequest, InitializeResponse,
-    ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
-    NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionCapabilities, SessionConfigOption,
+    AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse,
+    ConfigOptionUpdate, DeleteSessionRequest, DeleteSessionResponse, Implementation,
+    InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse,
+    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+    PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionCapabilities, SessionCloseCapabilities, SessionConfigOption,
     SessionDeleteCapabilities, SessionInfo, SessionInfoUpdate, SessionListCapabilities,
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse, StopReason,
@@ -181,6 +182,7 @@ async fn run_acp_server(
     let list_bridge = bridge.clone();
     let new_bridge = bridge.clone();
     let load_bridge = bridge.clone();
+    let close_bridge = bridge.clone();
     let delete_bridge = bridge.clone();
     let prompt_bridge = bridge.clone();
     let cancel_bridge = bridge.clone();
@@ -201,7 +203,8 @@ async fn run_acp_server(
                     .session_capabilities(
                         SessionCapabilities::new()
                             .list(SessionListCapabilities::new())
-                            .delete(SessionDeleteCapabilities::new()),
+                            .delete(SessionDeleteCapabilities::new())
+                            .close(SessionCloseCapabilities::new()),
                     )
                     .meta(initialize_bridge.capability_meta());
                 let info = Implementation::new("cowboy", env!("CARGO_PKG_VERSION"))
@@ -291,6 +294,18 @@ async fn run_acp_server(
                     Ok(())
                 })?;
                 Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: CloseSessionRequest, responder, _cx: ConnectionTo<Client>| {
+                let session_id = request.session_id.0.to_string();
+                if let Err(error) = close_bridge.validate_session(&session_id, None) {
+                    return responder
+                        .respond_with_error(agent_client_protocol::util::internal_error(error));
+                }
+                close_bridge.detach(&session_id);
+                responder.respond(CloseSessionResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -503,6 +518,21 @@ impl Bridge {
         cached.attached = true;
         cached.replaying = replaying;
         cached.replay_buffer.clear();
+    }
+
+    fn detach(&self, session_id: &str) {
+        // ACP requires close to cancel work owned by this client. Route the
+        // cancellation before detaching so a prompt submitted by this bridge
+        // cannot continue invisibly after Zed releases its thread entity.
+        self.cancel_prompts(session_id);
+
+        let mut state = self.state.lock();
+        if let Some(cached) = state.sessions.get_mut(session_id) {
+            cached.attached = false;
+            cached.replaying = false;
+            cached.replay_buffer.clear();
+        }
+        state.config_waiters.remove(session_id);
     }
 
     async fn wait_for_daemon(&self) -> Result<(), String> {
@@ -1544,5 +1574,41 @@ mod tests {
         let status = Bridge::status_from_cached(&meta, None);
         assert!(status.turn_running);
         assert_eq!(status.background_running, None);
+    }
+
+    #[test]
+    fn close_detaches_session_and_discards_replay_state() {
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+        let bridge = Bridge {
+            provider: Arc::from("codex"),
+            base_url: normalized_base_url("http://127.0.0.1:3333").unwrap(),
+            http: reqwest::Client::new(),
+            state: Arc::new(Mutex::new(BridgeState::default())),
+            connected_notify: Arc::new(Notify::new()),
+            command_tx,
+            next_cmid: Arc::new(AtomicU64::new(1)),
+        };
+        bridge.attach("sess-1", true);
+        {
+            let mut state = bridge.state.lock();
+            let cached = state.sessions.get_mut("sess-1").unwrap();
+            cached.replay_buffer.push(Envelope {
+                session_id: "sess-1".to_owned(),
+                seq: 1,
+                cmid: None,
+                event: Event::Lifecycle {
+                    status: Status::Running,
+                    detail: None,
+                },
+            });
+        }
+
+        bridge.detach("sess-1");
+
+        let state = bridge.state.lock();
+        let cached = state.sessions.get("sess-1").unwrap();
+        assert!(!cached.attached);
+        assert!(!cached.replaying);
+        assert!(cached.replay_buffer.is_empty());
     }
 }
