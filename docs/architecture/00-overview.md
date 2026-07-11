@@ -98,3 +98,6 @@ Read the chapters in order; each one zooms into a box above:
 8. [Codex-owned memory boundary](08-memory.md)
 9. [Frontend](09-frontend.md)
 10. [Build & deploy](10-deploy-build.md)
+
+Zed setup and the ACP bridge's current compatibility boundary are documented in
+[Zed ACP integration](../integrations/zed.md).

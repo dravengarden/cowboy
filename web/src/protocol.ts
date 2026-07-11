@@ -174,6 +174,9 @@ export interface DraftSchedule {
 
 export type Outbound =
   | { type: "sessions"; sessions: SessionMeta[] }
+  // End of the deterministic connect snapshot. Browser clients need no action;
+  // stdio bridges use it to avoid racing session/list against bootstrap.
+  | { type: "bootstrap_complete" }
   // App-level heartbeat (see src/core.rs Outbound::Ping). Carries nothing; its
   // ARRIVAL is the signal — the client tracks the last-message time to detect a
   // half-open socket that never fires `onclose` and reconnect.
@@ -250,6 +253,8 @@ export type Inbound =
       content?: ContentBlock[];
     }
   | { type: "cancel"; session_id: string }
+  // ACP bridge-only: remove exactly one queued prompt by its correlation id.
+  | { type: "cancel_submitted"; session_id: string; cmid: string }
   | {
       type: "permission";
       session_id: string;

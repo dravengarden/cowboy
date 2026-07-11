@@ -20,8 +20,27 @@ enum Command {
     /// service that owns the Hub + supervisor; every surface (Web UI, phone,
     /// native shell) connects to it as a client.
     Serve(ServeArgs),
+    /// Expose the running cowboy daemon as a stdio ACP agent for Zed or any
+    /// other ACP client. This is a thin bridge; it never starts a second Hub.
+    ServeAcp(ServeAcpArgs),
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     TryAgent(TryAgentArgs),
+}
+
+#[derive(Args)]
+pub struct ServeAcpArgs {
+    /// Only expose sessions for this provider. Register one Zed External Agent
+    /// entry per provider to preserve the provider identity and logo.
+    #[arg(long, default_value = "codex")]
+    pub provider: String,
+
+    /// Base URL of the already-running cowboy daemon.
+    #[arg(
+        long,
+        env = "COWBOY_DAEMON_URL",
+        default_value = "http://127.0.0.1:3333"
+    )]
+    pub daemon_url: String,
 }
 
 #[derive(Args)]
@@ -73,6 +92,10 @@ impl Cli {
     pub async fn run(self) -> anyhow::Result<()> {
         match self.command {
             Command::Serve(args) => crate::server::serve(args).await,
+            Command::ServeAcp(args) => {
+                crate::server::init_tracing();
+                crate::acp_bridge::serve(args).await
+            }
             Command::TryAgent(args) => {
                 crate::server::init_tracing();
                 let spec = crate::provider::lookup(&args.provider)

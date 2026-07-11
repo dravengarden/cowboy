@@ -32,8 +32,8 @@ use agent_client_protocol::schema::v1::ContentBlock;
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::core::{
-    DispatchReq, Envelope, Hub, Inbound, JudgeReq, Outbound, PersistenceHealth, RestoredSession,
-    SessionOrigin, Status, StoreSink, StoreWrite,
+    DispatchReq, Envelope, Event, Hub, Inbound, JudgeReq, Outbound, PersistenceHealth,
+    RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::persistence::EventReducer;
 use crate::runtime::RuntimeHealth;
@@ -1318,6 +1318,13 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
+    if send_json(&mut sink, &Outbound::BootstrapComplete)
+        .await
+        .is_err()
+    {
+        return;
+    }
+
     // Fan-out task: broadcast events → this socket, plus a periodic app-level
     // heartbeat (Outbound::Ping) so a client can detect a HALF-OPEN socket that
     // never fires `onclose` (see Outbound::Ping). Per-client interval — a failed
@@ -1445,6 +1452,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
     let session_id_for_err: Option<String> = match &cmd {
         Inbound::Prompt { session_id, .. }
         | Inbound::Cancel { session_id }
+        | Inbound::CancelSubmitted { session_id, .. }
         | Inbound::Permission { session_id, .. }
         | Inbound::DeleteSession { session_id }
         | Inbound::RenameSession { session_id, .. }
@@ -1546,6 +1554,25 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             result
         }
         Inbound::Cancel { session_id } => state.supervisor.send(&session_id, AgentCommand::Cancel),
+        Inbound::CancelSubmitted { session_id, cmid } => {
+            if state.hub.remove_queued_by_cmid(&session_id, &cmid) {
+                // Explicit acknowledgement for the ACP bridge. Absence of this
+                // event means the prompt crossed the queue→dispatch boundary;
+                // the bridge then waits for its cmid echo and cancels the now-
+                // active turn, avoiding both a false cancellation response and
+                // interruption of another surface's turn.
+                state.hub.push(
+                    &session_id,
+                    Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "cowboy_prompt_cancelled",
+                            "cmid": cmid,
+                        }),
+                    },
+                );
+            }
+            Ok(())
+        }
         Inbound::Permission {
             session_id,
             request_id,

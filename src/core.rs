@@ -602,6 +602,11 @@ pub enum Inbound {
     },
     /// Cancel a session's current turn.
     Cancel { session_id: String },
+    /// Cancel a prompt submitted by an ACP bridge before it becomes the active
+    /// turn. `cmid` is the bridge-generated correlation id. This deliberately
+    /// removes only that queued prompt and never disturbs another surface's
+    /// active turn.
+    CancelSubmitted { session_id: String, cmid: String },
     /// Answer a pending permission request.
     Permission {
         session_id: String,
@@ -832,6 +837,10 @@ pub enum Inbound {
 pub enum Outbound {
     /// Full session list (sent on connect and whenever it changes).
     Sessions { sessions: Vec<SessionMeta> },
+    /// Marks the end of the deterministic WebSocket connect snapshot. Thin
+    /// protocol bridges wait for this before accepting client requests, so
+    /// `session/list` cannot race an incomplete session cache.
+    BootstrapComplete,
     /// Replay of one session's RECENT log tail (sent on connect, after
     /// `Sessions`). Capped to the last [`SNAPSHOT_TAIL`] events so a long
     /// session doesn't ship its whole history on every connect; older pages are
@@ -3083,6 +3092,30 @@ impl Hub {
         self.try_drain(session_id);
     }
 
+    /// Remove exactly one still-queued prompt by its client correlation id.
+    ///
+    /// ACP `session/cancel` is session-scoped, but a bridge prompt can be
+    /// waiting behind a turn started by another surface. Cancelling that
+    /// request must not interrupt the unrelated active turn. Returns whether a
+    /// queued prompt was removed; an already-dispatched prompt is absent and
+    /// must instead be cancelled through the provider.
+    pub fn remove_queued_by_cmid(&self, session_id: &str, cmid: &str) -> bool {
+        let removed = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return false;
+            };
+            let before = s.queue.len();
+            s.queue.retain(|m| m.cmid.as_deref() != Some(cmid));
+            before != s.queue.len()
+        };
+        if removed {
+            self.emit_pending(session_id);
+            self.try_drain(session_id);
+        }
+        removed
+    }
+
     /// Edit a queued prompt in place. Empty text + content removes it.
     pub fn edit_queued(
         &self,
@@ -3824,6 +3857,22 @@ mod confirm_hold_tests {
             false,
         );
         hub
+    }
+
+    #[test]
+    fn queued_prompt_can_be_cancelled_by_exact_cmid() {
+        let hub = hub_with_session("s");
+        hub.submit(
+            "s",
+            "from ACP".to_owned(),
+            Vec::new(),
+            Some("acp-1".to_owned()),
+        );
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        assert!(!hub.remove_queued_by_cmid("s", "another-client"));
+        assert!(hub.remove_queued_by_cmid("s", "acp-1"));
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 0);
+        assert!(!hub.remove_queued_by_cmid("s", "acp-1"));
     }
 
     #[test]

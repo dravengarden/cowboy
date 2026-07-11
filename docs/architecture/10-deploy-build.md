@@ -58,6 +58,32 @@ crane/cargo caching instead.
 Other subcommands: `serve-acp` (the ACP server face for Zed), `try-agent`
 (one-shot provider smoke test).
 
+`serve-acp` is a thin stdio bridge to the running daemon, not a second cowboy
+instance. Register one Zed External Agent entry per provider:
+
+```text
+cowboy serve-acp --provider codex
+cowboy serve-acp --provider claude-code
+cowboy serve-acp --provider gemini
+```
+
+Each entry filters `session/list` and `session/load` to that provider, which
+keeps imported threads under the correct agent identity. The bridge implements
+the standard pending-`session/prompt` lifecycle plus the optional
+`_cowboy/session/status` request and `_cowboy/session/status_changed`
+notification for clients that need an out-of-band status snapshot.
+
+TODO: publish these three entries through the ACP Registry (or a small Zed
+extension) with their provider SVGs. Stock Zed assigns icons to an installed
+agent entry, while custom `settings.json` commands have no icon field; a single
+dynamic Cowboy entry therefore cannot switch logos per session.
+
+TODO: expose Codex `subAgentActivity` and `thread/backgroundTerminals/list`
+through the upstream Codex ACP adapter, then populate the bridge's currently
+unknown `backgroundRunning` field. Until then `turnRunning` is authoritative,
+but the bridge intentionally does not claim that detached background work is
+idle.
+
 ## NixOS service shape
 
 cowboy is consumed by the hawk config via a `git+file://` flake input from this

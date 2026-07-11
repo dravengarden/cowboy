@@ -44,9 +44,9 @@ const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
 ///   renamed `@zed-industries/claude-code-acp`), run via `npx`. Speaks ACP over
 ///   NDJSON on stdio. Requires Claude auth in the environment (e.g.
 ///   `ANTHROPIC_API_KEY` or a prior `claude` login).
-/// - `codex`: the `@zed-industries/codex-acp` adapter, run via `npx`. Wraps the
-///   Codex CLI. Requires Codex auth (`ChatGPT` subscription login in `~/.codex`,
-///   or `CODEX_API_KEY` / `OPENAI_API_KEY`).
+/// - `codex`: the `@agentclientprotocol/codex-acp` adapter, run via `npx`.
+///   Built on Codex App Server. Requires Codex auth (`ChatGPT` subscription
+///   login in `~/.codex`, or `CODEX_API_KEY` / `OPENAI_API_KEY`).
 /// - `gemini`: the Gemini CLI's own ACP mode — `@google/gemini-cli --acp`, run via
 ///   `npx` (the CLI is the adapter; no separate package). Requires Gemini auth (a
 ///   prior `gemini` OAuth login in `~/.gemini`, or `GEMINI_API_KEY`).
@@ -66,7 +66,10 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
         spec_with_custom_default_args(
             "codex",
             "npx",
-            &concat_slices(&["-y", "@zed-industries/codex-acp"], CODEX_FULL_ACCESS_ARGS),
+            &concat_slices(
+                &["-y", "@agentclientprotocol/codex-acp"],
+                CODEX_FULL_ACCESS_ARGS,
+            ),
             CODEX_FULL_ACCESS_ARGS,
         ),
     );
@@ -174,7 +177,7 @@ mod tests {
             codex.args,
             [
                 "-y",
-                "@zed-industries/codex-acp",
+                "@agentclientprotocol/codex-acp",
                 "-c",
                 "approval_policy=\"never\"",
                 "-c",
