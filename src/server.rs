@@ -1059,7 +1059,6 @@ async fn api_memory_record(
             body: req.body,
         },
         slug: req.tier.unwrap_or_default(),
-        cmid: String::new(),
     };
     queue.enqueue(mutation);
     Json(serde_json::json!({ "ok": true })).into_response()
@@ -1096,7 +1095,6 @@ async fn api_memory_forget(
             body: String::new(),
         },
         slug: req.tier.unwrap_or_default(),
-        cmid: String::new(),
     };
     queue.enqueue(mutation);
     Json(serde_json::json!({ "ok": true })).into_response()

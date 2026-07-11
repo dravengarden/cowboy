@@ -21,15 +21,13 @@ pub struct IndexEntry {
 }
 
 /// A scored query result. Carries the flat fields Phase-C wants (`name`,
-/// `description`, `tier`, `score`) plus the full `memory` for callers that need
-/// the body (Go's `Hit` carried the whole `Memory`).
+/// `description`, `tier`, and `score`.
 #[derive(Debug, Clone)]
 pub struct Hit {
     pub name: String,
     pub description: String,
     pub tier: Tier,
     pub score: i64,
-    pub memory: Memory,
 }
 
 /// An in-memory keyword index. Rebuild it when the store changes.
@@ -108,7 +106,6 @@ impl Index {
                     description: e.memory.description.clone(),
                     tier: e.tier.clone(),
                     score,
-                    memory: e.memory.clone(),
                 });
             }
         }

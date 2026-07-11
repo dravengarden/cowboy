@@ -20,7 +20,6 @@ use super::store::Memory;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
     Add,
-    Update,
     Delete,
 }
 
@@ -29,7 +28,6 @@ impl Op {
     pub fn as_str(self) -> &'static str {
         match self {
             Op::Add => "add",
-            Op::Update => "update",
             Op::Delete => "delete",
         }
     }
@@ -43,7 +41,6 @@ pub struct Mutation {
     pub op: Op,
     pub memory: Memory,
     pub slug: String,
-    pub cmid: String,
 }
 
 /// Tunes the debounce: fire after `quiesce` of silence, OR when the batch reaches
@@ -174,12 +171,6 @@ impl Queue {
         drop(g);
         self.cv.notify_all();
     }
-
-    /// The current pending batch size (for tests/metrics). Mirrors Go's `Depth`.
-    #[must_use]
-    pub fn depth(&self) -> usize {
-        self.inner.lock().unwrap().batch.len()
-    }
 }
 
 /// Drain the batch and fire the wake. Caller holds the lock. Bumps the generation
@@ -212,7 +203,6 @@ mod tests {
                 body: "b".to_string(),
             },
             slug: slug.to_string(),
-            cmid: String::new(),
         }
     }
 

@@ -1991,7 +1991,6 @@ impl Hub {
             &provider,
             &crate::provider::confirm::TurnEndCtx {
                 stop_reason: stop_reason.as_deref(),
-                final_text: &final_text,
             },
         ) {
             let at = now_ms();

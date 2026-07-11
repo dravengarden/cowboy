@@ -9,7 +9,7 @@
 //! remove.go, index_md.go, tiers.go).
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -236,12 +236,6 @@ impl Store {
     #[must_use]
     pub fn new(root: PathBuf) -> Store {
         Store { root }
-    }
-
-    /// The store root.
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
     }
 
     fn dir(&self, t: &Tier) -> PathBuf {

@@ -141,10 +141,7 @@ pub async fn classify(
     inference: &dyn InferenceProvider,
     final_text: &str,
 ) -> Result<JudgeOutcome> {
-    let ctx = crate::provider::confirm::TurnEndCtx {
-        stop_reason,
-        final_text,
-    };
+    let ctx = crate::provider::confirm::TurnEndCtx { stop_reason };
     if let Some(v) = crate::provider::confirm::l1(agent_provider, &ctx) {
         // Deterministic — no LLM call.
         let raw_output = v.reason.clone();
@@ -177,7 +174,7 @@ pub async fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inference::{CompleteResponse, ModelSource, Usage};
+    use crate::inference::{CompleteResponse, Usage};
     use async_trait::async_trait;
 
     #[test]
@@ -202,20 +199,11 @@ mod tests {
     struct Mock(&'static str);
     #[async_trait]
     impl InferenceProvider for Mock {
-        fn id(&self) -> &str {
-            "mock"
-        }
-        fn models(&self) -> ModelSource {
-            ModelSource::Static(vec![])
-        }
         async fn complete(&self, _req: CompleteRequest) -> Result<CompleteResponse> {
             Ok(CompleteResponse {
                 text: self.0.to_owned(),
                 usage: Usage::default(),
             })
-        }
-        async fn raw(&self, _body: serde_json::Value) -> Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
         }
     }
 
@@ -223,17 +211,8 @@ mod tests {
     struct NeverCalled;
     #[async_trait]
     impl InferenceProvider for NeverCalled {
-        fn id(&self) -> &str {
-            "never"
-        }
-        fn models(&self) -> ModelSource {
-            ModelSource::Static(vec![])
-        }
         async fn complete(&self, _req: CompleteRequest) -> Result<CompleteResponse> {
             panic!("L1 should have short-circuited — L2 must not run");
-        }
-        async fn raw(&self, _body: serde_json::Value) -> Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
         }
     }
 

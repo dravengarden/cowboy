@@ -13,9 +13,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    CompleteRequest, CompleteResponse, InferenceProvider, Message, ModelSource, Role, Usage,
-};
+use super::{CompleteRequest, CompleteResponse, InferenceProvider, Message, Role, Usage};
 
 const API_BASE: &str = "https://api.deepseek.com";
 /// Default model — the cheap, fast non-thinking model, right for a short
@@ -86,14 +84,6 @@ fn role_str(r: Role) -> &'static str {
 
 #[async_trait]
 impl InferenceProvider for DeepSeek {
-    fn id(&self) -> &str {
-        "deepseek"
-    }
-
-    fn models(&self) -> ModelSource {
-        ModelSource::Static(Self::model_list())
-    }
-
     async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse> {
         let messages = req
             .messages
@@ -130,20 +120,6 @@ impl InferenceProvider for DeepSeek {
                 cache_miss_tokens: u.prompt_cache_miss_tokens,
             },
         })
-    }
-
-    async fn raw(&self, body: serde_json::Value) -> Result<serde_json::Value> {
-        let resp = self
-            .client
-            .post(format!("{}/chat/completions", self.base))
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("deepseek: raw request failed")?;
-        resp.json::<serde_json::Value>()
-            .await
-            .context("deepseek: raw parse")
     }
 }
 
@@ -203,14 +179,6 @@ pub struct ResponseFormat {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatResponse {
-    #[serde(default)]
-    pub id: String,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub created: i64,
-    #[serde(default)]
-    pub system_fingerprint: Option<String>,
     pub choices: Vec<Choice>,
     #[serde(default)]
     pub usage: Option<DsUsage>,
@@ -218,13 +186,7 @@ pub struct ChatResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Choice {
-    #[serde(default)]
-    pub index: u32,
     pub message: ChatMessage,
-    #[serde(default)]
-    pub finish_reason: Option<String>,
-    #[serde(default)]
-    pub logprobs: Option<serde_json::Value>,
 }
 
 /// DeepSeek usage — incl. the prefix-cache hit/miss split that makes the cost
@@ -235,8 +197,6 @@ pub struct DsUsage {
     pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
-    #[serde(default)]
-    pub total_tokens: u32,
     #[serde(default)]
     pub prompt_cache_hit_tokens: u32,
     #[serde(default)]

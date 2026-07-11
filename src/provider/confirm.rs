@@ -18,8 +18,6 @@ pub struct TurnEndCtx<'a> {
     /// The ACP `StopReason` debug string from the last `TurnEnd` event
     /// (`"EndTurn"`, `"Cancelled"`, `"MaxTokens"`, `"error: …"`, …), if any.
     pub stop_reason: Option<&'a str>,
-    /// The agent's concatenated final message text this turn.
-    pub final_text: &'a str,
 }
 
 /// The cross-provider stop-reason rule. `Some` ⇒ deterministic (skip L2); `None`
@@ -83,14 +81,12 @@ mod tests {
     fn dispatch_routes_known_providers() {
         let ctx = TurnEndCtx {
             stop_reason: Some("Cancelled"),
-            final_text: "",
         };
         assert!(l1("claude-code", &ctx).is_some());
         assert!(l1("codex", &ctx).is_some());
         // EndTurn always falls through, every provider.
         let end = TurnEndCtx {
             stop_reason: Some("EndTurn"),
-            final_text: "做完了吗？",
         };
         assert!(l1("claude-code", &end).is_none());
         assert!(l1("codex", &end).is_none());

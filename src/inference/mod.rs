@@ -99,29 +99,8 @@ pub struct Usage {
     pub cache_miss_tokens: u32,
 }
 
-/// Where a provider's selectable models come from. DYNAMIC by design — model ids
-/// churn (e.g. DeepSeek's legacy aliases deprecate 2026-07-24), so callers + the
-/// UI read this rather than hardcoding ids.
-#[derive(Debug, Clone)]
-pub enum ModelSource {
-    /// Built-in list of (id, human label).
-    Static(Vec<(String, String)>),
-    // Future: Endpoint(String) — fetch the provider's `/models`.
-}
-
-/// The general inference-provider contract. Implementors expose their full native
-/// surface through their own types + [`Self::raw`]; this trait is just the
-/// portable core, kept dyn-safe (via `async_trait`) so a registry can hold
-/// `Box<dyn InferenceProvider>`.
+/// The portable inference-provider contract used by confirm detection.
 #[async_trait]
 pub trait InferenceProvider: Send + Sync {
-    /// Provider id, e.g. `"deepseek"`.
-    fn id(&self) -> &str;
-    /// Selectable models (dynamic).
-    fn models(&self) -> ModelSource;
-    /// Portable structured completion for generic callers.
     async fn complete(&self, req: CompleteRequest) -> Result<CompleteResponse>;
-    /// Full-surface escape hatch: arbitrary provider request JSON → the
-    /// unmodified provider response JSON. Nothing is clamped.
-    async fn raw(&self, body: serde_json::Value) -> Result<serde_json::Value>;
 }

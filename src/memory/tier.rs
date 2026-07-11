@@ -5,6 +5,7 @@
 //!
 //! Ported faithfully from mnemosyne's `internal/tier` (tier.go, slug.go).
 
+#[cfg(test)]
 use std::process::Command;
 
 use super::store::Tier;
@@ -25,6 +26,7 @@ pub fn project_tier(slug: &str) -> Tier {
 /// The project slug for a `projects/<slug>/memory` tier, or `""` for the machine
 /// (or any non-project) tier. Mirrors Go's `tier.Slug`.
 #[must_use]
+#[cfg(test)]
 pub fn slug_of(t: &Tier) -> String {
     if let Some(rest) = t.as_str().strip_prefix("projects/") {
         rest.strip_suffix("/memory").unwrap_or(rest).to_string()
@@ -37,6 +39,7 @@ pub fn slug_of(t: &Tier) -> String {
 /// byte becomes `-` (e.g. `/home/draven/columbus` → `-home-draven-columbus`). Not
 /// collapsed — matches CC byte-for-byte. Mirrors Go's `tier.Sanitize`.
 #[must_use]
+#[cfg(test)]
 pub fn sanitize(p: &str) -> String {
     let mut b = String::with_capacity(p.len());
     for c in p.chars() {
@@ -49,30 +52,22 @@ pub fn sanitize(p: &str) -> String {
     b
 }
 
-/// The pure routing decision given an already-resolved slug. Mirrors Go's
-/// `tier.RouteSlug`.
-#[must_use]
-pub fn route_slug(slug: &str, machine: bool) -> Tier {
-    if machine || slug.is_empty() {
-        Tier::machine()
-    } else {
-        project_tier(slug)
-    }
-}
-
 /// The context of a memory mutation. `machine` forces the machine tier;
 /// otherwise `cwd` is resolved to its canonical git root and sanitized to a slug.
 /// Mirrors Go's `tier.Caller`.
 #[derive(Debug, Clone, Default)]
+#[cfg(test)]
 pub struct Caller {
     pub cwd: String,
     pub machine: bool,
 }
 
+#[cfg(test)]
 type GitRootResolver<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
 
 /// Resolve a directory to its canonical git toplevel via `git -C <dir> rev-parse
 /// --show-toplevel`. Returns `None` when the dir is not inside a git repo.
+#[cfg(test)]
 fn git_root(dir: &str) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
@@ -97,6 +92,7 @@ fn git_root(dir: &str) -> Option<String> {
 /// `git_root_override` lets tests inject the git-root resolver (matching the Go
 /// `tier.GitRoot` package var). Pass `None` to use the real `git` shell-out.
 #[must_use]
+#[cfg(test)]
 pub fn route(c: &Caller, git_root_override: GitRootResolver<'_>) -> Tier {
     if c.machine {
         return Tier::machine();

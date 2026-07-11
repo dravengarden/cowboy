@@ -33,7 +33,7 @@ fmt-write:
     cargo fmt
 
 lint:
-    cargo clippy --all-targets -- -D clippy::all -A clippy::pedantic
+    cargo clippy --all-targets -- -D warnings -A clippy::pedantic
     cd web && deno task lint
 
 typecheck:

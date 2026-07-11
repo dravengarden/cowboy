@@ -8,10 +8,13 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 
+#[cfg(test)]
 use super::queue::{Mutation, Op};
 use super::store::{Memory, Store, Tier};
+#[cfg(test)]
 use super::tier::project_tier;
 
+#[cfg(test)]
 fn tier_from_slug(slug: &str) -> Tier {
     if slug.is_empty() {
         Tier::machine()
@@ -26,12 +29,13 @@ fn tier_from_slug(slug: &str) -> Tier {
 ///
 /// # Errors
 /// Propagates store write/read/remove and git errors.
+#[cfg(test)]
 pub fn batch(s: &Store, muts: &[Mutation]) -> Result<Option<String>> {
     let mut affected: HashSet<Tier> = HashSet::new();
     for m in muts {
         let t = tier_from_slug(&m.slug);
         match m.op {
-            Op::Add | Op::Update => {
+            Op::Add => {
                 s.write(&t, &m.memory)?;
                 affected.insert(t);
             }
@@ -295,7 +299,6 @@ mod tests {
                 body: "v".to_string(),
             },
             slug: String::new(),
-            cmid: String::new(),
         };
         batch(&s, &[add]).unwrap();
         assert!(s.read(&Tier::machine(), "k").is_ok());
@@ -309,7 +312,6 @@ mod tests {
                 body: String::new(),
             },
             slug: String::new(),
-            cmid: String::new(),
         };
         batch(&s, &[del]).unwrap();
         // Soft-archived: gone from machine, present in archive.
