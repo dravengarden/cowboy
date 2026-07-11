@@ -19,6 +19,7 @@ import {
   keymap,
 } from "@codemirror/view";
 import { type Extension, Prec } from "@codemirror/state";
+import { openExternalUrl } from "./openExternal";
 import {
   atomicEditorTheme,
   atomicMarkdownSyntax,
@@ -85,7 +86,10 @@ export function livePreviewExtensions(
     // own Prec.high token-Backspace runs first but no-ops outside a token.)
     Prec.high(keymap.of(closeBracketsKeymap)),
     keymap.of([...searchKeymap, ...markdownKeymap, indentWithTab]),
-    inlinePreview(opts),
+    inlinePreview({
+      ...opts,
+      onLinkClick: opts.onLinkClick ?? openExternalUrl,
+    }),
     EditorView.lineWrapping,
   ];
   // Every add/drop here, and every iOS pitfall it touches, is documented in

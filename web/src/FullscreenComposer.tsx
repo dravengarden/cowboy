@@ -10,7 +10,7 @@ import {
   Tooltip,
   useTheme,
 } from "@mui/material";
-import { CloseFullscreen, Tune } from "@mui/icons-material";
+import { CloseFullscreen, Send, Tune } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
@@ -36,6 +36,7 @@ export function FullscreenComposer({
   sessionId,
   commands,
   placeholder,
+  sendable,
   attachmentsSlot,
   editorRef,
   autoFocus = true,
@@ -50,6 +51,7 @@ export function FullscreenComposer({
   sessionId: string;
   commands: () => AvailableCommand[];
   placeholder: string;
+  sendable: boolean;
   attachmentsSlot?: ReactNode;
   // The SHARED composer editor handle. Must be the same ref the parent's
   // `addFiles`/submit/clear use — else paste-an-image here inserts the inline
@@ -104,11 +106,15 @@ export function FullscreenComposer({
   // narrow phone. (The phase-2 settings sheet edits the id list.)
   const toolbarIds = useComposerToolbar();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hasSelection, setHasSelection] = useState(false);
   const runCmd = (cmd: ComposerCommand): void => {
     const ed = editorRef.current;
     if (ed) cmd.run({ editor: ed, attach: onAttach });
   };
-  const actions = toolbarIds
+  const visibleToolbarIds = hasSelection
+    ? ["bold", "italic", "code", "link"]
+    : toolbarIds;
+  const actions = visibleToolbarIds
     .map((id) => COMPOSER_COMMANDS_BY_ID[id])
     .filter((c): c is ComposerCommand => c !== undefined)
     .map((cmd) => (
@@ -155,15 +161,23 @@ export function FullscreenComposer({
         }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 48, gap: 1 }}>
-          {/* Collapse only, pinned to the RIGHT. No Send button here: the fullscreen
-              surface is for WRITING — you collapse (the text syncs back to the inline
-              composer) and send from the main bar, and ⌘⏎ still submits directly. A
-              Send here duplicated that and read as confusing. */}
-          <Box sx={{ flex: 1 }} />
           <Tooltip title="Collapse">
             <IconButton aria-label="collapse editor" onClick={act(onCollapse)}>
               <CloseFullscreen />
             </IconButton>
+          </Tooltip>
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Send">
+            <span>
+              <IconButton
+                aria-label="send"
+                color="primary"
+                disabled={!sendable}
+                onClick={act(onSubmit)}
+              >
+                <Send />
+              </IconButton>
+            </span>
           </Tooltip>
         </Toolbar>
       </AppBar>
@@ -197,6 +211,7 @@ export function FullscreenComposer({
           commands={commands}
           placeholder={placeholder}
           onPasteFiles={onPasteFiles}
+          onSelectionChange={setHasSelection}
           borderless
           fill
           vim={false}
@@ -211,6 +226,7 @@ export function FullscreenComposer({
           config-driven commands scroll horizontally; a pinned wrench (never
           scrolls away) opens "Manage toolbar options". */}
       <Box
+        data-toolbar-mode={hasSelection ? "wrap" : "insert"}
         sx={{
           display: "flex",
           alignItems: "center",

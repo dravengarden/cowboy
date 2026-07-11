@@ -198,7 +198,13 @@ here says otherwise.
     composition risks the IME aborting. The sim can't verify this (no reliable IME);
     confirm on a device.
 
-11. **A phone soft keyboard can't delete an inline image / @-token / empty pair
+11. **Fullscreen toolbar claimed to be selection-aware but never changed mode.**
+    `ComposerEditor` emitted `onSelectionChange`, but `FullscreenComposer` did
+    not subscribe. Wire it into local state and show only bold/italic/code/link
+    for a non-empty range; empty selection keeps the configured toolbar. This
+    changes toolbar chrome only and never rebuilds CM6 state or composition.
+
+12. **A phone soft keyboard can't delete an inline image / @-token / empty pair
     ("输入框无法用删除键删除图片").** The custom Backspace handlers
     (`deleteImageTokenBackward` — the two-stage image delete — plus the empty-pair,
     code-fence, and @-token deleters) are CM6 **keymap `{key:"Backspace"}`**

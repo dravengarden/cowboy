@@ -81,6 +81,11 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    cowboy's `cmTheme.ts` (`.cm-atomic-highlight`), not the vendored CSS. On
    re-sync, re-add both entries.
 
+5. **Rendered-link callback plumbing** (`inline-preview.ts`): preserve the local
+   `InlinePreviewConfig.onLinkClick` hook and widget callback. Cowboy supplies it
+   from `composerExtensions.ts`, using Tauri opener in the native shell and
+   `window.open` in a browser/PWA.
+
 The CSS contents are unmodified.
 
 ## Sync workflow (run this to port an upstream fix)
