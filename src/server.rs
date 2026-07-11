@@ -9,7 +9,7 @@
 //! v1 has **no auth** and binds `0.0.0.0` by deliberate choice (LAN-only use);
 //! design §9 auth/pairing is a follow-up.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -31,12 +31,13 @@ use agent_client_protocol::schema::v1::ContentBlock;
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::core::{
-    DispatchReq, Envelope, Hub, Inbound, Outbound, RestoredSession, SessionOrigin, Status,
-    StoreWrite,
+    DispatchReq, Envelope, Hub, Inbound, Outbound, PersistenceHealth, RestoredSession,
+    SessionOrigin, Status, StoreSink, StoreWrite,
 };
+use crate::persistence::EventReducer;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 struct AppState {
     hub: Hub,
@@ -47,11 +48,16 @@ struct AppState {
     /// handlers reach. `None` when `--memory-enabled` is off (the endpoints then
     /// 404), so nothing memory-related runs by default.
     memory_queue: Option<Arc<crate::memory::Queue>>,
+    persistence_health: Option<Arc<PersistenceHealth>>,
+    shutdown: watch::Receiver<bool>,
 }
+
+const STORE_QUEUE_CAPACITY: usize = 8_192;
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     init_tracing();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Phase 2: when --postgres-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
@@ -59,63 +65,72 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // clients can connect. Without --postgres-url the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host that doesn't have the cowboy-private postgres yet.
-    let (hub, store) = if let Some(url) = args.postgres_url.as_deref() {
-        let store = Store::connect(url).await.context("connecting postgres")?;
-        store.migrate().await.context("running migrations")?;
-        let (tx, rx) = mpsc::unbounded_channel::<StoreWrite>();
-        let hub = Hub::with_store(Some(tx));
-        // Warm restore — sessions + events come back exactly as the daemon
-        // left them, so on a fresh process every WS client's first snapshot
-        // is correct.
-        let loaded = store.load_all().await.context("loading persisted state")?;
-        let restored: Vec<_> = loaded
-            .into_iter()
-            .map(|ls| RestoredSession {
-                meta: ls.meta,
-                log: ls.events,
-                next_seq: ls.next_seq,
-                queue: ls.queue,
-                drafts: ls.drafts,
-                judge_runs: ls.judge_runs,
-            })
-            .collect();
-        let restored_count = restored.len();
-        // Seed the global settings (auto-resume default + continuation template)
-        // BEFORE restore, so restore can compute each session's effective
-        // auto-resume (override ?? default) and enqueue a continuation for the
-        // opted-in interrupted ones.
-        match store.load_settings().await {
-            Ok(entries) => hub.load_settings(entries),
-            Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
-        }
-        // Inference provider configs + keys (the judge reads the key from memory).
-        let inf_cfg = store.load_inference_config().await.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading inference config");
-            Vec::new()
-        });
-        let inf_keys = store.load_inference_secrets().await.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading inference secrets");
-            Vec::new()
-        });
-        hub.load_inference(inf_cfg, inf_keys);
-        hub.restore(restored);
-        tracing::info!(
-            postgres = url,
-            restored = restored_count,
-            "persistence wired",
-        );
-        // Background DB writer: dequeues StoreWrite intents and applies them.
-        // Errors are logged but don't bring the daemon down — the in-memory
-        // state remains authoritative for the current process.
-        tokio::spawn(run_store_writer(store.clone(), rx));
-        // Background sweeper: hard-delete sessions soft-deleted past the
-        // retention window, reclaiming their event storage.
-        tokio::spawn(run_purge_sweeper(store.clone()));
-        (hub, Some(store))
-    } else {
-        tracing::info!("no --postgres-url: running in-memory only");
-        (Hub::new(), None)
-    };
+    let (hub, store, persistence_health, writer_task) =
+        if let Some(url) = args.postgres_url.as_deref() {
+            let store = Store::connect(url).await.context("connecting postgres")?;
+            store.migrate().await.context("running migrations")?;
+            let (tx, rx) = mpsc::channel::<StoreWrite>(STORE_QUEUE_CAPACITY);
+            let health = Arc::new(PersistenceHealth::default());
+            let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
+            // Warm restore — sessions + events come back exactly as the daemon
+            // left them, so on a fresh process every WS client's first snapshot
+            // is correct.
+            let loaded = store.load_all().await.context("loading persisted state")?;
+            let restored: Vec<_> = loaded
+                .into_iter()
+                .map(|ls| RestoredSession {
+                    meta: ls.meta,
+                    log: ls.events,
+                    event_count: ls.event_count,
+                    reached_start: ls.reached_start,
+                    next_seq: ls.next_seq,
+                    queue: ls.queue,
+                    drafts: ls.drafts,
+                    judge_runs: ls.judge_runs,
+                })
+                .collect();
+            let restored_count = restored.len();
+            // Seed the global settings (auto-resume default + continuation template)
+            // BEFORE restore, so restore can compute each session's effective
+            // auto-resume (override ?? default) and enqueue a continuation for the
+            // opted-in interrupted ones.
+            match store.load_settings().await {
+                Ok(entries) => hub.load_settings(entries),
+                Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
+            }
+            // Inference provider configs + keys (the judge reads the key from memory).
+            let inf_cfg = store.load_inference_config().await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "loading inference config");
+                Vec::new()
+            });
+            let inf_keys = store.load_inference_secrets().await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "loading inference secrets");
+                Vec::new()
+            });
+            hub.load_inference(inf_cfg, inf_keys);
+            hub.restore(restored);
+            tracing::info!(
+                postgres = url,
+                restored = restored_count,
+                "persistence wired",
+            );
+            // Background DB writer: dequeues StoreWrite intents and applies them.
+            // Errors are logged but don't bring the daemon down — the in-memory
+            // state remains authoritative for the current process.
+            let writer_task = tokio::spawn(run_store_writer(
+                store.clone(),
+                rx,
+                Arc::clone(&health),
+                shutdown_rx.clone(),
+            ));
+            // Background sweeper: hard-delete sessions soft-deleted past the
+            // retention window, reclaiming their event storage.
+            tokio::spawn(run_purge_sweeper(store.clone()));
+            (hub, Some(store), Some(health), Some(writer_task))
+        } else {
+            tracing::info!("no --postgres-url: running in-memory only");
+            (Hub::new(), None, None, None)
+        };
     let supervisor = Arc::new(Supervisor::new(hub.clone(), args.workspace_root.clone()));
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
@@ -171,7 +186,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         if meta.status != Status::Interrupted || !hub.effective_auto_resume(&meta.id) {
             continue;
         }
-        if !hub.session_info(&meta.id).is_some_and(|i| i.queue_count > 0) {
+        if hub
+            .session_info(&meta.id)
+            .is_none_or(|i| i.queue_count == 0)
+        {
             continue;
         }
         match supervisor.ensure_alive(&meta.id) {
@@ -208,7 +226,27 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         "cowboy serving",
     );
 
-    serve_axum(args.bind, hub, supervisor, store, memory_queue).await
+    let result = serve_axum(
+        args.bind,
+        AppState {
+            hub,
+            supervisor,
+            store,
+            memory_queue,
+            persistence_health,
+            shutdown: shutdown_rx,
+        },
+        shutdown_tx,
+    )
+    .await;
+    if let Some(task) = writer_task {
+        match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "store writer task failed during shutdown"),
+            Err(_) => tracing::error!("store writer did not drain within shutdown deadline"),
+        }
+    }
+    result
 }
 
 /// Stand up the memory subsystem and return the enqueue handle (the Queue) for
@@ -270,7 +308,6 @@ fn setup_memory(
         Index::new(Vec::new())
     });
     let janitor = Janitor {
-        hub,
         supervisor,
         store,
         session_id,
@@ -293,7 +330,20 @@ fn setup_memory(
     let reconcile_janitor = janitor.clone();
     tokio::spawn(async move {
         while let Some(batch) = rx.recv().await {
-            reconcile_janitor.run_janitor(batch).await;
+            let mut applied = false;
+            for attempt in 0..3 {
+                if reconcile_janitor.run_janitor(batch.clone()).await {
+                    applied = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+            }
+            if !applied {
+                tracing::error!(
+                    mutations = batch.len(),
+                    "memory batch exhausted retries; leaving unwritten"
+                );
+            }
         }
         tracing::info!("memory reconcile loop shutting down (channel closed)");
     });
@@ -307,7 +357,7 @@ fn setup_memory(
         tick.tick().await; // immediate first tick — consume it (no boot tidy)
         loop {
             tick.tick().await;
-            tidy_janitor.tidy().await;
+            let _ = tidy_janitor.tidy().await;
         }
     });
 
@@ -331,64 +381,263 @@ fn expand_tilde(p: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
-/// Drain the write-behind channel into postgres. One row per intent, no
-/// batching for v0 — append-event is the hot one and a single INSERT per
-/// envelope is fine at the volumes we'll see (a streaming claude turn is
-/// ~50-200 events; postgres can handle that easily over a local socket).
-async fn run_store_writer(store: Store, mut rx: mpsc::UnboundedReceiver<StoreWrite>) {
-    while let Some(write) = rx.recv().await {
-        let result = match &write {
-            StoreWrite::InsertSession(meta) => store.insert_session(meta).await,
-            StoreWrite::AppendEvent(env) => store.append_event(env).await,
-            StoreWrite::UpdateStatus { session_id, status } => {
-                store.update_status(session_id, *status).await
+/// Drain write-behind intents in small batches. Streaming text/tool updates are
+/// reduced to stable rows before persistence, and transient usage/session-info
+/// frames only advance the durable sequence watermark.
+async fn run_store_writer(
+    store: Store,
+    mut rx: mpsc::Receiver<StoreWrite>,
+    health: Arc<PersistenceHealth>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut reducer = EventReducer::default();
+    loop {
+        let first = tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_ok() && *shutdown.borrow() {
+                    rx.close();
+                    rx.recv().await
+                } else {
+                    continue;
+                }
             }
-            StoreWrite::UpdateVerdict { session_id, awaiting_user, done } => {
-                store.update_verdict(session_id, *awaiting_user, *done).await
-            }
-            StoreWrite::UpdateTitle { session_id, title } => {
-                store.update_title(session_id, title).await
-            }
-            StoreWrite::SetAgentSessionId {
-                session_id,
-                agent_session_id,
-            } => {
-                store
-                    .update_agent_session_id(session_id, agent_session_id)
-                    .await
-            }
-            StoreWrite::DeleteSession(id) => store.delete_session(id).await,
-            StoreWrite::UpdatePending {
-                session_id,
-                queue,
-                drafts,
-            } => store.update_pending(session_id, queue, drafts).await,
-            StoreWrite::UpdateSessionOrder { order } => {
-                store.update_session_order(order).await
-            }
-            StoreWrite::UpdateJudgeRuns { session_id, runs } => {
-                store.update_judge_runs(session_id, runs).await
-            }
-            StoreWrite::UpdateAutoResume { session_id, value } => {
-                store.update_auto_resume(session_id, *value).await
-            }
-            StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
-            StoreWrite::PutInferenceConfig { provider, model, params } => {
-                store.put_inference_config(provider, model, params).await
-            }
-            StoreWrite::PutInferenceSecret { provider, api_key } => {
-                store.put_inference_secret(provider, api_key).await
-            }
-            StoreWrite::UpsertWakeup { session_id, fire_at_ms, prompt } => {
-                store.upsert_wakeup(session_id, *fire_at_ms, prompt).await
-            }
-            StoreWrite::DeleteWakeup { session_id } => store.delete_wakeup(session_id).await,
+            write = rx.recv() => write,
         };
-        if let Err(e) = result {
-            tracing::warn!(error = %e, "store writer failed an intent (intent dropped)");
+        let Some(first) = first else { break };
+        let mut batch = vec![first];
+        while batch.len() < 256 {
+            match tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv()).await {
+                Ok(Some(write)) => batch.push(write),
+                Ok(None) | Err(_) => break,
+            }
         }
+        let count = batch.len();
+        if !apply_store_batch(&store, &mut reducer, batch).await {
+            health.mark_failed_batch();
+        }
+        health.consumed(count);
     }
     tracing::info!("store writer shutting down (channel closed)");
+}
+
+async fn apply_store_batch(
+    store: &Store,
+    reducer: &mut EventReducer,
+    writes: Vec<StoreWrite>,
+) -> bool {
+    let mut events: BTreeMap<(String, u64), Envelope> = BTreeMap::new();
+    let mut highwaters: HashMap<String, u64> = HashMap::new();
+    let mut ok = true;
+    for write in writes {
+        match write {
+            StoreWrite::AppendEvent(env) => {
+                highwaters
+                    .entry(env.session_id.clone())
+                    .and_modify(|seq| *seq = (*seq).max(env.seq.saturating_add(1)))
+                    .or_insert_with(|| env.seq.saturating_add(1));
+                if let Some(reduced) = reducer.reduce(env) {
+                    events.insert((reduced.session_id.clone(), reduced.seq), reduced);
+                }
+            }
+            other => {
+                ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
+                ok &= retry_store_write(store, &other).await;
+            }
+        }
+    }
+    ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
+    ok
+}
+
+async fn flush_event_batch(
+    store: &Store,
+    events: &mut BTreeMap<(String, u64), Envelope>,
+    highwaters: &mut HashMap<String, u64>,
+) -> bool {
+    if events.is_empty() && highwaters.is_empty() {
+        return true;
+    }
+    let rows: Vec<Envelope> = std::mem::take(events).into_values().collect();
+    let watermarks = std::mem::take(highwaters);
+    let mut last_error = None;
+    for attempt in 0..4 {
+        match store.upsert_event_batch(&rows, &watermarks).await {
+            Ok(()) => return true,
+            Err(e) => {
+                last_error = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(50 * (1 << attempt))).await;
+            }
+        }
+    }
+    if let Some(error) = last_error {
+        tracing::error!(%error, rows = rows.len(), "store writer exhausted event-batch retries");
+    }
+    false
+}
+
+async fn retry_store_write(store: &Store, write: &StoreWrite) -> bool {
+    let mut last_error = None;
+    for attempt in 0..4 {
+        match apply_store_write(store, write).await {
+            Ok(()) => return true,
+            Err(e) => {
+                last_error = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(50 * (1 << attempt))).await;
+            }
+        }
+    }
+    if let Some(error) = last_error {
+        tracing::error!(%error, ?write, "store writer exhausted intent retries");
+    }
+    false
+}
+
+async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<()> {
+    match write {
+        StoreWrite::InsertSession(meta) => store.insert_session(meta).await,
+        StoreWrite::AppendEvent(_) => Ok(()),
+        StoreWrite::UpdateStatus { session_id, status } => {
+            store.update_status(session_id, *status).await
+        }
+        StoreWrite::UpdateVerdict {
+            session_id,
+            awaiting_user,
+            done,
+        } => {
+            store
+                .update_verdict(session_id, *awaiting_user, *done)
+                .await
+        }
+        StoreWrite::UpdateTitle { session_id, title } => {
+            store.update_title(session_id, title).await
+        }
+        StoreWrite::SetAgentSessionId {
+            session_id,
+            agent_session_id,
+        } => {
+            store
+                .update_agent_session_id(session_id, agent_session_id)
+                .await
+        }
+        StoreWrite::DeleteSession(id) => store.delete_session(id).await,
+        StoreWrite::UpdatePending {
+            session_id,
+            queue,
+            drafts,
+        } => store.update_pending(session_id, queue, drafts).await,
+        StoreWrite::UpdateSessionOrder { order } => store.update_session_order(order).await,
+        StoreWrite::UpdateJudgeRuns { session_id, runs } => {
+            store.update_judge_runs(session_id, runs).await
+        }
+        StoreWrite::UpdateAutoResume { session_id, value } => {
+            store.update_auto_resume(session_id, *value).await
+        }
+        StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
+        StoreWrite::PutInferenceConfig {
+            provider,
+            model,
+            params,
+        } => store.put_inference_config(provider, model, params).await,
+        StoreWrite::PutInferenceSecret { provider, api_key } => {
+            store.put_inference_secret(provider, api_key).await
+        }
+        StoreWrite::UpsertWakeup {
+            session_id,
+            fire_at_ms,
+            prompt,
+        } => store.upsert_wakeup(session_id, *fire_at_ms, prompt).await,
+        StoreWrite::DeleteWakeup { session_id } => store.delete_wakeup(session_id).await,
+    }
+}
+
+#[cfg(test)]
+mod store_writer_tests {
+    use super::*;
+    use crate::core::Event;
+
+    fn update(seq: u64, value: serde_json::Value) -> Envelope {
+        Envelope {
+            session_id: "sess-test".to_owned(),
+            seq,
+            event: Event::Update { update: value },
+            cmid: None,
+        }
+    }
+
+    #[test]
+    fn reducer_coalesces_text_at_the_first_seq() {
+        let mut reducer = EventReducer::default();
+        let first = reducer
+            .reduce(update(
+                10,
+                serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "messageId": "m1",
+                    "content": {"type": "text", "text": "hello "}
+                }),
+            ))
+            .expect("first chunk persists");
+        assert_eq!(first.seq, 10);
+        let joined = reducer
+            .reduce(update(
+                11,
+                serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "messageId": "m1",
+                    "content": {"type": "text", "text": "world"}
+                }),
+            ))
+            .expect("second chunk updates canonical row");
+        assert_eq!(joined.seq, 10);
+        let Event::Update { update } = joined.event else {
+            panic!("update")
+        };
+        assert_eq!(update["content"]["text"], "hello world");
+    }
+
+    #[test]
+    fn reducer_folds_tool_updates_into_the_original_call() {
+        let mut reducer = EventReducer::default();
+        reducer.reduce(update(
+            20,
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-1",
+                "title": "run",
+                "status": "pending"
+            }),
+        ));
+        let folded = reducer
+            .reduce(update(
+                21,
+                serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "tool-1",
+                    "status": "completed",
+                    "content": [{"type": "text", "text": "ok"}]
+                }),
+            ))
+            .expect("tool update folds");
+        assert_eq!(folded.seq, 20);
+        let Event::Update { update } = folded.event else {
+            panic!("update")
+        };
+        assert_eq!(update["sessionUpdate"], "tool_call");
+        assert_eq!(update["status"], "completed");
+        assert_eq!(update["title"], "run");
+    }
+
+    #[test]
+    fn reducer_drops_transient_frames() {
+        let mut reducer = EventReducer::default();
+        assert!(reducer
+            .reduce(update(
+                30,
+                serde_json::json!({"sessionUpdate": "usage_update", "used": 1, "size": 2}),
+            ))
+            .is_none());
+    }
 }
 
 /// Retention (days) for soft-deleted sessions before the sweeper hard-deletes
@@ -434,7 +683,7 @@ async fn run_dispatcher(
             continue;
         };
         let title = first_prompt_title(&text, &content);
-        match supervisor.send(&session_id, AgentCommand::Prompt(blocks, cmid)) {
+        match supervisor.send(&session_id, AgentCommand::Prompt(blocks, cmid, None)) {
             Ok(()) => {
                 if let Some(t) = title {
                     hub.auto_title(&session_id, t);
@@ -462,13 +711,15 @@ fn build_prompt_blocks(text: &str, content: &[serde_json::Value]) -> Option<Vec<
     }
     let blocks: Vec<ContentBlock> = content
         .iter()
-        .filter_map(|v| match serde_json::from_value::<ContentBlock>(v.clone()) {
-            Ok(b) => Some(b),
-            Err(e) => {
-                tracing::warn!(error = %e, "skipping unparseable queued content block");
-                None
-            }
-        })
+        .filter_map(
+            |v| match serde_json::from_value::<ContentBlock>(v.clone()) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unparseable queued content block");
+                    None
+                }
+            },
+        )
         .collect();
     if blocks.is_empty() {
         None
@@ -479,12 +730,10 @@ fn build_prompt_blocks(text: &str, content: &[serde_json::Value]) -> Option<Vec<
 
 async fn serve_axum(
     bind: std::net::SocketAddr,
-    hub: Hub,
-    supervisor: Arc<Supervisor>,
-    store: Option<Store>,
-    memory_queue: Option<Arc<crate::memory::Queue>>,
+    state: AppState,
+    shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(AppState { hub, supervisor, store, memory_queue });
+    let state = Arc::new(state);
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -510,8 +759,34 @@ async fn serve_axum(
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(addr = %bind, "WS/HTTP listening");
 
-    axum::serve(listener, app).await.context("axum serve")?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+        .await
+        .context("axum serve")?;
     Ok(())
+}
+
+async fn shutdown_signal(shutdown: watch::Sender<bool>) {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "failed to listen for ctrl-c");
+                }
+            }
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        tracing::warn!(%error, "failed to listen for ctrl-c");
+    }
+    tracing::info!("shutdown requested; draining connections and persistence");
+    let _ = shutdown.send(true);
 }
 
 pub(crate) fn init_tracing() {
@@ -522,8 +797,16 @@ pub(crate) fn init_tracing() {
         .init();
 }
 
-async fn healthz() -> &'static str {
-    "ok"
+async fn healthz(State(state): State<Arc<AppState>>) -> Response {
+    if state
+        .persistence_health
+        .as_ref()
+        .is_some_and(|health| !health.is_healthy())
+    {
+        (StatusCode::SERVICE_UNAVAILABLE, "persistence degraded").into_response()
+    } else {
+        "ok".into_response()
+    }
 }
 
 /// Response body for `GET /version`.
@@ -574,6 +857,9 @@ struct Metrics {
     sessions_deleted: i64,
     /// daemon resident memory (bytes), excluding agent subprocesses.
     daemon_rss_bytes: u64,
+    persistence_pending: usize,
+    persistence_dropped: u64,
+    persistence_failed_batches: u64,
 }
 
 /// Resident set size of THIS process (the daemon, not its agent children) from
@@ -581,7 +867,11 @@ struct Metrics {
 fn daemon_rss_bytes() -> u64 {
     std::fs::read_to_string("/proc/self/statm")
         .ok()
-        .and_then(|s| s.split_whitespace().nth(1).and_then(|f| f.parse::<u64>().ok()))
+        .and_then(|s| {
+            s.split_whitespace()
+                .nth(1)
+                .and_then(|f| f.parse::<u64>().ok())
+        })
         .map_or(0, |pages| pages.saturating_mul(4096))
 }
 
@@ -597,6 +887,12 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         sessions_live,
         sessions_deleted,
         daemon_rss_bytes: daemon_rss_bytes(),
+        persistence_pending: state.persistence_health.as_ref().map_or(0, |h| h.pending()),
+        persistence_dropped: state.persistence_health.as_ref().map_or(0, |h| h.dropped()),
+        persistence_failed_batches: state
+            .persistence_health
+            .as_ref()
+            .map_or(0, |h| h.failed_batches()),
     })
     .into_response()
 }
@@ -662,14 +958,21 @@ async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
         for name in names {
             if let Some(dir) = project_worktree(&columbus, &name) {
                 let path = dir.display().to_string();
-                out.push(Workspace { value: path.clone(), label: name, help: path });
+                out.push(Workspace {
+                    value: path.clone(),
+                    label: name,
+                    help: path,
+                });
             }
         }
     }
     Json(out).into_response()
 }
 
-async fn api_session_info(State(state): State<Arc<AppState>>, Path(session_id): Path<String>) -> Response {
+async fn api_session_info(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
     match state.hub.session_info(&session_id) {
         Some(info) => Json(info).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown session").into_response(),
@@ -705,7 +1008,10 @@ async fn api_session_prompt(
             .filter_map(|v| serde_json::from_value::<ContentBlock>(v).ok())
             .collect()
     };
-    match state.supervisor.send(&session_id, AgentCommand::Prompt(blocks, None)) {
+    match state
+        .supervisor
+        .send(&session_id, AgentCommand::Prompt(blocks, None, None))
+    {
         Ok(()) => (StatusCode::ACCEPTED, "queued").into_response(),
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
@@ -738,7 +1044,11 @@ async fn api_memory_record(
         return (StatusCode::NOT_FOUND, "memory subsystem disabled").into_response();
     };
     let Some(mem_type) = crate::memory::MemoryType::parse(&req.mem_type) else {
-        return (StatusCode::BAD_REQUEST, format!("unknown type {:?}", req.mem_type)).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown type {:?}", req.mem_type),
+        )
+            .into_response();
     };
     let mutation = crate::memory::Mutation {
         op: crate::memory::Op::Add,
@@ -900,8 +1210,26 @@ async fn api_history(
     State(state): State<Arc<AppState>>,
     Path((session_id, page)): Path<(String, usize)>,
 ) -> Response {
-    let Some((events, immutable)) = state.hub.history_page(&session_id, page) else {
+    if state.hub.session_info(&session_id).is_none() {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    }
+    let history = match &state.store {
+        Some(store) => {
+            store
+                .history_page(&session_id, page, crate::core::HISTORY_PAGE)
+                .await
+        }
+        None => Ok(state
+            .hub
+            .history_page(&session_id, page)
+            .unwrap_or_default()),
+    };
+    let (events, immutable) = match history {
+        Ok(page) => page,
+        Err(e) => {
+            tracing::warn!(session = %session_id, page, error = %e, "history query failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "history unavailable").into_response();
+        }
     };
     let cache = if immutable {
         "public, max-age=31536000, immutable"
@@ -1007,6 +1335,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
     // client dedups by (session_id, seq), so a brief overlap is harmless.
     let mut rx = state.hub.subscribe();
+    let mut shutdown = state.shutdown.clone();
 
     if send_json(
         &mut sink,
@@ -1033,9 +1362,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         return;
     }
     // Seed the static skill registry (prompt + extract) for the Info sheet.
-    if send_json(&mut sink, &Outbound::Skills { skills: state.hub.skills_snapshot() })
-        .await
-        .is_err()
+    if send_json(
+        &mut sink,
+        &Outbound::Skills {
+            skills: state.hub.skills_snapshot(),
+        },
+    )
+    .await
+    .is_err()
     {
         return;
     }
@@ -1128,6 +1462,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         heartbeat.tick().await;
         loop {
             tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
                 msg = rx.recv() => match msg {
                     Ok(msg) => {
                         if send_json(&mut sink, &msg).await.is_err() {
@@ -1335,7 +1674,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // API direct prompt — no optimistic client, so no cmid.
             let result = state
                 .supervisor
-                .send(&session_id, AgentCommand::Prompt(blocks, None));
+                .send(&session_id, AgentCommand::Prompt(blocks, None, None));
             if result.is_ok() {
                 if let Some(title) = auto {
                     state.hub.auto_title(&session_id, title);
@@ -1373,7 +1712,12 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 Ok(())
             }
         }
-        Inbound::Sync { state: sync_state, id, name, args } => {
+        Inbound::Sync {
+            state: sync_state,
+            id,
+            name,
+            args,
+        } => {
             // Generic arbiter apply (title/order/…); validates, dedupes by id,
             // applies the typed mutation, version-stamps + broadcasts the patch.
             state.hub.sync_apply(&sync_state, id, &name, &args)
@@ -1382,7 +1726,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             state.hub.set_auto_resume(&session_id, value);
             Ok(())
         }
-        Inbound::SetAwaiting { session_id, awaiting } => {
+        Inbound::SetAwaiting {
+            session_id,
+            awaiting,
+        } => {
             state.hub.set_awaiting(&session_id, awaiting);
             Ok(())
         }
@@ -1402,7 +1749,11 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             state.hub.set_setting(key, value);
             Ok(())
         }
-        Inbound::SetInferenceConfig { provider, model, params } => {
+        Inbound::SetInferenceConfig {
+            provider,
+            model,
+            params,
+        } => {
             state.hub.set_inference_config(provider, model, params);
             Ok(())
         }
@@ -1506,9 +1857,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 // running turn so it runs next (same end-state as a queued row's
                 // force-push). force_submit returns true when it queued (vs a direct
                 // idle dispatch); only then, and only on a live turn, do we Cancel.
-                let queued = state.hub.force_submit(&session_id, text, content, cmid, true);
+                let queued = state
+                    .hub
+                    .force_submit(&session_id, text, content, cmid, true);
                 if queued
-                    && matches!(state.hub.status(&session_id), Some(Status::Busy | Status::Starting))
+                    && matches!(
+                        state.hub.status(&session_id),
+                        Some(Status::Busy | Status::Starting)
+                    )
                 {
                     state.supervisor.send(&session_id, AgentCommand::Cancel)
                 } else {
@@ -1525,7 +1881,9 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 // "Jump to front" without interrupting: front-insert so it runs next
                 // after the current turn, ahead of the rest of the queue. Same
                 // front placement as force, but no Cancel.
-                let _ = state.hub.force_submit(&session_id, text, content, cmid, false);
+                let _ = state
+                    .hub
+                    .force_submit(&session_id, text, content, cmid, false);
                 Ok(())
             } else {
                 state.hub.submit(&session_id, text, content, cmid);
@@ -1689,7 +2047,9 @@ async fn inference_probe(
     prompt: &str,
 ) -> crate::core::Outbound {
     use crate::core::Outbound::InferenceProbeResult;
-    use crate::inference::{deepseek::DeepSeek, CompleteRequest, InferenceProvider as _, Message as IMsg};
+    use crate::inference::{
+        deepseek::DeepSeek, CompleteRequest, InferenceProvider as _, Message as IMsg,
+    };
     let err = |e: String| InferenceProbeResult {
         provider: provider.to_owned(),
         ok: false,
@@ -1709,7 +2069,11 @@ async fn inference_probe(
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| crate::inference::deepseek::DEFAULT_MODEL.to_owned());
     let ds = DeepSeek::new(key, model);
-    let prompt = if prompt.is_empty() { "Reply with a JSON object {\"ok\": true}." } else { prompt };
+    let prompt = if prompt.is_empty() {
+        "Reply with a JSON object {\"ok\": true}."
+    } else {
+        prompt
+    };
     let req = CompleteRequest::json_judge(vec![IMsg::user(prompt)], 64);
     match ds.complete(req).await {
         Ok(r) => {

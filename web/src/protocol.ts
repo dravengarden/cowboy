@@ -201,7 +201,7 @@ export type Outbound =
   | { type: "skills"; skills: SkillView[] }
   // The confirm-detect judge's full result for a turn (verdict + raw I/O for the
   // overlay's "raw data" expand). Latest-per-session.
-  | { type: "judge_result"; judge: JudgeResult }
+  | ({ type: "judge_result" } & JudgeResult)
   // A session's confirm-detect judge-run HISTORY (newest first), capped. Backs the
   // inspector widget (long-press the turn-status pill). Sent per session on
   // connect + re-broadcast on every new run / per-item delete / clear.

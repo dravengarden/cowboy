@@ -6,10 +6,10 @@
 //! current-thread tokio runtime + `LocalSet` (see [`crate::acp::run_agent`]).
 //! The supervisor talks to that thread only through a `Send` command channel.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::Mutex;
 
 use tokio::sync::mpsc;
 

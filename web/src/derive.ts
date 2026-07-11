@@ -310,7 +310,7 @@ export function latestPlan(timeline: Envelope[]): CurrentPlan | null {
   if (!entries || entries.length === 0) return null;
   return {
     entries,
-    key: entries.map((e) => e.content).join(" "),
+    key: entries.map((e) => e.content).join("\0"),
     supersededByUserTurn: superseded,
   };
 }

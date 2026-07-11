@@ -108,9 +108,10 @@ The Hub never touches the database directly. Each state change emits a
 **`StoreWrite`** variant — `InsertSession`, `AppendEvent`, `UpdateStatus`,
 `UpdateVerdict`, `UpdateTitle`, `SetAgentSessionId`, `DeleteSession`,
 `UpdatePending`, `UpdateSessionOrder`, `UpdateAutoResume`, `UpdateJudgeRuns`,
-`PutSetting`, `PutInferenceConfig`, `PutInferenceSecret` — onto an unbounded mpsc
-channel drained by the background writer task ([Storage](05-storage.md)). The hot
-path never blocks on the DB.
+`PutSetting`, `PutInferenceConfig`, `PutInferenceSecret` — onto a bounded mpsc
+channel drained in reduced batches by the background writer task
+([Storage](05-storage.md)). The hot path never blocks on the DB; overflow and
+exhausted retries explicitly degrade health.
 
 ## Auto-resume of interrupted turns
 

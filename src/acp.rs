@@ -17,19 +17,18 @@
 //! require `Send` futures. The shared `Hub` is already `Arc`-backed; the small
 //! per-session client state ([`ClientState`]) uses `Arc` + `Mutex`/atomics.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use parking_lot::Mutex;
 
 // ACP 1.0 versioned the wire schema: the message types that were flat under
 // `schema::` in 0.14 now live under `schema::v1::` (v1 is the stable line; v2 is
 // unstable/feature-gated). `ProtocolVersion` stayed at the `schema::` root
 // (version-agnostic), and the `Agent`/`Client` traits at the crate root.
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
     LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
@@ -38,6 +37,7 @@ use agent_client_protocol::schema::v1::{
     SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
+use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
 use tokio::process::Command;
@@ -98,9 +98,9 @@ fn codex_full_access_available(options: &[SessionConfigOption]) -> bool {
 
 fn config_select_options_contain(options: &SessionConfigSelectOptions, value: &str) -> bool {
     match options {
-        SessionConfigSelectOptions::Ungrouped(options) => {
-            options.iter().any(|option| option.value.0.as_ref() == value)
-        }
+        SessionConfigSelectOptions::Ungrouped(options) => options
+            .iter()
+            .any(|option| option.value.0.as_ref() == value),
         SessionConfigSelectOptions::Grouped(groups) => groups.iter().any(|group| {
             group
                 .options
@@ -156,7 +156,11 @@ pub enum AgentCommand {
     /// through (subject to the upstream's own capabilities), not just text.
     /// The `Option<String>` is the originating client's cmid (chat send) used to
     /// tag the user-message echo for optimistic reconcile; None for none.
-    Prompt(Vec<ContentBlock>, Option<String>),
+    Prompt(
+        Vec<ContentBlock>,
+        Option<String>,
+        Option<oneshot::Sender<Result<String, String>>>,
+    ),
     /// Cancel the current turn (ACP `session/cancel`).
     Cancel,
     /// Answer a pending permission request (`None` = cancelled / no choice).
@@ -185,6 +189,9 @@ struct ClientState {
     /// id. The connection's permission handler inserts a sender; the command
     /// loop resolves exactly one (first-response-wins).
     pending: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
+    /// Assistant text captured for an internal prompt that requested a direct
+    /// completion result (the memory janitor). Ordinary UI prompts leave it off.
+    capture: Mutex<Option<String>>,
     /// Monotonic counter for synthesizing permission request ids.
     next_perm: AtomicU64,
     /// While `true`, incoming `session/update` notifications are dropped rather
@@ -237,14 +244,24 @@ pub fn run_agent(
     // stays valid. A SECOND stall is a persistent failure → `Crashed` + the UI's
     // manual Retry (which routes back through revive).
     let result = rt.block_on(async {
-        let mut result =
-            agent_main(spec, session_id, cwd.clone(), resume.clone(), &mut cmd_rx, hub).await;
+        let mut result = agent_main(
+            spec,
+            session_id,
+            cwd.clone(),
+            resume.clone(),
+            &mut cmd_rx,
+            hub,
+        )
+        .await;
         let stalled = result
             .as_ref()
             .err()
             .is_some_and(|e| e.downcast_ref::<HandshakeTimeout>().is_some());
         if stalled {
-            tracing::warn!(session = session_id, "ACP handshake stalled; auto-retrying spawn once");
+            tracing::warn!(
+                session = session_id,
+                "ACP handshake stalled; auto-retrying spawn once"
+            );
             // Stay in `Starting` (a spinner), not `Crashed`: this blip is
             // expected to self-heal, so don't flash an error for it.
             hub.set_status(
@@ -269,7 +286,11 @@ pub fn run_agent(
             // visible and re-drains once the session recovers. Cancel/Permission
             // commands are transient and intentionally dropped.
             while let Ok(cmd) = cmd_rx.try_recv() {
-                if let AgentCommand::Prompt(blocks, cmid) = cmd {
+                if let AgentCommand::Prompt(blocks, cmid, completion) = cmd {
+                    if let Some(tx) = completion {
+                        let _ = tx.send(Err(format!("agent failed before prompt: {e}")));
+                        continue;
+                    }
                     let content: Vec<serde_json::Value> = blocks
                         .iter()
                         .map(|b| serde_json::to_value(b).unwrap_or(serde_json::Value::Null))
@@ -333,6 +354,7 @@ async fn agent_main(
         hub: hub.clone(),
         session_id: session_id.to_owned(),
         pending: Mutex::new(HashMap::new()),
+        capture: Mutex::new(None),
         next_perm: AtomicU64::new(0),
         suppress_updates: AtomicBool::new(false),
     });
@@ -401,10 +423,7 @@ async fn agent_main(
                 let options = serde_json::to_value(&req.options).unwrap_or(serde_json::Value::Null);
 
                 let (tx, rx) = oneshot::channel::<Option<String>>();
-                perm_state
-                    .pending
-                    .lock()
-                    .insert(request_id.clone(), tx);
+                perm_state.pending.lock().insert(request_id.clone(), tx);
                 perm_state.hub.push(
                     &perm_state.session_id,
                     Event::PermissionRequest {
@@ -508,6 +527,13 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         }
         return;
     }
+    if let SessionUpdate::AgentMessageChunk(ref chunk) = notif.update {
+        if let ContentBlock::Text(text) = &chunk.content {
+            if let Some(capture) = state.capture.lock().as_mut() {
+                capture.push_str(&text.text);
+            }
+        }
+    }
     match serde_json::to_value(&notif.update) {
         Ok(update) => {
             // `usage_update` carries the context-window fill (`used`/`size`). It's
@@ -516,11 +542,20 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
             // composer's "context X% full" ring) instead of appending a copy to the
             // timeline every time (which bloated the persisted log). Matched on the
             // serialized shape so it's robust to the ACP crate's representation.
-            if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
+            if update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
                 == Some("usage_update")
             {
-                let field = |k| update.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
-                state.hub.set_context_usage(&state.session_id, field("used"), field("size"));
+                let field = |k| {
+                    update
+                        .get(k)
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                };
+                state
+                    .hub
+                    .set_context_usage(&state.session_id, field("used"), field("size"));
                 return;
             }
             // Honor a ScheduleWakeup BEFORE pushing — the event is still stored
@@ -729,8 +764,12 @@ async fn run_session(
         None
     };
     if let (Some(options), Some(m)) = (mode_select.as_ref(), modes.as_ref()) {
-        let opt =
-            SessionConfigOption::select("mode", "Mode", m.current_mode_id.0.to_string(), options.clone());
+        let opt = SessionConfigOption::select(
+            "mode",
+            "Mode",
+            m.current_mode_id.0.to_string(),
+            options.clone(),
+        );
         match serde_json::to_value([opt]) {
             Ok(v) => state.hub.set_config_options(&session_id, v),
             Err(e) => tracing::warn!(error = %e, "serializing gemini mode chip"),
@@ -742,7 +781,10 @@ async fn run_session(
     // turn is in flight.
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
-            AgentCommand::Prompt(blocks, cmid) => {
+            AgentCommand::Prompt(blocks, cmid, completion) => {
+                if completion.is_some() {
+                    *state.capture.lock() = Some(String::new());
+                }
                 state.hub.set_status(&session_id, Status::Busy, None);
                 // Echo each user content block into the timeline so every
                 // client (Web UI, phone, native shell) sees it — the upstream
@@ -771,12 +813,15 @@ async fn run_session(
                     if auto_resumed {
                         update["autoResumed"] = serde_json::Value::Bool(true);
                     }
-                    state.hub.push_tagged(&session_id, Event::Update { update }, tag);
+                    state
+                        .hub
+                        .push_tagged(&session_id, Event::Update { update }, tag);
                 }
                 let cx = cx.clone();
                 let hub = state.hub.clone();
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
+                let state = Arc::clone(state);
                 cx.clone().spawn(async move {
                     match cx
                         .send_request(PromptRequest::new(acp, blocks))
@@ -784,15 +829,26 @@ async fn run_session(
                         .await
                     {
                         Ok(r) => {
+                            if let Some(tx) = completion {
+                                let text = state.capture.lock().take().unwrap_or_default();
+                                let _ = tx.send(Ok(text));
+                            }
                             // Turn completed — including a `Cancelled` from the user's manual
                             // Stop or a force-push (an Ok we WANT to drain). Going Running lets
                             // the auto-drain send the next queued prompt.
-                            hub.push(&sid, Event::TurnEnd {
-                                stop_reason: format!("{:?}", r.stop_reason),
-                            });
+                            hub.push(
+                                &sid,
+                                Event::TurnEnd {
+                                    stop_reason: format!("{:?}", r.stop_reason),
+                                },
+                            );
                             hub.set_status(&sid, Status::Running, None);
                         }
                         Err(e) => {
+                            if let Some(tx) = completion {
+                                state.capture.lock().take();
+                                let _ = tx.send(Err(e.to_string()));
+                            }
                             // The prompt FAILED — agent/connection error, INCLUDING the agent
                             // subprocess dying mid-turn (surfaced by agent_main's `child.wait()`
                             // race, the one auto-recovery we keep: process death is unambiguous).
@@ -803,9 +859,12 @@ async fn run_session(
                             // reaches the same conclusion). The UI surfaces silence as a
                             // "waiting Xm" indicator and the user recovers MANUALLY via Stop
                             // (→ Cancel → the agent yields here as an Ok). No auto-kill.
-                            hub.push(&sid, Event::TurnEnd {
-                                stop_reason: format!("error: {e}"),
-                            });
+                            hub.push(
+                                &sid,
+                                Event::TurnEnd {
+                                    stop_reason: format!("error: {e}"),
+                                },
+                            );
                             hub.set_status(&sid, Status::Crashed, Some(e.to_string()));
                         }
                     }
@@ -830,7 +889,9 @@ async fn run_session(
                     },
                 );
             }
-            AgentCommand::SetConfigOption { config_id, value } if config_id == "mode" && mode_select.is_some() => {
+            AgentCommand::SetConfigOption { config_id, value }
+                if config_id == "mode" && mode_select.is_some() =>
+            {
                 // gemini's synthesized "mode" chip maps to ACP `session/set_mode` —
                 // it implements no `session/set_config_option` (it never advertised
                 // config options; cowboy built this chip from its session modes).
@@ -853,7 +914,9 @@ async fn run_session(
                             let opt = SessionConfigOption::select("mode", "Mode", mode_id, options);
                             match serde_json::to_value([opt]) {
                                 Ok(v) => hub.set_config_options(&sid, v),
-                                Err(e) => tracing::warn!(error = %e, "re-serializing gemini mode chip"),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "re-serializing gemini mode chip")
+                                }
                             }
                         }
                         Err(e) => hub.broadcast_error(Some(sid.clone()), format!("set mode: {e}")),

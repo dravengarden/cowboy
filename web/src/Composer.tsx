@@ -129,7 +129,7 @@ import {
   submitPrompt,
   unscheduleDraft,
   useInferenceConfig,
-  useStore,
+  useStoreSelector,
 } from "./store";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { fireLabel } from "./scheduleTime";
@@ -641,7 +641,10 @@ export function Composer({
   }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { drafts, queues, sessions, timelines } = useStore();
+  const drafts = useStoreSelector((snapshot) => snapshot.drafts);
+  const queues = useStoreSelector((snapshot) => snapshot.queues);
+  const sessions = useStoreSelector((snapshot) => snapshot.sessions);
+  const timeline = useStoreSelector((snapshot) => snapshot.timelines.get(sessionId));
   // `queues`/`drafts` already merge the server rows with this device's optimistic
   // (sending/failed) rows via the queue sync client (commitQueue) — server rows
   // first, optimistic rebased after, reconciled out the instant their cmid lands.
@@ -649,16 +652,13 @@ export function Composer({
   const draftList = drafts.get(sessionId) ?? [];
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
-  const plan = useMemo(() => latestPlan(timelines.get(sessionId) ?? []), [
-    timelines,
-    sessionId,
-  ]);
+  const plan = useMemo(() => latestPlan(timeline ?? []), [timeline]);
   // The latest unresolved tool-permission request (cheap single pass). When set,
   // the sticky PermissionOverlay takes the floating slot INSTEAD of the
   // turn-status pill — the two share the slot + material but never show at once.
   const pendingPermission = useMemo(
-    () => latestPendingPermission(timelines.get(sessionId) ?? []),
-    [timelines, sessionId],
+    () => latestPendingPermission(timeline ?? []),
+    [timeline],
   );
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
@@ -771,8 +771,8 @@ export function Composer({
   // the agent's own auto-compaction). Drives the Compact button's disabled +
   // spinner state so a second /compact can't be fired mid-run.
   const compacting = useMemo(
-    () => busy && isCompactingTail(timelines.get(sessionId) ?? []),
-    [busy, timelines, sessionId],
+    () => busy && isCompactingTail(timeline ?? []),
+    [busy, timeline],
   );
   // Queue manually paused: keep the ⚡ force button usable so a message can still
   // be pushed PAST the held queue (run now) even while the agent is idle.
@@ -825,8 +825,8 @@ export function Composer({
   // agent-advertised `/` commands through a thunk; `@` files come from the
   // daemon's `/api/sessions/{id}/files` search.
   const availableCommands = useMemo(
-    () => latestAvailableCommands(timelines.get(sessionId) ?? []),
-    [timelines, sessionId],
+    () => latestAvailableCommands(timeline ?? []),
+    [timeline],
   );
 
   // Session-lifecycle one-tap actions (Compact / Clear). Resolved per agent from
@@ -2410,7 +2410,7 @@ function PendingPanel({
   // aren't advancing. The pause/resume CONTROL itself is session-level and lives
   // in the navbar (AutoScrollAndStop), reachable even with an empty queue; here we
   // only surface the status badge. Read live so it tracks the toggle.
-  const { sessions } = useStore();
+  const sessions = useStoreSelector((snapshot) => snapshot.sessions);
   const queueHeld = kind === "queued" &&
     (sessions.find((s) => s.id === sessionId)?.paused ?? false);
   // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
@@ -3359,7 +3359,8 @@ export function SessionControls({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
-  const { configOptions, sessions } = useStore();
+  const configOptions = useStoreSelector((snapshot) => snapshot.configOptions);
+  const sessions = useStoreSelector((snapshot) => snapshot.sessions);
   const session = sessions.find((s) => s.id === sessionId);
   const touchInput = useTouchComposer();
   const [sheetOpen, setSheetOpen] = useState(false);

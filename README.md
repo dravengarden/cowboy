@@ -18,37 +18,36 @@ iPad/iPhone) lists sessions, shows a live transcript, sends prompts, and
 answers permission requests. See **[design.md](design.md)** for the full
 architecture (it is the source of truth).
 
-Deferred from v1 (see design): auth/token pairing + QR (§9; v1 is no-auth,
-LAN-only by choice), the vim/hint-mode keyboard layer (§8), SQLite persistence
-+ restart `session/load` resume (§6/§7), and the code-editor / file-tree / git
-views (intentionally out of scope — cowboy is the agent panel only).
+Auth/token pairing remains deliberately out of process (the deployment VPN is
+the boundary). Postgres persistence, restart resume, history pagination, queue /
+draft sync, and the CodeMirror composer are implemented. Code-editor / file-tree
+/ git views remain intentionally out of scope — cowboy is the agent panel only.
 
 ## Shape (one-paragraph summary)
 
 A single Rust binary, run as a systemd daemon, that is itself the **ACP client**
 (via the official `agent-client-protocol` crate — no Zed fork). It spawns each
 agent over ACP/stdio, normalizes the stream into a provider-agnostic
-event/command model, persists it (SQLite, event-sourced), and fans it out over
+event/command model, persists it in Postgres, and fans it out over
 WebSocket to all connected web clients equally. The web UI (React/MUI/Vite,
 embedded in the binary, omega's frontend recipe) is one responsive app:
-virtualized transcript via `@tanstack/react-virtual`, QR pairing for phones,
-and vim (CodeMirror 6) in the composer at PC widths.
+incrementally paged transcript, and a CodeMirror 6 composer with vim support.
 
 ## Stack
 
 - **Backend**: Rust — axum + tokio (WS/HTTP), `agent-client-protocol` (pinned),
-  rusqlite (WAL), clap, rust-embed.
-- **Frontend**: React 19, MUI 7, TanStack Router/Query/Virtual, Vite 7,
+  sqlx/Postgres, clap, rust-embed.
+- **Frontend**: React 19, MUI 7, Vite 7,
   TypeScript (strictest); built by Deno, linted by oxlint.
 - **Providers**: pluggable (trait + registry), all over ACP; OpenCode first
   (native ACP), then Claude Code and Codex.
-- **Storage**: SQLite (sessions + events) + `config.json` (intent) + secrets.
+- **Storage**: service-private Postgres (sessions, canonical events, settings, secrets).
 - **Deploy**: systemd, `StateDirectory=cowboy` → `/var/lib/cowboy/`.
 
 ## Two subcommands, one source of truth (design §13a)
 
 cowboy is **one** long-running daemon. `cowboy serve` on `:3333` owns the
-`Hub`, supervisor, and (future) SQLite — that's the source of truth. Every
+`Hub`, supervisor, and Postgres write-behind — that's the source of truth. Every
 other surface is a *client* of it:
 
 | Subcommand | Transport | Run by | When to use |

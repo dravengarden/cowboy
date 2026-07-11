@@ -1,19 +1,11 @@
-// Virtualized transcript. One row per derived `RenderItem`; row heights are
-// measured dynamically so streamed-in markdown / code blocks / images grow
-// naturally without us pre-computing sizes.
+// Paged transcript. One row per canonical `RenderItem`; CSS containment skips
+// layout/paint for off-screen rows while preserving DOM and native scroll
+// anchoring as streamed markdown / code blocks / images grow.
 //
-// Why virtual at all: a long session (claude with hundreds of streamed
-// chunks + tool cards) renders thousands of DOM nodes otherwise — on mobile
-// that scrolls badly and locks up the main thread. `@tanstack/react-virtual`
-// keeps DOM proportional to the viewport, with `measureElement` for
-// variable heights.
-//
-// Why no virtual on tool/permission CARDS (those have their own collapse
-// state): row-level virtualization unmounts and remounts rows as they leave
-// the viewport. To preserve per-card UI state across scroll we'd need to
-// hoist that state into a Map keyed by item id; v0 accepts that re-opening
-// a card after scrolling away is required. Tool cards default to collapsed,
-// so this is mostly a non-issue.
+// A JavaScript virtualizer was deliberately removed: unmounting variable-height
+// rows breaks the iOS column-reverse anchor and loses local tool/permission-card
+// state. Server history paging, live event coalescing, and `content-visibility`
+// bound the expensive work without fighting native momentum scrolling.
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -62,7 +54,7 @@ import {
   type QueuedMessage,
   retryMessage,
   send,
-  useStore,
+  useStoreSelector,
 } from "./store";
 import { haptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
@@ -72,6 +64,8 @@ import {
   useScrollNonce,
 } from "./stickyStore";
 import { ImageLightbox } from "./_shell";
+
+const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -748,7 +742,7 @@ function MessageBubble({
   }
   // Assistant replies render flush in the page (Zed-style): no border, no card
   // background, just markdown flowing inline. The per-item `py` in the
-  // virtualizer row is the only separator between consecutive replies. Only the
+  // transcript row is the only separator between consecutive replies. Only the
   // user's own messages keep the right-aligned bubble — the conventional "my
   // message" affordance.
   if (!mine) {
@@ -1276,8 +1270,8 @@ export function Transcript({
   // reading column inherits it like everything else. `padding` is the column's
   // side gutter; `lineHeight` drives the prose leading (MarkdownImpl `p`
   // inherits it). The reading font-family swaps via the `--cowboy-reading-font`
-  // CSS var (useReadingFontFaces). A change re-renders here and the virtualizer
-  // re-measures rows on the next pass, so live adjustments reflow without a
+  // CSS var (useReadingFontFaces). A change re-renders here and contained rows
+  // reflow on the next pass, so live adjustments apply without a
   // reload.
   const { padding, lineHeight } = useReadingSettings();
   // A pending tool-permission is surfaced by the sticky PermissionOverlay, which
@@ -1347,12 +1341,13 @@ export function Transcript({
   const freezeRef = useRef<FreezeAnchor>({ key: null, top: 0, self: false });
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
-  const store = useStore();
-  const paging = store.pagination.get(sessionId);
+  const paging = useStoreSelector((snapshot) => snapshot.pagination.get(sessionId));
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
   // user bubbles below the latest real item (newest at the very bottom), dropped
   // by cmid the moment the echo lands. Empty in the common (confirmed) case.
-  const optimisticMsgs = store.optimisticMessages.get(sessionId) ?? [];
+  const optimisticMsgs = useStoreSelector(
+    (snapshot) => snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
+  );
   // "stick-to-bottom" UX, done properly this time:
   //
   // Previous bug: we listened to `onScroll` to decide if the user "wanted"
@@ -1486,8 +1481,8 @@ export function Transcript({
     // `detach` (not a wheel/touch), so this can't fight the user.
     //
     // CONVERGE across a few frames, don't write once: a resize re-renders the
-    // virtualizer's window and react-virtual re-measures the now-visible rows
-    // over the NEXT frames, so `scrollHeight` is briefly stale and a single
+    // newly visible contained rows are laid out over the NEXT frames, so
+    // `scrollHeight` is briefly stale and a single
     // `scrollTop = scrollHeight` lands SHORT — the "expanded drafts and the last
     // message no longer sits at the bottom" report. This is the same lazy-measure
     // gap the session-pin + auto-snap effects already converge across. Coalesce
@@ -1572,7 +1567,7 @@ export function Transcript({
     }
     // Content grew/shrank → overflow may have flipped, and neither the RO (the
     // viewport didn't resize) nor `scroll` fires. Re-measure AFTER paint: the
-    // virtualizer re-measures the now-visible rows over the next frame, so
+    // newly visible contained rows lay out over the next frame, so
     // `scrollHeight` is briefly stale this layout pass.
     const sRaf = requestAnimationFrame(() => reportScrollableRef.current());
     return () => cancelAnimationFrame(sRaf);

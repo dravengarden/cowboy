@@ -119,11 +119,7 @@ pub struct ServeArgs {
     /// Provider id the memory-janitor system session runs as (the in-process
     /// judge that dedups/merges/tiers candidates and emits resolve-ops). Only
     /// consulted when `--memory-enabled`.
-    #[arg(
-        long,
-        env = "COWBOY_MEMORY_JANITOR_PROVIDER",
-        default_value = "codex"
-    )]
+    #[arg(long, env = "COWBOY_MEMORY_JANITOR_PROVIDER", default_value = "codex")]
     pub memory_janitor_provider: String,
 }
 

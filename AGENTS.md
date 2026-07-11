@@ -9,11 +9,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - cowboy is a NixOS service (`services/cowboy` on hawk), consumed via a
   `git+file://` flake input from this repo. To ship: commit here, then on hawk
   `nix flake update cowboy` + rebuild.
-- **Deploying restarts the daemon you may be driving Claude THROUGH.** A
-  `nixos-rebuild switch` that restarts cowboy kills the approval channel for the
-  in-flight turn — the switch tool reports "rejected" even though the rebuild
-  actually COMPLETED. Verify via `/run/current-system`; don't re-run. Web/bundle
-  changes also need a PWA hard-reload (a WS reconnect keeps stale JS).
+- **Deploying restarts the daemon you may be driving Claude THROUGH.** Build
+  first, then use `/etc/nixos`'s `just sys-activate ./result`: it hands activation
+  to an independent root systemd unit that survives the cowboy restart. Verify
+  its journal and `/run/current-system`; never run a direct switch from cowboy.
+  Web/bundle changes also need a PWA hard-reload (a WS reconnect keeps stale JS).
   (memories: cowboy-switch-restarts-approval-channel, cowboy-v1-deploy)
 
 ## Architecture gotchas

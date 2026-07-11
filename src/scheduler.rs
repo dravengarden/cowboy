@@ -75,7 +75,10 @@ enum Action {
     /// Fire the agent's wakeup prompt as its own turn (runaway-guarded).
     Wakeup { session_id: String, prompt: String },
     /// Activate a user-scheduled draft (one-shot, not guarded).
-    Draft { session_id: String, draft_id: String },
+    Draft {
+        session_id: String,
+        draft_id: String,
+    },
 }
 
 struct Pending {

@@ -5,9 +5,8 @@
 //! candidates and applies resolve-ops. Agents READ the store with plain
 //! `rg`/`cat` (taught by the `memory` skill); they WRITE only through
 //! `cowboy mem record` → the daemon's queue → the janitor. There is NO MCP: the
-//! janitor is a cowboy `system` session whose reply cowboy reads IN-PROCESS
-//! (`Hub::snapshot`), so it calls no tools and needs no admin socket/shim/
-//! approval.
+//! janitor is a cowboy `system` session whose exact turn reply returns through
+//! ACP completion, so it calls no tools and needs no admin socket/shim/approval.
 //!
 //! Phase A (this commit): scaffold only — the `cowboy mem` subcommand exists and
 //! the write VALIDATION guardrail is in place; the store/index/queue/janitor +
@@ -24,12 +23,10 @@ pub mod queue;
 pub mod store;
 pub mod tier;
 
-pub use apply::{batch, resolve, ResolveKind, ResolveOp};
-pub use index::{Hit, Index, IndexEntry};
+pub use index::Index;
 pub use janitor::Janitor;
 pub use queue::{Config as QueueConfig, Mutation, Op, Queue};
-pub use store::{Memory, MemoryType, Store, Tier};
-pub use tier::{project_tier, route, route_slug, sanitize, slug_of, Caller};
+pub use store::{Memory, MemoryType, Store};
 
 use crate::cli::{MemArgs, MemCommand, MemRecordArgs};
 

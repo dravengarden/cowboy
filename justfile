@@ -27,16 +27,23 @@ build: build-web
 
 # Quality gates.
 fmt:
+    cargo fmt --check
+
+fmt-write:
     cargo fmt
 
 lint:
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets -- -D clippy::all -A clippy::pedantic
     cd web && deno task lint
 
 typecheck:
     cd web && deno task typecheck
 
-check: fmt lint typecheck
+test:
+    cargo test --all-targets
+    cd web && deno task test
+
+check: fmt lint typecheck test
     cargo build
 
 # Show sccache cache stats.

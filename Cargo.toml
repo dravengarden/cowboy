@@ -44,6 +44,9 @@ mime_guess = "2"
 ignore = "0.4"
 nucleo-matcher = "0.3"
 
+[dev-dependencies]
+syn = { version = "2", features = ["full"] }
+
 [lints.clippy]
 all = "warn"
 pedantic = "warn"

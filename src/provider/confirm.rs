@@ -66,7 +66,13 @@ mod tests {
 
     #[test]
     fn cut_off_reasons_are_not_awaiting() {
-        for r in ["Cancelled", "MaxTokens", "MaxTurnRequests", "Refusal", "error: boom"] {
+        for r in [
+            "Cancelled",
+            "MaxTokens",
+            "MaxTurnRequests",
+            "Refusal",
+            "error: boom",
+        ] {
             let v = stop_reason_l1(Some(r)).expect("deterministic");
             assert!(!v.awaiting_user, "{r} must not hold the queue");
             assert!(!v.done);
@@ -75,11 +81,17 @@ mod tests {
 
     #[test]
     fn dispatch_routes_known_providers() {
-        let ctx = TurnEndCtx { stop_reason: Some("Cancelled"), final_text: "" };
+        let ctx = TurnEndCtx {
+            stop_reason: Some("Cancelled"),
+            final_text: "",
+        };
         assert!(l1("claude-code", &ctx).is_some());
         assert!(l1("codex", &ctx).is_some());
         // EndTurn always falls through, every provider.
-        let end = TurnEndCtx { stop_reason: Some("EndTurn"), final_text: "做完了吗？" };
+        let end = TurnEndCtx {
+            stop_reason: Some("EndTurn"),
+            final_text: "做完了吗？",
+        };
         assert!(l1("claude-code", &end).is_none());
         assert!(l1("codex", &end).is_none());
     }

@@ -14,9 +14,9 @@
 //! process lifetime). `SQLite` persistence is deferred together with restart
 //! `session/load` resume (design §7) — both land in the same follow-up.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -24,6 +24,10 @@ use tokio::sync::{broadcast, mpsc};
 /// How many recent events a fresh client gets over WS (the live tail). Older
 /// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
 pub const SNAPSHOT_TAIL: usize = 200;
+/// Maximum persisted-history tail retained in the Hub. Older events stay in
+/// Postgres and are fetched by `/api/history`.
+pub const HOT_TAIL: usize = 1_000;
+const HOT_TAIL_TRIM_BATCH: usize = 200;
 /// Fixed history page size (events) for the HTTP `/api/history` route. Fixed +
 /// seq-aligned so each page has a STABLE url → safe to cache `immutable`.
 pub const HISTORY_PAGE: usize = 200;
@@ -162,7 +166,9 @@ fn render_template(template: &str, vars: &[(&str, &str)]) -> String {
 fn last_turn_texts(log: &[Envelope]) -> (String, String) {
     let chunk = |env: &Envelope| -> Option<(String, String)> {
         if let Event::Update { update } = &env.event {
-            let kind = update.get("sessionUpdate").and_then(serde_json::Value::as_str)?;
+            let kind = update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)?;
             let text = update
                 .get("content")
                 .and_then(|c| c.get("text"))
@@ -172,9 +178,9 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
         }
         None
     };
-    let last_user = log.iter().rposition(|env| {
-        matches!(chunk(env), Some((ref k, _)) if k == "user_message_chunk")
-    });
+    let last_user = log
+        .iter()
+        .rposition(|env| matches!(chunk(env), Some((ref k, _)) if k == "user_message_chunk"));
     let Some(start) = last_user else {
         return (String::new(), String::new());
     };
@@ -363,6 +369,8 @@ pub struct DispatchReq {
 pub struct RestoredSession {
     pub meta: SessionMeta,
     pub log: Vec<Envelope>,
+    pub event_count: u64,
+    pub reached_start: bool,
     pub next_seq: u64,
     pub queue: Vec<QueuedMessage>,
     pub drafts: Vec<QueuedMessage>,
@@ -425,7 +433,11 @@ pub struct SessionInfo {
 /// Per-session state: metadata + the seq-ordered event log.
 struct Session {
     meta: SessionMeta,
+    /// Hot event tail when persistence is enabled; the full log in memory-only
+    /// development mode.
     log: Vec<Envelope>,
+    event_count: u64,
+    reached_start: bool,
     next_seq: u64,
     /// Last seen agent-advertised config options (raw ACP
     /// `configOptions` array — see acp.rs intercept). `None` until the agent
@@ -514,24 +526,14 @@ pub enum Inbound {
     /// Clear/set a session's confirm-detect "awaiting user" hold from the awaiting
     /// widget. The user dismissing it (`false`) means "not a question" → the hold
     /// lifts and the queue drains. Broadcasts the updated session list.
-    SetAwaiting {
-        session_id: String,
-        awaiting: bool,
-    },
+    SetAwaiting { session_id: String, awaiting: bool },
     /// User toggle: manually pause/resume the queue drain. Holds the auto-drain
     /// without interrupting the running turn (see [`Hub::set_paused`]).
-    SetPaused {
-        session_id: String,
-        paused: bool,
-    },
+    SetPaused { session_id: String, paused: bool },
     /// Overlay action: resume an interrupted turn (inject the continuation + run).
-    ResumeTurn {
-        session_id: String,
-    },
+    ResumeTurn { session_id: String },
     /// Overlay action: retry an errored/crashed turn (re-run the last prompt).
-    RetryTurn {
-        session_id: String,
-    },
+    RetryTurn { session_id: String },
     /// Set one global setting (`session.autoResume.default` flag /
     /// `session.autoResume.template` string). Persisted + broadcast to every
     /// surface as [`Outbound::Settings`].
@@ -549,10 +551,7 @@ pub enum Inbound {
     },
     /// Set an inference provider's API key. Persisted to a SEPARATE table; the
     /// broadcast only flips `key_set` — the key itself never leaves the daemon.
-    SetInferenceSecret {
-        provider: String,
-        api_key: String,
-    },
+    SetInferenceSecret { provider: String, api_key: String },
     /// DEV probe: call the inference provider once with `prompt` and broadcast an
     /// [`Outbound::InferenceProbeResult`] (text + cache token counts). Proves the
     /// key/model/HTTP wiring end to end.
@@ -811,15 +810,11 @@ pub enum Outbound {
     },
     /// The inference-provider configs (model + params + whether a key is set —
     /// NEVER the key). Sent on connect + re-broadcast on every edit.
-    InferenceConfig {
-        providers: Vec<InferenceView>,
-    },
+    InferenceConfig { providers: Vec<InferenceView> },
     /// The registered skills (id/title/description + the prompt template + the
     /// extraction rule), so the Info sheet can render each skill's prompt verbatim.
     /// Static — sent once on connect.
-    Skills {
-        skills: Vec<SkillView>,
-    },
+    Skills { skills: Vec<SkillView> },
     /// The confirm-detect judge's full result for a turn — the verdict PLUS the
     /// observability detail the overlay's "raw data" expand shows. Sent after each
     /// judge; the client keeps the latest per session. NOT persisted.
@@ -875,17 +870,26 @@ pub enum Outbound {
 
 /// Persistence intent sent on the write-behind channel from `Hub` to the
 /// background DB writer task in `crate::server`. Each variant maps 1:1 to a
-/// [`crate::store::Store`] call. The channel is unbounded so the hot path
-/// (`Hub::push`) never blocks; a slow DB causes memory growth, not WS lag.
+/// [`crate::store::Store`] call.
 #[derive(Debug, Clone)]
 pub enum StoreWrite {
     InsertSession(SessionMeta),
     AppendEvent(Envelope),
-    UpdateStatus { session_id: String, status: Status },
+    UpdateStatus {
+        session_id: String,
+        status: Status,
+    },
     /// Persist the confirm-detect turn-end verdict (so a done/awaiting session
     /// survives a daemon restart — migration 0008).
-    UpdateVerdict { session_id: String, awaiting_user: bool, done: bool },
-    UpdateTitle { session_id: String, title: String },
+    UpdateVerdict {
+        session_id: String,
+        awaiting_user: bool,
+        done: bool,
+    },
+    UpdateTitle {
+        session_id: String,
+        title: String,
+    },
     SetAgentSessionId {
         session_id: String,
         agent_session_id: String,
@@ -901,24 +905,118 @@ pub enum StoreWrite {
     },
     /// Persist the manual session ordering (a `position` per id) so a drag-
     /// arranged list survives a daemon restart.
-    UpdateSessionOrder { order: Vec<String> },
+    UpdateSessionOrder {
+        order: Vec<String>,
+    },
     /// Persist a session's auto-resume OVERRIDE (`None` = inherit global default).
-    UpdateAutoResume { session_id: String, value: Option<bool> },
+    UpdateAutoResume {
+        session_id: String,
+        value: Option<bool>,
+    },
     /// Persist a session's confirm-detect judge-run history (whole list, as JSONB
     /// — migration 0009). Written on every add / delete / clear, like
     /// [`StoreWrite::UpdatePending`].
-    UpdateJudgeRuns { session_id: String, runs: Vec<JudgeRun> },
+    UpdateJudgeRuns {
+        session_id: String,
+        runs: Vec<JudgeRun>,
+    },
     /// Upsert one global setting (auto-resume default flag / continuation template).
-    PutSetting { key: String, value: serde_json::Value },
+    PutSetting {
+        key: String,
+        value: serde_json::Value,
+    },
     /// Upsert an inference provider's non-secret config.
-    PutInferenceConfig { provider: String, model: String, params: serde_json::Value },
+    PutInferenceConfig {
+        provider: String,
+        model: String,
+        params: serde_json::Value,
+    },
     /// Upsert an inference provider's API key (separate secrets table).
-    PutInferenceSecret { provider: String, api_key: String },
+    PutInferenceSecret {
+        provider: String,
+        api_key: String,
+    },
     /// Upsert a session's pending `ScheduleWakeup` (migration 0011) so an armed
     /// wakeup survives a daemon restart and still fires.
-    UpsertWakeup { session_id: String, fire_at_ms: i64, prompt: String },
+    UpsertWakeup {
+        session_id: String,
+        fire_at_ms: i64,
+        prompt: String,
+    },
     /// Drop a session's persisted wakeup once it has fired (or been dropped).
-    DeleteWakeup { session_id: String },
+    DeleteWakeup {
+        session_id: String,
+    },
+}
+
+/// Shared operational state for the bounded write-behind queue.
+#[derive(Debug, Default)]
+pub struct PersistenceHealth {
+    pending: AtomicUsize,
+    dropped: AtomicU64,
+    failed_batches: AtomicU64,
+    degraded: AtomicBool,
+}
+
+impl PersistenceHealth {
+    #[must_use]
+    pub fn pending(&self) -> usize {
+        self.pending.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn failed_batches(&self) -> u64 {
+        self.failed_batches.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
+        !self.degraded.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn consumed(&self, count: usize) {
+        self.pending.fetch_sub(count, Ordering::Relaxed);
+    }
+
+    pub(crate) fn mark_failed_batch(&self) {
+        self.failed_batches.fetch_add(1, Ordering::Relaxed);
+        self.degraded.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Non-blocking producer for the bounded persistence queue. Queue exhaustion
+/// is deliberately visible through health/metrics instead of growing memory
+/// without bound or silently discarding an intent.
+#[derive(Clone)]
+pub struct StoreSink {
+    tx: mpsc::Sender<StoreWrite>,
+    health: std::sync::Arc<PersistenceHealth>,
+}
+
+impl StoreSink {
+    #[must_use]
+    pub fn new(tx: mpsc::Sender<StoreWrite>, health: std::sync::Arc<PersistenceHealth>) -> Self {
+        Self { tx, health }
+    }
+
+    pub fn send(&self, write: StoreWrite) -> bool {
+        self.health.pending.fetch_add(1, Ordering::Relaxed);
+        match self.tx.try_send(write) {
+            Ok(()) => true,
+            Err(error) => {
+                self.health.pending.fetch_sub(1, Ordering::Relaxed);
+                self.health.dropped.fetch_add(1, Ordering::Relaxed);
+                self.health.degraded.store(true, Ordering::Relaxed);
+                tracing::error!(%error, "persistence queue rejected an intent");
+                false
+            }
+        }
+    }
 }
 
 /// Client-facing view of one inference provider's config — carries `key_set`
@@ -951,7 +1049,9 @@ fn provider_models(provider: &str) -> Vec<ModelOption> {
         "deepseek" => crate::inference::deepseek::DeepSeek::model_list(),
         _ => Vec::new(),
     };
-    src.into_iter().map(|(id, label)| ModelOption { id, label }).collect()
+    src.into_iter()
+        .map(|(id, label)| ModelOption { id, label })
+        .collect()
 }
 
 /// Client-facing, owned view of a registered skill (the static `SkillMeta` has
@@ -1016,7 +1116,7 @@ struct HubInner {
     tx: broadcast::Sender<Outbound>,
     /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
     /// only (no `--postgres-url` configured).
-    store_tx: Option<mpsc::UnboundedSender<StoreWrite>>,
+    store_tx: Option<StoreSink>,
     /// Hand-off to the background dispatcher task that owns the `Supervisor`.
     /// Set once at startup via [`Hub::set_dispatch_tx`]; `None` until then (and
     /// in tests), in which case a drain decision is computed but no prompt is
@@ -1053,7 +1153,7 @@ impl Hub {
     /// Hub plus a write-behind channel. The receiver half is owned by the
     /// DB writer task (spawned in `crate::server`).
     #[must_use]
-    pub fn with_store(store_tx: Option<mpsc::UnboundedSender<StoreWrite>>) -> Self {
+    pub fn with_store(store_tx: Option<StoreSink>) -> Self {
         // Shared fan-out buffer. A client that falls this many events behind
         // LAGS and the broadcast drops its missed events (the server then closes
         // it to force a resync — see server.rs). One long autonomous turn (a book
@@ -1251,6 +1351,8 @@ impl Hub {
                 let RestoredSession {
                     mut meta,
                     log,
+                    event_count,
+                    reached_start,
                     next_seq,
                     mut queue,
                     mut drafts,
@@ -1286,6 +1388,8 @@ impl Hub {
                     Session {
                         meta,
                         log,
+                        event_count,
+                        reached_start,
                         next_seq,
                         config_options: None,
                         queue,
@@ -1317,9 +1421,7 @@ impl Hub {
                 &id,
                 Event::Lifecycle {
                     status: Status::Interrupted,
-                    detail: Some(
-                        "turn cut off by a cowboy restart — it never finished".to_owned(),
-                    ),
+                    detail: Some("turn cut off by a cowboy restart — it never finished".to_owned()),
                 },
             );
             // Auto-resume (opted in, globally or per-session): enqueue a
@@ -1375,7 +1477,7 @@ impl Hub {
         let s = sessions.get(session_id)?;
         Some(SessionInfo {
             meta: s.meta.clone(),
-            event_count: u64::try_from(s.log.len()).unwrap_or(u64::MAX),
+            event_count: s.event_count,
             queue_count: s.queue.len(),
             drafts_count: s.drafts.len(),
         })
@@ -1396,7 +1498,7 @@ impl Hub {
     #[must_use]
     pub fn event_total(&self) -> u64 {
         let sessions = self.inner.sessions.lock();
-        sessions.values().map(|s| u64::try_from(s.log.len()).unwrap_or(u64::MAX)).sum()
+        sessions.values().map(|s| s.event_count).sum()
     }
 
     /// Recent log TAIL for a fresh client (last [`SNAPSHOT_TAIL`] events) plus
@@ -1409,7 +1511,7 @@ impl Hub {
         sessions.get(session_id).map(|s| {
             let len = s.log.len();
             let start = len.saturating_sub(SNAPSHOT_TAIL);
-            (s.log[start..].to_vec(), start == 0)
+            (s.log[start..].to_vec(), s.reached_start && start == 0)
         })
     }
 
@@ -1477,6 +1579,8 @@ impl Hub {
                 Session {
                     meta: meta.clone(),
                     log: Vec::new(),
+                    event_count: 0,
+                    reached_start: true,
                     next_seq: 0,
                     config_options: None,
                     queue: Vec::new(),
@@ -1577,7 +1681,10 @@ impl Hub {
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::PutSetting { key, value });
         }
-        let _ = self.inner.tx.send(Outbound::Settings { settings: snapshot });
+        let _ = self
+            .inner
+            .tx
+            .send(Outbound::Settings { settings: snapshot });
     }
 
     /// Seed the in-memory settings map from the persisted table (restore only).
@@ -1643,9 +1750,15 @@ impl Hub {
             e.params = params.clone();
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::PutInferenceConfig { provider, model, params });
+            let _ = tx.send(StoreWrite::PutInferenceConfig {
+                provider,
+                model,
+                params,
+            });
         }
-        let _ = self.inner.tx.send(Outbound::InferenceConfig { providers: self.inference_snapshot() });
+        let _ = self.inner.tx.send(Outbound::InferenceConfig {
+            providers: self.inference_snapshot(),
+        });
     }
 
     /// Set a provider's API key; persist (separate table) + broadcast (key_set only).
@@ -1657,7 +1770,9 @@ impl Hub {
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::PutInferenceSecret { provider, api_key });
         }
-        let _ = self.inner.tx.send(Outbound::InferenceConfig { providers: self.inference_snapshot() });
+        let _ = self.inner.tx.send(Outbound::InferenceConfig {
+            providers: self.inference_snapshot(),
+        });
     }
 
     /// Seed inference state from the persisted tables (restore only).
@@ -1680,26 +1795,43 @@ impl Hub {
     /// The API key for `provider` — INTERNAL (the judge call). Never broadcast.
     #[must_use]
     pub fn inference_key(&self, provider: &str) -> Option<String> {
-        self.inner.inference.lock().get(provider).and_then(|e| e.api_key.clone())
+        self.inner
+            .inference
+            .lock()
+            .get(provider)
+            .and_then(|e| e.api_key.clone())
     }
 
     /// The configured model for `provider` (the caller applies a default if unset).
     #[must_use]
     pub fn inference_model(&self, provider: &str) -> Option<String> {
-        self.inner.inference.lock().get(provider).map(|e| e.model.clone())
+        self.inner
+            .inference
+            .lock()
+            .get(provider)
+            .map(|e| e.model.clone())
     }
 
     /// Whether the confirm-detect judge can run — i.e. the `deepseek` provider has
     /// an API key. When false, the drain holds everything (§J no-token block).
     #[must_use]
     pub fn confirm_key_present(&self) -> bool {
-        self.inner.inference.lock().get("deepseek").is_some_and(|e| e.api_key.is_some())
+        self.inner
+            .inference
+            .lock()
+            .get("deepseek")
+            .is_some_and(|e| e.api_key.is_some())
     }
 
     /// Whether a session is currently holding for "awaiting user".
     #[must_use]
+    #[cfg(test)]
     pub fn is_awaiting(&self, session_id: &str) -> bool {
-        self.inner.sessions.lock().get(session_id).is_some_and(|s| s.meta.awaiting_user)
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.meta.awaiting_user)
     }
 
     /// Set/clear a session's "awaiting user" hold. Broadcasts the session list so
@@ -1855,28 +1987,32 @@ impl Hub {
         };
         // L1: deterministic, no LLM. A cut-off/cancelled turn settles here; only a
         // normal `EndTurn` returns None and falls through to L2.
-        if let Some(v) =
-            crate::provider::confirm::l1(&provider, &crate::provider::confirm::TurnEndCtx {
+        if let Some(v) = crate::provider::confirm::l1(
+            &provider,
+            &crate::provider::confirm::TurnEndCtx {
                 stop_reason: stop_reason.as_deref(),
                 final_text: &final_text,
-            })
-        {
+            },
+        ) {
             let at = now_ms();
-            self.emit_and_record_judge(session_id, JudgeRun {
-                id: format!("{at}-{seq}"),
-                at,
-                layer: "L1".to_owned(),
-                awaiting_user: v.awaiting_user,
-                done: v.done,
-                confidence: v.confidence,
-                reason: v.reason.clone(),
-                model: String::new(),
-                input: final_text.clone(),
-                output: v.reason.clone(),
-                cache_hit: 0,
-                cache_miss: 0,
-                latency_ms: 0,
-            });
+            self.emit_and_record_judge(
+                session_id,
+                JudgeRun {
+                    id: format!("{at}-{seq}"),
+                    at,
+                    layer: "L1".to_owned(),
+                    awaiting_user: v.awaiting_user,
+                    done: v.done,
+                    confidence: v.confidence,
+                    reason: v.reason.clone(),
+                    model: String::new(),
+                    input: final_text.clone(),
+                    output: v.reason.clone(),
+                    cache_hit: 0,
+                    cache_miss: 0,
+                    latency_ms: 0,
+                },
+            );
             self.apply_verdict(session_id, seq, &v);
             return;
         }
@@ -1908,35 +2044,44 @@ impl Hub {
             let mut last_err = String::new();
             for attempt in 0u32..3 {
                 if attempt > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * u64::from(attempt))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * u64::from(attempt)))
+                        .await;
                 }
                 let started = std::time::Instant::now();
-                match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text).await
+                match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text)
+                    .await
                 {
                     Ok(o) => {
-                        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        let (hit, miss) = o.usage.as_ref().map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
+                        let latency_ms =
+                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        let (hit, miss) = o
+                            .usage
+                            .as_ref()
+                            .map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
                         tracing::info!(
                             session = %sid, awaiting = o.verdict.awaiting_user, done = o.verdict.done,
                             confidence = o.verdict.confidence, reason = %o.verdict.reason, latency_ms, attempt,
                             "confirm-detect verdict"
                         );
                         let at = now_ms();
-                        hub.emit_and_record_judge(&sid, JudgeRun {
-                            id: format!("{at}-{seq}"),
-                            at,
-                            layer: o.layer.to_owned(),
-                            awaiting_user: o.verdict.awaiting_user,
-                            done: o.verdict.done,
-                            confidence: o.verdict.confidence,
-                            reason: o.verdict.reason.clone(),
-                            model: model.clone(),
-                            input: final_text.clone(),
-                            output: o.raw_output,
-                            cache_hit: hit,
-                            cache_miss: miss,
-                            latency_ms,
-                        });
+                        hub.emit_and_record_judge(
+                            &sid,
+                            JudgeRun {
+                                id: format!("{at}-{seq}"),
+                                at,
+                                layer: o.layer.to_owned(),
+                                awaiting_user: o.verdict.awaiting_user,
+                                done: o.verdict.done,
+                                confidence: o.verdict.confidence,
+                                reason: o.verdict.reason.clone(),
+                                model: model.clone(),
+                                input: final_text.clone(),
+                                output: o.raw_output,
+                                cache_hit: hit,
+                                cache_miss: miss,
+                                latency_ms,
+                            },
+                        );
                         hub.apply_verdict(&sid, seq, &o.verdict);
                         hub.set_judging(&sid, false);
                         return;
@@ -1958,22 +2103,32 @@ impl Hub {
             tracing::warn!(session = %sid, error = %last_err, "confirm-detect judge failed after retries; clearing provisional hold");
             let at = now_ms();
             let reason = format!("judge failed: {last_err}");
-            hub.emit_and_record_judge(&sid, JudgeRun {
-                id: format!("{at}-{seq}"),
-                at,
-                layer: "L2".to_owned(),
-                awaiting_user: false,
-                done: false,
-                confidence: 0.0,
-                reason: reason.clone(),
-                model,
-                input: final_text,
-                output: String::new(),
-                cache_hit: 0,
-                cache_miss: 0,
-                latency_ms: 0,
-            });
-            hub.apply_verdict(&sid, seq, &crate::skills::Verdict { reason, ..Default::default() });
+            hub.emit_and_record_judge(
+                &sid,
+                JudgeRun {
+                    id: format!("{at}-{seq}"),
+                    at,
+                    layer: "L2".to_owned(),
+                    awaiting_user: false,
+                    done: false,
+                    confidence: 0.0,
+                    reason: reason.clone(),
+                    model,
+                    input: final_text,
+                    output: String::new(),
+                    cache_hit: 0,
+                    cache_miss: 0,
+                    latency_ms: 0,
+                },
+            );
+            hub.apply_verdict(
+                &sid,
+                seq,
+                &crate::skills::Verdict {
+                    reason,
+                    ..Default::default()
+                },
+            );
             hub.set_judging(&sid, false);
         });
     }
@@ -2125,11 +2280,11 @@ impl Hub {
             // interrupted across several restarts while never opened (so the
             // continuation never drains) must not accrue a pile of them — the
             // bound that keeps "continue" from running away.
-            if s
-                .queue
-                .iter()
-                .any(|m| m.cmid.as_deref().is_some_and(|c| c.starts_with(AUTO_CONTINUE_PREFIX)))
-            {
+            if s.queue.iter().any(|m| {
+                m.cmid
+                    .as_deref()
+                    .is_some_and(|c| c.starts_with(AUTO_CONTINUE_PREFIX))
+            }) {
                 return;
             }
             let (prompt, partial) = last_turn_texts(&s.log);
@@ -2144,11 +2299,18 @@ impl Hub {
                 if prompt.trim().is_empty() {
                     return;
                 }
-                render_template(DEFAULT_RETRY_TEMPLATE, &[("prompt", &prompt), ("cwd", &s.meta.cwd)])
+                render_template(
+                    DEFAULT_RETRY_TEMPLATE,
+                    &[("prompt", &prompt), ("cwd", &s.meta.cwd)],
+                )
             } else {
                 render_template(
                     &template,
-                    &[("partial", &partial), ("prompt", &prompt), ("cwd", &s.meta.cwd)],
+                    &[
+                        ("partial", &partial),
+                        ("prompt", &prompt),
+                        ("cwd", &s.meta.cwd),
+                    ],
                 )
             };
             let id = self.next_qid();
@@ -2156,7 +2318,16 @@ impl Hub {
             // FRONT of the queue: the interrupted turn was running BEFORE anything
             // queued behind it, so its continuation must run first (the queue was
             // *waiting on* that turn), not after the backlog.
-            s.queue.insert(0, QueuedMessage { id, text, content: Vec::new(), cmid: Some(cmid), schedule: None });
+            s.queue.insert(
+                0,
+                QueuedMessage {
+                    id,
+                    text,
+                    content: Vec::new(),
+                    cmid: Some(cmid),
+                    schedule: None,
+                },
+            );
             // A continuation is the system telling the agent to finish its OWN work
             // — never an answer to a question — so it must not sit behind a stale
             // confirm-detect hold. (The death-edge clear above usually handles this;
@@ -2182,7 +2353,10 @@ impl Hub {
             }
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateTitle { session_id: session_id.to_owned(), title });
+            let _ = tx.send(StoreWrite::UpdateTitle {
+                session_id: session_id.to_owned(),
+                title,
+            });
         }
     }
 
@@ -2208,13 +2382,22 @@ impl Hub {
                 let sessions = self.inner.sessions.lock();
                 let map: serde_json::Map<String, serde_json::Value> = sessions
                     .values()
-                    .map(|s| (s.meta.id.clone(), serde_json::Value::String(s.meta.title.clone())))
+                    .map(|s| {
+                        (
+                            s.meta.id.clone(),
+                            serde_json::Value::String(s.meta.title.clone()),
+                        )
+                    })
                     .collect();
                 serde_json::Value::Object(map)
             }
             "order" => {
                 let list = self.inner.order.lock();
-                serde_json::Value::Array(list.iter().map(|id| serde_json::Value::String(id.clone())).collect())
+                serde_json::Value::Array(
+                    list.iter()
+                        .map(|id| serde_json::Value::String(id.clone()))
+                        .collect(),
+                )
             }
             _ => serde_json::Value::Null,
         }
@@ -2223,13 +2406,20 @@ impl Hub {
     /// Record `id` as seen for `state`; returns true if it's NEW (first delivery).
     fn sync_first_seen(&self, state: &str, id: &str) -> bool {
         let mut reg = self.inner.sync.lock();
-        reg.entry(state.to_owned()).or_default().seen.insert(id.to_owned())
+        reg.entry(state.to_owned())
+            .or_default()
+            .seen
+            .insert(id.to_owned())
     }
 
     /// Cmids carried inside a queue/drafts value — the confirm set for the queue
     /// sync state (the client drops an optimistic add the moment its cmid lands).
     fn cmids_of(queue: &[QueuedMessage], drafts: &[QueuedMessage]) -> Vec<String> {
-        queue.iter().chain(drafts.iter()).filter_map(|m| m.cmid.clone()).collect()
+        queue
+            .iter()
+            .chain(drafts.iter())
+            .filter_map(|m| m.cmid.clone())
+            .collect()
     }
 
     /// Bump `state`'s version and broadcast a LIVE (version-gated) SyncPatch with
@@ -2245,10 +2435,13 @@ impl Hub {
         // → VictoriaLogs. Lets you (or an AI) replay "how state X reached version
         // N" via LogsQL. Low volume (user-paced changes, not per-agent-event).
         tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?confirmed);
-        let _ = self
-            .inner
-            .tx
-            .send(Outbound::SyncPatch { state: state.to_owned(), version, value, confirmed, resync: false });
+        let _ = self.inner.tx.send(Outbound::SyncPatch {
+            state: state.to_owned(),
+            version,
+            value,
+            confirmed,
+            resync: false,
+        });
     }
 
     /// Version-stamp `state` and broadcast its derived value, confirming the given
@@ -2262,7 +2455,13 @@ impl Hub {
     /// bad/unknown mutation before burning the id), dedupe (retry = no-op), apply
     /// the typed mutation, then version-stamp + broadcast. Returns an error string
     /// the server surfaces to the user.
-    pub fn sync_apply(&self, state: &str, id: String, name: &str, args: &serde_json::Value) -> Result<(), String> {
+    pub fn sync_apply(
+        &self,
+        state: &str,
+        id: String,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<(), String> {
         enum Op {
             Rename { session_id: String, title: String },
             Reorder { order: Vec<String> },
@@ -2274,7 +2473,12 @@ impl Hub {
                     .and_then(serde_json::Value::as_str)
                     .ok_or("rename: missing session_id")?
                     .to_owned();
-                let title = args.get("title").and_then(serde_json::Value::as_str).unwrap_or("").trim().to_owned();
+                let title = args
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned();
                 if title.is_empty() {
                     return Err("title cannot be empty".to_owned());
                 }
@@ -2359,7 +2563,13 @@ impl Hub {
         let version = self.inner.sync.lock().get(&state).map_or(0, |e| e.version);
         let confirmed = Self::cmids_of(&queue, &drafts);
         let value = serde_json::json!({ "queue": queue, "drafts": drafts });
-        Some(Outbound::SyncPatch { state, version, value, confirmed, resync: true })
+        Some(Outbound::SyncPatch {
+            state,
+            version,
+            value,
+            confirmed,
+            resync: true,
+        })
     }
 
     /// Auto-name a session from its first prompt, but ONLY while the title is
@@ -2458,7 +2668,10 @@ impl Hub {
             // turns). Mirrors the old client-side drain edge logic.
             let was = s.meta.status;
             if (was == Status::Busy && status == Status::Running)
-                || matches!(status, Status::Exited | Status::Crashed | Status::Interrupted)
+                || matches!(
+                    status,
+                    Status::Exited | Status::Crashed | Status::Interrupted
+                )
             {
                 s.in_flight = false;
             }
@@ -2468,7 +2681,10 @@ impl Hub {
             // at the queue FRONT and must drain to revive the turn). The judge only
             // runs on a clean Busy→Running end, so these death edges need the
             // explicit clear.
-            if matches!(status, Status::Exited | Status::Crashed | Status::Interrupted) {
+            if matches!(
+                status,
+                Status::Exited | Status::Crashed | Status::Interrupted
+            ) {
                 s.meta.awaiting_user = false;
                 s.meta.done = false;
             }
@@ -2524,6 +2740,11 @@ impl Hub {
                 cmid,
             };
             s.log.push(envelope.clone());
+            s.event_count = s.event_count.saturating_add(1);
+            if self.inner.store_tx.is_some() && s.log.len() > HOT_TAIL + HOT_TAIL_TRIM_BATCH {
+                s.log.drain(..HOT_TAIL_TRIM_BATCH);
+                s.reached_start = false;
+            }
             envelope
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -2785,7 +3006,16 @@ impl Hub {
                 }
             }
             let id = self.next_qid();
-            s.queue.insert(0, QueuedMessage { id, text, content, cmid, schedule: None });
+            s.queue.insert(
+                0,
+                QueuedMessage {
+                    id,
+                    text,
+                    content,
+                    cmid,
+                    schedule: None,
+                },
+            );
         }
         self.emit_pending(session_id);
     }
@@ -2903,13 +3133,27 @@ impl Hub {
             if wired && Self::ready(s, true) && s.queue.is_empty() {
                 // Idle + nothing queued → straight dispatch, identical to submit.
                 s.in_flight = true;
-                dispatch = Some(DispatchReq { session_id: session_id.to_owned(), text, content, cmid });
+                dispatch = Some(DispatchReq {
+                    session_id: session_id.to_owned(),
+                    text,
+                    content,
+                    cmid,
+                });
             } else {
                 // Busy / draining / queued ahead → jump to the FRONT so it runs
                 // next; ask the caller to interrupt the in-flight turn only when
                 // this is a force push (not a no-interrupt "jump to front").
                 let id = self.next_qid();
-                s.queue.insert(0, QueuedMessage { id, text, content, cmid, schedule: None });
+                s.queue.insert(
+                    0,
+                    QueuedMessage {
+                        id,
+                        text,
+                        content,
+                        cmid,
+                        schedule: None,
+                    },
+                );
                 interrupt = interrupt_on_busy;
             }
         }
@@ -3117,6 +3361,7 @@ impl Hub {
     /// from the chip passes the current text; a bare time-change can pass empty).
     /// Persists via the drafts jsonb and arms the server-side timer. Broadcasts
     /// the session list too so the row clock badge updates promptly.
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_draft(
         &self,
         session_id: &str,
@@ -3139,7 +3384,10 @@ impl Hub {
                     cmid.as_deref()
                         .and_then(|c| s.drafts.iter().position(|m| m.cmid.as_deref() == Some(c)))
                 });
-            let schedule = Some(DraftSchedule { fire_at_ms, delivery });
+            let schedule = Some(DraftSchedule {
+                fire_at_ms,
+                delivery,
+            });
             match pos {
                 Some(p) => {
                     let m = &mut s.drafts[p];
@@ -3215,7 +3463,10 @@ impl Hub {
         self.emit_pending(session_id);
         self.broadcast_sessions();
 
-        let front = m.schedule.as_ref().is_some_and(|sc| sc.delivery == Delivery::Front);
+        let front = m
+            .schedule
+            .as_ref()
+            .is_some_and(|sc| sc.delivery == Delivery::Front);
         let cmid = Some(format!("{SCHED_PREFIX}{session_id}-{draft_id}"));
 
         // Land it in the queue. A scheduled fire ALWAYS respects a paused queue —
@@ -3254,7 +3505,13 @@ impl Hub {
                 });
             } else {
                 let id = self.next_qid();
-                let msg = QueuedMessage { id, text: m.text, content: m.content, cmid, schedule: None };
+                let msg = QueuedMessage {
+                    id,
+                    text: m.text,
+                    content: m.content,
+                    cmid,
+                    schedule: None,
+                };
                 if front {
                     s.queue.insert(0, msg);
                 } else {
@@ -3478,12 +3735,7 @@ impl Hub {
     pub fn reorder_sessions(&self, order: &[String]) {
         {
             let mut list = self.inner.order.lock();
-            list.sort_by_key(|id| {
-                order
-                    .iter()
-                    .position(|o| o == id)
-                    .unwrap_or(usize::MAX)
-            });
+            list.sort_by_key(|id| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateSessionOrder {
@@ -3572,14 +3824,60 @@ mod confirm_hold_tests {
     fn requeue_prompt_restores_and_dedupes() {
         let hub = hub_with_session("r1");
         assert!(queue_texts(&hub, "r1").is_empty());
-        hub.requeue_prompt("r1", "hello agent".to_owned(), vec![], Some("c1".to_owned()));
+        hub.requeue_prompt(
+            "r1",
+            "hello agent".to_owned(),
+            vec![],
+            Some("c1".to_owned()),
+        );
         assert_eq!(queue_texts(&hub, "r1"), vec!["hello agent".to_owned()]);
         // Same cmid (the delivery raced a re-revive) → not double-queued.
-        hub.requeue_prompt("r1", "hello agent".to_owned(), vec![], Some("c1".to_owned()));
-        assert_eq!(queue_texts(&hub, "r1").len(), 1, "same cmid must not double-queue");
+        hub.requeue_prompt(
+            "r1",
+            "hello agent".to_owned(),
+            vec![],
+            Some("c1".to_owned()),
+        );
+        assert_eq!(
+            queue_texts(&hub, "r1").len(),
+            1,
+            "same cmid must not double-queue"
+        );
         // A different message DOES stack (front-inserted).
         hub.requeue_prompt("r1", "second".to_owned(), vec![], Some("c2".to_owned()));
-        assert_eq!(queue_texts(&hub, "r1"), vec!["second".to_owned(), "hello agent".to_owned()]);
+        assert_eq!(
+            queue_texts(&hub, "r1"),
+            vec!["second".to_owned(), "hello agent".to_owned()]
+        );
+    }
+
+    #[test]
+    fn persisted_hub_bounds_hot_history_but_keeps_total_count() {
+        let (tx, _rx) = mpsc::channel(HOT_TAIL + HOT_TAIL_TRIM_BATCH + 2);
+        let health = std::sync::Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        hub.create_session(
+            "bounded".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "bounded".to_owned(),
+            SessionOrigin::Api,
+            false,
+        );
+        for n in 0..=HOT_TAIL + HOT_TAIL_TRIM_BATCH {
+            hub.push(
+                "bounded",
+                Event::Update {
+                    update: serde_json::json!({"sessionUpdate": "plan", "n": n}),
+                },
+            );
+        }
+        assert_eq!(
+            hub.event_total(),
+            u64::try_from(HOT_TAIL + HOT_TAIL_TRIM_BATCH + 1).unwrap()
+        );
+        let (snapshot, reached_start) = hub.snapshot("bounded").expect("session snapshot");
+        assert_eq!(snapshot.len(), SNAPSHOT_TAIL);
+        assert!(!reached_start);
     }
 }
-

@@ -40,7 +40,7 @@
         # crates via python-requests, which sends a User-Agent. crates.io now
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-5Sx3rsA5nPZnNcAa9x6Z8uDjf6hNTtoEdkZPNeyBGlM=";
+        cargoHash = "sha256-u6C4neMxWuXg2rsVwHI1NGGBBDuFK+m0Tn8k6LsJb44=";
         # The memory store shells out to `git` (store::Store::commit/ensure_git_repo,
         # ported from mnemosyne). Its unit tests `git init` a temp store + commit
         # entirely offline, so `git` must be on the checkPhase PATH (the build
@@ -65,6 +65,13 @@
         default = cowboy;
         cowboy = cowboy;
         cowboy-web = cowboy-web;
+      };
+
+      # `cowboy`'s buildRustPackage check phase runs the Rust tests; cowboy-web's
+      # build runs TypeScript checking before Vite. Developer lint/test policy is
+      # additionally enforced by `just check` in CI.
+      checks.${system} = {
+        inherit cowboy cowboy-web;
       };
 
       devShells.${system}.default = pkgs.mkShell {

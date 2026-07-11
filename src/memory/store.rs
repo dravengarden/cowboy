@@ -264,11 +264,9 @@ impl Store {
     /// Propagates filesystem errors from `mkdir`/`write`.
     pub fn write(&self, t: &Tier, m: &Memory) -> Result<()> {
         let dir = self.dir(t);
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("mkdir {}", dir.display()))?;
+        std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
         let path = self.path(t, &m.name);
-        std::fs::write(&path, m.render())
-            .with_context(|| format!("write {}", path.display()))?;
+        std::fs::write(&path, m.render()).with_context(|| format!("write {}", path.display()))?;
         Ok(())
     }
 
@@ -278,8 +276,7 @@ impl Store {
     /// Propagates read errors and parse errors.
     pub fn read(&self, t: &Tier, name: &str) -> Result<Memory> {
         let path = self.path(t, name);
-        let data = std::fs::read(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let data = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         Memory::parse(&data)
     }
 
@@ -352,7 +349,9 @@ impl Store {
             let stem = n.trim_end_matches(".md");
             match self.read(t, stem) {
                 Ok(m) => out.push(m),
-                Err(e) => tracing::warn!(tier = %t, file = %n, error = %e, "skipping unparseable memory"),
+                Err(e) => {
+                    tracing::warn!(tier = %t, file = %n, error = %e, "skipping unparseable memory")
+                }
             }
         }
         Ok(out)
@@ -435,8 +434,7 @@ impl Store {
     pub fn write_index(&self, t: &Tier) -> Result<()> {
         let idx = self.generate_index(t)?;
         let dir = self.dir(t);
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("mkdir {}", dir.display()))?;
+        std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
         std::fs::write(dir.join("MEMORY.md"), idx)
             .with_context(|| format!("write {}/MEMORY.md", t))?;
         Ok(())
@@ -525,9 +523,8 @@ mod tests {
         let (s, _d) = tmp();
         let want = Memory {
             name: "user-runs-nixos-switch".to_string(),
-            description:
-                "the user runs nixos-rebuild switch themselves; build-verify + hand off"
-                    .to_string(),
+            description: "the user runs nixos-rebuild switch themselves; build-verify + hand off"
+                .to_string(),
             mem_type: MemoryType::Feedback,
             body: "Don't run sudo switch via Bash (rejected twice).\n\nLink [[deploy-paths]]."
                 .to_string(),

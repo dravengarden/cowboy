@@ -13,7 +13,9 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{CompleteRequest, CompleteResponse, InferenceProvider, Message, ModelSource, Role, Usage};
+use super::{
+    CompleteRequest, CompleteResponse, InferenceProvider, Message, ModelSource, Role, Usage,
+};
 
 const API_BASE: &str = "https://api.deepseek.com";
 /// Default model — the cheap, fast non-thinking model, right for a short
@@ -31,15 +33,26 @@ pub struct DeepSeek {
 
 impl DeepSeek {
     pub fn new(api_key: String, model: String) -> Self {
-        Self { client: reqwest::Client::new(), api_key, model, base: API_BASE.to_owned() }
+        Self {
+            client: reqwest::Client::new(),
+            api_key,
+            model,
+            base: API_BASE.to_owned(),
+        }
     }
 
     /// Built-in selectable models (id, human label). DYNAMIC by design — a
     /// `/models` fetch can replace this later; ids stay data, never control flow.
     pub fn model_list() -> Vec<(String, String)> {
         vec![
-            (DEFAULT_MODEL.to_owned(), "V4 Pro — thinking, most accurate (default)".to_owned()),
-            ("deepseek-v4-flash".to_owned(), "V4 Flash — fast & cheap".to_owned()),
+            (
+                DEFAULT_MODEL.to_owned(),
+                "V4 Pro — thinking, most accurate (default)".to_owned(),
+            ),
+            (
+                "deepseek-v4-flash".to_owned(),
+                "V4 Flash — fast & cheap".to_owned(),
+            ),
         ]
     }
 
@@ -96,11 +109,17 @@ impl InferenceProvider for DeepSeek {
             messages,
             temperature: Some(req.temperature),
             max_tokens: Some(req.max_tokens),
-            response_format: req.json.then(|| ResponseFormat { kind: "json_object".to_owned() }),
+            response_format: req.json.then(|| ResponseFormat {
+                kind: "json_object".to_owned(),
+            }),
             ..Default::default()
         };
         let r = self.chat(&chat).await?;
-        let text = r.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default();
+        let text = r
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default();
         let u = r.usage.unwrap_or_default();
         Ok(CompleteResponse {
             text,
@@ -122,7 +141,9 @@ impl InferenceProvider for DeepSeek {
             .send()
             .await
             .context("deepseek: raw request failed")?;
-        resp.json::<serde_json::Value>().await.context("deepseek: raw parse")
+        resp.json::<serde_json::Value>()
+            .await
+            .context("deepseek: raw parse")
     }
 }
 
@@ -230,10 +251,16 @@ mod tests {
     fn request_serializes_judge_shape() {
         let req = ChatRequest {
             model: "deepseek-v4-flash".to_owned(),
-            messages: vec![ChatMessage { role: "user".to_owned(), content: Some("hi".to_owned()), ..Default::default() }],
+            messages: vec![ChatMessage {
+                role: "user".to_owned(),
+                content: Some("hi".to_owned()),
+                ..Default::default()
+            }],
             temperature: Some(0.0),
             max_tokens: Some(64),
-            response_format: Some(ResponseFormat { kind: "json_object".to_owned() }),
+            response_format: Some(ResponseFormat {
+                kind: "json_object".to_owned(),
+            }),
             ..Default::default()
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
@@ -254,7 +281,10 @@ mod tests {
                     "prompt_cache_hit_tokens": 96, "prompt_cache_miss_tokens": 24}
         }"#;
         let r: ChatResponse = serde_json::from_str(sample).unwrap();
-        assert_eq!(r.choices[0].message.content.as_deref(), Some("{\"awaiting_user\":true}"));
+        assert_eq!(
+            r.choices[0].message.content.as_deref(),
+            Some("{\"awaiting_user\":true}")
+        );
         let u = r.usage.unwrap();
         assert_eq!(u.prompt_cache_hit_tokens, 96);
         assert_eq!(u.prompt_cache_miss_tokens, 24);

@@ -24,7 +24,6 @@
     "npm:@mui/icons-material@7": "7.3.11_@mui+material@7.3.11__@emotion+react@11.14.0___react@19.2.6__@emotion+styled@11.14.1___@emotion+react@11.14.0____react@19.2.6___react@19.2.6__@types+react@19.2.15__react@19.2.6__react-dom@19.2.6___react@19.2.6_@types+react@19.2.15_react@19.2.6_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@mui/material@7": "7.3.11_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_@types+react@19.2.15_react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@replit/codemirror-vim@^6.3.0": "6.3.0_@codemirror+commands@6.10.3_@codemirror+language@6.12.3_@codemirror+search@6.7.0_@codemirror+state@6.6.0_@codemirror+view@6.43.0",
-    "npm:@tanstack/react-virtual@^3.13.26": "3.13.26_react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@types/node@24": "24.12.4",
     "npm:@types/react-dom@19": "19.2.3_@types+react@19.2.15",
     "npm:@types/react-syntax-highlighter@^15.5.13": "15.5.13",
@@ -977,17 +976,6 @@
       "integrity": "sha512-QVTUovf40zgTqlFVrKA1uXMVvU2QWEFWfAH8Wdc48IxLvrJMQVMBRjuQyUpzZCDkakImib9eVazbWlC6ksWtJw==",
       "os": ["win32"],
       "cpu": ["x64"]
-    },
-    "@tanstack/react-virtual@3.13.26_react@19.2.6_react-dom@19.2.6__react@19.2.6": {
-      "integrity": "sha512-DosdgjOxCLahkn0o+ilmZYwEjo1glfMGuRT/j3PQ18yr5XqA8N/BCaL9IJ3B5TRl+nnzyK2IOFgAILwzN3a9xQ==",
-      "dependencies": [
-        "@tanstack/virtual-core",
-        "react",
-        "react-dom"
-      ]
-    },
-    "@tanstack/virtual-core@3.16.0": {
-      "integrity": "sha512-Er2N7q3WOiH6y2JLxsxNX+u2/sLqSsL0bxFgDjuiPiA7vKhZRm+IzcS17vRee3GNXr64UsesA5CAp9yTiIYw9A=="
     },
     "@types/babel__core@7.20.5": {
       "integrity": "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==",
@@ -2335,7 +2323,6 @@
         "npm:@mui/icons-material@7",
         "npm:@mui/material@7",
         "npm:@replit/codemirror-vim@^6.3.0",
-        "npm:@tanstack/react-virtual@^3.13.26",
         "npm:@types/node@24",
         "npm:@types/react-dom@19",
         "npm:@types/react-syntax-highlighter@^15.5.13",

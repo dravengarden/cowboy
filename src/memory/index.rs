@@ -112,11 +112,7 @@ impl Index {
                 });
             }
         }
-        hits.sort_by(|a, b| {
-            b.score
-                .cmp(&a.score)
-                .then_with(|| a.name.cmp(&b.name))
-        });
+        hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
         if limit != 0 && hits.len() > limit {
             hits.truncate(limit);
         }

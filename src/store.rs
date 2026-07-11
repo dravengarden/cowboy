@@ -4,22 +4,22 @@
 //! surface the [`Hub`] (and one background writer task in
 //! [`crate::server`]) needs:
 //!
-//! - load all sessions + their events on daemon startup (warm restore);
+//! - load all sessions + their recent event tails on daemon startup;
 //! - append a new session;
-//! - append an event under a session;
+//! - UPSERT reduced event batches under their sessions;
 //! - update a session's status;
 //! - delete a session (cascades events).
 //!
 //! Writes from the hot path (`Hub::push`) go through an mpsc channel into the
-//! background writer task, so a slow DB never blocks WS fan-out. That's
-//! the write-behind tradeoff: in-memory and DB can diverge for a brief
-//! window if the daemon crashes mid-flush. v0 accepts that — WS clients
-//! already had no durability guarantees, and the alternative (sync writes)
-//! couples broadcast latency to DB round-trips.
+//! bounded background writer task, so a slow DB never blocks WS fan-out or grows
+//! memory indefinitely. The writer retries, reports degraded health on loss,
+//! and drains on graceful shutdown. A hard crash can still lose the current
+//! batch; the alternative couples broadcast latency to DB round-trips.
 //!
 //! Embedded migrations live next to `Cargo.toml` in `./migrations/`. Run
 //! [`Store::migrate`] once on startup.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -40,11 +40,8 @@ use crate::core::{Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, Session
 /// this on any value bound to a `jsonb` column.
 fn strip_nul(value: &mut serde_json::Value) {
     match value {
-        serde_json::Value::String(s) => {
-            if s.contains('\0') {
-                s.retain(|c| c != '\0');
-            }
-        }
+        serde_json::Value::String(s) if s.contains('\0') => s.retain(|c| c != '\0'),
+        serde_json::Value::String(_) => {}
         serde_json::Value::Array(arr) => arr.iter_mut().for_each(strip_nul),
         serde_json::Value::Object(map) => {
             // Object keys can also carry NUL; rebuild the map only if needed so
@@ -80,6 +77,10 @@ fn strip_nul_str(s: &str) -> std::borrow::Cow<'_, str> {
 pub struct LoadedSession {
     pub meta: SessionMeta,
     pub events: Vec<Envelope>,
+    /// Total durable rows, including history older than `events`.
+    pub event_count: u64,
+    /// Whether the loaded tail reaches the first durable row.
+    pub reached_start: bool,
     /// Highest `seq + 1` for this session — what Hub uses to stamp the next
     /// event in line.
     pub next_seq: u64,
@@ -123,8 +124,8 @@ impl Store {
         Ok(())
     }
 
-    /// Load every session with its full event log, restoring insertion
-    /// order via `created_at`.
+    /// Load every session with only its recent event tail. Older history remains
+    /// in Postgres and is fetched by [`Self::history_page`].
     ///
     /// # Errors
     /// If a query fails or a payload is unparseable.
@@ -142,15 +143,22 @@ impl Store {
         for row in session_rows {
             let id = row.id.clone();
             let event_rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
-                "SELECT seq, payload FROM events WHERE session_id = $1 ORDER BY seq ASC",
+                "SELECT seq, payload, count(*) OVER() AS total_count \
+                 FROM events WHERE session_id = $1 ORDER BY seq DESC LIMIT $2",
             )
             .bind(&id)
+            .bind(i64::try_from(crate::core::HOT_TAIL).unwrap_or(i64::MAX))
             .fetch_all(&self.pool)
             .await
             .with_context(|| format!("SELECT events for {id}"))?;
 
+            let event_count = event_rows
+                .first()
+                .and_then(|r| u64::try_from(r.total_count).ok())
+                .unwrap_or(0);
+            let reached_start = event_count <= u64::try_from(event_rows.len()).unwrap_or(u64::MAX);
             let mut events = Vec::with_capacity(event_rows.len());
-            for er in event_rows {
+            for er in event_rows.into_iter().rev() {
                 let seq_for_log = er.seq;
                 // Degrade a single undecodable event to a SKIP (with a warn), not a
                 // hard error: one corrupt/legacy row must not fail the whole
@@ -191,6 +199,8 @@ impl Store {
             out.push(LoadedSession {
                 meta: row.into_meta(),
                 events,
+                event_count,
+                reached_start,
                 next_seq,
                 queue,
                 drafts,
@@ -198,6 +208,58 @@ impl Store {
             });
         }
         Ok(out)
+    }
+
+    /// Read one seq-aligned history page directly from Postgres. A page becomes
+    /// immutable as soon as any later seq exists.
+    pub async fn history_page(
+        &self,
+        session_id: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<Envelope>, bool)> {
+        let lo = u64::try_from(page)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(page_size).unwrap_or(u64::MAX));
+        let hi = lo.saturating_add(u64::try_from(page_size).unwrap_or(u64::MAX));
+        let lo_i64 = i64::try_from(lo).context("history lower seq overflow")?;
+        let hi_i64 = i64::try_from(hi).context("history upper seq overflow")?;
+        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+            "SELECT seq, payload, 0::bigint AS total_count FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND seq < $3 ORDER BY seq ASC",
+        )
+        .bind(session_id)
+        .bind(lo_i64)
+        .bind(hi_i64)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT history page for {session_id}"))?;
+        let immutable: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = $1 AND seq >= $2)",
+        )
+        .bind(session_id)
+        .bind(hi_i64)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT history watermark for {session_id}"))?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            match serde_json::from_value::<Event>(row.payload) {
+                Ok(event) => events.push(Envelope {
+                    session_id: session_id.to_owned(),
+                    seq: u64::try_from(row.seq).unwrap_or(0),
+                    event,
+                    cmid: None,
+                }),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    session = %session_id,
+                    seq = row.seq,
+                    "skipping undecodable history event",
+                ),
+            }
+        }
+        Ok((events, immutable))
     }
 
     /// Insert a brand-new session. Caller is expected to set `next_seq = 0`
@@ -243,14 +305,21 @@ impl Store {
     ///
     /// # Errors
     /// If the UPDATE fails.
-    pub async fn update_verdict(&self, session_id: &str, awaiting_user: bool, done: bool) -> Result<()> {
-        sqlx::query("UPDATE sessions SET awaiting_user = $1, done = $2, updated_at = now() WHERE id = $3")
-            .bind(awaiting_user)
-            .bind(done)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE session verdict {session_id}"))?;
+    pub async fn update_verdict(
+        &self,
+        session_id: &str,
+        awaiting_user: bool,
+        done: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET awaiting_user = $1, done = $2, updated_at = now() WHERE id = $3",
+        )
+        .bind(awaiting_user)
+        .bind(done)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session verdict {session_id}"))?;
         Ok(())
     }
 
@@ -400,35 +469,6 @@ impl Store {
         Ok(())
     }
 
-    /// The API key — INTERNAL ONLY (the judge call reads it). NEVER exposed to a
-    /// web client; pair `inference_secret_set` for the client-facing fact.
-    ///
-    /// # Errors
-    /// If the SELECT fails.
-    pub async fn load_inference_secret(&self, provider: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT api_key FROM inference_secrets WHERE provider = $1")
-                .bind(provider)
-                .fetch_optional(&self.pool)
-                .await
-                .context("SELECT inference_secret")?;
-        Ok(row.map(|(k,)| k))
-    }
-
-    /// Whether a key is set for `provider` — the ONLY secret fact the web is told.
-    ///
-    /// # Errors
-    /// If the SELECT fails.
-    pub async fn inference_secret_set(&self, provider: &str) -> Result<bool> {
-        let row: Option<(i32,)> =
-            sqlx::query_as("SELECT 1 FROM inference_secrets WHERE provider = $1")
-                .bind(provider)
-                .fetch_optional(&self.pool)
-                .await
-                .context("EXISTS inference_secret")?;
-        Ok(row.is_some())
-    }
-
     /// All API keys — INTERNAL ONLY, restore-time bulk load into the Hub's memory
     /// (so the judge can call without a per-turn DB read). Never reaches the web.
     ///
@@ -442,35 +482,44 @@ impl Store {
         Ok(rows)
     }
 
-    /// Append an event under its session. Also bumps `sessions.next_seq` so
-    /// the high-water mark survives restart. Single transaction so seq
-    /// stays monotonic from any concurrent appender.
-    ///
-    /// # Errors
-    /// If serializing the event fails, the transaction fails, or the seq
-    /// conflicts with an existing row.
-    pub async fn append_event(&self, env: &Envelope) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin tx")?;
-        let mut payload = serde_json::to_value(&env.event).context("serialize event")?;
-        strip_nul(&mut payload);
-        let seq_i64 = i64::try_from(env.seq).context("seq i64 overflow")?;
-        sqlx::query("INSERT INTO events(session_id, seq, payload) VALUES ($1, $2, $3)")
+    /// Insert or replace a reduced batch of canonical events and advance every
+    /// touched session's sequence watermark in one transaction. Replacing an
+    /// existing `(session_id, seq)` is how the writer coalesces streaming text
+    /// and tool updates without changing their stable timeline position.
+    pub async fn upsert_event_batch(
+        &self,
+        events: &[Envelope],
+        highwaters: &HashMap<String, u64>,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin event batch")?;
+        for env in events {
+            let mut payload = serde_json::to_value(&env.event).context("serialize event")?;
+            strip_nul(&mut payload);
+            let seq = i64::try_from(env.seq).context("seq i64 overflow")?;
+            sqlx::query(
+                "INSERT INTO events(session_id, seq, payload) VALUES ($1, $2, $3) \
+                 ON CONFLICT(session_id, seq) DO UPDATE SET payload = EXCLUDED.payload",
+            )
             .bind(&env.session_id)
-            .bind(seq_i64)
+            .bind(seq)
             .bind(&payload)
             .execute(&mut *tx)
             .await
-            .with_context(|| format!("INSERT event {}/{}", env.session_id, env.seq))?;
-        sqlx::query(
-            "UPDATE sessions SET next_seq = GREATEST(next_seq, $1 + 1), updated_at = now() \
-             WHERE id = $2",
-        )
-        .bind(seq_i64)
-        .bind(&env.session_id)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("UPDATE next_seq for {}", env.session_id))?;
-        tx.commit().await.context("commit append_event")?;
+            .with_context(|| format!("UPSERT event {}/{}", env.session_id, env.seq))?;
+        }
+        for (session_id, next_seq) in highwaters {
+            let next_seq = i64::try_from(*next_seq).context("next_seq i64 overflow")?;
+            sqlx::query(
+                "UPDATE sessions SET next_seq = GREATEST(next_seq, $1), updated_at = now() \
+                 WHERE id = $2",
+            )
+            .bind(next_seq)
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPDATE next_seq for {session_id}"))?;
+        }
+        tx.commit().await.context("commit event batch")?;
         Ok(())
     }
 
@@ -491,13 +540,15 @@ impl Store {
         let mut drafts_json = serde_json::to_value(drafts).context("serialize drafts")?;
         strip_nul(&mut queue_json);
         strip_nul(&mut drafts_json);
-        sqlx::query("UPDATE sessions SET queue = $1, drafts = $2, updated_at = now() WHERE id = $3")
-            .bind(&queue_json)
-            .bind(&drafts_json)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("UPDATE session pending {session_id}"))?;
+        sqlx::query(
+            "UPDATE sessions SET queue = $1, drafts = $2, updated_at = now() WHERE id = $3",
+        )
+        .bind(&queue_json)
+        .bind(&drafts_json)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session pending {session_id}"))?;
         Ok(())
     }
 
@@ -523,7 +574,12 @@ impl Store {
     ///
     /// # Errors
     /// If the query fails.
-    pub async fn upsert_wakeup(&self, session_id: &str, fire_at_ms: i64, prompt: &str) -> Result<()> {
+    pub async fn upsert_wakeup(
+        &self,
+        session_id: &str,
+        fire_at_ms: i64,
+        prompt: &str,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO scheduled_wakeups (session_id, fire_at_ms, prompt) VALUES ($1, $2, $3) \
              ON CONFLICT (session_id) DO UPDATE SET fire_at_ms = $2, prompt = $3",
@@ -566,9 +622,8 @@ impl Store {
 
     /// Persist the manual session ordering: write each id's index as its
     /// `position`. `load_all` then restores the drag-arranged order (NULLS LAST
-    /// + created_at keeps any unknown/never-reordered rows sensible). One UPDATE
-    /// per id in a single transaction — the list is short (a handful of
-    /// sessions).
+    /// + `created_at` keeps any unknown/never-reordered rows sensible). It writes
+    ///   one update per id in a single transaction; the list is short.
     ///
     /// # Errors
     /// If the transaction or an UPDATE fails.
@@ -742,4 +797,5 @@ impl SessionRow {
 struct EventRow {
     seq: i64,
     payload: serde_json::Value,
+    total_count: i64,
 }

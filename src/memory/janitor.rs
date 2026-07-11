@@ -6,8 +6,8 @@
 //!   1. builds a reconcile/tidy prompt rendering the candidates + the top
 //!      similar existing memories (so the judge can dedup);
 //!   2. wakes the session via `supervisor.send(.., AgentCommand::Prompt(..))`;
-//!   3. waits for the turn to finish by polling `hub.snapshot`, then reads the
-//!      assistant reply IN-PROCESS (no MCP, no tools, no admin socket);
+//!   3. awaits the prompt's direct completion channel and reads the assistant
+//!      reply IN-PROCESS (no transcript scraping, MCP, tools, or admin socket);
 //!   4. parses a fenced ```json array of resolve-ops out of the reply;
 //!   5. materializes them via `apply::resolve` (one git commit), then rebuilds
 //!      the keyword index.
@@ -21,7 +21,6 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::Deserialize;
 
-use crate::core::{Envelope, Event, Hub, Status};
 use crate::supervisor::Supervisor;
 
 use super::apply::{self, ResolveOp};
@@ -36,14 +35,10 @@ use super::tier::project_tier;
 /// whole turn (the model actually thinking + replying), so it is generous.
 const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Poll cadence for the turn-end watch.
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
-
 /// Everything the janitor loop needs to drive one reconcile/tidy pass. Cheap to
 /// clone (all handles are `Arc`/clone-cheap), so the spawned tasks each hold one.
 #[derive(Clone)]
 pub struct Janitor {
-    pub hub: Hub,
     pub supervisor: Arc<Supervisor>,
     pub store: Store,
     pub session_id: String,
@@ -161,7 +156,11 @@ pub fn build_tidy_prompt(index: &Index) -> String {
     );
     // Surface a sample of what exists so the judge has something to survey. The
     // empty query returns nothing from the keyword index, so list the entries.
-    for h in index.query("memory the and a project user feedback reference", 0).iter().take(40) {
+    for h in index
+        .query("memory the and a project user feedback reference", 0)
+        .iter()
+        .take(40)
+    {
         sb.push_str(&format!(
             "- name={:?} tier={} — {}\n",
             h.name, h.tier, h.description
@@ -217,9 +216,7 @@ impl ResolveOpDto {
     fn into_resolve_op(self) -> Result<ResolveOp, String> {
         match self.kind.as_str() {
             "write" => {
-                let tier = self
-                    .tier
-                    .ok_or("write op missing `tier`")?;
+                let tier = self.tier.ok_or("write op missing `tier`")?;
                 let memory = self
                     .memory
                     .ok_or("write op missing `memory`")?
@@ -264,12 +261,14 @@ pub fn parse_resolve_ops(reply: &str) -> Result<Vec<ResolveOp>, String> {
 fn extract_json_block(reply: &str) -> Option<String> {
     // Scan for an opening fence, capture to the next closing ```.
     let bytes_search = |needle: &str| -> Option<usize> { reply.find(needle) };
-    let open = bytes_search("```json").map(|i| (i, "```json".len())).or_else(|| {
-        // Plain fence: only accept it if the body actually looks like a JSON
-        // array (starts with `[` after trimming), so we don't grab a random
-        // code block.
-        bytes_search("```").map(|i| (i, "```".len()))
-    })?;
+    let open = bytes_search("```json")
+        .map(|i| (i, "```json".len()))
+        .or_else(|| {
+            // Plain fence: only accept it if the body actually looks like a JSON
+            // array (starts with `[` after trimming), so we don't grab a random
+            // code block.
+            bytes_search("```").map(|i| (i, "```".len()))
+        })?;
     let after = &reply[open.0 + open.1..];
     // Skip an optional trailing language tag / newline right after the fence.
     let after = after.strip_prefix('\n').unwrap_or(after);
@@ -291,31 +290,31 @@ impl Janitor {
     /// for the turn, read the reply, parse + apply the resolve-ops. On a parse
     /// failure, re-prompt ONCE with a stricter instruction, then give up
     /// (leaving the batch's effect unwritten + logged). Never panics.
-    pub async fn run_janitor(&self, batch: Vec<Mutation>) {
+    pub async fn run_janitor(&self, batch: Vec<Mutation>) -> bool {
         if batch.is_empty() {
-            return;
+            return true;
         }
         let prompt = {
             let index = self.index.lock();
             build_reconcile_prompt(&batch, &index)
         };
-        self.drive("reconcile", prompt).await;
+        self.drive("reconcile", prompt).await
     }
 
     /// A scheduled tidy pass (no candidates). Same machinery as `run_janitor`
     /// but with the conservative survey/soft-archive prompt.
-    pub async fn tidy(&self) {
+    pub async fn tidy(&self) -> bool {
         let prompt = {
             let index = self.index.lock();
             build_tidy_prompt(&index)
         };
-        self.drive("tidy", prompt).await;
+        self.drive("tidy", prompt).await
     }
 
     /// Shared driver: send `prompt`, await the turn, read + parse the reply,
     /// apply the ops. `label` tags the logs (`reconcile`/`tidy`). Re-prompts
     /// ONCE on a parse failure.
-    async fn drive(&self, label: &str, prompt: String) {
+    async fn drive(&self, label: &str, prompt: String) -> bool {
         match self.wake_and_read(prompt).await {
             Ok(reply) => match parse_resolve_ops(&reply) {
                 Ok(ops) => self.apply_ops(label, ops),
@@ -325,18 +324,19 @@ impl Janitor {
                         error = %e,
                         "janitor reply did not parse; re-prompting once"
                     );
-                    self.reprompt_once(label).await;
+                    self.reprompt_once(label).await
                 }
             },
             Err(e) => {
                 tracing::warn!(label, error = %e, "janitor turn failed (batch left unwritten)");
+                false
             }
         }
     }
 
     /// The single stricter retry: ask for ONLY the json block, parse + apply, or
     /// give up.
-    async fn reprompt_once(&self, label: &str) {
+    async fn reprompt_once(&self, label: &str) -> bool {
         let prompt = format!(
             "Your previous reply could not be parsed. Emit ONLY a fenced \
              ```json block — an array of resolve ops (possibly empty `[]`), and \
@@ -345,22 +345,28 @@ impl Janitor {
         match self.wake_and_read(prompt).await {
             Ok(reply) => match parse_resolve_ops(&reply) {
                 Ok(ops) => self.apply_ops(label, ops),
-                Err(e) => tracing::warn!(
-                    label,
-                    error = %e,
-                    "janitor re-prompt still unparseable; giving up (unwritten)"
-                ),
+                Err(e) => {
+                    tracing::warn!(
+                        label,
+                        error = %e,
+                        "janitor re-prompt still unparseable; giving up (unwritten)"
+                    );
+                    false
+                }
             },
-            Err(e) => tracing::warn!(label, error = %e, "janitor re-prompt turn failed; giving up"),
+            Err(e) => {
+                tracing::warn!(label, error = %e, "janitor re-prompt turn failed; giving up");
+                false
+            }
         }
     }
 
     /// Apply parsed resolve-ops (one git commit), then rebuild the index. An
     /// empty op list is a clean no-op.
-    fn apply_ops(&self, label: &str, ops: Vec<ResolveOp>) {
+    fn apply_ops(&self, label: &str, ops: Vec<ResolveOp>) -> bool {
         if ops.is_empty() {
             tracing::info!(label, "janitor: empty op list (no change)");
-            return;
+            return true;
         }
         let n = ops.len();
         match apply::resolve(&self.store, &ops) {
@@ -372,98 +378,36 @@ impl Janitor {
                     Ok(ix) => *self.index.lock() = ix,
                     Err(e) => tracing::warn!(label, error = %e, "index rebuild after apply failed"),
                 }
+                true
             }
-            Err(e) => tracing::warn!(label, error = %e, "janitor apply::resolve failed"),
+            Err(e) => {
+                tracing::warn!(label, error = %e, "janitor apply::resolve failed");
+                false
+            }
         }
     }
 
-    /// Wake the janitor session with `prompt`, wait for the turn to finish, and
-    /// return the assistant reply text read IN-PROCESS from the Hub.
-    ///
-    /// Turn-end detection: capture the session's max event seq BEFORE sending;
-    /// after sending, poll `hub.snapshot` until a `TurnEnd` (or a terminal
-    /// lifecycle) lands with a seq strictly greater than that mark, or the
-    /// timeout elapses. The reply is the concatenation of the
-    /// `agent_message_chunk` text in envelopes after the mark.
+    /// Wake the janitor and await the exact turn's captured assistant text.
     async fn wake_and_read(&self, prompt: String) -> Result<String, String> {
-        let mark = self.max_seq();
-        let blocks = vec![agent_client_protocol::schema::v1::ContentBlock::from(prompt)];
+        let blocks = vec![agent_client_protocol::schema::v1::ContentBlock::from(
+            prompt,
+        )];
+        let (tx, rx) = tokio::sync::oneshot::channel();
         self.supervisor
-            .send(&self.session_id, crate::acp::AgentCommand::Prompt(blocks, None))
+            .send(
+                &self.session_id,
+                crate::acp::AgentCommand::Prompt(blocks, None, Some(tx)),
+            )
             .map_err(|e| format!("send prompt: {e}"))?;
-
-        let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
-        loop {
-            tokio::time::sleep(POLL_INTERVAL).await;
-            let Some((log, _reached_start)) = self.hub.snapshot(&self.session_id) else {
-                return Err("session vanished while waiting for turn".to_string());
-            };
-            // A TurnEnd after the mark = the turn we issued finished.
-            let turn_ended = log
-                .iter()
-                .any(|e| e.seq > mark && matches!(e.event, Event::TurnEnd { .. }));
-            // A terminal lifecycle (exited/crashed) also ends our wait — the
-            // agent died; treat whatever it managed to emit as the reply.
-            let terminal = log.iter().any(|e| {
-                e.seq > mark
-                    && matches!(
-                        &e.event,
-                        Event::Lifecycle {
-                            status: Status::Exited | Status::Crashed,
-                            ..
-                        }
-                    )
-            });
-            if turn_ended || terminal {
-                let reply = reply_text_after(&log, mark);
-                if reply.trim().is_empty() {
-                    return Err("turn ended with an empty assistant reply".to_string());
-                }
-                return Ok(reply);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(format!(
-                    "turn did not finish within {}s",
-                    TURN_TIMEOUT.as_secs()
-                ));
-            }
+        let reply = tokio::time::timeout(TURN_TIMEOUT, rx)
+            .await
+            .map_err(|_| format!("turn did not finish within {}s", TURN_TIMEOUT.as_secs()))?
+            .map_err(|_| "agent completion channel closed".to_owned())??;
+        if reply.trim().is_empty() {
+            return Err("turn ended with an empty assistant reply".to_owned());
         }
+        Ok(reply)
     }
-
-    /// The highest event seq currently in the session's snapshot, or 0 if the
-    /// session has no events yet (or vanished — caller re-checks on poll).
-    fn max_seq(&self) -> u64 {
-        self.hub
-            .snapshot(&self.session_id)
-            .map(|(log, _)| log.iter().map(|e| e.seq).max().unwrap_or(0))
-            .unwrap_or(0)
-    }
-}
-
-/// Concatenate the `agent_message_chunk` text from envelopes with seq > `mark` —
-/// the assistant reply produced by the turn we just issued. Walks the same
-/// `Event::Update`/`sessionUpdate`/`content.text` shape as the Hub's private
-/// `last_turn_texts`, scoped to events after the mark so a prior turn's output
-/// is never mixed in.
-fn reply_text_after(log: &[Envelope], mark: u64) -> String {
-    let mut out = String::new();
-    for env in log.iter().filter(|e| e.seq > mark) {
-        let Event::Update { update } = &env.event else {
-            continue;
-        };
-        let kind = update.get("sessionUpdate").and_then(serde_json::Value::as_str);
-        if kind != Some("agent_message_chunk") {
-            continue;
-        }
-        if let Some(text) = update
-            .get("content")
-            .and_then(|c| c.get("text"))
-            .and_then(serde_json::Value::as_str)
-        {
-            out.push_str(text);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -494,7 +438,10 @@ mod tests {
         assert_eq!(ops[1].name, "stale-note");
 
         assert_eq!(ops[2].kind, ResolveKind::Move);
-        assert_eq!(ops[2].from.as_str(), "projects/-home-draven-columbus/memory");
+        assert_eq!(
+            ops[2].from.as_str(),
+            "projects/-home-draven-columbus/memory"
+        );
         assert_eq!(ops[2].tier.as_str(), "machine");
         assert_eq!(ops[2].name, "x");
     }
@@ -507,8 +454,10 @@ mod tests {
 
     #[test]
     fn parse_plain_fence_no_lang() {
-        let ops = parse_resolve_ops("```\n[{\"kind\":\"archive\",\"from\":\"machine\",\"name\":\"a\"}]\n```")
-            .expect("plain fence parses");
+        let ops = parse_resolve_ops(
+            "```\n[{\"kind\":\"archive\",\"from\":\"machine\",\"name\":\"a\"}]\n```",
+        )
+        .expect("plain fence parses");
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].kind, ResolveKind::Archive);
     }
@@ -528,27 +477,5 @@ mod tests {
     fn parse_unknown_kind_errs() {
         let r = "```json\n[{\"kind\":\"frobnicate\"}]\n```";
         assert!(parse_resolve_ops(r).is_err());
-    }
-
-    #[test]
-    fn reply_text_scopes_to_mark() {
-        let env = |seq: u64, kind: &str, text: &str| Envelope {
-            session_id: "s".to_string(),
-            seq,
-            event: Event::Update {
-                update: serde_json::json!({
-                    "sessionUpdate": kind,
-                    "content": {"type": "text", "text": text},
-                }),
-            },
-            cmid: None,
-        };
-        let log = vec![
-            env(1, "agent_message_chunk", "OLD turn output"),
-            env(2, "user_message_chunk", "the prompt"),
-            env(3, "agent_message_chunk", "new "),
-            env(4, "agent_message_chunk", "reply"),
-        ];
-        assert_eq!(reply_text_after(&log, 2), "new reply");
     }
 }

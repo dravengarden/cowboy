@@ -190,14 +190,14 @@ fn write_indexes(s: &Store, affected: &HashSet<Tier>) -> Result<()> {
 mod tests {
     use super::*;
     use crate::memory::store::MemoryType;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
     fn tmp_store() -> (Store, std::path::PathBuf) {
         let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("cowboy-apply-test-{pid}-{nanos}"));
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("cowboy-apply-test-{pid}-{id}"));
         std::fs::create_dir_all(&path).unwrap();
         (Store::new(path.clone()), path)
     }

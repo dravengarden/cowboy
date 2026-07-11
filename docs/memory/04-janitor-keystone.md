@@ -15,7 +15,7 @@ round-trip. cowboy already runs the session and owns its event log, so it can:
 
 1. send the session a prompt,
 2. wait for that turn to finish,
-3. read the assistant's reply text straight out of the in-memory log,
+3. receive the exact turn's assistant text through its completion channel,
 4. parse the decision and apply it itself.
 
 No MCP, no socket, no tool the model has to remember to call. The judge just
@@ -25,8 +25,8 @@ No MCP, no socket, no tool the model has to remember to call. The judge just
 flowchart TB
     B["batch of proposals"] --> P["build_reconcile_prompt<br/>candidates + top similar (index)"]
     P --> S["supervisor.send(session, Prompt)"]
-    S --> W["poll hub.snapshot every 1s<br/>until TurnEnd past the mark (≤180s)"]
-    W --> R["reply_text_after(log, mark)<br/>= the assistant JSON reply"]
+    S --> W["ACP client captures assistant chunks<br/>for this Prompt only"]
+    W --> R["oneshot completion at turn end<br/>(≤180s timeout)"]
     R --> J{"parse_resolve_ops<br/>fenced json block?"}
     J -- ok --> AP["apply::resolve → git commit"]
     J -- no --> RE["re-prompt once, then give up<br/>(batch left unwritten, logged)"]
@@ -40,25 +40,21 @@ flowchart TB
 ## `wake_and_read` — the mechanism, exactly
 
 ```
-mark = max_seq(log)                       // highest event seq BEFORE we send
-supervisor.send(session, Prompt(blocks))  // wake the judge
-loop every 1s, up to 180s:
-    log = hub.snapshot(session)
-    if any event.seq > mark is TurnEnd            → turn finished
-    if any event.seq > mark is Lifecycle Exited/Crashed → agent died; take what it emitted
-    on either: reply = reply_text_after(log, mark); return (error if empty)
-    on deadline: error "turn did not finish within 180s"
+(tx, rx) = oneshot()
+supervisor.send(session, Prompt(blocks, completion=tx))
+reply = timeout(180s, rx)
+return error if the turn failed or reply is empty
 ```
 
 Two details make this robust:
 
-- **The `mark`.** Capturing the max event seq *before* sending scopes everything
-  to *this* turn — a prior turn's `TurnEnd` or output can never be mistaken for
-  the reply. `reply_text_after` concatenates only the `agent_message_chunk` text
-  from events with `seq > mark`.
-- **Terminal lifecycle also ends the wait.** If the agent process exits or
-  crashes, cowboy stops waiting and uses whatever it emitted, rather than
-  blocking to the 180s deadline.
+- **Turn-scoped capture.** `AgentCommand::Prompt` carries a one-shot sender. The
+  ACP client captures assistant chunks only while that exact prompt is active,
+  so bounded hot history, reconnects, and old `TurnEnd` rows cannot truncate or
+  contaminate the reply.
+- **Failure is explicit.** A failed/cancelled prompt completes the channel with
+  an error. The reconcile loop retries the same coalesced batch three times with
+  backoff before leaving it unwritten and logging an exhausted-batch error.
 
 An empty reply, a parse failure, or a timeout each leaves the batch **unwritten**
 and logged — the janitor never panics and never writes a half-understood

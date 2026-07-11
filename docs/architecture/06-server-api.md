@@ -9,9 +9,9 @@ the same binary is both frontend and backend.
 
 | Route | Purpose |
 |---|---|
-| `GET /healthz` | liveness → `"ok"` |
+| `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
-| `GET /api/metrics` | `db_bytes`, `events_rows`, `sessions_live`, `sessions_deleted`, `daemon_rss_bytes` |
+| `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
 | `GET /api/workspaces` | selectable session roots — Columbus projects + `workspace_root` subdirs |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
@@ -38,8 +38,10 @@ that project's guidance files and the memory store keys by the cwd-slug.
 The WebSocket `Snapshot` only carries the last ~200 events. Older history is
 pulled lazily over REST: `GET /api/history/{id}/{page}` returns a fixed-size,
 seq-aligned page, marked `immutable` once a later page exists (so the client can
-cache it forever). The frontend's virtualized transcript requests older pages as
-the user scrolls up, with scroll anchoring so the view doesn't jump.
+cache it forever). The frontend requests older pages as the user scrolls up. It
+uses canonical message/tool rows plus CSS off-screen containment; retaining the
+browser's `column-reverse` anchor avoids iOS jumps from unmounting
+variable-height rows in a JavaScript virtualizer.
 
 ## The WebSocket loop
 
@@ -58,9 +60,10 @@ flowchart TB
 On connect the Hub pushes the full bootstrap (`Sessions`, per-session
 `Snapshot`, `Settings`, `ConfigOptions`, `Skills`). After that it's symmetric:
 the client sends `Inbound` commands, the Hub fans `Outbound` messages back. The
-wire types are mirrored in `web/src/protocol.ts` so the TypeScript and Rust ends
-stay in lock-step. See [Core — the Hub](02-core-hub.md) for the full command and
-message catalogs.
+wire types are mirrored in `web/src/protocol.ts`. `protocol_contract` parses the
+Rust enums and fails tests when their serialized discriminants differ from the
+TypeScript unions; representative field shapes remain covered by Rust serde and
+TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 
 ## Background tasks
 

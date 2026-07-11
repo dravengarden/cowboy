@@ -7,7 +7,7 @@
 // by (session_id, seq) so a reconnect snapshot overlapping the live stream is
 // harmless.
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { createConnectionStore } from "./_shell";
 import {
   type ArgsOf,
@@ -286,11 +286,94 @@ function fromWire(list: WireQueued[]): QueuedMessage[] {
   }));
 }
 
+// A canonical live envelope may absorb many raw sequence numbers. Keep those
+// numbers out-of-band so reconnect snapshots can still deduplicate their raw
+// overlap without retaining every large payload. Weak keys disappear with the
+// timeline rows they describe.
+const absorbedSeqs = new WeakMap<Envelope, Set<number>>();
+
+function absorbed(previous: Envelope, replacement: Envelope, seq: number): Envelope {
+  const seen = absorbedSeqs.get(previous) ?? new Set([previous.seq]);
+  seen.add(seq);
+  absorbedSeqs.set(replacement, seen);
+  return replacement;
+}
+
+function containsSeq(events: Envelope[], seq: number): boolean {
+  return events.some((event) => event.seq === seq || absorbedSeqs.get(event)?.has(seq) === true);
+}
+
 function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<string, Envelope[]> {
+  const existing = timelines.get(env.session_id) ?? [];
+  if (containsSeq(existing, env.seq)) return timelines; // dedup
+
+  // These high-frequency frames are runtime telemetry, not transcript history.
+  // The daemon persists their sequence watermark without storing a row; mirror
+  // that canonical representation in the live client so long turns don't grow
+  // one inert object per token update.
+  if (
+    env.kind === "update" &&
+    (env.update.sessionUpdate === "usage_update" ||
+      env.update.sessionUpdate === "session_info_update")
+  ) {
+    return timelines;
+  }
+
+  let merged: Envelope[] | undefined;
+  if (env.kind === "update") {
+    const updateKind = env.update.sessionUpdate;
+    if (
+      updateKind === "agent_message_chunk" ||
+      updateKind === "agent_thought_chunk" ||
+      updateKind === "user_message_chunk"
+    ) {
+      const last = existing[existing.length - 1];
+      if (
+        last?.kind === "update" &&
+        last.update.sessionUpdate === updateKind &&
+        last.update.messageId === env.update.messageId &&
+        last.update.content?.type === "text" &&
+        env.update.content?.type === "text"
+      ) {
+        const replacement: Envelope = {
+          ...last,
+          update: {
+            ...last.update,
+            content: {
+              ...last.update.content,
+              text: `${last.update.content.text ?? ""}${env.update.content.text ?? ""}`,
+            },
+          },
+        };
+        merged = [...existing.slice(0, -1), absorbed(last, replacement, env.seq)];
+      }
+    } else if (updateKind === "tool_call_update") {
+      const toolId = env.update.toolCallId;
+      const index = toolId
+        ? existing.findIndex((candidate) =>
+          candidate.kind === "update" &&
+          candidate.update.sessionUpdate === "tool_call" &&
+          candidate.update.toolCallId === toolId
+        )
+        : -1;
+      const initial = index >= 0 ? existing[index] : undefined;
+      if (initial?.kind === "update") {
+        const replacement: Envelope = {
+          ...initial,
+          update: {
+            ...initial.update,
+            ...env.update,
+            sessionUpdate: "tool_call",
+          },
+        };
+        merged = [...existing];
+        merged[index] = absorbed(initial, replacement, env.seq);
+      }
+    }
+  }
+
+  merged ??= [...existing, env].sort((a, b) => a.seq - b.seq);
   const next = new Map(timelines);
-  const existing = next.get(env.session_id) ?? [];
-  if (existing.some((e) => e.seq === env.seq)) return next; // dedup
-  const merged = [...existing, env].sort((a, b) => a.seq - b.seq);
   next.set(env.session_id, merged);
   return next;
 }
@@ -306,8 +389,7 @@ function mergeEvents(
 ): Map<string, Envelope[]> {
   const next = new Map(timelines);
   const existing = next.get(sessionId) ?? [];
-  const seen = new Set(existing.map((e) => e.seq));
-  const fresh = events.filter((e) => !seen.has(e.seq));
+  const fresh = events.filter((event) => !containsSeq(existing, event.seq));
   if (fresh.length === 0 && existing.length > 0) return next;
   const merged = [...existing, ...fresh].sort((a, b) => a.seq - b.seq);
   next.set(sessionId, merged);
@@ -483,7 +565,7 @@ function handle(msg: Outbound): void {
       break;
     }
     case "judge_result": {
-      setState({ ...state, judgeResults: { ...state.judgeResults, [msg.judge.session_id]: msg.judge } });
+      setState({ ...state, judgeResults: { ...state.judgeResults, [msg.session_id]: msg } });
       // The semantic attention alert: the verdict is what makes a turn-end worth a
       // sound. `done` → the completion chime; `awaiting_user` (the agent asked
       // something) → the decision chime. A plain continue / a force-push lands here
@@ -493,10 +575,10 @@ function handle(msg: Outbound): void {
       // independent vibration setting (separate from sound), but NOT on tab-hidden:
       // a native haptic only registers while the app is foreground, which is exactly
       // when the "it finished / it needs you" buzz is wanted.
-      if (msg.judge.done) {
+      if (msg.done) {
         fireAlert("done");
         if (vibrateAlertOn()) notifyHaptic("success");
-      } else if (msg.judge.awaiting_user) {
+      } else if (msg.awaiting_user) {
         fireAlert("decision");
         if (vibrateAlertOn()) notifyHaptic("warning");
       }
@@ -850,18 +932,18 @@ export function setSetting(key: string, value: unknown): void {
 
 /** All inference-provider configs (model + key_set, never the key). */
 export function useInferenceConfig(): InferenceProviderView[] {
-  return useStore().inferenceConfig;
+  return useStoreSelector((snapshot) => snapshot.inferenceConfig);
 }
 
 /** The registered skills (prompt + extract), for the Info sheet viewer. */
 export function useSkills(): SkillView[] {
-  return useStore().skills;
+  return useStoreSelector((snapshot) => snapshot.skills);
 }
 
 /** Whether the live WS is currently open. False the moment it drops (onclose),
  *  true on (re)open — drives the turn-status pill's "Reconnecting…" state. */
 export function useConnected(): boolean {
-  return useStore().connected;
+  return useStoreSelector((snapshot) => snapshot.connected);
 }
 
 /** Set a provider's model/params (optimistic local update + send). */
@@ -886,7 +968,7 @@ export function setInferenceSecret(provider: string, apiKey: string): void {
 
 /** Last dev-probe result (Info sheet "Test"). */
 export function useLastProbe(): ProbeResult | undefined {
-  return useStore().lastProbe;
+  return useStoreSelector((snapshot) => snapshot.lastProbe);
 }
 
 /** Fire a dev probe against a provider — the daemon calls it once and broadcasts
@@ -1327,7 +1409,7 @@ export function requestSendQueued(sessionId: string, id: string): void {
 
 /** The pending no-judge send awaiting confirmation (drives the modal). */
 export function usePendingSend(): { sessionId: string; id: string } | undefined {
-  return useStore().confirmSend;
+  return useStoreSelector((snapshot) => snapshot.confirmSend);
 }
 
 /** Confirm the pending manual send; `dontAskAgain` suppresses it for the session. */
@@ -1399,7 +1481,7 @@ export function setPaused(sessionId: string, paused: boolean): void {
 
 /** The latest confirm-detect judge result for a session (overlay raw-data expand). */
 export function useJudgeResult(sessionId: string): JudgeResult | undefined {
-  return useStore().judgeResults[sessionId];
+  return useStoreSelector((snapshot) => snapshot.judgeResults[sessionId]);
 }
 
 const EMPTY_RUNS: JudgeRun[] = [];
@@ -1407,7 +1489,7 @@ const EMPTY_RUNS: JudgeRun[] = [];
 /** A session's confirm-detect judge-run history (newest first), for the inspector
  *  widget. Server-authoritative — stable empty array when none yet. */
 export function useJudgeRuns(sessionId: string): JudgeRun[] {
-  return useStore().judgeRuns[sessionId] ?? EMPTY_RUNS;
+  return useStoreSelector((snapshot) => snapshot.judgeRuns[sessionId] ?? EMPTY_RUNS);
 }
 
 /** Delete one judge run from a session's inspector history (server-authoritative;
@@ -1555,4 +1637,22 @@ if (typeof globalThis.addEventListener === "function") {
 
 export function useStore(): State {
   return useSyncExternalStore(subscribe, () => state);
+}
+
+/** Subscribe to one stable slice instead of re-rendering for every unrelated
+ * store mutation. `getSnapshot` keeps the previous reference when the selected
+ * value is `Object.is`-equal, as required by `useSyncExternalStore`. */
+export function useStoreSelector<T>(selector: (snapshot: State) => T): T {
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const cacheRef = useRef<{ value: T } | undefined>(undefined);
+  const getSnapshot = useCallback((): T => {
+    const next = selectorRef.current(state);
+    if (cacheRef.current && Object.is(cacheRef.current.value, next)) {
+      return cacheRef.current.value;
+    }
+    cacheRef.current = { value: next };
+    return next;
+  }, []);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

@@ -69,6 +69,8 @@ pub struct Caller {
     pub machine: bool,
 }
 
+type GitRootResolver<'a> = Option<&'a dyn Fn(&str) -> Option<String>>;
+
 /// Resolve a directory to its canonical git toplevel via `git -C <dir> rev-parse
 /// --show-toplevel`. Returns `None` when the dir is not inside a git repo.
 fn git_root(dir: &str) -> Option<String> {
@@ -95,7 +97,7 @@ fn git_root(dir: &str) -> Option<String> {
 /// `git_root_override` lets tests inject the git-root resolver (matching the Go
 /// `tier.GitRoot` package var). Pass `None` to use the real `git` shell-out.
 #[must_use]
-pub fn route(c: &Caller, git_root_override: Option<&dyn Fn(&str) -> Option<String>>) -> Tier {
+pub fn route(c: &Caller, git_root_override: GitRootResolver<'_>) -> Tier {
     if c.machine {
         return Tier::machine();
     }

@@ -74,11 +74,25 @@ Zed-over-SSH session share one identity and one view of the files), points
 `CLAUDE_CODE_REMOTE_MEMORY_DIR` so spawned agents' auto-memory lands in the
 machine store.
 
-## The deploy gotcha
+## Safe activation from a cowboy session
 
-**A `nixos-rebuild switch` that restarts cowboy kills the approval channel for
-any in-flight turn you are driving Claude *through*.** The switch tool reports
-"rejected" even though the rebuild actually **completed** — verify via
-`/run/current-system`, don't re-run. Web/bundle changes additionally need a PWA
-hard-reload (a WS reconnect alone keeps the stale JS); bump `sw.js`'s `VERSION`
-to trigger the auto-reload onto the fresh bundle.
+A direct `nixos-rebuild switch` runs inside the invoking agent's service cgroup.
+When activation stops cowboy, it can kill its own activation process after the
+system profile moved but before `/run/current-system` and restarted units
+converged. A dropped approval channel therefore proves neither success nor
+failure.
+
+Build as the normal user, then dispatch activation into an independent root
+systemd unit:
+
+```bash
+cd /etc/nixos
+sudo nixos-rebuild build
+just sys-activate ./result
+```
+
+`hawk activate` resolves the already-built closure, then the transient unit sets
+the system profile and runs that closure's `switch-to-configuration`. The unit is
+under `system.slice`, not `cowboy.service`, so a cowboy restart cannot kill it.
+Verify the unit journal and `/run/current-system`; never blindly re-run a switch.
+Web changes still require a `sw.js` VERSION bump so installed PWAs reload.

@@ -49,7 +49,8 @@ types so the wire contract is checked at both ends.
 ## Transcript
 
 `Transcript.tsx` renders the session timeline (user messages, agent chunks, tool
-calls, plan, permissions) as a **column-reverse virtualized list**. It must handle
+calls, plan, permissions) as a **column-reverse, paged list with off-screen CSS
+containment**. It must handle
 three chat-log realities: variable row heights (dynamic measurement),
 stick-to-bottom during live streaming (releasing when the user scrolls up), and
 scroll anchoring on prepend so loading older history (via

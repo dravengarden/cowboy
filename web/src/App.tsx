@@ -72,7 +72,7 @@ import {
     send,
     setSessionAutoResume,
     setSetting,
-    useStore,
+    useStoreSelector,
 } from "./store";
 import { useSortable } from "./useSortable";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
@@ -704,7 +704,7 @@ function NewSessionDialog({
     const titleRef = useRef<HTMLInputElement>(null);
     // Session count, captured in a ref so its default name is computed at open
     // time WITHOUT a session arriving mid-edit clobbering what you're typing.
-    const { sessions } = useStore();
+    const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const sessionCountRef = useRef(sessions.length);
     sessionCountRef.current = sessions.length;
     // On open: reset to a fresh "New session N" default (N keeps it distinct if
@@ -850,8 +850,13 @@ export function App({
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
-    const { sessions, timelines, hydrated, lastError, sessionsLoaded, connected, settings } =
-        useStore();
+    const sessions = useStoreSelector((snapshot) => snapshot.sessions);
+    const timelines = useStoreSelector((snapshot) => snapshot.timelines);
+    const hydrated = useStoreSelector((snapshot) => snapshot.hydrated);
+    const lastError = useStoreSelector((snapshot) => snapshot.lastError);
+    const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
+    const connected = useStoreSelector((snapshot) => snapshot.connected);
+    const settings = useStoreSelector((snapshot) => snapshot.settings);
     const autoResumeDefaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
@@ -1963,7 +1968,7 @@ function interpolateTemplate(template: string, vars: Record<string, string>): st
 // toggle + a collapsed continuation-template editor with a live interpolated
 // preview. Server-authoritative (reads `state.settings`, writes via setSetting).
 function AutoResumeSettings(): React.JSX.Element {
-    const { settings } = useStore();
+    const settings = useStoreSelector((snapshot) => snapshot.settings);
     const defaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     const saved =
         typeof settings[AUTO_RESUME_TEMPLATE_KEY] === "string"
@@ -2739,4 +2744,3 @@ function SessionInfoShell(
         </Sheet>
     );
 }
-

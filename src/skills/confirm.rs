@@ -87,7 +87,12 @@ fn parse_verdict(text: &str) -> Result<Verdict> {
         let (confidence, reason) = extract_json(text)
             .and_then(|j| serde_json::from_str::<Raw>(j).ok())
             .map_or((0.0, String::new()), |r| (r.confidence, r.reason));
-        return Ok(Verdict { awaiting_user, done, confidence, reason });
+        return Ok(Verdict {
+            awaiting_user,
+            done,
+            confidence,
+            reason,
+        });
     }
     // Neither boolean present → genuinely unparseable.
     let json = extract_json(text).unwrap_or(text);
@@ -136,19 +141,37 @@ pub async fn classify(
     inference: &dyn InferenceProvider,
     final_text: &str,
 ) -> Result<JudgeOutcome> {
-    let ctx = crate::provider::confirm::TurnEndCtx { stop_reason, final_text };
+    let ctx = crate::provider::confirm::TurnEndCtx {
+        stop_reason,
+        final_text,
+    };
     if let Some(v) = crate::provider::confirm::l1(agent_provider, &ctx) {
         // Deterministic — no LLM call.
         let raw_output = v.reason.clone();
-        return Ok(JudgeOutcome { verdict: v, layer: "L1", raw_output, usage: None });
+        return Ok(JudgeOutcome {
+            verdict: v,
+            layer: "L1",
+            raw_output,
+            usage: None,
+        });
     }
-    let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(final_text.to_owned())];
+    let messages = vec![
+        Message::system(SYSTEM_PROMPT),
+        Message::user(final_text.to_owned()),
+    ];
     // No forced JSON mode (thinking models reject it). Generous token budget so a
     // verbose reason can't truncate the JSON (the prompt also caps reason ≤8 chars,
     // and parse_verdict survives truncation anyway).
-    let resp = inference.complete(CompleteRequest::judge(messages, 1024)).await?;
+    let resp = inference
+        .complete(CompleteRequest::judge(messages, 1024))
+        .await?;
     let verdict = parse_verdict(&resp.text)?;
-    Ok(JudgeOutcome { verdict, layer: "L2", raw_output: resp.text, usage: Some(resp.usage) })
+    Ok(JudgeOutcome {
+        verdict,
+        layer: "L2",
+        raw_output: resp.text,
+        usage: Some(resp.usage),
+    })
 }
 
 #[cfg(test)]
@@ -159,9 +182,10 @@ mod tests {
 
     #[test]
     fn parses_verdict_variants() {
-        let v =
-            parse_verdict(r#"{"awaiting_user": true, "done": false, "confidence": 0.9, "reason": "q"}"#)
-                .unwrap();
+        let v = parse_verdict(
+            r#"{"awaiting_user": true, "done": false, "confidence": 0.9, "reason": "q"}"#,
+        )
+        .unwrap();
         assert!(v.awaiting_user && !v.done);
         // tolerant of surrounding prose / a code fence
         let v2 = parse_verdict("```json\n{\"awaiting_user\": false, \"done\": true}\n```").unwrap();
@@ -185,7 +209,10 @@ mod tests {
             ModelSource::Static(vec![])
         }
         async fn complete(&self, _req: CompleteRequest) -> Result<CompleteResponse> {
-            Ok(CompleteResponse { text: self.0.to_owned(), usage: Usage::default() })
+            Ok(CompleteResponse {
+                text: self.0.to_owned(),
+                usage: Usage::default(),
+            })
         }
         async fn raw(&self, _body: serde_json::Value) -> Result<serde_json::Value> {
             Ok(serde_json::Value::Null)
@@ -212,9 +239,17 @@ mod tests {
 
     #[tokio::test]
     async fn end_turn_falls_through_to_l2() {
-        let mock = Mock(r#"{"awaiting_user": true, "done": true, "confidence": 0.8, "reason": "x"}"#);
+        let mock =
+            Mock(r#"{"awaiting_user": true, "done": true, "confidence": 0.8, "reason": "x"}"#);
         // EndTurn is ambiguous → L1 returns None → the LLM (mock) decides.
-        let o = classify("claude-code", Some("EndTurn"), &mock, "做完了 A，要不要做 B?").await.unwrap();
+        let o = classify(
+            "claude-code",
+            Some("EndTurn"),
+            &mock,
+            "做完了 A，要不要做 B?",
+        )
+        .await
+        .unwrap();
         assert_eq!(o.layer, "L2");
         assert!(o.verdict.awaiting_user);
         assert!(o.verdict.done);
@@ -224,7 +259,9 @@ mod tests {
     #[tokio::test]
     async fn cancelled_short_circuits_l1_no_llm() {
         // A non-EndTurn stop is deterministic → L2 must NOT be called.
-        let o = classify("codex", Some("Cancelled"), &NeverCalled, "anything").await.unwrap();
+        let o = classify("codex", Some("Cancelled"), &NeverCalled, "anything")
+            .await
+            .unwrap();
         assert_eq!(o.layer, "L1");
         assert!(!o.verdict.awaiting_user);
         assert!(!o.verdict.done);

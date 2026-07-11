@@ -7,14 +7,16 @@ restart. The deployed service uses the host's service-private Postgres.
 
 ## Write-behind
 
-The Hub never blocks on the database. It emits a `StoreWrite` intent onto an
-unbounded mpsc channel; a background **writer task** (`run_store_writer()`) drains
-the channel and executes the corresponding `Store` method.
+The Hub never blocks on the database. It emits a `StoreWrite` intent onto a
+bounded mpsc channel (8,192 intents); a background **writer task** drains small
+batches, reduces high-frequency events, and executes the corresponding `Store`
+operations. Queue overflow or a batch that exhausts four retries marks
+persistence degraded through `/healthz` and `/api/metrics`.
 
 ```mermaid
 flowchart TB
-    HUB["Hub.push(Event)"] --> CH["StoreWrite channel<br/>(unbounded mpsc)"]
-    CH --> WR["writer task"]
+    HUB["Hub.push(Event)"] --> CH["StoreWrite channel<br/>(bounded: 8,192)"]
+    CH --> WR["batch + reduce + retry"]
     WR --> PG[("Postgres")]
     PG --> RST["load_all() on boot"]
     RST --> HUB
@@ -24,9 +26,10 @@ flowchart TB
     style RST fill:#dcfce7,stroke:#16a34a
 ```
 
-Tradeoff: writes land within milliseconds of the Hub push, but a daemon crash
-*between* a push and its flush can lose the very latest events. Accepted for v0 —
-the cost of synchronous writes on the streaming hot path is not worth it.
+Writes normally land within milliseconds. On SIGTERM the HTTP/WS server closes
+connections and waits up to ten seconds for the writer to drain. A hard crash can
+still lose the latest in-memory batch; synchronous token-path writes would couple
+live fan-out latency to Postgres, so cowboy keeps that window observable and bounded.
 
 ## Schema
 
@@ -44,17 +47,23 @@ Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
 | `0008_turn_verdict` | `awaiting_user` + `done` (persisted confirm verdict) |
 | `0009_judge_runs` | `judge_runs` JSONB history |
 | `0010_system_session` | `system` flag (the memory janitor session) |
+| `0011_scheduled_wakeups` | persisted agent wakeups |
+| `0012_compact_event_log` | drops the duplicate event index, removes transient telemetry, folds legacy tool updates into their initial row |
 
-The design keeps the event log lean: **token deltas are never persisted.**
-Live streaming chunks are broadcast from memory only; once a turn completes, the
-coalesced final message and tool calls (in their final state) are what land in
-`events`. This keeps replay fast and the DB small without hurting the live feel.
+The writer UPSERTs consecutive message/thought chunks into their first sequence
+row, folds tool updates into the initial call, and stores only the sequence
+watermark for usage/session-info telemetry. Live WS clients still see every
+frame. On restore, only the latest 1,000 durable rows per session enter the Hub;
+older rows stay in Postgres and are loaded through immutable 200-event pages.
+Native Postgres fits this better than a Timescale hypertable: reads and
+uniqueness are keyed by `(session_id, seq)`, while the actual cost was redundant
+large JSON payloads rather than time-range scans.
 
 ## Store API surface
 
-`load_all()` returns every session's metadata + event log + queue/drafts/judge
-runs in one restore. Mutations mirror the `StoreWrite` variants: `insert_session`,
-`append_event`, `update_status`, `update_verdict`, `update_title`,
+`load_all()` returns every session's metadata + hot event tail + total event
+count + queue/drafts/judge runs in one restore. Mutations mirror the `StoreWrite`
+variants: `insert_session`, batched event UPSERT, `update_status`, `update_verdict`, `update_title`,
 `update_agent_session_id`, `delete_session`, `update_pending`,
 `update_session_order`, `update_auto_resume`, `update_judge_runs`, plus settings
 (`load_settings` / `put_setting`) and inference (`load/put_inference_config`,
@@ -71,8 +80,8 @@ insert is kept (minus the NULs) instead of lost.
 
 Deletes are **soft** (`deleted_at` stamp), so a mis-tap is recoverable. A
 **purge sweeper** (`run_purge_sweeper()`, every 6h) hard-deletes sessions past a
-3-day retention window. `/api/metrics` exposes `db_bytes`, `events_rows`,
-`sessions_live`, `sessions_deleted`, and `daemon_rss_bytes` for monitoring.
+3-day retention window. `/api/metrics` exposes storage/session/RSS values plus
+persistence queue, drop, and failed-batch counters.
 
 ## Why not file-as-truth (the omega rule)
 
