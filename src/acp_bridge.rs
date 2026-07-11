@@ -132,6 +132,17 @@ struct BridgeState {
     config_waiters: HashMap<String, Vec<oneshot::Sender<Vec<SessionConfigOption>>>>,
 }
 
+impl BridgeState {
+    fn detach_session(&mut self, session_id: &str) {
+        if let Some(cached) = self.sessions.get_mut(session_id) {
+            cached.attached = false;
+            cached.replaying = false;
+            cached.replay_buffer.clear();
+        }
+        self.config_waiters.remove(session_id);
+    }
+}
+
 #[derive(Clone)]
 struct Bridge {
     provider: Arc<str>,
@@ -526,13 +537,7 @@ impl Bridge {
         // cannot continue invisibly after Zed releases its thread entity.
         self.cancel_prompts(session_id);
 
-        let mut state = self.state.lock();
-        if let Some(cached) = state.sessions.get_mut(session_id) {
-            cached.attached = false;
-            cached.replaying = false;
-            cached.replay_buffer.clear();
-        }
-        state.config_waiters.remove(session_id);
+        self.state.lock().detach_session(session_id);
     }
 
     async fn wait_for_daemon(&self) -> Result<(), String> {
@@ -1578,34 +1583,27 @@ mod tests {
 
     #[test]
     fn close_detaches_session_and_discards_replay_state() {
-        let (command_tx, _command_rx) = mpsc::unbounded_channel();
-        let bridge = Bridge {
-            provider: Arc::from("codex"),
-            base_url: normalized_base_url("http://127.0.0.1:3333").unwrap(),
-            http: reqwest::Client::new(),
-            state: Arc::new(Mutex::new(BridgeState::default())),
-            connected_notify: Arc::new(Notify::new()),
-            command_tx,
-            next_cmid: Arc::new(AtomicU64::new(1)),
-        };
-        bridge.attach("sess-1", true);
-        {
-            let mut state = bridge.state.lock();
-            let cached = state.sessions.get_mut("sess-1").unwrap();
-            cached.replay_buffer.push(Envelope {
-                session_id: "sess-1".to_owned(),
-                seq: 1,
-                cmid: None,
-                event: Event::Lifecycle {
-                    status: Status::Running,
-                    detail: None,
-                },
-            });
-        }
+        let mut state = BridgeState::default();
+        state.sessions.insert(
+            "sess-1".to_owned(),
+            CachedSession {
+                attached: true,
+                replaying: true,
+                replay_buffer: vec![Envelope {
+                    session_id: "sess-1".to_owned(),
+                    seq: 1,
+                    cmid: None,
+                    event: Event::Lifecycle {
+                        status: Status::Running,
+                        detail: None,
+                    },
+                }],
+                ..CachedSession::default()
+            },
+        );
 
-        bridge.detach("sess-1");
+        state.detach_session("sess-1");
 
-        let state = bridge.state.lock();
         let cached = state.sessions.get("sess-1").unwrap();
         assert!(!cached.attached);
         assert!(!cached.replaying);
