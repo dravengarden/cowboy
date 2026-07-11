@@ -90,8 +90,8 @@ export function InfoContent(): React.JSX.Element {
             Turn classifier
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Normal turn endings are classified by one shared Codex Luna session;
-            deterministic stop reasons are handled locally without a model call.
+            Normal turn endings use isolated Codex Luna threads on one shared
+            app-server; deterministic stop reasons need no model call.
           </Typography>
           <InfoRow k="Runtime" v="Codex app-server" />
           <InfoRow k="Model" v="gpt-5.6-luna" />

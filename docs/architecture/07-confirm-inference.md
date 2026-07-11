@@ -11,7 +11,7 @@ flowchart TB
     TE["TurnEnd<br/>(stop reason, final answer)"] --> L1["L1: deterministic<br/>stop-reason rules"]
     L1 --> Q{"certain?"}
     Q -->|yes| V["verdict<br/>(no model call)"]
-    Q -->|"normal EndTurn"| L2["L2: shared Codex app-server<br/>Luna classifier thread"]
+    Q -->|"normal EndTurn"| L2["L2: shared Codex app-server<br/>isolated Luna thread per judgment"]
     L2 --> V
     V --> META["persist and broadcast<br/>awaiting_user / done"]
 ```
@@ -23,16 +23,16 @@ L1 deliberately does not guess from punctuation or provider-specific prose.
 
 ## Shared Codex classifier
 
-`src/inference/codex.rs` owns one long-lived `codex app-server` process and one
-ephemeral `gpt-5.6-luna` thread shared across all cowboy sessions. A single
-bounded worker serializes judgments on that thread. Stable base/developer
-instructions and a calibration example remain at the front; each turn adds only
-a compact JSON envelope containing the final answer. The rolling identical
-prefix lets Codex reuse its prompt cache, unlike starting one CLI session per
-judgment.
+`src/inference/codex.rs` owns one long-lived `codex app-server` process. A single
+bounded worker serializes judgments, but each judgment creates a fresh ephemeral
+`gpt-5.6-luna` thread. Stable base/developer instructions remain at the front and
+each thread adds only one compact JSON envelope containing the final answer.
+Exact-prefix caching therefore remains effective without sharing model-visible
+history between cowboy sessions or consecutive judgments.
 
-The worker starts lazily on the first ambiguous turn, disables memory, exposes
-no tools, uses read-only sandboxing, and requests strict structured output:
+The worker starts lazily on the first ambiguous turn. It calibrates once in a
+disposable thread, disables memory, exposes no dynamic tools or environments,
+uses read-only sandboxing, and requests strict structured output:
 
 ```json
 { "awaiting_user": true, "done": false, "confidence": 0.0, "reason": "<short>" }
@@ -43,7 +43,9 @@ the user prompt, and previous transcript are excluded; oversized answers are
 Unicode-safely capped at 4,096 characters while retaining both their beginning
 and end. A timeout or malformed response discards the app-server and retries
 once with a fresh calibrated thread. Repeated failure is fail-open: cowboy
-clears the provisional hold so the queue cannot become permanently stuck.
+clears the provisional hold so the queue cannot become permanently stuck. The
+app-server rotates periodically to bound any in-process ephemeral-thread state;
+provider-side prompt caching survives that local process rotation.
 
 The Codex executable defaults to `/opt/npm-global/bin/codex` and can be changed
 with `COWBOY_CODEX_COMMAND`. Its installation follows Codex's own npm update

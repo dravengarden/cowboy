@@ -1,10 +1,9 @@
 //! Long-lived Codex app-server classifier.
 //!
-//! One ephemeral Luna thread is shared by every cowboy session. The stable
-//! classifier instructions and calibration turn stay at the front of that
-//! thread; each real judgment appends only a compact JSON data envelope. This
-//! is deliberately a single-worker design: app-server turns on one thread are
-//! serialized, which preserves an exact growing prefix for prompt caching.
+//! One app-server process is shared, but every judgment runs in a fresh
+//! ephemeral Luna thread. Stable instructions stay at the front and the compact
+//! JSON input stays at the end, so provider-side exact-prefix caching remains
+//! effective without exposing one cowboy session's answer to another judgment.
 
 use std::process::Stdio;
 
@@ -16,6 +15,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use super::{CompleteResponse, Usage};
 
 pub const MODEL: &str = "gpt-5.6-luna";
+const MAX_REQUESTS_PER_SERVER: u16 = 128;
 
 const BASE_INSTRUCTIONS: &str =
     "You are a text classifier. Never use tools. Return only the requested structured output.";
@@ -46,6 +46,7 @@ fn output_schema() -> Value {
 pub struct CodexJudge {
     command: String,
     server: Option<AppServer>,
+    requests: u16,
 }
 
 impl CodexJudge {
@@ -54,12 +55,16 @@ impl CodexJudge {
         Self {
             command: command.into(),
             server: None,
+            requests: 0,
         }
     }
 
-    /// Classify one final answer. A broken app-server is discarded so the
-    /// caller's retry starts with a fresh process and calibrated thread.
+    /// Classify one final answer in its own ephemeral thread. A broken or
+    /// periodically rotated app-server is discarded so retries start cleanly.
     pub async fn complete(&mut self, text: &str) -> Result<CompleteResponse> {
+        if self.requests >= MAX_REQUESTS_PER_SERVER {
+            self.reset();
+        }
         if self.server.is_none() {
             self.server = Some(AppServer::start(&self.command).await?);
         }
@@ -69,15 +74,22 @@ impl CodexJudge {
             .expect("server initialized")
             .classify(text)
             .await;
-        if result.is_err() {
-            self.server = None;
+        match result {
+            Ok(response) => {
+                self.requests = self.requests.saturating_add(1);
+                Ok(response)
+            }
+            Err(error) => {
+                self.reset();
+                Err(error)
+            }
         }
-        result
     }
 
     /// Discard a timed-out or otherwise desynchronized app-server session.
     pub fn reset(&mut self) {
         self.server = None;
+        self.requests = 0;
     }
 }
 
@@ -86,7 +98,6 @@ struct AppServer {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
-    thread_id: String,
 }
 
 impl AppServer {
@@ -121,7 +132,6 @@ impl AppServer {
             stdin,
             lines: BufReader::new(stdout).lines(),
             next_id: 1,
-            thread_id: String::new(),
         };
         server.initialize().await?;
         Ok(server)
@@ -137,6 +147,24 @@ impl AppServer {
         )
         .await?;
         self.notify("initialized", json!({})).await?;
+        // Warm the exact static prefix and validate the model/schema path before
+        // a real turn depends on it. classify() creates a disposable thread, so
+        // production judgments never inherit the calibration conversation.
+        let warm = self.classify("全部完成，测试通过，已提交。").await?;
+        let verdict: Value =
+            serde_json::from_str(&warm.text).context("parse calibration verdict")?;
+        if verdict.get("done") != Some(&Value::Bool(true))
+            || verdict.get("awaiting_user") != Some(&Value::Bool(false))
+        {
+            bail!(
+                "Codex judge calibration returned unexpected verdict: {}",
+                warm.text
+            );
+        }
+        Ok(())
+    }
+
+    async fn start_thread(&mut self) -> Result<String> {
         let response = self
             .request(
                 "thread/start",
@@ -156,30 +184,15 @@ impl AppServer {
                 }),
             )
             .await?;
-        response
+        Ok(response
             .pointer("/thread/id")
             .and_then(Value::as_str)
             .context("thread/start response missing thread.id")?
-            .clone_into(&mut self.thread_id);
-
-        // Warm the exact prefix and validate the model/schema path before a real
-        // user turn depends on it. This turn remains in the ephemeral thread.
-        let warm = self.classify("全部完成，测试通过，已提交。").await?;
-        let verdict: Value =
-            serde_json::from_str(&warm.text).context("parse calibration verdict")?;
-        if verdict.get("done") != Some(&Value::Bool(true))
-            || verdict.get("awaiting_user") != Some(&Value::Bool(false))
-        {
-            bail!(
-                "Codex judge calibration returned unexpected verdict: {}",
-                warm.text
-            );
-        }
-        Ok(())
+            .to_owned())
     }
 
     async fn classify(&mut self, text: &str) -> Result<CompleteResponse> {
-        let thread_id = self.thread_id.clone();
+        let thread_id = self.start_thread().await?;
         self.request(
             "turn/start",
             json!({
@@ -326,7 +339,7 @@ mod tests {
     // normal unit tests remain offline; run explicitly before classifier deploys.
     #[tokio::test]
     #[ignore = "requires authenticated /opt Codex and network"]
-    async fn live_shared_thread_classifies_consecutive_answers() {
+    async fn live_independent_threads_classify_consecutive_answers() {
         let mut judge = CodexJudge::new("/opt/npm-global/bin/codex");
         let done = judge
             .complete("修复已经完成，测试全部通过。")
@@ -335,7 +348,7 @@ mod tests {
         let awaiting = judge
             .complete("基础改动已完成；发布到生产环境前，需要你确认是否现在部署。")
             .await
-            .expect("second classification on the same thread");
+            .expect("second classification in a fresh thread");
         eprintln!(
             "first cache hit/miss: {}/{}; second: {}/{}",
             done.usage.cache_hit_tokens,
@@ -345,7 +358,7 @@ mod tests {
         );
         assert!(
             awaiting.usage.cache_hit_tokens > 0,
-            "the second judgment should reuse the rolling thread prefix"
+            "an independent thread should still reuse the stable prompt prefix"
         );
         let done: Value = serde_json::from_str(&done.text).expect("done JSON");
         let awaiting: Value = serde_json::from_str(&awaiting.text).expect("awaiting JSON");
