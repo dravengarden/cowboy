@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "remote-haptics",
-  "description": "Allow the remote cowboy UI (loaded over the tailnet from cowboy.hawk.thundersparrow.top) to invoke native OS haptics. The remote origin needs its OWN core:default for the IPC layer to function at all (a remote capability is independent of the local loader's default capability), plus the explicit haptics allow-* permissions — there is NO haptics:default identifier. All four haptic commands are granted so future web call sites (impact / notification / selection / vibrate) work with no native rebuild. iOS Safari/PWA has no reliable web haptic, so this native path is the only one that buzzes.",
+  "description": "Allow the remote cowboy UI (loaded over the tailnet from cowboy.hawk.thundersparrow.top) to invoke native OS haptics and open rendered markdown links through the OS. The remote origin needs its OWN permissions because it is independent of the local loader capability.",
   "windows": ["main"],
   "remote": {
     "urls": [
@@ -11,6 +11,7 @@
   },
   "permissions": [
     "core:default",
+    "opener:allow-open-url",
     "haptics:allow-impact-feedback",
     "haptics:allow-notification-feedback",
     "haptics:allow-selection-feedback",
