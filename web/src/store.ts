@@ -706,6 +706,16 @@ function connect(): void {
 }
 
 function openSocket(): void {
+  // A reconnect can be triggered by several independent recovery paths
+  // (backoff timer, foreground watchdog, connect guard). Never let them create
+  // parallel sockets: a late close from an older socket would otherwise mark a
+  // newer healthy connection as down and start an endless reconnect fan-out.
+  if (
+    socket?.readyState === WebSocket.OPEN ||
+    socket?.readyState === WebSocket.CONNECTING
+  ) {
+    return;
+  }
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws`);
   socket = ws;
@@ -721,6 +731,14 @@ function openSocket(): void {
   }, 8000);
   ws.onopen = (): void => {
     clearTimeout(connectGuard);
+    if (socket !== ws) {
+      ws.close();
+      return;
+    }
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
     markAlive(); // seed liveness so the watchdog doesn't fire before the snapshot
     startLiveness(ws);
     setState({ ...state, connected: true });
@@ -754,6 +772,7 @@ function openSocket(): void {
     }
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
+    if (socket !== ws) return;
     markAlive(); // any frame (incl. the heartbeat) proves the socket is alive
     try {
       handle(JSON.parse(e.data) as Outbound);
@@ -763,13 +782,20 @@ function openSocket(): void {
   };
   ws.onclose = (): void => {
     clearTimeout(connectGuard);
+    // A superseded socket may close after its replacement has opened. It no
+    // longer owns global connection state and must not raise the red banner or
+    // schedule another reconnect.
+    if (socket !== ws) return;
+    socket = undefined;
     stopLiveness();
     setState({ ...state, connected: false });
     // Raises the red banner past the failure threshold and hands back the
     // exponential-backoff delay to wait before retrying (banner lives in `conn`).
     scheduleReconnect(conn.connectionLost());
   };
-  ws.onerror = (): void => ws.close();
+  ws.onerror = (): void => {
+    if (socket === ws) ws.close();
+  };
 }
 
 /** Returns whether the command actually went out (socket OPEN). The optimistic
