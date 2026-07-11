@@ -81,10 +81,14 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    cowboy's `cmTheme.ts` (`.cm-atomic-highlight`), not the vendored CSS. On
    re-sync, re-add both entries.
 
-5. **Rendered-link callback plumbing** (`inline-preview.ts`): preserve the local
-   `InlinePreviewConfig.onLinkClick` hook and widget callback. Cowboy supplies it
-   from `composerExtensions.ts`, using Tauri opener in the native shell and
-   `window.open` in a browser/PWA.
+5. **Rendered-link handling** (`inline-preview.ts`): preserve both parts of the
+   local link behavior:
+   - bare/standalone autolinks (`URL` nodes whose URL is also the visible text)
+     are never hidden, avoiding an empty rendered line or a link that only
+     appears when its markers are active;
+   - `InlinePreviewConfig.onLinkClick` is threaded through the widget/click
+     handler. Cowboy supplies it from `composerExtensions.ts`, using Tauri opener
+     in the native shell and `window.open` in a browser/PWA.
 
 The CSS contents are unmodified.
 
