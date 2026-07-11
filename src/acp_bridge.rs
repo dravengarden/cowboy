@@ -13,10 +13,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, DeleteSessionRequest, DeleteSessionResponse,
-    Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
+    AgentCapabilities, CancelNotification, ConfigOptionUpdate, DeleteSessionRequest,
+    DeleteSessionResponse, Implementation, InitializeRequest, InitializeResponse,
+    ListSessionsRequest, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, SessionCapabilities, SessionConfigOption,
     SessionDeleteCapabilities, SessionInfo, SessionInfoUpdate, SessionListCapabilities,
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
@@ -830,7 +830,7 @@ impl Bridge {
             Outbound::ConfigOptions {
                 session_id,
                 options,
-            } => self.apply_config_options(&session_id, options),
+            } => self.apply_config_options(&session_id, options, cx)?,
             Outbound::Error {
                 session_id,
                 message,
@@ -880,21 +880,40 @@ impl Bridge {
         cached.reached_start = reached_start;
     }
 
-    fn apply_config_options(&self, session_id: &str, options: serde_json::Value) {
+    fn apply_config_options(
+        &self,
+        session_id: &str,
+        options: serde_json::Value,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<(), agent_client_protocol::Error> {
         let Ok(options) = serde_json::from_value::<Vec<SessionConfigOption>>(options) else {
             tracing::warn!(session = %session_id, "invalid config options from cowboy daemon");
-            return;
+            return Ok(());
         };
-        let waiters = {
+        let (waiters, attached) = {
             let mut state = self.state.lock();
             state
                 .config_options
                 .insert(session_id.to_owned(), options.clone());
-            state.config_waiters.remove(session_id).unwrap_or_default()
+            let attached = state
+                .sessions
+                .get(session_id)
+                .is_some_and(|session| session.attached);
+            (
+                state.config_waiters.remove(session_id).unwrap_or_default(),
+                attached,
+            )
         };
         for waiter in waiters {
             let _ = waiter.send(options.clone());
         }
+        if attached {
+            cx.send_notification(SessionNotification::new(
+                session_id.to_owned(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
+            ))?;
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)] // One lock computes correlation and forwarding actions atomically.
