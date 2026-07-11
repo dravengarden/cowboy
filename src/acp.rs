@@ -58,7 +58,7 @@ use crate::provider::LaunchSpec;
 /// not race it. Too tight would false-trip a slow-but-healthy start into a
 /// pointless respawn; a real stall is caught either way. `run_agent` auto-retries
 /// the spawn once before this ever surfaces as `Crashed`.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 

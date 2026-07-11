@@ -35,12 +35,19 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
+use crate::acp::HANDSHAKE_TIMEOUT;
 use crate::cli::ServeAcpArgs;
 use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 const CONFIG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
-const INITIAL_CONFIG_TIMEOUT: Duration = Duration::from_secs(10);
+// The daemon's POST /api/sessions returns before the provider completes its ACP
+// handshake. Zed decides whether to construct ConfigOptionsView from the
+// session/new response; a later config_option_update can refresh an existing
+// view, but cannot create one when the response contained no config options.
+// Therefore this wait must outlive the provider handshake watchdog. A cold
+// Codex start has been observed taking 23s, well beyond the old 10s timeout.
+const INITIAL_CONFIG_TIMEOUT: Duration = Duration::from_secs(HANDSHAKE_TIMEOUT.as_secs() + 5);
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -686,10 +693,18 @@ impl Bridge {
                 .push(tx);
             rx
         };
-        tokio::time::timeout(INITIAL_CONFIG_TIMEOUT, receiver)
-            .await
-            .ok()
-            .and_then(Result::ok)
+        match tokio::time::timeout(INITIAL_CONFIG_TIMEOUT, receiver).await {
+            Ok(Ok(options)) => Some(options),
+            Ok(Err(_)) => None,
+            Err(_) => {
+                tracing::warn!(
+                    session = %session_id,
+                    timeout_s = INITIAL_CONFIG_TIMEOUT.as_secs(),
+                    "initial config options did not arrive before session/new response"
+                );
+                None
+            }
+        }
     }
 
     fn config_options(&self, session_id: &str) -> Option<Vec<SessionConfigOption>> {
@@ -1538,6 +1553,11 @@ fn send_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_config_wait_outlives_provider_handshake() {
+        assert!(INITIAL_CONFIG_TIMEOUT > HANDSHAKE_TIMEOUT);
+    }
 
     #[test]
     fn stop_reasons_accept_hub_debug_and_wire_names() {
