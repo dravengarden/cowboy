@@ -1181,8 +1181,8 @@ struct HubInner {
     /// in tests), in which case a drain decision is computed but no prompt is
     /// actually sent. See [`DispatchReq`].
     dispatch_tx: Mutex<Option<mpsc::Sender<DispatchReq>>>,
-    /// Hand-off to the single shared Codex classifier worker. All normal
-    /// `EndTurn` judgments serialize through one Luna thread for prefix reuse.
+    /// Hand-off to the single shared Codex classifier worker. Each normal
+    /// `EndTurn` judgment gets an isolated Luna thread on one app-server process.
     judge_tx: Mutex<Option<mpsc::Sender<JudgeReq>>>,
     /// Hand-off to the background scheduler task that fires agent-armed
     /// `ScheduleWakeup`s. Set once at startup via [`Hub::set_scheduler_tx`];
@@ -3696,10 +3696,10 @@ impl Default for Hub {
     }
 }
 
-/// Run the single shared Luna classifier. Keeping one app-server/thread alive
-/// makes every normal turn reuse the same model-visible prefix. A failed or
-/// timed-out request discards that process; the next retry recalibrates a fresh
-/// ephemeral thread. The queue stays bounded by the server-side channel.
+/// Run the single shared Luna classifier worker. The app-server process stays
+/// warm, while each judgment gets an isolated ephemeral thread with an identical
+/// static prefix. A failed or timed-out request discards the process; the next
+/// retry recalibrates it. The queue stays bounded by the server-side channel.
 pub async fn run_judge_worker(hub: Hub, mut rx: mpsc::Receiver<JudgeReq>, command: String) {
     let mut judge = crate::inference::codex::CodexJudge::new(command);
     while let Some(req) = rx.recv().await {

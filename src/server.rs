@@ -159,9 +159,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         tracing::error!("dispatcher exited unexpectedly");
     });
 
-    // One bounded queue feeds one long-lived Codex app-server Luna thread. The
-    // worker starts/calibrates lazily on its first ambiguous normal turn, so a
-    // daemon restart does not block HTTP readiness on an external model call.
+    // One bounded queue feeds one long-lived Codex app-server process; every
+    // judgment uses a fresh ephemeral Luna thread. The worker starts/calibrates
+    // lazily, so daemon readiness never waits on an external model call.
     let (judge_tx, judge_rx) = mpsc::channel::<JudgeReq>(256);
     hub.set_judge_tx(judge_tx);
     let judge_hub = hub.clone();
