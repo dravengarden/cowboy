@@ -7,7 +7,8 @@ type TauriGlobal = {
 };
 
 export function openExternalUrl(url: string): void {
-  const resolved = new URL(url, window.location.href).href;
+  const resolved = safeExternalUrl(url);
+  if (!resolved) return;
   const tauri = (globalThis as { __TAURI__?: TauriGlobal }).__TAURI__;
 
   if (tauri?.opener?.openUrl) {
@@ -20,6 +21,17 @@ export function openExternalUrl(url: string): void {
     return;
   }
   openInBrowser(resolved);
+}
+
+const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+
+export function safeExternalUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function openInBrowser(url: string): void {

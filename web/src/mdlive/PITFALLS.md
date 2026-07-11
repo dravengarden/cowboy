@@ -1,8 +1,8 @@
 # mdlive — iOS / CM6 pitfalls & the Obsidian-alignment contract
 
-> **⚠️ TEARDOWN IN PROGRESS — task `cowboy-composer-drop-pwa-hacks` (branch of
-> the same name).** The whole PWA iOS hack tower documented below has been
-> **REMOVED IN CODE** on that branch: the composer now runs ONE native-shell
+> **RESOLVED ARCHITECTURE CHANGE — task `cowboy-composer-drop-pwa-hacks`.** The
+> whole PWA iOS hack tower documented below is **REMOVED IN CURRENT CODE**: the
+> composer now runs one native-shell-oriented code path in normal flow.
 > code path in normal flow. Specifically gone — `.cm-scroller { translateZ(0) }`
 > (cmTheme), the `compositionstart/update/end/blur` transform+opacity dance
 > (ComposerEditor), `drawSelection()` + `dropCursor()` + the `.cm-composing`
@@ -13,11 +13,9 @@
 > around the PWA's `position: fixed` keyboard lock; the native Tauri shell
 > resizes the WebView instead, so none of it is needed.
 >
-> **These entries are RETAINED as the WHY-history (and the "do NOT re-add" rule)
-> until the Phase-2 on-device matrix confirms the root fix.** Do not re-introduce
-> any hack below. After device verification, the resolved pitfalls (#1d, #2, #2a,
-> #3, #10) get marked "removed at the root." NOT yet device-verified — the IME
-> proof needs a real device, not the Simulator.
+> The resolved entries remain below as WHY-history and a **do not re-add** rule;
+> they are labelled historical rather than described as active inventory. Any
+> later editor change still requires the verification matrix at the end.
 
 > **READ THIS BEFORE TOUCHING the composer editor (`ComposerEditor.tsx`,
 > `composerExtensions.ts`, `FullscreenComposer.tsx`, `ComposerTextarea.tsx`, the
@@ -66,8 +64,8 @@ here says otherwise.
 | `Prec.high(keymap.of(closeBracketsKeymap))` | ✅ | **Backspace deletes an empty pair as a unit** (`*|*`→empty). MUST be `Prec.high` — else cowboy's `defaultKeymap` `deleteCharBackward` wins and orphans the closer. |
 | `markdownKeymap` | ✅ | markdown keybindings (list continuation is owned by inlinePreview's `Prec.highest` Enter, so markdownKeymap's Enter is beaten — fine). |
 | `indentOnInput()` | ✅ | auto-indent. |
-| `drawSelection()` | ✅ (Obsidian) | **CM draws the caret/selection itself.** This is how Obsidian keeps the caret visible on iOS — the *native* caret BLINKS OUT under cowboy's `translateZ(0)` scroller compositing layer ("光标经常消失，尤其上下移动时"). See pitfall #2. It only OVERLAYS the native selection (does not remove it), so the iOS paste menu is unaffected — see pitfall #3. |
-| `dropCursor()` | ✅ | drag-drop caret (Obsidian has it). |
+| `drawSelection()` | ❌ removed | Native caret/selection is required for the iOS Paste/Select callout. The PWA `translateZ(0)` layer that once required a drawn caret is gone. See historical pitfalls #2–#3. |
+| `dropCursor()` | ❌ removed | It was coupled to the drawn-selection workaround and is unnecessary in the native-shell path. |
 | `highlightActiveLine()` | ✅ | active-line bg (atomic-theme styles `.cm-activeLine`). |
 | `search({top:true})` + `searchKeymap` | ✅ | find-in-doc (fullscreen long-form). Needs `@codemirror/search`. |
 | `EditorView.theme({".cm-widgetBuffer":{visibility:"hidden"}})` | ✅ | hide the iOS broken-image dot (pitfall #4). |
@@ -86,23 +84,20 @@ here says otherwise.
    reveals raw markers on the *active line* (`shouldHide = !activeLines.has(lineNum)`)
    so you never compose inside a hidden range; (b) NO contenteditable widgets
    (tables/images excluded); (c) `@codemirror/view ≥ 6.5` (composition fix);
-   (d) cowboy's `compositionstart/end` handler in `ComposerEditor.tsx` drops the
-   `translateZ(0)` scroller transform during composition. **Status: verified on
-   the Simulator (imeSetComposition) + desktop. Re-verify on EVERY editor change.**
+   (d) the current native-shell path has no PWA `translateZ(0)` layer or
+   composition transform dance. **Status: verified with Simplified Chinese
+   Pinyin in compact + fullscreen Simulator paths, plus the earlier native-shell
+   device sign-off. Re-verify on EVERY editor change.**
 
-2. **Caret "经常消失" (blinks out / invisible), esp. when moving up/down.** iOS
+2. **Historical — caret "经常消失" (blinks out / invisible), esp. when moving
+   up/down.** iOS
    WebKit hides the *native* caret when the editor's scroller is a promoted
-   compositing layer (cowboy's `cmTheme` uses `translateZ(0)` to force repaint of
-   the fixed-body content); vertical caret motion is the worst case. **Fix =
-   `drawSelection()`** — CM draws its own `.cm-cursor` positioned div (the atomic
-   theme styles it `borderLeftColor: accent-bright / 2px`), so it is immune to the
-   native-caret compositing glitch. This is exactly what Obsidian does. Verified
-   on the Simulator (2026-06-11, v166): the drawn caret stays visible across
-   arrow-up/down line moves (a single screenshot can still catch the CSS *blink*
-   off-phase — burst-shoot to confirm). **Do NOT "fix" the caret by removing the
-   compositing hack** (it exists so typed text repaints inside `position:fixed`).
+   compositing layer; vertical caret motion was the worst case. The old fix was
+   `drawSelection()`. **Current root fix:** the native shell resizes its WebView,
+   so the fixed-body/`translateZ(0)` repaint layer and drawn caret are both gone.
+   Do not re-add either half of that retired workaround.
 
-   **2a — drawSelection ↔ iOS IME: the drawn caret freezes during pinyin
+   **2a — historical drawSelection ↔ iOS IME: the drawn caret froze during pinyin
    composition (v166 regression, fixed v167).** drawSelection's `hideNativeSelection`
    facet forces `.cm-content`/`.cm-line { caret-color: transparent !important }` and
    draws its own `.cm-cursor`. CM6 deliberately does NOT re-measure mid-composition
@@ -113,11 +108,8 @@ here says otherwise.
    compositionstart/end + blur self-heal) whose CSS reveals the NATIVE caret
    (`caret-color: accent`, it tracks marked text in the same layer) and hides the
    stale drawn `.cm-cursorLayer` for the duration of the composition; restored on
-   commit. The selectors out-specify drawSelection's (0,3,1 > 0,1,0) so they win
-   over its `!important`. This is the holistic verify pitfall #1 demands — caret +
-   IME must be tested TOGETHER (v166 fixed the caret-move case but shipped before
-   IME was checked, hence 2a). Real-IME caret tracking is iOS-WebKit-only; confirm
-   on a device, not the Simulator.
+   commit. That `.cm-composing` workaround was removed together with
+   `drawSelection()`; the current path uses the native caret throughout.
 
 3. **iOS long-press "Paste / Select" menu — `drawSelection()` DOES break it (on a
    real device), and the fix is to go native in the shell.** The CSS-blocker
@@ -127,12 +119,9 @@ here says otherwise.
    — because `drawSelection()`'s `hideNativeSelection` forces
    `caret-color: transparent`, so the menu had **no native caret to anchor to**.
    AXe never caught it (synthetic touch isn't a UIKit gesture), so the earlier
-   "expected-fine" was wrong. **Fix:** in the NATIVE shell, drop `drawSelection()`
-   + `dropCursor()` + the `.cm-composing` dance entirely and use the NATIVE
-   caret/selection (`composerExtensions.ts`, gated on `isNativeShell()`). Safe
-   because the shell has no `translateZ(0)` (pitfall #2's reason for drawSelection
-   is gone there), and it matches Obsidian (native). The PWA keeps drawSelection
-   (it still needs translateZ). Also: `.cm-content { min-height: 100% }` (cmTheme)
+   "expected-fine" was wrong. **Root fix:** drop `drawSelection()` +
+   `dropCursor()` + the `.cm-composing` dance and use the native caret/selection
+   on the single current path. Also: `.cm-content { min-height: 100% }` (cmTheme)
    so the whole editor area is editable — long-pressing the blank space below a
    short note now hits the contenteditable instead of the inert scroller ("长按
    区域小"). Status: **fixed in the native shell (v190); the menu is the OS's, not
@@ -180,8 +169,9 @@ here says otherwise.
    `initialDraftText.current = text` on collapse to carry edits back. NEVER pass live
    state as `value` to either editor.
 
-10. **IME marked text is "swallowed" (invisible) during composition — the two
-    compositing-layer fixes fight each other (fixed v169).** Two coupled iOS hacks
+10. **Historical — IME marked text was "swallowed" during composition because
+    two compositing-layer fixes fought each other (fixed v169, later removed at
+    the root).** Two coupled iOS hacks
     in `ComposerEditor.tsx` / `cmTheme.ts`: (a) `.cm-scroller { transform: translateZ(0) }`
     is a compositing layer that forces WebKit to repaint the editable on every input
     (the `position: fixed` body otherwise leaves typed text invisible until a later
@@ -195,8 +185,9 @@ here says otherwise.
     **scroller's** opacity for one frame to force the repaint (so marked text stays
     visible while `transform: none` keeps it positioned). Nudge the SCROLLER, never the
     contentDOM — contentDOM is the contenteditable host and mutating its style mid-
-    composition risks the IME aborting. The sim can't verify this (no reliable IME);
-    confirm on a device.
+    composition risks the IME aborting. The current native-shell path removed
+    both the transform and opacity dances; this paragraph is history, not an
+    instruction to restore them.
 
 11. **Fullscreen toolbar claimed to be selection-aware but never changed mode.**
     `ComposerEditor` emitted `onSelectionChange`, but `FullscreenComposer` did
