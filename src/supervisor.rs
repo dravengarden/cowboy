@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
 
@@ -25,25 +26,32 @@ pub struct Supervisor {
     counter: AtomicU64,
 }
 
+fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
+    let live_floor = hub
+        .session_list()
+        .iter()
+        .filter_map(|meta| {
+            meta.id
+                .strip_prefix("sess-")
+                .and_then(|suffix| suffix.parse::<u64>().ok())
+        })
+        .max()
+        .map_or(1, |value| value.saturating_add(1));
+    live_floor.max(persistent_floor).max(clock_floor)
+}
+
 impl Supervisor {
     #[must_use]
-    pub fn new(hub: Hub, workspace_root: PathBuf) -> Self {
-        // Seed the id counter past anything Hub::restore already loaded —
-        // otherwise after a daemon restart the first new session gets
-        // `sess-1` again, collides with the persisted row, and every
-        // store-writer INSERT throws PRIMARY KEY conflicts (the in-memory
-        // Hub silently clobbers the old session too). Parse `sess-N`
-        // suffixes; ignore anything that doesn't fit that shape so
-        // future id formats degrade gracefully.
-        let initial = hub
-            .session_list()
-            .iter()
-            .filter_map(|m| {
-                m.id.strip_prefix("sess-")
-                    .and_then(|n| n.parse::<u64>().ok())
-            })
-            .max()
-            .map_or(1, |max| max + 1);
+    pub fn new(hub: Hub, workspace_root: PathBuf, persistent_floor: u64) -> Self {
+        // The wall-clock floor prevents reuse even after old tombstones are
+        // purged. `persistent_floor` covers clock rollback and, critically,
+        // includes soft-deleted rows that Hub::restore does not load.
+        let clock_floor = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+            .unwrap_or(1);
+        let initial = initial_counter(&hub, persistent_floor, clock_floor);
         Self {
             hub,
             workspace_root,
@@ -280,5 +288,27 @@ impl Supervisor {
             }
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_counter_honors_live_persistent_and_clock_floors() {
+        let hub = Hub::new();
+        hub.create_session(
+            "sess-99".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Api,
+            false,
+        );
+
+        assert_eq!(initial_counter(&hub, 50, 25), 100);
+        assert_eq!(initial_counter(&hub, 196, 25), 196);
+        assert_eq!(initial_counter(&hub, 196, 10_000), 10_000);
     }
 }

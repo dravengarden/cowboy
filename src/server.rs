@@ -65,82 +65,91 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // clients can connect. Without --postgres-url the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host that doesn't have the cowboy-private postgres yet.
-    let (hub, store, persistence_health, writer_task, purge_task) = if let Some(url) =
-        args.postgres_url.as_deref()
-    {
-        let store = Store::connect(url, args.data_dir.join("artifacts"))
-            .await
-            .context("connecting postgres")?;
-        store.migrate().await.context("running migrations")?;
-        let (tx, rx) = mpsc::channel::<StoreWrite>(STORE_QUEUE_CAPACITY);
-        let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
-        // Warm restore — sessions + events come back exactly as the daemon
-        // left them, so on a fresh process every WS client's first snapshot
-        // is correct.
-        let loaded = store.load_all().await.context("loading persisted state")?;
-        let restored: Vec<_> = loaded
-            .into_iter()
-            .map(|ls| RestoredSession {
-                meta: ls.meta,
-                log: ls.events,
-                event_count: ls.event_count,
-                reached_start: ls.reached_start,
-                next_seq: ls.next_seq,
-                queue: ls.queue,
-                drafts: ls.drafts,
-                judge_runs: ls.judge_runs,
-            })
-            .collect();
-        let restored_count = restored.len();
-        // Seed the global settings (auto-resume default + continuation template)
-        // BEFORE restore, so restore can compute each session's effective
-        // auto-resume (override ?? default) and enqueue a continuation for the
-        // opted-in interrupted ones.
-        match store.load_settings().await {
-            Ok(entries) => hub.load_settings(entries),
-            Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
-        }
-        hub.restore(restored);
-        tracing::info!(
-            postgres = url,
-            restored = restored_count,
-            "persistence wired",
-        );
-        // Background DB writer: dequeues StoreWrite intents and applies them.
-        // Errors are logged but don't bring the daemon down — the in-memory
-        // state remains authoritative for the current process.
-        runtime_health.set_store_writer(true);
-        let writer_health = Arc::clone(&runtime_health);
-        let writer_store = store.clone();
-        let writer_persistence_health = Arc::clone(&health);
-        let writer_shutdown = shutdown_rx.clone();
-        let writer_task = tokio::spawn(async move {
-            run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown).await;
-            writer_health.set_store_writer(false);
-        });
-        // Background sweeper: hard-delete sessions soft-deleted past the
-        // retention window, reclaiming their event storage.
-        runtime_health.set_purge_sweeper(true);
-        let purge_health = Arc::clone(&runtime_health);
-        let purge_store = store.clone();
-        let purge_task = tokio::spawn(async move {
-            run_purge_sweeper(purge_store).await;
-            purge_health.set_purge_sweeper(false);
-            tracing::error!("purge sweeper exited unexpectedly");
-        });
-        (
-            hub,
-            Some(store),
-            Some(health),
-            Some(writer_task),
-            Some(purge_task),
-        )
-    } else {
-        tracing::info!("no --postgres-url: running in-memory only");
-        (Hub::new(), None, None, None, None)
-    };
-    let supervisor = Arc::new(Supervisor::new(hub.clone(), args.workspace_root.clone()));
+    let (hub, store, persistence_health, writer_task, purge_task, session_id_floor) =
+        if let Some(url) = args.postgres_url.as_deref() {
+            let store = Store::connect(url, args.data_dir.join("artifacts"))
+                .await
+                .context("connecting postgres")?;
+            store.migrate().await.context("running migrations")?;
+            let session_id_floor = store
+                .next_session_number()
+                .await
+                .context("seeding session id counter")?;
+            let (tx, rx) = mpsc::channel::<StoreWrite>(STORE_QUEUE_CAPACITY);
+            let health = Arc::new(PersistenceHealth::default());
+            let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
+            // Warm restore — sessions + events come back exactly as the daemon
+            // left them, so on a fresh process every WS client's first snapshot
+            // is correct.
+            let loaded = store.load_all().await.context("loading persisted state")?;
+            let restored: Vec<_> = loaded
+                .into_iter()
+                .map(|ls| RestoredSession {
+                    meta: ls.meta,
+                    log: ls.events,
+                    event_count: ls.event_count,
+                    reached_start: ls.reached_start,
+                    next_seq: ls.next_seq,
+                    queue: ls.queue,
+                    drafts: ls.drafts,
+                    judge_runs: ls.judge_runs,
+                })
+                .collect();
+            let restored_count = restored.len();
+            // Seed the global settings (auto-resume default + continuation template)
+            // BEFORE restore, so restore can compute each session's effective
+            // auto-resume (override ?? default) and enqueue a continuation for the
+            // opted-in interrupted ones.
+            match store.load_settings().await {
+                Ok(entries) => hub.load_settings(entries),
+                Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
+            }
+            hub.restore(restored);
+            tracing::info!(
+                postgres = url,
+                restored = restored_count,
+                "persistence wired",
+            );
+            // Background DB writer: dequeues StoreWrite intents and applies them.
+            // Errors are logged but don't bring the daemon down — the in-memory
+            // state remains authoritative for the current process.
+            runtime_health.set_store_writer(true);
+            let writer_health = Arc::clone(&runtime_health);
+            let writer_store = store.clone();
+            let writer_persistence_health = Arc::clone(&health);
+            let writer_shutdown = shutdown_rx.clone();
+            let writer_task = tokio::spawn(async move {
+                run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown)
+                    .await;
+                writer_health.set_store_writer(false);
+            });
+            // Background sweeper: hard-delete sessions soft-deleted past the
+            // retention window, reclaiming their event storage.
+            runtime_health.set_purge_sweeper(true);
+            let purge_health = Arc::clone(&runtime_health);
+            let purge_store = store.clone();
+            let purge_task = tokio::spawn(async move {
+                run_purge_sweeper(purge_store).await;
+                purge_health.set_purge_sweeper(false);
+                tracing::error!("purge sweeper exited unexpectedly");
+            });
+            (
+                hub,
+                Some(store),
+                Some(health),
+                Some(writer_task),
+                Some(purge_task),
+                session_id_floor,
+            )
+        } else {
+            tracing::info!("no --postgres-url: running in-memory only");
+            (Hub::new(), None, None, None, None, 1)
+        };
+    let supervisor = Arc::new(Supervisor::new(
+        hub.clone(),
+        args.workspace_root.clone(),
+        session_id_floor,
+    ));
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
     // call the Supervisor (which holds the Hub) — that cycle is why the queue

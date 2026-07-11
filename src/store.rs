@@ -128,6 +128,25 @@ impl Store {
         Ok(())
     }
 
+    /// Return the first numeric `sess-N` id not yet used by any durable row,
+    /// including soft-deleted rows that [`Self::load_all`] intentionally hides.
+    ///
+    /// Seeding only from live/restored sessions can reuse a tombstoned id after
+    /// restart. The in-memory Hub then clobbers the new session while Postgres
+    /// rejects its INSERT, and later metadata updates corrupt the tombstone.
+    pub async fn next_session_number(&self) -> Result<u64> {
+        let max: Option<i64> = sqlx::query_scalar(
+            "SELECT max((substring(id FROM 6))::bigint) FROM sessions \
+             WHERE id ~ '^sess-[0-9]+$'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("SELECT max session id")?;
+        Ok(max
+            .and_then(|value| u64::try_from(value).ok())
+            .map_or(1, |value| value.saturating_add(1)))
+    }
+
     /// Load every session with only its recent event tail. Older history remains
     /// in Postgres and is fetched by [`Self::history_page`].
     ///
