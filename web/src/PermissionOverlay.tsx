@@ -70,6 +70,10 @@ export function PermissionOverlay({
         pb: 1,
         pointerEvents: "none",
         zIndex: 3,
+        fontFamily: "var(--cowboy-reading-font, inherit)",
+        "& .MuiTypography-root, & .MuiButton-root": {
+          fontFamily: "inherit",
+        },
       }}
     >
       {expanded ? (
@@ -110,7 +114,7 @@ export function PermissionOverlay({
               py: 0.75,
               borderRadius: 1,
               bgcolor: "action.hover",
-              fontFamily: "ui-monospace, SFMono-Regular, monospace",
+              fontFamily: "inherit",
               fontSize: 13,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
