@@ -1,8 +1,8 @@
 # cowboy — design
 
-> Status: design draft. No code yet. This document is the source of truth for
-> the architecture; it consolidates the decisions taken during design and is
-> meant to be read top-to-bottom before any scaffolding.
+> Status: original design record. The implemented architecture is documented
+> under `docs/architecture/`; where this draft differs, code and those living
+> architecture documents are authoritative.
 
 ## 1. Goal
 
@@ -111,8 +111,8 @@ trait AgentSession {
 | Provider | ACP on-ramp | Resume |
 |---|---|---|
 | **OpenCode** | native built-in ACP server (`opencode acp`) — first class | yes (own session store) |
-| **Claude Code** | via adapter (`claude-code-acp`) | yes (own session store) |
-| **Codex** | via `zed-industries/codex-acp` (open-sourced, usable standalone) | TBD per adapter |
+| **Claude Code** | via `@agentclientprotocol/claude-agent-acp` | discovered from ACP capabilities |
+| **Codex** | via `@agentclientprotocol/codex-acp` | discovered from ACP capabilities |
 
 Start with **OpenCode** (cleanest, native ACP) to prove the spine, then add
 Claude Code and Codex.
@@ -389,8 +389,8 @@ the wrapper config.
   `sessionUpdate` variants) rather than lenient. Action items: prefer a crate
   version that models `usage_update` when available, and/or add a lenient
   sidecar parse that captures unknown notification variants as `Opaque` events
-  (§5) so cost/usage reaches the UI. codex provider not yet verified
-  (`codex-acp` binary not installed).
+  (§5) so cost/usage reaches the UI. Both maintained adapters are deployed on
+  hawk through preinstalled binaries.
 
 ## 12. Open risks
 

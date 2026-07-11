@@ -15,8 +15,9 @@ codex over ACP, normalizes their streams (messages, thinking, tool calls,
 plan, permissions), and fans them out over one WebSocket to all clients
 equally; the React/MUI web UI (embedded in the binary, responsive for
 iPad/iPhone) lists sessions, shows a live transcript, sends prompts, and
-answers permission requests. See **[design.md](design.md)** for the full
-architecture (it is the source of truth).
+answers permission requests. See **[docs/architecture/](docs/architecture/)**
+for the implementation architecture; [design.md](design.md) records the
+original design direction.
 
 Auth/token pairing remains deliberately out of process (the deployment VPN is
 the boundary). Postgres persistence, restart resume, history pagination, queue /
@@ -39,8 +40,8 @@ incrementally paged transcript, and a CodeMirror 6 composer with vim support.
   sqlx/Postgres, clap, rust-embed.
 - **Frontend**: React 19, MUI 7, Vite 7,
   TypeScript (strictest); built by Deno, linted by oxlint.
-- **Providers**: pluggable (trait + registry), all over ACP; OpenCode first
-  (native ACP), then Claude Code and Codex.
+- **Providers**: pluggable (trait + registry), all over ACP; Claude Code and
+  Codex use maintained ACP adapters, while Gemini uses its native ACP mode.
 - **Storage**: service-private Postgres (sessions, canonical events, settings, secrets).
 - **Deploy**: systemd, `StateDirectory=cowboy` → `/var/lib/cowboy/`.
 
@@ -61,8 +62,10 @@ other surface is a *client* of it:
 | Web UI / phone creates a session | ✅ — daemon assigns id, broadcasts; every WS client sees it appear |
 | Either client deletes a session | ✅ to WS clients (badge disappears) |
 
-Each session in the Web UI carries an **origin** chip (`Web` / `API`) so
-you can see who opened what. Per-session **delete** button is in the sidebar.
+Each session in the UI carries a source chip (`Cowboy` / `External`) so you can
+distinguish sessions opened in Cowboy's own UI from sessions opened by an ACP
+client or another external caller. Per-session **delete** button is in the
+sidebar.
 
 ## Quick start
 

@@ -11,9 +11,9 @@ needed, hand-coded confirm-detection rules — the core never changes.
 
 | Provider | Launch | ACP on-ramp |
 |---|---|---|
-| `claude-code` | `npx @agentclientprotocol/claude-agent-acp` | Anthropic's ACP adapter |
-| `codex` | `npx @zed-industries/codex-acp` | adapter over the Codex CLI |
-| `gemini` | `npx @google/gemini-cli --acp` | Gemini's native ACP mode |
+| `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp` | Claude Code ACP adapter |
+| `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
+| `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
 
 Each entry is a **`LaunchSpec`**: `id` + `command` + `args`. That's the whole
 contract a provider must satisfy to start; everything downstream
