@@ -58,6 +58,15 @@ pub struct ServeArgs {
     /// `cowboy`; that's the production URL.
     #[arg(long, env = "COWBOY_POSTGRES_URL")]
     pub postgres_url: Option<String>,
+
+    /// Codex CLI used by the shared Luna classifier app-server. The self-managed
+    /// `/opt` install follows Codex's own update channel on hawk.
+    #[arg(
+        long,
+        env = "COWBOY_CODEX_COMMAND",
+        default_value = "/opt/npm-global/bin/codex"
+    )]
+    pub codex_command: String,
 }
 
 impl Cli {

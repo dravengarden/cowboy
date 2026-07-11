@@ -32,7 +32,7 @@ pub struct SkillMeta {
     pub title: &'static str,
     pub description: &'static str,
     /// The stable prompt prefix (the per-turn text is appended at call time, so
-    /// this prefix is what DeepSeek's cache keys on).
+    /// this prefix is kept stable for the classifier session's prompt cache).
     pub prompt_template: &'static str,
     /// How the raw LLM output maps onto the typed `Verdict`.
     pub extract: &'static str,

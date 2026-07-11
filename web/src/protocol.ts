@@ -195,8 +195,6 @@ export type Outbound =
   // Global key-value settings (auto-resume default flag + continuation template).
   // Sent on connect + re-broadcast on every edit. See store.ts `settings`.
   | { type: "settings"; settings: Record<string, unknown> }
-  // Inference-provider configs (model + key_set — NEVER the key). Connect + edits.
-  | { type: "inference_config"; providers: InferenceProviderView[] }
   // The static skill registry (prompt + extract), sent once on connect.
   | { type: "skills"; skills: SkillView[] }
   // The confirm-detect judge's full result for a turn (verdict + raw I/O for the
@@ -206,29 +204,7 @@ export type Outbound =
   // inspector widget (long-press the turn-status pill). Sent per session on
   // connect + re-broadcast on every new run / per-item delete / clear.
   | { type: "judge_history"; session_id: string; runs: JudgeRun[] }
-  // Result of a dev probe (Info sheet "Test"): text + cache token counts, or error.
-  | {
-    type: "inference_probe_result";
-    provider: string;
-    ok: boolean;
-    text: string;
-    cache_hit: number;
-    cache_miss: number;
-    error?: string;
-  }
   | { type: "error"; session_id?: string; message: string };
-
-/** One inference provider's config as the daemon exposes it — `key_set` says
- *  whether an API key exists, but the key itself never reaches the client. */
-export interface InferenceProviderView {
-  provider: string;
-  model: string;
-  params: unknown;
-  key_set: boolean;
-  /** Selectable models (id + human label) the daemon offers for this provider —
-   *  the model dropdown renders from this, never hardcoding ids (Step 18). */
-  models: { id: string; label: string }[];
-}
 
 /** A registered skill as the daemon exposes it — the prompt template + extraction
  *  rule are rendered verbatim in the Info sheet so they're inspectable. */
@@ -380,11 +356,6 @@ export type Inbound =
   // Overlay actions for interrupted / errored turns.
   | { type: "resume_turn"; session_id: string }
   | { type: "retry_turn"; session_id: string }
-  | { type: "set_setting"; key: string; value: unknown }
-  // Inference provider config (model + params) + API key (separate; key never
-  // echoed back). See store.ts `inferenceConfig`.
-  | { type: "set_inference_config"; provider: string; model: string; params?: unknown }
-  | { type: "set_inference_secret"; provider: string; api_key: string }
-  | { type: "inference_probe"; provider: string; prompt?: string };
+  | { type: "set_setting"; key: string; value: unknown };
 
 export const PROVIDERS = ["claude-code", "codex", "gemini"] as const;

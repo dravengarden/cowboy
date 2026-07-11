@@ -63,8 +63,7 @@ queue / awaiting-user hold. Beyond those:
 - queue / draft ops — `RemoveQueued`, `EditQueued`, `ClearQueue`,
   `RequestSendQueued`, `ForcePushQueued`, `QueuedToDraft`, `AddDraft`,
   `EditDraft`, `ActivateDraft`, `MoveDraft`, … (all routed through the sync arbiter)
-- config — `SetConfigOption`, `SetSetting`, `SetInferenceConfig`,
-  `SetInferenceSecret`, `InferenceProbe`
+- config — `SetConfigOption`, `SetSetting`
 - ordering — `ReorderSessions`, `ReorderQueue`, `ReorderDrafts`
 - `Sync { state, id, name, args }` — the generic optimistic-sync mutation
 

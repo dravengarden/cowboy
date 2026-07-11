@@ -29,7 +29,6 @@ import type {
   DraftSchedule,
   Envelope,
   Inbound,
-  InferenceProviderView,
   JudgeResult,
   JudgeRun,
   Outbound,
@@ -86,16 +85,6 @@ export interface QueuedMessage {
   schedule?: DraftSchedule;
 }
 
-/** Result of a dev inference probe (Info sheet "Test"). */
-export interface ProbeResult {
-  provider: string;
-  ok: boolean;
-  text: string;
-  cacheHit: number;
-  cacheMiss: number;
-  error?: string;
-}
-
 export interface State {
   connected: boolean;
   sessions: SessionMeta[];
@@ -140,9 +129,6 @@ export interface State {
   // from the `settings` broadcast. Drives the Settings UI + the per-session badge
   // (effective auto-resume = session override ?? this default).
   settings: Record<string, unknown>;
-  // Inference-provider configs (model + key_set, NEVER the key) from the
-  // `inference_config` broadcast. Drives the Info sheet's provider config.
-  inferenceConfig: InferenceProviderView[];
   // The static skill registry (prompt + extract) from the `skills` broadcast.
   skills: SkillView[];
   // Latest confirm-detect judge result per session (drives the overlay's raw-data
@@ -153,12 +139,6 @@ export interface State {
   // turn-status pill). Keyed by session id; populated by the `judge_history`
   // broadcast (connect seed + every add/delete/clear).
   judgeRuns: Record<string, JudgeRun[]>;
-  // Last dev-probe result (Info sheet "Test"), or undefined.
-  lastProbe: ProbeResult | undefined;
-  // A manual "send now" awaiting user confirmation because the judge can't run
-  // (no key). The modal it drives lets the user send anyway (the LLM-call
-  // fallback). `undefined` = no pending confirmation.
-  confirmSend: { sessionId: string; id: string } | undefined;
 }
 
 let errorSeq = 0;
@@ -177,12 +157,9 @@ let state: State = {
   optimisticMessages: new Map(),
   titleOverrides: {},
   settings: {},
-  inferenceConfig: [],
   skills: [],
   judgeResults: {},
   judgeRuns: {},
-  lastProbe: undefined,
-  confirmSend: undefined,
 };
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
@@ -578,10 +555,6 @@ function handle(msg: Outbound): void {
       setState({ ...state, settings: msg.settings });
       break;
     }
-    case "inference_config": {
-      setState({ ...state, inferenceConfig: msg.providers });
-      break;
-    }
     case "skills": {
       setState({ ...state, skills: msg.skills });
       break;
@@ -608,20 +581,6 @@ function handle(msg: Outbound): void {
     }
     case "judge_history": {
       setState({ ...state, judgeRuns: { ...state.judgeRuns, [msg.session_id]: msg.runs } });
-      break;
-    }
-    case "inference_probe_result": {
-      setState({
-        ...state,
-        lastProbe: {
-          provider: msg.provider,
-          ok: msg.ok,
-          text: msg.text,
-          cacheHit: msg.cache_hit,
-          cacheMiss: msg.cache_miss,
-          ...(msg.error !== undefined && { error: msg.error }),
-        },
-      });
       break;
     }
     case "error": {
@@ -978,11 +937,6 @@ export function setSetting(key: string, value: unknown): void {
   send({ type: "set_setting", key, value });
 }
 
-/** All inference-provider configs (model + key_set, never the key). */
-export function useInferenceConfig(): InferenceProviderView[] {
-  return useStoreSelector((snapshot) => snapshot.inferenceConfig);
-}
-
 /** The registered skills (prompt + extract), for the Info sheet viewer. */
 export function useSkills(): SkillView[] {
   return useStoreSelector((snapshot) => snapshot.skills);
@@ -992,37 +946,6 @@ export function useSkills(): SkillView[] {
  *  true on (re)open — drives the turn-status pill's "Reconnecting…" state. */
 export function useConnected(): boolean {
   return useStoreSelector((snapshot) => snapshot.connected);
-}
-
-/** Set a provider's model/params (optimistic local update + send). */
-export function setInferenceConfig(provider: string, model: string, params?: unknown): void {
-  const next = state.inferenceConfig.some((p) => p.provider === provider)
-    ? state.inferenceConfig.map((p) => (p.provider === provider ? { ...p, model } : p))
-    : [...state.inferenceConfig, { provider, model, params: params ?? {}, key_set: false, models: [] }];
-  setState({ ...state, inferenceConfig: next });
-  send({ type: "set_inference_config", provider, model, params });
-}
-
-/** Set a provider's API key (optimistic `key_set` flip + send; the key never
- *  comes back from the daemon). */
-export function setInferenceSecret(provider: string, apiKey: string): void {
-  const next = state.inferenceConfig.some((p) => p.provider === provider)
-    ? state.inferenceConfig.map((p) => (p.provider === provider ? { ...p, key_set: true } : p))
-    // Optimistic stub until the daemon broadcasts the real view (with its models).
-    : [...state.inferenceConfig, { provider, model: "", params: {}, key_set: true, models: [] }];
-  setState({ ...state, inferenceConfig: next });
-  send({ type: "set_inference_secret", provider, api_key: apiKey });
-}
-
-/** Last dev-probe result (Info sheet "Test"). */
-export function useLastProbe(): ProbeResult | undefined {
-  return useStoreSelector((snapshot) => snapshot.lastProbe);
-}
-
-/** Fire a dev probe against a provider — the daemon calls it once and broadcasts
- *  an `inference_probe_result` (text + cache tokens, or error). */
-export function runInferenceProbe(provider: string, prompt?: string): void {
-  send({ type: "inference_probe", provider, ...(prompt !== undefined && { prompt }) });
 }
 
 /** Set a session's auto-resume override (`null` = inherit the global default).
@@ -1435,42 +1358,10 @@ export function frontPrompt(sessionId: string, text: string, attachments: Attach
   }
 }
 
-// Sessions where the user chose "don't ask again" for the no-judge send confirm.
-const sendConfirmSuppressed = new Set<string>();
-
-function judgeKeySet(): boolean {
-  return state.inferenceConfig.some((c) => c.provider === "deepseek" && c.key_set);
-}
-
 // "Send now" on a queued row: the daemon sends it if it can take a turn this
-// instant, otherwise moves it to the front to drain next. When the judge can't
-// run (no key) we can't tell if the agent is waiting, so confirm first — the
-// always-available manual fallback, with eyes open. The daemon drain bypasses the
-// no-key hold for this explicit send.
+// instant, otherwise moves it to the front to drain next.
 export function requestSendQueued(sessionId: string, id: string): void {
-  if (!judgeKeySet() && !sendConfirmSuppressed.has(sessionId)) {
-    setState({ ...state, confirmSend: { sessionId, id } });
-    return;
-  }
   send({ type: "request_send_queued", session_id: sessionId, id });
-}
-
-/** The pending no-judge send awaiting confirmation (drives the modal). */
-export function usePendingSend(): { sessionId: string; id: string } | undefined {
-  return useStoreSelector((snapshot) => snapshot.confirmSend);
-}
-
-/** Confirm the pending manual send; `dontAskAgain` suppresses it for the session. */
-export function confirmPendingSend(dontAskAgain: boolean): void {
-  const p = state.confirmSend;
-  if (!p) return;
-  if (dontAskAgain) sendConfirmSuppressed.add(p.sessionId);
-  send({ type: "request_send_queued", session_id: p.sessionId, id: p.id });
-  setState({ ...state, confirmSend: undefined });
-}
-
-export function cancelPendingSend(): void {
-  setState({ ...state, confirmSend: undefined });
 }
 
 // "Force push" a queued row: interrupt the running turn and run this prompt

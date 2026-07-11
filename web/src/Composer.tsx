@@ -128,7 +128,6 @@ import {
   setQueueEditing,
   submitPrompt,
   unscheduleDraft,
-  useInferenceConfig,
   useStoreSelector,
 } from "./store";
 import { ScheduleSheet } from "./ScheduleSheet";
@@ -590,12 +589,10 @@ function ComposeBar(
 export function Composer({
   sessionId,
   status,
-  onOpenInfo,
   variant = "overlay",
 }: {
   sessionId: string;
   status: Status;
-  onOpenInfo: () => void;
   /// "overlay" (default): the composer floats over the transcript at the bottom
   /// (single-column / mobile). "column": the desktop two-column layout — the
   /// composer is a full-height left column (queued + drafts scroll at the top,
@@ -675,10 +672,6 @@ export function Composer({
   // in the always-visible sidebar, so the sheet — and this lookup — only
   // matters on the compact tier.
   const session = sessions.find((s) => s.id === sessionId);
-  const inferenceConfig = useInferenceConfig();
-  const hasJudgeKey = inferenceConfig.some((c) =>
-    c.provider === "deepseek" && c.key_set
-  );
   const theme = useTheme();
   // Touch tier collapses the agent config into a single Tune button — tapping
   // it opens a BottomSheet with the session info + every config option in one
@@ -1086,7 +1079,7 @@ export function Composer({
           the turn-status pill (a blocking decision beats a status), and the two
           share the slot + frosted material — so they're mutually exclusive here,
           never overlapping. Otherwise the unified turn-status overlay decides its
-          own visibility (awaiting / done / interrupted / error / no-key, hidden
+          own visibility (awaiting / done / interrupted / error, hidden
           while working). */
       }
       {pendingPermission ? (
@@ -1101,9 +1094,7 @@ export function Composer({
           judging={session?.judging ?? false}
           paused={session?.paused ?? false}
           queue={queue}
-          hasKey={hasJudgeKey}
           onFocusComposer={(): void => editorRef.current?.focus()}
-          onConfigure={onOpenInfo}
         />
       )}
       <ScheduleSheet

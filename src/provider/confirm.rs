@@ -1,5 +1,5 @@
 //! L1 confirm-detection: deterministic, no-LLM turn-end classification per agent
-//! provider (design §B, the cheap-certain layer before the DeepSeek L2 judge).
+//! provider (the cheap-certain layer before the Codex L2 judge).
 //!
 //! The one signal that's reliable across providers is the ACP **stop reason**:
 //! any non-`EndTurn` stop (cancelled, token/turn limit, refusal, error) means the

@@ -49,6 +49,7 @@ Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
 | `0010_system_session` | `system` flag for machine-driven, view-only sessions |
 | `0011_scheduled_wakeups` | persisted agent wakeups |
 | `0012_compact_event_log` | drops the duplicate event index, removes transient telemetry, folds legacy tool updates into their initial row |
+| `0013_drop_inference` | drops obsolete external-provider config and API-secret tables |
 
 The writer UPSERTs consecutive message/thought chunks into their first sequence
 row, folds tool updates into the initial call, and stores only the sequence
@@ -66,8 +67,7 @@ count + queue/drafts/judge runs in one restore. Mutations mirror the `StoreWrite
 variants: `insert_session`, batched event UPSERT, `update_status`, `update_verdict`, `update_title`,
 `update_agent_session_id`, `delete_session`, `update_pending`,
 `update_session_order`, `update_auto_resume`, `update_judge_runs`, plus settings
-(`load_settings` / `put_setting`) and inference (`load/put_inference_config`,
-`load/put_inference_secret`). `purge_deleted()` hard-deletes soft-deleted rows.
+(`load_settings` / `put_setting`). `purge_deleted()` hard-deletes soft-deleted rows.
 
 ## NUL-byte stripping
 

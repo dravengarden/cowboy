@@ -6,7 +6,6 @@ import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 import type { Status } from "./protocol";
 import {
   dismissAwaiting,
-  requestSendQueued,
   resumeTurn,
   retryTurn,
   setPaused,
@@ -23,18 +22,17 @@ type Kind =
   | "paused"
   | "done"
   | "interrupted"
-  | "error"
-  | "no-key";
+  | "error";
 type PaletteKey = "primary" | "success" | "warning" | "error" | "info";
 
 // The unified "turn status" overlay (replaces the old AwaitingBar): one floating
 // frosted pill above the composer that surfaces a NON-RUNNING turn-end state and
 // its actions. Hidden while the agent is working (busy) or on a fresh session —
 // it only appears when something needs your attention. Colour-coded per the locked
-// palette: awaiting=purple, done=green, interrupted=amber, error=red, no-key=blue.
+// palette: awaiting=purple, done=green, interrupted=amber, error=red.
 //
 // `awaiting`/`done` come from the confirm-detect judge; `interrupted`/`error` from
-// the session status; `no-key` when the judge can't run and a queue is held.
+// the session status.
 
 function deriveKind(args: {
   offline: boolean;
@@ -44,10 +42,8 @@ function deriveKind(args: {
   awaitingUser: boolean;
   done: boolean;
   paused: boolean;
-  queueLen: number;
-  hasKey: boolean;
 }): Kind | null {
-  const { offline, status, working, judging, awaitingUser, done, paused, queueLen, hasKey } = args;
+  const { offline, status, working, judging, awaitingUser, done, paused } = args;
   // Connection loss outranks everything: while the socket is down the `status` is
   // stale (we can't know the real turn state), so surface "Reconnecting…" instead —
   // even mid-turn — so you're never silently typing into a dead socket.
@@ -72,7 +68,6 @@ function deriveKind(args: {
   // -held session shows how to release it, not just "Task complete".
   if (paused) return "paused";
   if (done) return "done";
-  if (!hasKey && queueLen > 0) return "no-key"; // queue held, can't judge
   return null;
 }
 
@@ -84,7 +79,6 @@ const KIND_META: Record<Kind, { color: PaletteKey; label: string }> = {
   interrupted: { color: "warning", label: "Turn interrupted" },
   paused: { color: "warning", label: "Queue paused" },
   error: { color: "error", label: "Agent error" },
-  "no-key": { color: "info", label: "Queue held · no judge key" },
 };
 
 export function TurnStatusOverlay({
@@ -96,9 +90,7 @@ export function TurnStatusOverlay({
   done,
   paused,
   queue,
-  hasKey,
   onFocusComposer,
-  onConfigure,
 }: {
   sessionId: string;
   status: Status;
@@ -111,9 +103,7 @@ export function TurnStatusOverlay({
   done: boolean;
   paused: boolean;
   queue: { id: string }[];
-  hasKey: boolean;
   onFocusComposer: () => void;
-  onConfigure: () => void;
 }): React.JSX.Element | null {
   // Connection loss → a debounced "Reconnecting…" pill. The 600ms debounce keeps a
   // sub-second blip (the common case on flaky cellular) from flashing the pill; a
@@ -137,8 +127,6 @@ export function TurnStatusOverlay({
     awaitingUser,
     done,
     paused,
-    queueLen: queue.length,
-    hasKey,
   });
   const judge = useJudgeResult(sessionId);
   const [hidden, setHidden] = useState(false);
@@ -244,13 +232,6 @@ export function TurnStatusOverlay({
     action = { label: "Resume", onClick: () => setPaused(sessionId, false) };
   } else if (kind === "error") {
     action = { label: "Retry", onClick: () => retryTurn(sessionId) };
-  } else if (kind === "no-key") {
-    action = held
-      ? {
-        label: "Send",
-        onClick: () => requestSendQueued(sessionId, queue[0]?.id ?? ""),
-      }
-      : { label: "Set key", onClick: onConfigure };
   }
   // Symmetric padding (centred text) when there's no trailing control; otherwise
   // tighten the right so the button sits in.

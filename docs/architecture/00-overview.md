@@ -65,7 +65,7 @@ survives daemon restarts by reviving agents from persisted state.
 | Providers | `src/provider/*` | launch specs + per-provider confirm rules |
 | Server | `src/server.rs` | axum REST + WS + embedded SPA |
 | Storage | `src/store.rs`, `migrations/*` | Postgres write-behind, restore |
-| Confirm | `src/skills/`, `src/inference/` | turn-end L1/L2 judge, DeepSeek |
+| Confirm | `src/skills/`, `src/inference/` | deterministic L1 + shared Codex Luna L2 |
 | Files | `src/files.rs` | gitignore-aware `@` file picker |
 | Frontend | `web/src/*` | React SPA, embedded via `rust-embed` |
 

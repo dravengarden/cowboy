@@ -32,7 +32,7 @@ use agent_client_protocol::schema::v1::ContentBlock;
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::core::{
-    DispatchReq, Envelope, Hub, Inbound, Outbound, PersistenceHealth, RestoredSession,
+    DispatchReq, Envelope, Hub, Inbound, JudgeReq, Outbound, PersistenceHealth, RestoredSession,
     SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::persistence::EventReducer;
@@ -101,16 +101,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             Ok(entries) => hub.load_settings(entries),
             Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
         }
-        // Inference provider configs + keys (the judge reads the key from memory).
-        let inf_cfg = store.load_inference_config().await.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading inference config");
-            Vec::new()
-        });
-        let inf_keys = store.load_inference_secrets().await.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading inference secrets");
-            Vec::new()
-        });
-        hub.load_inference(inf_cfg, inf_keys);
         hub.restore(restored);
         tracing::info!(
             postgres = url,
@@ -167,6 +157,18 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         run_dispatcher(dispatcher_hub, dispatcher_supervisor, dispatch_rx).await;
         dispatcher_health.set_dispatcher(false);
         tracing::error!("dispatcher exited unexpectedly");
+    });
+
+    // One bounded queue feeds one long-lived Codex app-server Luna thread. The
+    // worker starts/calibrates lazily on its first ambiguous normal turn, so a
+    // daemon restart does not block HTTP readiness on an external model call.
+    let (judge_tx, judge_rx) = mpsc::channel::<JudgeReq>(256);
+    hub.set_judge_tx(judge_tx);
+    let judge_hub = hub.clone();
+    let judge_command = args.codex_command.clone();
+    let judge_task = tokio::spawn(async move {
+        crate::core::run_judge_worker(judge_hub, judge_rx, judge_command).await;
+        tracing::error!("Codex judge worker exited unexpectedly");
     });
 
     // Honor agent `ScheduleWakeup`s: fires a wake-prompt (via the same dispatch
@@ -252,6 +254,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     )
     .await;
     dispatcher_task.abort();
+    judge_task.abort();
     scheduler_task.abort();
     if let Some(task) = purge_task {
         task.abort();
@@ -419,14 +422,6 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             store.update_auto_resume(session_id, *value).await
         }
         StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
-        StoreWrite::PutInferenceConfig {
-            provider,
-            model,
-            params,
-        } => store.put_inference_config(provider, model, params).await,
-        StoreWrite::PutInferenceSecret { provider, api_key } => {
-            store.put_inference_secret(provider, api_key).await
-        }
         StoreWrite::UpsertWakeup {
             session_id,
             fire_at_ms,
@@ -1257,18 +1252,6 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     {
         return;
     }
-    // Seed inference-provider config (model + key_set, never the key).
-    if send_json(
-        &mut sink,
-        &Outbound::InferenceConfig {
-            providers: state.hub.inference_snapshot(),
-        },
-    )
-    .await
-    .is_err()
-    {
-        return;
-    }
     // Seed every optimistic-sync state (@shared-utils/sync): one absolute
     // snapshot patch per state mutated this lifetime, so each of this client's
     // sync clients starts at the arbiter's version and folds any live overrides.
@@ -1499,10 +1482,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         Inbound::NewSession { .. }
         | Inbound::ReorderSessions { .. }
         | Inbound::Sync { .. }
-        | Inbound::SetSetting { .. }
-        | Inbound::SetInferenceConfig { .. }
-        | Inbound::SetInferenceSecret { .. }
-        | Inbound::InferenceProbe { .. } => None,
+        | Inbound::SetSetting { .. } => None,
     };
     // A view-only system session rejects user-driven turns; only the backend
     // wake endpoint (POST /api/sessions/{id}/prompt) drives it.
@@ -1630,28 +1610,6 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         }
         Inbound::SetSetting { key, value } => {
             state.hub.set_setting(key, value);
-            Ok(())
-        }
-        Inbound::SetInferenceConfig {
-            provider,
-            model,
-            params,
-        } => {
-            state.hub.set_inference_config(provider, model, params);
-            Ok(())
-        }
-        Inbound::SetInferenceSecret { provider, api_key } => {
-            state.hub.set_inference_secret(provider, api_key);
-            Ok(())
-        }
-        Inbound::InferenceProbe { provider, prompt } => {
-            // The probe is a network call — run it off the command path and
-            // broadcast the result when it returns (the judge will be async too).
-            let hub = state.hub.clone();
-            tokio::spawn(async move {
-                let result = inference_probe(&hub, &provider, &prompt).await;
-                hub.broadcast(result);
-            });
             Ok(())
         }
         Inbound::SetConfigOption {
@@ -1920,62 +1878,4 @@ where
 {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     sink.send(Message::Text(text.into())).await.map_err(|_| ())
-}
-
-/// DEV probe: call the inference provider once and shape the result message
-/// (text + cache token counts, or an error). Proves the key/model/HTTP wiring.
-async fn inference_probe(
-    hub: &crate::core::Hub,
-    provider: &str,
-    prompt: &str,
-) -> crate::core::Outbound {
-    use crate::core::Outbound::InferenceProbeResult;
-    use crate::inference::{
-        deepseek::DeepSeek, CompleteRequest, InferenceProvider as _, Message as IMsg,
-    };
-    let err = |e: String| InferenceProbeResult {
-        provider: provider.to_owned(),
-        ok: false,
-        text: String::new(),
-        cache_hit: 0,
-        cache_miss: 0,
-        error: Some(e),
-    };
-    if provider != "deepseek" {
-        return err(format!("unknown provider {provider}"));
-    }
-    let Some(key) = hub.inference_key(provider) else {
-        return err("no API key set".to_owned());
-    };
-    let model = hub
-        .inference_model(provider)
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| crate::inference::deepseek::DEFAULT_MODEL.to_owned());
-    let ds = DeepSeek::new(key, model);
-    let prompt = if prompt.is_empty() {
-        "Reply with a JSON object {\"ok\": true}."
-    } else {
-        prompt
-    };
-    let req = CompleteRequest::json_judge(vec![IMsg::user(prompt)], 64);
-    match ds.complete(req).await {
-        Ok(r) => {
-            tracing::info!(
-                target: "cowboy::inference",
-                provider,
-                cache_hit = r.usage.cache_hit_tokens,
-                cache_miss = r.usage.cache_miss_tokens,
-                "inference probe ok"
-            );
-            InferenceProbeResult {
-                provider: provider.to_owned(),
-                ok: true,
-                text: r.text,
-                cache_hit: r.usage.cache_hit_tokens,
-                cache_miss: r.usage.cache_miss_tokens,
-                error: None,
-            }
-        }
-        Err(e) => err(e.to_string()),
-    }
 }

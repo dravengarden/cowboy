@@ -64,7 +64,7 @@ fn inbound_tags_match_typescript() {
 fn outbound_tags_match_typescript() {
     assert_eq!(
         rust_tags("Outbound"),
-        typescript_tags("Outbound", "export interface InferenceProviderView")
+        typescript_tags("Outbound", "export interface SkillView")
     );
 }
 

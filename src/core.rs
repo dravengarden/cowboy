@@ -196,6 +196,101 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
     (prompt, partial)
 }
 
+/// Extract only the final agent answer for L2 classification. Codex labels its
+/// commentary/final phases explicitly; other ACP providers fall back to the
+/// last message-id group. Long answers retain both the opening result and the
+/// closing question, where the useful classification signals usually live.
+fn last_judge_text(log: &[Envelope]) -> String {
+    #[derive(Clone)]
+    struct Chunk {
+        id: Option<String>,
+        final_answer: bool,
+        text: String,
+    }
+
+    let last_user = log.iter().rposition(|env| {
+        matches!(
+            &env.event,
+            Event::Update { update }
+                if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
+                    == Some("user_message_chunk")
+        )
+    });
+    let Some(start) = last_user else {
+        return String::new();
+    };
+    let chunks: Vec<Chunk> = log[start..]
+        .iter()
+        .filter_map(|env| {
+            let Event::Update { update } = &env.event else {
+                return None;
+            };
+            if update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
+                != Some("agent_message_chunk")
+            {
+                return None;
+            }
+            Some(Chunk {
+                id: update
+                    .get("messageId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                final_answer: update
+                    .pointer("/_meta/codex/phase")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("final_answer"),
+                text: update
+                    .pointer("/content/text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            })
+        })
+        .collect();
+    let selected = chunks
+        .iter()
+        .rev()
+        .find(|c| c.final_answer)
+        .or_else(|| chunks.last());
+    let Some(selected) = selected else {
+        return String::new();
+    };
+    let mut text = if let Some(id) = selected.id.as_deref() {
+        chunks
+            .iter()
+            .filter(|c| c.id.as_deref() == Some(id) && (!selected.final_answer || c.final_answer))
+            .map(|c| c.text.as_str())
+            .collect::<String>()
+    } else {
+        selected.text.clone()
+    };
+    text.retain(|c| c != '\0');
+    truncate_judge_text(text.trim())
+}
+
+fn truncate_judge_text(text: &str) -> String {
+    const MAX: usize = 4_096;
+    const HEAD: usize = 1_536;
+    const MARKER: &str = "\n[…中间已截断…]\n";
+    const MARKER_CHARS: usize = 11;
+    let count = text.chars().count();
+    if count <= MAX {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(HEAD).collect();
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(MAX - HEAD - MARKER_CHARS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}{MARKER}{tail}")
+}
+
 /// The ACP stop-reason string from the most recent `TurnEnd` event, if any. Read
 /// by the confirm-detect L1 (a non-`EndTurn` stop ⇒ the turn was cut off, not a
 /// question). `acp.rs` pushes `TurnEnd` to the log just before flipping the
@@ -364,6 +459,14 @@ pub struct DispatchReq {
     pub cmid: Option<String>,
 }
 
+/// One ambiguous normal turn handed to the shared Codex classifier worker.
+#[derive(Debug, Clone)]
+pub struct JudgeReq {
+    pub session_id: String,
+    pub seq: u64,
+    pub final_text: String,
+}
+
 /// One session's full persisted state, handed to [`Hub::restore`] at startup.
 pub struct RestoredSession {
     pub meta: SessionMeta,
@@ -391,7 +494,7 @@ pub struct JudgeRun {
     pub id: String,
     /// Unix-ms when the verdict landed.
     pub at: i64,
-    /// "L1" (deterministic stop-reason) or "L2" (the DeepSeek judge).
+    /// "L1" (deterministic stop-reason) or "L2" (the Codex judge).
     pub layer: String,
     pub awaiting_user: bool,
     pub done: bool,
@@ -539,25 +642,6 @@ pub enum Inbound {
     SetSetting {
         key: String,
         value: serde_json::Value,
-    },
-    /// Set an inference provider's non-secret config (model + params). Persisted
-    /// + broadcast as [`Outbound::InferenceConfig`].
-    SetInferenceConfig {
-        provider: String,
-        model: String,
-        #[serde(default)]
-        params: serde_json::Value,
-    },
-    /// Set an inference provider's API key. Persisted to a SEPARATE table; the
-    /// broadcast only flips `key_set` — the key itself never leaves the daemon.
-    SetInferenceSecret { provider: String, api_key: String },
-    /// DEV probe: call the inference provider once with `prompt` and broadcast an
-    /// [`Outbound::InferenceProbeResult`] (text + cache token counts). Proves the
-    /// key/model/HTTP wiring end to end.
-    InferenceProbe {
-        provider: String,
-        #[serde(default)]
-        prompt: String,
     },
     /// Generic optimistic-sync mutation (@shared-utils/sync). The client applies
     /// it locally for an INSTANT update, then sends it here; the daemon (the
@@ -807,9 +891,6 @@ pub enum Outbound {
     Settings {
         settings: std::collections::HashMap<String, serde_json::Value>,
     },
-    /// The inference-provider configs (model + params + whether a key is set —
-    /// NEVER the key). Sent on connect + re-broadcast on every edit.
-    InferenceConfig { providers: Vec<InferenceView> },
     /// The registered skills (id/title/description + the prompt template + the
     /// extraction rule), so the Info sheet can render each skill's prompt verbatim.
     /// Static — sent once on connect.
@@ -819,7 +900,7 @@ pub enum Outbound {
     /// judge; the client keeps the latest per session. NOT persisted.
     JudgeResult {
         session_id: String,
-        /// "L1" (deterministic stop-reason) or "L2" (the DeepSeek judge).
+        /// "L1" (deterministic stop-reason) or "L2" (the Codex judge).
         layer: String,
         awaiting_user: bool,
         done: bool,
@@ -842,17 +923,6 @@ pub enum Outbound {
     JudgeHistory {
         session_id: String,
         runs: Vec<JudgeRun>,
-    },
-    /// Result of an [`Inbound::InferenceProbe`] — surfaced in the Info sheet.
-    InferenceProbeResult {
-        provider: String,
-        ok: bool,
-        #[serde(default)]
-        text: String,
-        cache_hit: u32,
-        cache_miss: u32,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
     },
     /// An error to surface to the user (bad command, unknown session, ...).
     /// Broadcast to every connected client — cowboy's "one shared progress"
@@ -923,17 +993,6 @@ pub enum StoreWrite {
     PutSetting {
         key: String,
         value: serde_json::Value,
-    },
-    /// Upsert an inference provider's non-secret config.
-    PutInferenceConfig {
-        provider: String,
-        model: String,
-        params: serde_json::Value,
-    },
-    /// Upsert an inference provider's API key (separate secrets table).
-    PutInferenceSecret {
-        provider: String,
-        api_key: String,
     },
     /// Upsert a session's pending `ScheduleWakeup` (migration 0011) so an armed
     /// wakeup survives a daemon restart and still fires.
@@ -1054,41 +1113,6 @@ impl StoreSink {
     }
 }
 
-/// Client-facing view of one inference provider's config — carries `key_set`
-/// (whether an API key exists) but NEVER the key itself.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct InferenceView {
-    pub provider: String,
-    pub model: String,
-    pub params: serde_json::Value,
-    pub key_set: bool,
-    /// Selectable models (id + human label) for this provider — the UI renders the
-    /// model dropdown from THIS, never hardcoding ids (Step 18). Sourced from the
-    /// provider's `ModelSource`; empty for a provider with no known list.
-    pub models: Vec<ModelOption>,
-}
-
-/// One selectable model for a provider's dropdown (the client-facing form of a
-/// `ModelSource::Static` entry).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ModelOption {
-    pub id: String,
-    pub label: String,
-}
-
-/// The provider's selectable models as wire options. Reads the provider's
-/// `ModelSource` (dynamic by design — ids churn); empty for an unknown provider.
-/// The `/models`-endpoint hook lives on `ModelSource` for when a provider needs it.
-fn provider_models(provider: &str) -> Vec<ModelOption> {
-    let src = match provider {
-        "deepseek" => crate::inference::deepseek::DeepSeek::model_list(),
-        _ => Vec::new(),
-    };
-    src.into_iter()
-        .map(|(id, label)| ModelOption { id, label })
-        .collect()
-}
-
 /// Client-facing, owned view of a registered skill (the static `SkillMeta` has
 /// `&'static str` fields, which `Outbound`'s `Deserialize` can't target — so we
 /// snapshot it into owned strings for the wire).
@@ -1099,15 +1123,6 @@ pub struct SkillView {
     pub description: String,
     pub prompt_template: String,
     pub extract: String,
-}
-
-/// In-memory inference entry: the non-secret config PLUS the API key (read by the
-/// judge call, never broadcast).
-#[derive(Debug, Clone, Default)]
-struct InferenceEntry {
-    model: String,
-    params: serde_json::Value,
-    api_key: Option<String>,
 }
 
 /// Live arbiter state for the title-sync channel (the @shared-utils/sync
@@ -1157,6 +1172,9 @@ struct HubInner {
     /// in tests), in which case a drain decision is computed but no prompt is
     /// actually sent. See [`DispatchReq`].
     dispatch_tx: Mutex<Option<mpsc::Sender<DispatchReq>>>,
+    /// Hand-off to the single shared Codex classifier worker. All normal
+    /// `EndTurn` judgments serialize through one Luna thread for prefix reuse.
+    judge_tx: Mutex<Option<mpsc::Sender<JudgeReq>>>,
     /// Hand-off to the background scheduler task that fires agent-armed
     /// `ScheduleWakeup`s. Set once at startup via [`Hub::set_scheduler_tx`];
     /// `None` until then (and in tests) ⇒ wakeups are simply not honored.
@@ -1173,10 +1191,6 @@ struct HubInner {
     /// template), mirrored from the `settings` table on restore. Authoritative
     /// in-memory; every edit also write-behinds via `StoreWrite::PutSetting`.
     settings: Mutex<HashMap<String, serde_json::Value>>,
-    /// In-memory inference-provider configs keyed by provider id (model/params +
-    /// the API key the judge reads). Seeded from the DB on restore; every edit
-    /// write-behinds + re-broadcasts (key_set only).
-    inference: Mutex<HashMap<String, InferenceEntry>>,
 }
 
 impl Hub {
@@ -1203,11 +1217,11 @@ impl Hub {
                 tx,
                 store_tx,
                 dispatch_tx: Mutex::new(None),
+                judge_tx: Mutex::new(None),
                 scheduler_tx: Mutex::new(None),
                 sync: Mutex::new(HashMap::new()),
                 next_qid: AtomicU64::new(1),
                 settings: Mutex::new(HashMap::new()),
-                inference: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -1217,6 +1231,11 @@ impl Hub {
     /// client connects. Until set, drains compute but dispatch nothing.
     pub fn set_dispatch_tx(&self, tx: mpsc::Sender<DispatchReq>) {
         *self.inner.dispatch_tx.lock() = Some(tx);
+    }
+
+    /// Wire the shared Codex classifier queue. Called once at server startup.
+    pub fn set_judge_tx(&self, tx: mpsc::Sender<JudgeReq>) {
+        *self.inner.judge_tx.lock() = Some(tx);
     }
 
     /// Wire the background scheduler's hand-off channel (mirrors
@@ -1723,37 +1742,6 @@ impl Hub {
         }
     }
 
-    /// Snapshot of inference configs for the connect-time push + broadcast —
-    /// `key_set` only, NEVER the key. Sorted by provider for a stable UI order.
-    #[must_use]
-    pub fn inference_snapshot(&self) -> Vec<InferenceView> {
-        let m = self.inner.inference.lock();
-        let mut v: Vec<InferenceView> = m
-            .iter()
-            .map(|(p, e)| InferenceView {
-                provider: p.clone(),
-                model: e.model.clone(),
-                params: e.params.clone(),
-                key_set: e.api_key.is_some(),
-                models: provider_models(p),
-            })
-            .collect();
-        // Always surface deepseek (the judge provider) even before it's configured,
-        // so the Info sheet can render its model dropdown + the "set a key" state on
-        // a fresh install. `key_set:false` until a key is stored.
-        if !v.iter().any(|x| x.provider == "deepseek") {
-            v.push(InferenceView {
-                provider: "deepseek".to_owned(),
-                model: crate::inference::deepseek::DEFAULT_MODEL.to_owned(),
-                params: serde_json::json!({}),
-                key_set: false,
-                models: provider_models("deepseek"),
-            });
-        }
-        v.sort_by(|a, b| a.provider.cmp(&b.provider));
-        v
-    }
-
     /// Snapshot the static skill registry into owned wire views (Info sheet).
     #[must_use]
     pub fn skills_snapshot(&self) -> Vec<SkillView> {
@@ -1767,88 +1755,6 @@ impl Hub {
                 extract: m.extract.to_owned(),
             })
             .collect()
-    }
-
-    /// Set a provider's non-secret config; persist + broadcast.
-    pub fn set_inference_config(&self, provider: String, model: String, params: serde_json::Value) {
-        {
-            let mut m = self.inner.inference.lock();
-            let e = m.entry(provider.clone()).or_default();
-            e.model = model.clone();
-            e.params = params.clone();
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::PutInferenceConfig {
-                provider,
-                model,
-                params,
-            });
-        }
-        let _ = self.inner.tx.send(Outbound::InferenceConfig {
-            providers: self.inference_snapshot(),
-        });
-    }
-
-    /// Set a provider's API key; persist (separate table) + broadcast (key_set only).
-    pub fn set_inference_secret(&self, provider: String, api_key: String) {
-        {
-            let mut m = self.inner.inference.lock();
-            m.entry(provider.clone()).or_default().api_key = Some(api_key.clone());
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::PutInferenceSecret { provider, api_key });
-        }
-        let _ = self.inner.tx.send(Outbound::InferenceConfig {
-            providers: self.inference_snapshot(),
-        });
-    }
-
-    /// Seed inference state from the persisted tables (restore only).
-    pub fn load_inference(
-        &self,
-        configs: Vec<(String, String, serde_json::Value)>,
-        keys: Vec<(String, String)>,
-    ) {
-        let mut m = self.inner.inference.lock();
-        for (provider, model, params) in configs {
-            let e = m.entry(provider).or_default();
-            e.model = model;
-            e.params = params;
-        }
-        for (provider, api_key) in keys {
-            m.entry(provider).or_default().api_key = Some(api_key);
-        }
-    }
-
-    /// The API key for `provider` — INTERNAL (the judge call). Never broadcast.
-    #[must_use]
-    pub fn inference_key(&self, provider: &str) -> Option<String> {
-        self.inner
-            .inference
-            .lock()
-            .get(provider)
-            .and_then(|e| e.api_key.clone())
-    }
-
-    /// The configured model for `provider` (the caller applies a default if unset).
-    #[must_use]
-    pub fn inference_model(&self, provider: &str) -> Option<String> {
-        self.inner
-            .inference
-            .lock()
-            .get(provider)
-            .map(|e| e.model.clone())
-    }
-
-    /// Whether the confirm-detect judge can run — i.e. the `deepseek` provider has
-    /// an API key. When false, the drain holds everything (§J no-token block).
-    #[must_use]
-    pub fn confirm_key_present(&self) -> bool {
-        self.inner
-            .inference
-            .lock()
-            .get("deepseek")
-            .is_some_and(|e| e.api_key.is_some())
     }
 
     /// Whether a session is currently holding for "awaiting user".
@@ -1966,17 +1872,41 @@ impl Hub {
         }
     }
 
+    fn judge_is_current(&self, session_id: &str, seq: u64) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.judge_seq == seq)
+    }
+
+    fn set_judging_if_current(&self, session_id: &str, seq: u64, judging: bool) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.judge_seq == seq && s.meta.judging != judging => {
+                    s.meta.judging = judging;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
     /// Apply a confirm-detect verdict under the `judge_seq` stale-guard: set the
     /// hold to `v.awaiting_user` only if no newer turn-end has superseded `seq`.
     /// Broadcasts and resumes the drain when the hold clears.
-    fn apply_verdict(&self, session_id: &str, seq: u64, v: &crate::skills::Verdict) {
+    fn apply_verdict(&self, session_id: &str, seq: u64, v: &crate::skills::Verdict) -> bool {
         let resume = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
             if s.judge_seq != seq {
-                return; // a newer turn-end already re-judged — drop this verdict
+                return false; // a newer turn-end already re-judged — drop this verdict
             }
             let resume = s.meta.awaiting_user && !v.awaiting_user;
             s.meta.awaiting_user = v.awaiting_user;
@@ -1988,6 +1918,7 @@ impl Hub {
         if resume {
             self.try_drain(session_id);
         }
+        true
     }
 
     /// Turn-end hook: classify the agent's last message with the confirm-detect
@@ -1997,8 +1928,8 @@ impl Hub {
     /// Recall-first (design §I): before the async judge, set `awaiting_user=true`
     /// synchronously so the drain can't release a queued prompt as a wrong answer.
     /// The verdict is applied under the `judge_seq` guard — `false` clears + drains,
-    /// `true`/error keeps the hold (continuity over a wrong drain). `done` is logged
-    /// for a future "task complete" notification hook.
+    /// `true` keeps the hold; a repeated classifier failure clears it so the queue
+    /// cannot deadlock. `done` is logged for completion notifications.
     fn judge_turn_end(&self, session_id: &str) {
         let (final_text, seq, provider, stop_reason) = {
             let mut sessions = self.inner.sessions.lock();
@@ -2007,7 +1938,7 @@ impl Hub {
             };
             s.judge_seq = s.judge_seq.wrapping_add(1);
             (
-                last_turn_texts(&s.log).1,
+                last_judge_text(&s.log),
                 s.judge_seq,
                 s.meta.provider.clone(),
                 last_stop_reason(&s.log),
@@ -2040,7 +1971,7 @@ impl Hub {
                     latency_ms: 0,
                 },
             );
-            self.apply_verdict(session_id, seq, &v);
+            let _ = self.apply_verdict(session_id, seq, &v);
             return;
         }
         // Nothing the agent said this turn → nothing to judge; don't hold.
@@ -2052,112 +1983,55 @@ impl Hub {
         // pill shows "Judging…" rather than the provisional "Waiting for your reply".
         self.set_awaiting(session_id, true);
         self.set_judging(session_id, true);
-        let Some(key) = self.inference_key("deepseek") else {
-            self.set_judging(session_id, false); // never dispatched → not judging
-            return; // confirm_key_present() gated us in, but be defensive
+        let req = JudgeReq {
+            session_id: session_id.to_owned(),
+            seq,
+            final_text,
         };
-        let model = self
-            .inference_model("deepseek")
-            .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| crate::inference::deepseek::DEFAULT_MODEL.to_owned());
-        let hub = self.clone();
-        let sid = session_id.to_owned();
-        tokio::spawn(async move {
-            let ds = crate::inference::deepseek::DeepSeek::new(key, model.clone());
-            // The confirm-detect backend (deepseek, via the proxy) fails several
-            // times a day — a transient `request failed`, or an unparseable
-            // `parse verdict`. Retry a couple of times with a short backoff before
-            // giving up, so a blip doesn't strand the turn.
-            let mut last_err = String::new();
-            for attempt in 0u32..3 {
-                if attempt > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * u64::from(attempt)))
-                        .await;
-                }
-                let started = std::time::Instant::now();
-                match crate::skills::confirm::classify(&provider, Some("EndTurn"), &ds, &final_text)
-                    .await
-                {
-                    Ok(o) => {
-                        let latency_ms =
-                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        let (hit, miss) = o
-                            .usage
-                            .as_ref()
-                            .map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
-                        tracing::info!(
-                            session = %sid, awaiting = o.verdict.awaiting_user, done = o.verdict.done,
-                            confidence = o.verdict.confidence, reason = %o.verdict.reason, latency_ms, attempt,
-                            "confirm-detect verdict"
-                        );
-                        let at = now_ms();
-                        hub.emit_and_record_judge(
-                            &sid,
-                            JudgeRun {
-                                id: format!("{at}-{seq}"),
-                                at,
-                                layer: o.layer.to_owned(),
-                                awaiting_user: o.verdict.awaiting_user,
-                                done: o.verdict.done,
-                                confidence: o.verdict.confidence,
-                                reason: o.verdict.reason.clone(),
-                                model: model.clone(),
-                                input: final_text.clone(),
-                                output: o.raw_output,
-                                cache_hit: hit,
-                                cache_miss: miss,
-                                latency_ms,
-                            },
-                        );
-                        hub.apply_verdict(&sid, seq, &o.verdict);
-                        hub.set_judging(&sid, false);
-                        return;
-                    }
-                    Err(e) => {
-                        last_err = e.to_string();
-                        tracing::warn!(session = %sid, error = %last_err, attempt, "confirm-detect judge attempt failed");
-                    }
-                }
-            }
-            // Every attempt failed. Do NOT leave the turn stranded at the provisional
-            // "awaiting" hold — that renders a PERMANENT, false "Waiting for your
-            // reply" (the confirmed bug: a transient judge outage pinned the pill
-            // with no verdict behind it). Fail OPEN to a neutral verdict (neither
-            // awaiting nor done) so the pill reads honest idle and the queue drains,
-            // and record the failure so the judge inspector shows why there's no
-            // real verdict. Losing the queue-hold on a rare judge outage is strictly
-            // better than a session that's stuck "Waiting" until the user intervenes.
-            tracing::warn!(session = %sid, error = %last_err, "confirm-detect judge failed after retries; clearing provisional hold");
-            let at = now_ms();
-            let reason = format!("judge failed: {last_err}");
-            hub.emit_and_record_judge(
-                &sid,
-                JudgeRun {
-                    id: format!("{at}-{seq}"),
-                    at,
-                    layer: "L2".to_owned(),
-                    awaiting_user: false,
-                    done: false,
-                    confidence: 0.0,
-                    reason: reason.clone(),
-                    model,
-                    input: final_text,
-                    output: String::new(),
-                    cache_hit: 0,
-                    cache_miss: 0,
-                    latency_ms: 0,
-                },
-            );
-            hub.apply_verdict(
-                &sid,
-                seq,
-                &crate::skills::Verdict {
-                    reason,
-                    ..Default::default()
-                },
-            );
-            hub.set_judging(&sid, false);
-        });
+        let sent = self
+            .inner
+            .judge_tx
+            .lock()
+            .as_ref()
+            .is_some_and(|tx| tx.try_send(req.clone()).is_ok());
+        if !sent {
+            self.finish_judge_failure(req, "classifier worker unavailable");
+        }
+    }
+
+    fn finish_judge_failure(&self, req: JudgeReq, error: &str) {
+        if !self.judge_is_current(&req.session_id, req.seq) {
+            return;
+        }
+        tracing::warn!(session = %req.session_id, %error, "confirm-detect judge failed; clearing provisional hold");
+        let at = now_ms();
+        let reason = format!("judge failed: {error}");
+        let verdict = crate::skills::Verdict {
+            reason: reason.clone(),
+            ..Default::default()
+        };
+        if !self.apply_verdict(&req.session_id, req.seq, &verdict) {
+            return;
+        }
+        self.emit_and_record_judge(
+            &req.session_id,
+            JudgeRun {
+                id: format!("{at}-{}", req.seq),
+                at,
+                layer: "L2".to_owned(),
+                awaiting_user: false,
+                done: false,
+                confidence: 0.0,
+                reason: reason.clone(),
+                model: crate::inference::codex::MODEL.to_owned(),
+                input: req.final_text,
+                output: String::new(),
+                cache_hit: 0,
+                cache_miss: 0,
+                latency_ms: 0,
+            },
+        );
+        self.set_judging_if_current(&req.session_id, req.seq, false);
     }
 
     /// Broadcast a judge run for the LIVE overlay (`JudgeResult`, latest-per-
@@ -2730,12 +2604,10 @@ impl Hub {
         self.push(session_id, Event::Lifecycle { status, detail });
         self.broadcast_sessions();
         // On a turn-end, judge whether the agent is awaiting the user BEFORE the
-        // drain can release the next queued prompt. Recall-first: the judge sets a
-        // provisional hold synchronously, so try_drain below is a no-op until the
-        // async verdict either clears it (drains) or confirms it (stays held). With
-        // no judge key configured, drain_head already blocks wholesale (§J), so we
-        // skip the judge entirely.
-        if turn_ended && self.confirm_key_present() {
+        // drain can release the next queued prompt. The judge sets a provisional
+        // hold synchronously, so try_drain below is a no-op until the shared Codex
+        // worker either clears it (drains) or confirms it (stays held).
+        if turn_ended {
             self.judge_turn_end(session_id);
         }
         // A turn-end / death may make the session drainable — try the next
@@ -2926,17 +2798,9 @@ impl Hub {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
-        // The two LLM-gated holds below apply ONLY to the automatic drain. A manual
-        // send (an explicit "send this now") is the user-triggered fallback that
-        // must ALWAYS get through — even with no judge key or while the agent is
-        // judged "awaiting" — so the queue can never be permanently trapped.
-        if !manual {
-            // No inference key → we can't judge whether the agent is asking the
-            // user, so never AUTO-drain (§J). The user can still send manually.
-            if !self.confirm_key_present() {
-                return;
-            }
-        }
+        // The awaiting-user hold below applies only to automatic drain. An
+        // explicit manual send always gets through, so a queue cannot remain
+        // trapped behind a stale classifier verdict.
         let req = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -3277,8 +3141,7 @@ impl Hub {
             }
         }
         self.emit_pending(session_id);
-        // Explicit user "send now" → manual drain, bypassing the no-key / awaiting
-        // holds (the always-available fallback when the judge can't run).
+        // Explicit user "send now" → manual drain, bypassing the awaiting hold.
         self.drain_head(session_id, true, true);
     }
 
@@ -3800,9 +3663,155 @@ impl Default for Hub {
     }
 }
 
+/// Run the single shared Luna classifier. Keeping one app-server/thread alive
+/// makes every normal turn reuse the same model-visible prefix. A failed or
+/// timed-out request discards that process; the next retry recalibrates a fresh
+/// ephemeral thread. The queue stays bounded by the server-side channel.
+pub async fn run_judge_worker(hub: Hub, mut rx: mpsc::Receiver<JudgeReq>, command: String) {
+    let mut judge = crate::inference::codex::CodexJudge::new(command);
+    while let Some(req) = rx.recv().await {
+        let mut last_error = String::new();
+        let mut completed = false;
+        for attempt in 0..2u32 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            let started = std::time::Instant::now();
+            let call = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                judge.complete(&req.final_text),
+            )
+            .await;
+            let response = match call {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => {
+                    last_error = error.to_string();
+                    tracing::warn!(session = %req.session_id, %last_error, attempt, "Codex judge attempt failed");
+                    continue;
+                }
+                Err(_) => {
+                    "Codex judge timed out after 30s".clone_into(&mut last_error);
+                    judge.reset();
+                    tracing::warn!(session = %req.session_id, attempt, "Codex judge attempt timed out");
+                    continue;
+                }
+            };
+            match crate::skills::confirm::classify_response(response) {
+                Ok(outcome) => {
+                    if !hub.judge_is_current(&req.session_id, req.seq) {
+                        completed = true;
+                        break;
+                    }
+                    let latency_ms =
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let (hit, miss) = outcome
+                        .usage
+                        .as_ref()
+                        .map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
+                    tracing::info!(
+                        session = %req.session_id,
+                        awaiting = outcome.verdict.awaiting_user,
+                        done = outcome.verdict.done,
+                        confidence = outcome.verdict.confidence,
+                        reason = %outcome.verdict.reason,
+                        latency_ms,
+                        cache_hit = hit,
+                        cache_miss = miss,
+                        attempt,
+                        "confirm-detect verdict"
+                    );
+                    let at = now_ms();
+                    if !hub.apply_verdict(&req.session_id, req.seq, &outcome.verdict) {
+                        completed = true;
+                        break;
+                    }
+                    hub.emit_and_record_judge(
+                        &req.session_id,
+                        JudgeRun {
+                            id: format!("{at}-{}", req.seq),
+                            at,
+                            layer: outcome.layer.to_owned(),
+                            awaiting_user: outcome.verdict.awaiting_user,
+                            done: outcome.verdict.done,
+                            confidence: outcome.verdict.confidence,
+                            reason: outcome.verdict.reason.clone(),
+                            model: crate::inference::codex::MODEL.to_owned(),
+                            input: req.final_text.clone(),
+                            output: outcome.raw_output,
+                            cache_hit: hit,
+                            cache_miss: miss,
+                            latency_ms,
+                        },
+                    );
+                    hub.set_judging_if_current(&req.session_id, req.seq, false);
+                    completed = true;
+                    break;
+                }
+                Err(error) => {
+                    last_error = error.to_string();
+                    judge.reset();
+                    tracing::warn!(session = %req.session_id, %last_error, attempt, "parse Codex judge verdict failed");
+                }
+            }
+        }
+        if !completed {
+            hub.finish_judge_failure(req, &last_error);
+        }
+    }
+}
+
 #[cfg(test)]
 mod confirm_hold_tests {
     use super::*;
+
+    fn update(seq: u64, kind: &str, text: &str, id: &str, phase: Option<&str>) -> Envelope {
+        let mut value = serde_json::json!({
+            "sessionUpdate": kind,
+            "messageId": id,
+            "content": { "type": "text", "text": text }
+        });
+        if let Some(phase) = phase {
+            value["_meta"] = serde_json::json!({ "codex": { "phase": phase } });
+        }
+        Envelope {
+            session_id: "s".to_owned(),
+            seq,
+            event: Event::Update { update: value },
+            cmid: None,
+        }
+    }
+
+    #[test]
+    fn judge_input_prefers_only_codex_final_answer() {
+        let log = vec![
+            update(1, "user_message_chunk", "task", "u", None),
+            update(2, "agent_message_chunk", "working", "a", Some("commentary")),
+            update(3, "agent_message_chunk", "done ", "a", Some("final_answer")),
+            update(4, "agent_message_chunk", "now", "a", Some("final_answer")),
+        ];
+        assert_eq!(last_judge_text(&log), "done now");
+    }
+
+    #[test]
+    fn judge_input_falls_back_to_last_agent_message_group() {
+        let log = vec![
+            update(1, "user_message_chunk", "task", "u", None),
+            update(2, "agent_message_chunk", "old", "a", None),
+            update(3, "agent_message_chunk", "new ", "b", None),
+            update(4, "agent_message_chunk", "answer", "b", None),
+        ];
+        assert_eq!(last_judge_text(&log), "new answer");
+    }
+
+    #[test]
+    fn judge_input_truncates_unicode_and_keeps_both_ends() {
+        let text = format!("START{}END", "界".repeat(5_000));
+        let truncated = truncate_judge_text(&text);
+        assert!(truncated.starts_with("START"));
+        assert!(truncated.ends_with("END"));
+        assert!(truncated.contains("中间已截断"));
+        assert_eq!(truncated.chars().count(), 4_096);
+    }
 
     fn hub_with_session(id: &str) -> Hub {
         let hub = Hub::new();
@@ -3815,18 +3824,6 @@ mod confirm_hold_tests {
             false,
         );
         hub
-    }
-
-    // The two inputs `drain_head` reads before draining: a present judge key
-    // (§J no-token block) and the per-session awaiting hold (§I). The drain is a
-    // no-op without a registered dispatcher, so we assert the guard *state* the
-    // drain branches on rather than the dispatch side effect (live-verified).
-    #[test]
-    fn no_key_blocks_then_key_unblocks() {
-        let hub = hub_with_session("s1");
-        assert!(!hub.confirm_key_present(), "no key → drain blocks");
-        hub.set_inference_secret("deepseek".to_owned(), "sk-test".to_owned());
-        assert!(hub.confirm_key_present(), "key present → drain may proceed");
     }
 
     #[test]

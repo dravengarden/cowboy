@@ -4,24 +4,12 @@ import {
   AccordionDetails,
   AccordionSummary,
   Box,
-  Button,
-  Chip,
-  CircularProgress,
   Divider,
-  MenuItem,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
-import { CheckCircle, ExpandMore } from "@mui/icons-material";
-import {
-  runInferenceProbe,
-  setInferenceConfig,
-  setInferenceSecret,
-  useInferenceConfig,
-  useLastProbe,
-  useSkills,
-} from "./store";
+import { ExpandMore } from "@mui/icons-material";
+import { useSkills } from "./store";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
@@ -90,118 +78,23 @@ function StorageInfoSection(): React.JSX.Element {
   );
 }
 
-// The Info sheet (opened from the info button left of the Settings gear). Holds
-// the inference-provider config, the skills viewer, and the daemon system-info
-// block (migrated out of user Settings).
 // The Info tab's body — rendered inside the merged Settings sheet (no own Sheet
-// wrapper). Holds the inference-provider config, the skills viewer, and the
-// daemon system-info (Storage / About).
+// wrapper). Holds the classifier/skills viewer and daemon system info.
 export function InfoContent(): React.JSX.Element {
-  const configs = useInferenceConfig();
-  const ds = configs.find((c) => c.provider === "deepseek");
-  // Data-driven: the daemon supplies the selectable models (Step 18). Default to
-  // the stored choice, else the first offered model; the literal is only a
-  // last-resort fallback if the config snapshot hasn't arrived yet.
-  const models = ds?.models ?? [];
-  const model = ds?.model || models[0]?.id || "deepseek-v4-pro";
-  const keySet = ds?.key_set ?? false;
-  const [keyInput, setKeyInput] = useState("");
-  const probe = useLastProbe();
   const skills = useSkills();
-  // Probe is fire-and-forget — the result lands later via the broadcast. Show a
-  // spinner in between. The store builds a fresh `probe` object per result, so a
-  // new reference (even with identical values) clears the pending flag.
-  const [testing, setTesting] = useState(false);
-  useEffect(() => {
-    setTesting(false);
-  }, [probe]);
-
-  const saveKey = (): void => {
-    const k = keyInput.trim();
-    if (!k) return;
-    setInferenceSecret("deepseek", k);
-    setKeyInput(""); // never keep the key in component state
-  };
 
   return (
     <Stack spacing={2.5} sx={{ mt: 1 }}>
         <Box>
           <Typography variant="overline" color="text.secondary">
-            Inference provider
+            Turn classifier
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Judges whether the agent is waiting for your reply (confirm-detection). The key is
-            stored on the daemon and never shown again.
+            Normal turn endings are classified by one shared Codex Luna session;
+            deterministic stop reasons are handled locally without a model call.
           </Typography>
-
-          <Stack spacing={1.5}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between">
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                DeepSeek
-              </Typography>
-              {keySet
-                ? <Chip size="small" color="success" icon={<CheckCircle />} label="Key set" />
-                : <Chip size="small" color="warning" label="No key" />}
-            </Stack>
-
-            <Stack direction="row" spacing={1} alignItems="flex-start">
-              <TextField
-                type="password"
-                size="small"
-                label={keySet ? "Replace API key" : "API key"}
-                placeholder={keySet ? "•••••••• (set)" : "sk-…"}
-                value={keyInput}
-                onChange={(e): void => setKeyInput(e.target.value)}
-                autoComplete="off"
-                fullWidth
-              />
-              <Button
-                variant="contained"
-                onClick={saveKey}
-                disabled={keyInput.trim().length === 0}
-                sx={{ flexShrink: 0, mt: 0.25 }}
-              >
-                Save
-              </Button>
-            </Stack>
-
-            <TextField
-              select
-              size="small"
-              label="Model"
-              value={model}
-              onChange={(e): void => setInferenceConfig("deepseek", e.target.value, ds?.params)}
-              fullWidth
-            >
-              {models.map((m) => (
-                <MenuItem key={m.id} value={m.id}>
-                  {m.label}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={(): void => {
-                  setTesting(true);
-                  runInferenceProbe("deepseek");
-                }}
-                disabled={!keySet || testing}
-                startIcon={testing ? <CircularProgress size={14} color="inherit" /> : undefined}
-              >
-                {testing ? "Testing…" : "Test connection"}
-              </Button>
-              {!testing && probe?.provider === "deepseek" && (
-                <Typography variant="caption" color={probe.ok ? "success.main" : "error.main"}>
-                  {probe.ok
-                    ? `✓ responded (cache hit ${probe.cacheHit} / miss ${probe.cacheMiss})`
-                    : `✗ ${probe.error ?? "failed"}`}
-                </Typography>
-              )}
-            </Stack>
-          </Stack>
+          <InfoRow k="Runtime" v="Codex app-server" />
+          <InfoRow k="Model" v="gpt-5.6-luna" />
         </Box>
 
         {/* Skills — provider-agnostic capability units run at turn-end. Each is
@@ -212,7 +105,7 @@ export function InfoContent(): React.JSX.Element {
             Skills
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            Run after each turn to classify what the agent did. The inference provider above powers them.
+            Run after each turn to classify what the agent did.
           </Typography>
           <Stack spacing={1}>
             {skills.length === 0 && (

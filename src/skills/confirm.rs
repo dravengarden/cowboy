@@ -9,45 +9,19 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::{SkillMeta, Verdict};
-use crate::inference::{CompleteRequest, InferenceProvider, Message, Usage};
+use crate::inference::{CompleteResponse, Usage};
 
 /// A judge run's full outcome — the verdict PLUS the observability detail the Info
 /// / overlay surfaces let the user inspect (which layer decided, the raw model
 /// output, token usage). `usage` is `None` for an L1 (no LLM call).
 pub struct JudgeOutcome {
     pub verdict: Verdict,
-    /// "L1" (deterministic stop-reason) or "L2" (the DeepSeek judge).
+    /// "L1" (deterministic stop-reason) or "L2" (the Codex judge).
     pub layer: &'static str,
     /// The model's raw response text (L2), or the L1 reason — what `output` shows.
     pub raw_output: String,
     pub usage: Option<Usage>,
 }
-
-/// The stable system prefix — instructions + few-shot. Kept FIRST + constant so
-/// DeepSeek's prefix cache hits across turns; only the per-turn text varies.
-const SYSTEM_PROMPT: &str = r#"你是一个「coding agent 回合结束」分类器。输入是 agent 刚说完、停下来把控制权交还给用户的最后一段话（中/英文，可能很长）。只输出这一行 JSON，bool 在前，reason 必须很短（≤8 个字），不要任何其它文字 / markdown / 代码块：
-{"awaiting_user": <bool>, "done": <bool>, "confidence": <0..1>, "reason": "<≤8字>"}
-
-awaiting_user 的唯一标准：**agent 现在是不是「卡住了」—— 不拿到你的回答就没法往下做。** 不看有没有问号、不看客套话，只看它是否被你挡住了。
-
-- true：agent 在问一个必须先回答才能继续的问题、让你在几个方案里选一个、或请求确认某个有风险/不可逆的操作。也就是：你不回它，它就停在这儿。
-  （例：用 A 还是 B？要不要接着做 B？确认删除吗？）
-- false：agent 已经把事做完或做到一个段落、在汇报结果。**哪怕结尾邀请你去试用 / 验证 / 反馈（「试试看」「看一眼」「对不对」「有问题告诉我」「满意吗」「效果如何」），也是 false** —— 那只是礼貌邀请，agent 没被卡住，你完全可以去干别的、不必先回答它。
-
-done —— 这次的任务/产物是否已经做完（值得提示「完成了」）：
-- true：明确说做完 / 跑通 / 已部署 / 已提交。
-- false：还在中途、纯过程汇报、或仅在提问。
-- 两者可同时 true（例「X 做完了，要不要接着做 Y?」：在问要不要继续 → awaiting 也是 true）。
-
-示例：
-「你想用方案 A 还是 B?」→ {"awaiting_user": true, "done": false, "confidence": 0.96, "reason": "二选一"}
-「这步不可逆，确认删旧文件吗?」→ {"awaiting_user": true, "done": false, "confidence": 0.95, "reason": "危险确认"}
-「X 做完了，要不要接着做 Y?」→ {"awaiting_user": true, "done": true, "confidence": 0.9, "reason": "问是否继续"}
-「全部完成，测试通过，已提交。」→ {"awaiting_user": false, "done": true, "confidence": 0.96, "reason": "纯完成"}
-「上线了，切到前台重开看看效果，对不对告诉我。」→ {"awaiting_user": false, "done": true, "confidence": 0.9, "reason": "完成+邀验证"}
-「修好了，划掉重开试试，还有问题再说。」→ {"awaiting_user": false, "done": true, "confidence": 0.9, "reason": "完成+礼貌"}
-「我先跑一下测试看看结果。」→ {"awaiting_user": false, "done": false, "confidence": 0.85, "reason": "过程"}
-「Done — pushed. Let me know if anything else.」→ {"awaiting_user": false, "done": true, "confidence": 0.9, "reason": "完成+礼貌"}"#;
 
 /// The skill's inspectable metadata (Info UI).
 #[must_use]
@@ -56,7 +30,7 @@ pub fn meta() -> SkillMeta {
         id: "confirm-detect",
         title: "Confirm detection",
         description: "判断 agent 这轮是否在等你回答 / 是否完成了任务（用于队列 hold、提醒、未来推送）。",
-        prompt_template: SYSTEM_PROMPT,
+        prompt_template: crate::inference::codex::DEVELOPER_INSTRUCTIONS,
         extract: "LLM 以 JSON 返回 {awaiting_user, done, confidence, reason}；awaiting_user=true 即 hold 队列 + 显示「在等你」widget。",
     }
 }
@@ -127,41 +101,10 @@ fn extract_json(text: &str) -> Option<&str> {
     (end > start).then_some(&text[start..=end])
 }
 
-/// Classify the agent's last turn. Tries the agent-provider's **L1** detector
-/// first (deterministic, no LLM — design §B); only an ambiguous `EndTurn` falls
-/// through to the **L2** DeepSeek judge below. The system prompt is the stable
-/// cached prefix; only `final_text` varies (cheap).
-///
-/// # Errors
-/// If the L2 inference call or the JSON parse fails (the caller treats an error
-/// as "stay held" — continuity over a wrong drain).
-pub async fn classify(
-    agent_provider: &str,
-    stop_reason: Option<&str>,
-    inference: &dyn InferenceProvider,
-    final_text: &str,
-) -> Result<JudgeOutcome> {
-    let ctx = crate::provider::confirm::TurnEndCtx { stop_reason };
-    if let Some(v) = crate::provider::confirm::l1(agent_provider, &ctx) {
-        // Deterministic — no LLM call.
-        let raw_output = v.reason.clone();
-        return Ok(JudgeOutcome {
-            verdict: v,
-            layer: "L1",
-            raw_output,
-            usage: None,
-        });
-    }
-    let messages = vec![
-        Message::system(SYSTEM_PROMPT),
-        Message::user(final_text.to_owned()),
-    ];
-    // No forced JSON mode (thinking models reject it). Generous token budget so a
-    // verbose reason can't truncate the JSON (the prompt also caps reason ≤8 chars,
-    // and parse_verdict survives truncation anyway).
-    let resp = inference
-        .complete(CompleteRequest::judge(messages, 1024))
-        .await?;
+/// Convert one structured Codex response into the domain verdict recorded by
+/// the Hub. `outputSchema` makes this strict JSON; the tolerant parser remains
+/// as a compatibility guard around runtime regressions.
+pub fn classify_response(resp: CompleteResponse) -> Result<JudgeOutcome> {
     let verdict = parse_verdict(&resp.text)?;
     Ok(JudgeOutcome {
         verdict,
@@ -175,7 +118,6 @@ pub async fn classify(
 mod tests {
     use super::*;
     use crate::inference::{CompleteResponse, Usage};
-    use async_trait::async_trait;
 
     #[test]
     fn parses_verdict_variants() {
@@ -196,54 +138,17 @@ mod tests {
         assert!(!v3.awaiting_user && v3.done);
     }
 
-    struct Mock(&'static str);
-    #[async_trait]
-    impl InferenceProvider for Mock {
-        async fn complete(&self, _req: CompleteRequest) -> Result<CompleteResponse> {
-            Ok(CompleteResponse {
-                text: self.0.to_owned(),
-                usage: Usage::default(),
-            })
-        }
-    }
-
-    // A mock that panics if called — proves L1 short-circuits without the LLM.
-    struct NeverCalled;
-    #[async_trait]
-    impl InferenceProvider for NeverCalled {
-        async fn complete(&self, _req: CompleteRequest) -> Result<CompleteResponse> {
-            panic!("L1 should have short-circuited — L2 must not run");
-        }
-    }
-
-    #[tokio::test]
-    async fn end_turn_falls_through_to_l2() {
-        let mock =
-            Mock(r#"{"awaiting_user": true, "done": true, "confidence": 0.8, "reason": "x"}"#);
-        // EndTurn is ambiguous → L1 returns None → the LLM (mock) decides.
-        let o = classify(
-            "claude-code",
-            Some("EndTurn"),
-            &mock,
-            "做完了 A，要不要做 B?",
-        )
-        .await
+    #[test]
+    fn structured_response_becomes_l2_outcome() {
+        let o = classify_response(CompleteResponse {
+            text: r#"{"awaiting_user": true, "done": true, "confidence": 0.8, "reason": "x"}"#
+                .to_owned(),
+            usage: Usage::default(),
+        })
         .unwrap();
         assert_eq!(o.layer, "L2");
         assert!(o.verdict.awaiting_user);
         assert!(o.verdict.done);
         assert!(o.usage.is_some());
-    }
-
-    #[tokio::test]
-    async fn cancelled_short_circuits_l1_no_llm() {
-        // A non-EndTurn stop is deterministic → L2 must NOT be called.
-        let o = classify("codex", Some("Cancelled"), &NeverCalled, "anything")
-            .await
-            .unwrap();
-        assert_eq!(o.layer, "L1");
-        assert!(!o.verdict.awaiting_user);
-        assert!(!o.verdict.done);
-        assert!(o.usage.is_none());
     }
 }

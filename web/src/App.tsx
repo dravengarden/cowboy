@@ -105,7 +105,6 @@ import { ENTER_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
-import { ConfirmSendModal } from "./ConfirmSendModal";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import type { Mode as ThemeMode } from "./theme";
@@ -1684,7 +1683,6 @@ export function App({
                                             key={active.id}
                                             sessionId={active.id}
                                             status={active.status}
-                                            onOpenInfo={(): void => openSettings("info")}
                                             variant="column"
                                         />
                                     )}
@@ -1826,7 +1824,6 @@ export function App({
                                     key={active.id}
                                     sessionId={active.id}
                                     status={active.status}
-                                    onOpenInfo={(): void => openSettings("info")}
                                 />
                             )}
                             {/* Zed/VSCode-style status bar at the very bottom of
@@ -1920,7 +1917,6 @@ export function App({
                 }}
             />
             <SessionInfoShell session={pendingInfo} onClose={(): void => setPendingInfo(null)} />
-            <ConfirmSendModal />
             <ResourceLightbox />
             <JudgeInspectorHost forceSheet={navbarAtBottom} />
             <SettingsShell
