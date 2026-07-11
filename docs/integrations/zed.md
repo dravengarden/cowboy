@@ -51,7 +51,9 @@ The bridge supports:
   options;
 - daemon WebSocket recovery without terminating Zed's stdio ACP process:
   disconnects publish `reconnecting`, commands wait in the bridge, and a fresh
-  bootstrap restores attached sessions, statuses, and config options;
+  bootstrap restores attached sessions, statuses, and config options. In-flight
+  prompts remain pending through the outage and settle normally after the
+  revived daemon reports the session idle;
 - provider-filtered import/load, preventing a thread from acquiring the wrong
   provider identity;
 - `_cowboy/session/status` snapshots and

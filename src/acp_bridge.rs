@@ -857,7 +857,6 @@ impl Bridge {
             }
 
             self.set_connected(false);
-            self.fail_all_prompts("cowboy daemon disconnected; reconnecting");
             self.publish_reconnecting_state(&cx);
             tracing::warn!(
                 retry_ms = reconnect_delay.as_millis(),
@@ -1218,6 +1217,27 @@ impl Bridge {
                         );
                         prompt_outcome = Some((pending.completion, outcome));
                     }
+                } else if let Event::Lifecycle { status, .. } = &envelope.event {
+                    // A daemon restart can terminate the downstream turn after its
+                    // last streamed update but before persisting TurnEnd. Keep the
+                    // ACP request alive across the socket outage, then close it
+                    // normally once the revived session reports idle. Returning an
+                    // internal error at disconnect time leaves a permanent red error
+                    // in Zed even though the bridge reconnects successfully.
+                    let settled = match status {
+                        Status::Running => Some(StopReason::EndTurn),
+                        Status::Exited | Status::Crashed | Status::Interrupted => {
+                            Some(StopReason::Cancelled)
+                        }
+                        Status::Starting | Status::Busy => None,
+                    };
+                    if let Some(reason) = settled {
+                        if let Some(index) = prompts.iter().position(|prompt| prompt.started) {
+                            let pending = prompts.remove(index).expect("index came from queue");
+                            prompt_outcome =
+                                Some((pending.completion, PromptOutcome::Stopped(reason)));
+                        }
+                    }
                 }
             }
             (attached, replaying, status, prompt_outcome, cancel_active)
@@ -1313,18 +1333,6 @@ impl Bridge {
             .and_then(VecDeque::pop_front);
         if let Some(pending) = pending {
             let _ = pending.completion.send(PromptOutcome::Failed(error));
-        }
-    }
-
-    fn fail_all_prompts(&self, error: &str) {
-        let prompts = {
-            let mut state = self.state.lock();
-            std::mem::take(&mut state.pending_prompts)
-        };
-        for pending in prompts.into_values().flatten() {
-            let _ = pending
-                .completion
-                .send(PromptOutcome::Failed(error.to_owned()));
         }
     }
 }
