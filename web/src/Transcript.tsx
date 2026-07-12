@@ -43,7 +43,6 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
-import { CODEX_ACTIVITY_PHRASES } from "./codexActivityPhrases";
 import { Markdown } from "./Markdown";
 import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
@@ -324,14 +323,14 @@ function CodexThinking(): React.JSX.Element {
   ).matches;
   const phraseMs = 4200;
   const [phraseIndex, setPhraseIndex] = useState(() =>
-    Math.floor(Date.now() / phraseMs) % CODEX_ACTIVITY_PHRASES.length
+    Math.floor(Date.now() / phraseMs) % CLAUDE_VERBS.length
   );
   useEffect(() => {
     const id = globalThis.setInterval(() => setPhraseIndex((index) => index + 1), phraseMs);
     return () => globalThis.clearInterval(id);
   }, []);
-  const phrase = CODEX_ACTIVITY_PHRASES[
-    phraseIndex % CODEX_ACTIVITY_PHRASES.length
+  const phrase = CLAUDE_VERBS[
+    phraseIndex % CLAUDE_VERBS.length
   ] ?? "Thinking";
   const muted = theme.palette.text.secondary;
   const blue = theme.palette.mode === "dark" ? "#8FA8FF" : "#4F6BED";
