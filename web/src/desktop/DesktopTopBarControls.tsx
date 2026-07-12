@@ -32,6 +32,8 @@ import { send, submitPrompt, useStoreSelector } from "../store";
 import {
   fullResetTime,
   providerUsage,
+  relativeUpdateTime,
+  shortResetTime,
   type UsageSnapshot,
   usageLimits,
 } from "../usageLimits";
@@ -175,6 +177,7 @@ export function DesktopTopBarControls({
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [clock, setClock] = useState(() => Date.now());
   const [compactConfirm, setCompactConfirm] = useState(false);
   const dead = status === "exited" || status === "crashed" || status === "interrupted";
   const options = useMemo(() => {
@@ -203,10 +206,15 @@ export function DesktopTopBarControls({
     }
   }, [refreshing]);
   useEffect(() => { void loadUsage(false); }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
+    return (): void => window.clearInterval(timer);
+  }, []);
   const usage = providerUsage(snapshot, session?.provider);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const accountLimits = limits.filter((limit) => !limit.label.includes(" · "));
   const visibleLimits = (accountLimits.length >= 2 ? accountLimits : limits).slice(0, 2);
+  const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const availableCommands = useMemo(() => latestAvailableCommands(timeline), [timeline]);
   const compactAction = useMemo(
     () => resolveSessionAction("compact", session?.provider ?? "", availableCommands),
@@ -328,13 +336,13 @@ export function DesktopTopBarControls({
         }}
       >
         {visibleLimits.length > 0 ? (
-          <Stack direction="row" spacing={0.5}>
+          <Stack direction="row" spacing={0.4} alignItems="stretch">
             {visibleLimits.map((limit) => (
               <Box
                 key={limit.id}
                 sx={{
-                  width: 142,
-                  px: 0.75,
+                  width: 98,
+                  px: 0.65,
                   py: 0.25,
                   textAlign: "left",
                   borderRadius: 1,
@@ -346,10 +354,27 @@ export function DesktopTopBarControls({
                   <Typography variant="caption" fontWeight={800} noWrap>{limit.remaining}%</Typography>
                 </Stack>
                 <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
-                  {fullResetTime(limit.resetsAt)}
+                  {shortResetTime(limit.resetsAt)}
                 </Typography>
               </Box>
             ))}
+            <Box
+              sx={{
+                width: 58,
+                px: 0.5,
+                py: 0.25,
+                borderRadius: 1,
+                bgcolor: "action.hover",
+                textAlign: "left",
+              }}
+            >
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: "0.5625rem" }}>
+                Updated
+              </Typography>
+              <Typography variant="caption" fontWeight={750} noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
+                {updatedAgo}
+              </Typography>
+            </Box>
           </Stack>
         ) : (
           <Typography variant="caption" color="text.secondary">
@@ -371,7 +396,7 @@ export function DesktopTopBarControls({
             <Box>
               <Typography variant="subtitle2" fontWeight={750}>Usage limits</Typography>
               <Typography variant="caption" color="text.secondary">
-                {session?.provider ?? "Provider"} · {usage?.status ?? "unavailable"}
+                {session?.provider ?? "Provider"} · {usage?.status ?? "unavailable"} · Updated {updatedAgo}
               </Typography>
             </Box>
             <Button

@@ -13,6 +13,16 @@ import {
 } from "@mui/material";
 import { ExpandMore, Refresh } from "@mui/icons-material";
 import { useSkills } from "./store";
+import {
+  type JsonRecord,
+  num,
+  type ProviderUsage,
+  record,
+  relativeUpdateTime,
+  type UsageLimit,
+  usageLimits,
+  type UsageSnapshot,
+} from "./usageLimits";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${String(n)} B`;
@@ -47,44 +57,8 @@ interface MetricsData {
   daemon_rss_bytes: number;
 }
 
-type JsonRecord = Record<string, unknown>;
-
-interface ProviderUsage {
-  provider: string;
-  status: string;
-  source: string;
-  observed_at_ms: number;
-  account?: JsonRecord;
-  rate_limits?: JsonRecord;
-  activity?: JsonRecord;
-  error?: string;
-}
-
-interface UsageSnapshot {
-  refreshed_at_ms: number;
-  providers: ProviderUsage[];
-}
-
-function record(value: unknown): JsonRecord | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as JsonRecord
-    : undefined;
-}
-
-function num(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-function relativeTime(ms: number): string {
-  if (ms <= 0) return "Not updated";
-  const seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  if (seconds < 5) return "Updated just now";
-  if (seconds < 60) return `Updated ${String(seconds)}s ago`;
-  return `Updated ${String(Math.round(seconds / 60))}m ago`;
 }
 
 function fullDateTime(epochSeconds: number): string {
@@ -110,49 +84,27 @@ function resetText(epochSeconds: number | undefined): string | undefined {
   return `Resets in ${relative} · ${fullDateTime(epochSeconds)}`;
 }
 
-function windowLabel(minutes: number | undefined): string {
-  if (minutes === undefined) return "Usage limit";
-  if (minutes < 60) return `${String(minutes)} minute limit`;
-  if (minutes < 1440) return `${String(Math.round(minutes / 60))} hour limit`;
-  if (minutes >= 10080) return "Weekly usage limit";
-  return `${String(Math.round(minutes / 1440))} day limit`;
-}
-
-function LimitRow({ value, prefix }: { value: JsonRecord; prefix: string | undefined }): React.JSX.Element {
-  const used = Math.min(100, Math.max(0, num(value.usedPercent) ?? 0));
-  const remaining = Math.round(100 - used);
+function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
   return (
     <Stack spacing={0.65}>
       <Stack direction="row" justifyContent="space-between" spacing={1}>
-        <Typography variant="body2">{prefix ? `${prefix} · ` : ""}{windowLabel(num(value.windowDurationMins))}</Typography>
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>{remaining}% remaining</Typography>
+        <Typography variant="body2">{limit.label}</Typography>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>{limit.remaining}% remaining</Typography>
       </Stack>
       <LinearProgress
         variant="determinate"
-        value={remaining}
+        value={limit.remaining}
         sx={{ height: 7, borderRadius: 99, bgcolor: "action.selected", "& .MuiLinearProgress-bar": { borderRadius: 99 } }}
       />
-      {resetText(num(value.resetsAt)) && (
-        <Typography variant="caption" color="text.secondary">{resetText(num(value.resetsAt))}</Typography>
+      {resetText(limit.resetsAt) && (
+        <Typography variant="caption" color="text.secondary">{resetText(limit.resetsAt)}</Typography>
       )}
     </Stack>
   );
 }
 
 function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Element {
-  const rateRoot = record(usage.rate_limits?.rateLimits);
-  const buckets = record(usage.rate_limits?.rateLimitsByLimitId);
-  const limits = useMemo(() => {
-    const source = buckets
-      ? Object.values(buckets).map(record).filter((v): v is JsonRecord => v !== undefined)
-      : rateRoot ? [rateRoot] : [];
-    return source.flatMap((bucket) => {
-      const prefix = str(bucket.limitName);
-      return [record(bucket.primary), record(bucket.secondary)]
-        .filter((v): v is JsonRecord => v !== undefined)
-        .map((value) => ({ value, prefix }));
-    });
-  }, [buckets, rateRoot]);
+  const limits = useMemo(() => usageLimits(usage), [usage]);
   const account = record(usage.account?.account);
   const plan = account ? str(account.planType) : undefined;
   const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
@@ -174,7 +126,7 @@ function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Eleme
             {plan ? plan.toUpperCase() : usage.status === "available" ? "Live" : "Unavailable"}
           </Typography>
         </Stack>
-        {limits.map((limit, index) => <LimitRow key={index} value={limit.value} prefix={limit.prefix} />)}
+        {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
         {usage.provider === "codex" && credits.length > 0 && (
           <Stack spacing={0} sx={{ pt: 0.5 }}>
             <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ pb: 0.75 }}>
@@ -226,7 +178,7 @@ function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Eleme
           <Typography variant="body2" color="text.secondary">{usage.error ?? "Detailed limits are not available."}</Typography>
         )}
         <Typography variant="caption" color="text.secondary">
-          {usage.source} · {relativeTime(usage.observed_at_ms)}
+          {usage.source} · Updated {relativeUpdateTime(usage.observed_at_ms)}
         </Typography>
       </Stack>
     </Box>
@@ -237,22 +189,15 @@ function UsageInfoSection(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const load = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
     setError(null);
     try {
-      let response = await fetch("/api/usage", { method: manual ? "POST" : "GET" });
+      const response = await fetch("/api/usage", { method: manual ? "POST" : "GET" });
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-      let next = await response.json() as UsageSnapshot;
-      // Opening Info is cache-first for instant paint, then refreshes only when
-      // the account snapshot is old. Session ACP usage is overlaid live server-side.
-      if (!manual && Date.now() - next.refreshed_at_ms > 60_000) {
-        response = await fetch("/api/usage", { method: "POST" });
-        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-        next = await response.json() as UsageSnapshot;
-      }
-      setSnapshot(next);
+      setSnapshot(await response.json() as UsageSnapshot);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     } finally {
@@ -260,6 +205,14 @@ function UsageInfoSection(): React.JSX.Element {
     }
   }, [refreshing]);
   useEffect(() => { void load(false); }, []); // load only when Info mounts
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
+    return (): void => window.clearInterval(timer);
+  }, []);
+  const refreshed = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
+  const nextRefreshMinutes = snapshot?.next_refresh_at_ms
+    ? Math.max(0, Math.ceil((snapshot.next_refresh_at_ms - clock) / 60_000))
+    : null;
 
   return (
     <Stack spacing={1.25}>
@@ -267,7 +220,8 @@ function UsageInfoSection(): React.JSX.Element {
         <Box>
           <Typography variant="overline" color="text.secondary">Usage</Typography>
           <Typography variant="caption" color={error ? "error.main" : "text.secondary"} sx={{ display: "block" }}>
-            {error ? `Refresh failed · ${relativeTime(snapshot?.refreshed_at_ms ?? 0)}` : relativeTime(snapshot?.refreshed_at_ms ?? 0)}
+            {error ? `Refresh failed · Updated ${refreshed}` : `Updated ${refreshed}`}
+            {nextRefreshMinutes !== null ? ` · Auto refresh in ${String(nextRefreshMinutes)}m` : ""}
           </Typography>
         </Box>
         <IconButton aria-label="Refresh usage" disabled={refreshing} onClick={() => void load(true)} sx={{ width: 44, height: 44 }}>

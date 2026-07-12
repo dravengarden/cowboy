@@ -71,10 +71,16 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let runtime_health = Arc::new(RuntimeHealth::default());
     let usage = UsageService::new(args.codex_command.clone());
     let initial_usage = usage.clone();
+    let mut usage_shutdown = shutdown_rx.clone();
     tokio::spawn(async move {
         loop {
             initial_usage.refresh().await;
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(crate::usage::AUTO_REFRESH_INTERVAL) => {}
+                changed = usage_shutdown.changed() => {
+                    if changed.is_err() || *usage_shutdown.borrow() { break; }
+                }
+            }
         }
     });
     // Acquire the controller lease before restoring Hub state. Its worker

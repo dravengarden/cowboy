@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 
 use crate::core::SessionMeta;
 
+pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderUsage {
     pub provider: &'static str,
@@ -36,6 +38,8 @@ pub struct ProviderUsage {
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageSnapshot {
     pub refreshed_at_ms: i64,
+    pub next_refresh_at_ms: i64,
+    pub refresh_interval_ms: i64,
     pub providers: Vec<ProviderUsage>,
 }
 
@@ -52,6 +56,9 @@ impl UsageService {
             codex_command,
             snapshot: Arc::new(Mutex::new(UsageSnapshot {
                 refreshed_at_ms: 0,
+                next_refresh_at_ms: 0,
+                refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
+                    .unwrap_or(i64::MAX),
                 providers: unavailable_providers(),
             })),
             refresh_lock: Arc::new(Mutex::new(())),
@@ -83,6 +90,11 @@ impl UsageService {
         let refreshed_at_ms = now_ms();
         let next = UsageSnapshot {
             refreshed_at_ms,
+            next_refresh_at_ms: refreshed_at_ms.saturating_add(
+                i64::try_from(AUTO_REFRESH_INTERVAL.as_millis()).unwrap_or(i64::MAX),
+            ),
+            refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
+                .unwrap_or(i64::MAX),
             providers: vec![
                 codex,
                 unavailable("claude-code", "ACP", "Waiting for ACP rate-limit data"),

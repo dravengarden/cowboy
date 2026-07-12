@@ -13,6 +13,8 @@ export interface ProviderUsage {
 
 export interface UsageSnapshot {
   refreshed_at_ms: number;
+  next_refresh_at_ms: number;
+  refresh_interval_ms: number;
   providers: ProviderUsage[];
 }
 
@@ -77,6 +79,24 @@ export function fullResetTime(epochSeconds: number | undefined): string {
   const date = new Date(epochSeconds * 1000);
   const pad = (value: number): string => String(value).padStart(2, "0");
   return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function shortResetTime(epochSeconds: number | undefined): string {
+  if (epochSeconds === undefined) return "No reset";
+  const date = new Date(epochSeconds * 1000);
+  const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? time
+    : `${date.toLocaleString(undefined, { month: "short", day: "numeric" })} ${time}`;
+}
+
+export function relativeUpdateTime(ms: number, now = Date.now()): string {
+  if (ms <= 0) return "Not updated";
+  const seconds = Math.max(0, Math.round((now - ms) / 1000));
+  if (seconds < 5) return "Just now";
+  if (seconds < 60) return `${String(seconds)}s ago`;
+  return `${String(Math.round(seconds / 60))}m ago`;
 }
 
 export function providerUsage(snapshot: UsageSnapshot | null, provider: string | undefined): ProviderUsage | undefined {
