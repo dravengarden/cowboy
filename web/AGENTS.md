@@ -40,6 +40,25 @@ routinely breaks another.
 - Quality gate before commit: `deno check` + `oxlint` (the cowboy web gate). Do
   not run repo-wide `deno fmt`.
 
+## Desktop and mobile are separate products
+
+- Mobile is touch-first: single-task focus, large targets, progressive
+  disclosure, safe system-keyboard behaviour, and native gestures.
+- Desktop is efficiency-first: keyboard-first operation, high information
+  density, full use of available space, visible controls, composable commands,
+  and parallel context. Minimalism must never hide useful capability or add
+  interaction layers merely to make the surface look clean.
+- A user who knows basic Vim must be productive without memorising Cowboy-only
+  shortcuts. Prefer standard Vim motion, discoverable leader/which-key menus,
+  and Vimium-style visible hints for arbitrary actions.
+- Share protocol, stores, API clients, domain logic, attachments, and markdown
+  machinery. Desktop and mobile may intentionally duplicate layout, component,
+  and interaction code so either product can evolve without responsive-UI
+  compromises.
+- Never decide whether Desktop controls are visible from a mobile breakpoint or
+  from the fact that a pane is in split mode. Use the pane's actual available
+  space and the Desktop workflow's efficiency needs.
+
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 
 1. Bump `web/public/sw.js` → `const VERSION = "cowboy-vNN"` (the foreground
