@@ -43,6 +43,7 @@ import {
   WarningAmberRounded,
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
+import { CODEX_ACTIVITY_PHRASES } from "./codexActivityPhrases";
 import { Markdown } from "./Markdown";
 import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
@@ -174,6 +175,12 @@ const pulse = keyframes`
 // Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
+const codexPhraseFade = keyframes`
+  0%   { opacity: 0.28; transform: translateY(1px); }
+  12%  { opacity: 1; transform: translateY(0); }
+  88%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0.28; transform: translateY(-1px); }
+`;
 
 // Codex activity uses the smallest useful coding gesture: a prompt chevron
 // advances toward a breathing caret. There is no enclosing spinner or badge,
@@ -311,20 +318,57 @@ function ClaudeThinking(): React.JSX.Element {
 }
 
 function CodexThinking(): React.JSX.Element {
+  const theme = useTheme();
+  const reducedMotion = globalThis.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  const phraseMs = 4200;
+  const [phraseIndex, setPhraseIndex] = useState(() =>
+    Math.floor(Date.now() / phraseMs) % CODEX_ACTIVITY_PHRASES.length
+  );
+  useEffect(() => {
+    const id = globalThis.setInterval(() => setPhraseIndex((index) => index + 1), phraseMs);
+    return () => globalThis.clearInterval(id);
+  }, []);
+  const phrase = CODEX_ACTIVITY_PHRASES[
+    phraseIndex % CODEX_ACTIVITY_PHRASES.length
+  ] ?? "Thinking";
+  const muted = theme.palette.text.secondary;
+  const blue = theme.palette.mode === "dark" ? "#8FA8FF" : "#4F6BED";
+  const mint = theme.palette.mode === "dark" ? "#62D6BC" : "#168B78";
   return (
     <Stack
       direction="row"
       spacing={0.8}
       alignItems="center"
+      aria-label="Codex is working"
       sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
     >
       <CodexWorkcell size={17} />
       <Typography
+        key={phraseIndex}
+        aria-hidden
         variant="caption"
-        color="text.secondary"
-        sx={{ fontWeight: 550, letterSpacing: "0.015em" }}
+        sx={{
+          fontWeight: 550,
+          letterSpacing: "0.015em",
+          background: `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${blue} 44%, ${mint} 56%, ${muted} 74%, ${muted} 100%)`,
+          backgroundSize: "220% 100%",
+          WebkitBackgroundClip: "text",
+          backgroundClip: "text",
+          color: "transparent",
+          animation: reducedMotion
+            ? "none"
+            : `${codexPhraseFade} ${String(phraseMs)}ms ease-in-out, ${shimmer} 3.2s linear infinite`,
+          "@media (prefers-reduced-motion: reduce)": {
+            animation: "none",
+            background: "none",
+            color: muted,
+            WebkitTextFillColor: muted,
+          },
+        }}
       >
-        Thinking…
+        {phrase}…
       </Typography>
     </Stack>
   );
