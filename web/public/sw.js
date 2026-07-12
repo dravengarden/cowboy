@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes, which is what triggers the
 // auto-reload onto the fresh bundle.
-const VERSION = "cowboy-v281";
+const VERSION = "cowboy-v282";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Cowboy serves the independently switched
 // frontend on the same origin as the API/WS, so when the daemon is down (e.g. a
@@ -38,18 +38,12 @@ self.addEventListener("activate", (event) => {
       const stale = keys.filter((k) => !k.startsWith(VERSION));
       await Promise.all(stale.map((k) => caches.delete(k)));
       await self.clients.claim();
-      // THE redeploy-reaches-the-PWA fix. An installed iOS PWA restores its old
-      // page on reopen and never re-navigates, so a network-first SW alone can't
-      // refresh it — but the browser DOES re-check sw.js on launch, installs a new
-      // worker, and runs THIS. When this activation is an UPDATE (a prior VERSION's
-      // caches existed, so it's not a first install), force every open window to
-      // re-navigate onto the fresh bundle — no manual reload, no cooperation from
-      // the (old) page code needed. Single reload: the reloaded page registers the
-      // same worker, no new activation, no loop.
-      if (stale.length > 0) {
-        const wins = await self.clients.matchAll({ type: "window" });
-        await Promise.all(wins.map((c) => c.navigate(c.url).catch(() => {})));
-      }
+      // `clients.claim()` changes the active controller for every open window.
+      // main.tsx owns the ONE resulting navigation via its `controllerchange`
+      // handler. Do not also call `client.navigate()` here: the two navigations
+      // race, which made desktop shells intermittently appear frozen during a
+      // web-only deploy. Installed PWAs still refresh automatically because they
+      // re-check sw.js on launch/foreground and controllerchange reloads once.
     })(),
   );
 });
