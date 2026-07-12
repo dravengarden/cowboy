@@ -15,7 +15,20 @@
 //     the client's job. So clear is NOT a slash-command: it's a cowboy session
 //     RESET (kind: "reset") that respawns the agent with a fresh session/new.
 //     It works for every agent, so it's always available.
-import type { AvailableCommand } from "./protocol";
+import type { AcpUpdate, AvailableCommand, Envelope } from "./protocol";
+
+export function latestAvailableCommands(timeline: readonly Envelope[]): AvailableCommand[] {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const envelope = timeline[index];
+    if (envelope?.kind !== "update") continue;
+    const update = envelope.update as AcpUpdate;
+    if (
+      update.sessionUpdate === "available_commands_update" &&
+      Array.isArray(update.availableCommands)
+    ) return update.availableCommands;
+  }
+  return [];
+}
 
 export type SessionActionId = "compact" | "clear";
 

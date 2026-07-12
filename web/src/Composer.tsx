@@ -76,7 +76,11 @@ import {
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
-import { resolveSessionAction, type SessionAction } from "./agentCommands";
+import {
+  latestAvailableCommands,
+  resolveSessionAction,
+  type SessionAction,
+} from "./agentCommands";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
@@ -142,12 +146,10 @@ import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
 import { originLabel } from "./protocol";
 import type {
-  AcpUpdate,
   AvailableCommand,
   ConfigOption,
   Delivery,
   DraftSchedule,
-  Envelope,
   SessionMeta,
   Status,
 } from "./protocol";
@@ -212,7 +214,7 @@ function fmtTokens(n: number): string {
 // carry it at a glance (amber ≥70%, red ≥90% — the auto-compaction zone), and the
 // exact numbers live in the Compact tooltip. Before the agent reports a size it's
 // just the bare Compress icon.
-function CompactIcon(
+export function CompactIcon(
   { used, size, active }: { used: number; size: number; active: boolean },
 ): React.JSX.Element {
   // Compaction running right now → an indeterminate terracotta (Claude accent,
@@ -275,7 +277,7 @@ function CompactIcon(
 
 // The Compact tooltip — names the action and, when known, the context fullness it
 // acts on ("Compact · context 79% · 780K / 1M tokens").
-function compactTooltip(used: number, size: number): string {
+export function compactTooltip(used: number, size: number): string {
   if (!(size > 0)) return "Compact conversation";
   const pct = used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0;
   return `Compact conversation · context ${pct}% · ${fmtTokens(used)} / ${fmtTokens(size)} tokens`;
@@ -1388,27 +1390,6 @@ export function ComposerWorkspace({
                 </IconButton>
               </span>
             </Tooltip>
-            {compactAction && (
-              <Tooltip title={compacting
-                ? "Compacting…"
-                : compactTooltip(session?.context_used ?? 0, session?.context_size ?? 0)}>
-                <span>
-                  <IconButton
-                    size="small"
-                    aria-label="compact conversation"
-                    disabled={dead || compacting}
-                    onClick={(): void => setCmdConfirm(compactAction)}
-                  >
-                    <CompactIcon
-                      used={session?.context_used ?? 0}
-                      size={session?.context_size ?? 0}
-                      active={compacting}
-                    />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
-
             <Box sx={{ flex: 1 }} />
 
             {desktopActionsExpanded && (
@@ -1653,7 +1634,7 @@ export function ComposerWorkspace({
             Disabled while dead (no live agent to run the command). Compact doubles
             as the context-fullness indicator: the ring around its glyph shows how
             full the window is (no separate %-label button). */}
-        {compactAction && (
+        {!desktop && compactAction && (
           <Tooltip
             title={compacting
               ? "Compacting…"
@@ -3982,23 +3963,3 @@ function ConfigSheetDropdown({
 }
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
-
-// Find the most recent `available_commands_update` payload in the session's
-// event log. Walks in reverse so the cost is at most one event when the
-// agent already advertised, and the empty-array baseline is cheap on first
-// connect.
-function latestAvailableCommands(timeline: Envelope[]): AvailableCommand[] {
-  for (let i = timeline.length - 1; i >= 0; i -= 1) {
-    const env = timeline[i];
-    if (env && env.kind === "update") {
-      const u = env.update as AcpUpdate;
-      if (
-        u.sessionUpdate === "available_commands_update" &&
-        Array.isArray(u.availableCommands)
-      ) {
-        return u.availableCommands;
-      }
-    }
-  }
-  return [];
-}

@@ -4,6 +4,11 @@ import {
   Button,
   ButtonBase,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   LinearProgress,
   Popover,
@@ -16,9 +21,11 @@ import {
 } from "@mui/material";
 import { ExpandMore, Refresh, Tune } from "@mui/icons-material";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AutoScrollAndStop } from "../Composer";
+import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
+import { latestAvailableCommands, resolveSessionAction } from "../agentCommands";
+import { isCompactingTail } from "../derive";
 import type { ConfigOption, Status } from "../protocol";
-import { send, useStoreSelector } from "../store";
+import { send, submitPrompt, useStoreSelector } from "../store";
 import {
   fullResetTime,
   providerUsage,
@@ -131,10 +138,12 @@ export function DesktopTopBarControls({
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
+  const timeline = useStoreSelector((snapshot) => snapshot.timelines.get(sessionId) ?? []);
   const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [compactConfirm, setCompactConfirm] = useState(false);
   const dead = status === "exited" || status === "crashed" || status === "interrupted";
   const options = useMemo(() => {
     const raw = optionsBySession.get(sessionId) ?? [];
@@ -166,6 +175,17 @@ export function DesktopTopBarControls({
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const accountLimits = limits.filter((limit) => !limit.label.includes(" · "));
   const visibleLimits = (accountLimits.length >= 2 ? accountLimits : limits).slice(0, 2);
+  const availableCommands = useMemo(() => latestAvailableCommands(timeline), [timeline]);
+  const compactAction = useMemo(
+    () => resolveSessionAction("compact", session?.provider ?? "", availableCommands),
+    [availableCommands, session?.provider],
+  );
+  const compacting = status === "busy" && isCompactingTail(timeline);
+  const contextUsed = session?.context_used ?? 0;
+  const contextSize = session?.context_size ?? 0;
+  const contextPercent = contextSize > 0
+    ? Math.round(Math.min(100, (contextUsed / contextSize) * 100))
+    : null;
 
   return (
     <Stack
@@ -354,6 +374,74 @@ export function DesktopTopBarControls({
           )}
         </Stack>
       </Popover>
+
+      {compactAction && (
+        <Tooltip title={compacting ? "Compacting…" : compactTooltip(contextUsed, contextSize)}>
+          <span>
+            <Button
+              data-desktop-compact
+              size="small"
+              color="inherit"
+              variant="outlined"
+              startIcon={<CompactIcon used={contextUsed} size={contextSize} active={compacting} />}
+              disabled={dead || compacting}
+              onClick={(): void => setCompactConfirm(true)}
+              sx={{
+                height: 36,
+                px: 1.1,
+                flexShrink: 0,
+                textTransform: "none",
+                borderColor: "divider",
+                "& .MuiButton-startIcon": { mr: 0.75 },
+              }}
+            >
+              <Stack direction="row" spacing={0.65} alignItems="baseline">
+                <Typography variant="caption" fontWeight={750}>Compact</Typography>
+                {contextPercent !== null && (
+                  <Typography variant="caption" color="text.secondary" fontWeight={650}>
+                    {contextPercent}% ctx
+                  </Typography>
+                )}
+              </Stack>
+            </Button>
+          </span>
+        </Tooltip>
+      )}
+
+      <Dialog
+        open={compactConfirm}
+        onClose={(): void => setCompactConfirm(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Compact conversation?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>{compactAction?.detail}</DialogContentText>
+          {compactAction?.command && (
+            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+              Sends <Box component="code" sx={{ px: 0.5, py: 0.125, borderRadius: 0.75, bgcolor: "action.hover" }}>
+                {compactAction.command}
+              </Box> to {session?.provider ?? "the agent"}
+              {status === "busy" || status === "starting" ? " (queued after the current turn)" : ""}.
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button color="inherit" onClick={(): void => setCompactConfirm(false)} sx={{ textTransform: "none" }}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={(): void => {
+              setCompactConfirm(false);
+              if (compactAction?.command) submitPrompt(sessionId, compactAction.command, []);
+            }}
+            sx={{ textTransform: "none" }}
+          >
+            Compact
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Box sx={{ flex: 1, minWidth: 4 }} />
       <AutoScrollAndStop
