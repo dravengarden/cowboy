@@ -716,6 +716,25 @@ export function ComposerWorkspace({
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
   const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<HTMLElement | null>(null);
   const desktopMoreButtonRef = useRef<HTMLButtonElement | null>(null);
+  const desktopToolbarRef = useRef<HTMLDivElement | null>(null);
+  // The split Prompt pane is user-resizable, so viewport breakpoints cannot tell
+  // us whether its action row has room. Measure the row itself and expose every
+  // delivery action whenever it can fit; fold only below the real content width.
+  const [desktopActionsExpanded, setDesktopActionsExpanded] = useState(!column);
+  useEffect(() => {
+    if (!desktop) return undefined;
+    const el = desktopToolbarRef.current;
+    if (!el) return undefined;
+    const update = (): void => {
+      const expanded = el.getBoundingClientRect().width >= 540;
+      setDesktopActionsExpanded(expanded);
+      if (expanded) setDesktopMoreAnchor(null);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return (): void => observer.disconnect();
+  }, [desktop]);
   // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
   // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -1319,6 +1338,7 @@ export function ComposerWorkspace({
             card's own edges. */}
         {desktop ? (
           <Stack
+            ref={desktopToolbarRef}
             direction="row"
             alignItems="center"
             spacing={0.25}
@@ -1383,7 +1403,7 @@ export function ComposerWorkspace({
 
             <Box sx={{ flex: 1 }} />
 
-            {!column && (
+            {desktopActionsExpanded && (
               <>
                 <Tooltip title="Save as draft">
                   <span>
@@ -1437,13 +1457,13 @@ export function ComposerWorkspace({
               </>
             )}
 
-            {(column || clearAction) && (
-              <Tooltip title={column ? "More delivery options" : "More actions"}>
+            {(!desktopActionsExpanded || clearAction) && (
+              <Tooltip title={!desktopActionsExpanded ? "More delivery options" : "More actions"}>
                 <span>
                   <IconButton
                     ref={desktopMoreButtonRef}
                     size="small"
-                    aria-label={column ? "more delivery options" : "more actions"}
+                    aria-label={!desktopActionsExpanded ? "more delivery options" : "more actions"}
                     aria-controls={desktopMoreAnchor ? "desktop-composer-more" : undefined}
                     aria-expanded={desktopMoreAnchor ? "true" : undefined}
                     onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
@@ -1461,7 +1481,7 @@ export function ComposerWorkspace({
               anchorOrigin={{ vertical: "top", horizontal: "right" }}
               transformOrigin={{ vertical: "bottom", horizontal: "right" }}
             >
-              {column && <MenuItem
+              {!desktopActionsExpanded && <MenuItem
                 disabled={!sendable}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1471,7 +1491,7 @@ export function ComposerWorkspace({
                 <EditNoteOutlined fontSize="small" sx={{ mr: 1.25 }} />
                 Save as draft
               </MenuItem>}
-              {column && <MenuItem
+              {!desktopActionsExpanded && <MenuItem
                 disabled={!sendable}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1481,8 +1501,8 @@ export function ComposerWorkspace({
                 <Schedule fontSize="small" sx={{ mr: 1.25 }} />
                 Schedule send
               </MenuItem>}
-              {column && <Divider />}
-              {column && <MenuItem
+              {!desktopActionsExpanded && <Divider />}
+              {!desktopActionsExpanded && <MenuItem
                 disabled={!sendable || queue.length === 0}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1492,7 +1512,7 @@ export function ComposerWorkspace({
                 <VerticalAlignTop fontSize="small" sx={{ mr: 1.25 }} />
                 Jump to front of queue
               </MenuItem>}
-              {column && <MenuItem
+              {!desktopActionsExpanded && <MenuItem
                 disabled={!sendable || !(busy || starting || paused)}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1502,7 +1522,7 @@ export function ComposerWorkspace({
                 <Bolt fontSize="small" color="warning" sx={{ mr: 1.25 }} />
                 Force push…
               </MenuItem>}
-              {column && clearAction && <Divider />}
+              {!desktopActionsExpanded && clearAction && <Divider />}
               {clearAction && (
                 <MenuItem
                   disabled={dead}
