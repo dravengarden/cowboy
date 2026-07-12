@@ -1,0 +1,24 @@
+schema = 1
+slug = "cowboy-architecture"
+title = "Cowboy Architecture"
+source = "architecture"
+description = "Architecture, protocols, storage, deployment, and operations for Cowboy."
+collection = "Project Docs"
+author = "Cowboy maintainers"
+
+[layout]
+order = [
+  "00-overview.md",
+  "01-acp-transport.md",
+  "02-core-hub.md",
+  "03-supervisor.md",
+  "04-providers.md",
+  "05-storage.md",
+  "06-server-api.md",
+  "07-confirm-inference.md",
+  "08-memory.md",
+  "09-frontend.md",
+  "10-deploy-build.md",
+  "11-operations.md",
+  "12-rolling-updates.md",
+]
