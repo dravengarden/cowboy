@@ -269,6 +269,13 @@ here says otherwise.
     Normal→Insert transition is labelled explicitly, and commit confirmation
     expires after 600ms. Do not infer the user's language or input-source name;
     browsers expose composition lifecycle, not the selected OS keyboard layout.
+    Direct Insert commands must not all share deferred Selection stabilization:
+    a fast `i` followed immediately by pinyin can start native marked text after
+    the command's RAF was queued but before `compositionstart` reaches JS. That
+    stale RAF then rewrites Selection and leaves underlined romanization frozen.
+    Plain `i/I/a/A/R` only focus the content once; reserve deferred DOM/caret
+    stabilization for structural commands (`o/O/s/S/C` and change operators)
+    that can create an empty line, with composition guards at every phase.
 
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns

@@ -32,6 +32,10 @@ const CODE_KEYS: Readonly<Record<string, string>> = {
 };
 
 const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
+// These commands can replace/create an empty line whose DOM is not available
+// until the next layout cycle. Plain i/I/a/A/R only move the logical caret and
+// must not schedule a later Selection rewrite that can race fast IME startup.
+const STRUCTURAL_INSERT_KEYS = new Set(["o", "O", "s", "S", "C"]);
 
 function normalModeKey(event: KeyboardEvent): string | null {
   if (event.metaKey || event.ctrlKey || event.altKey) return null;
@@ -178,16 +182,13 @@ export function createImeAutoInsertVim(): {
       // native composition host, so let the browser own it until commit.
       if (composing || this.view.composing) return;
       this.view.contentDOM.focus({ preventScroll: true });
+    }
+
+    private scheduleNativeCaretStabilization(): void {
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
       this.focusFrame = requestAnimationFrame(() => {
         this.focusFrame = null;
         if (!this.cm?.state?.vim?.insertMode || composing || this.view.composing) return;
-        const head = this.view.state.selection.main.head;
-        this.view.contentDOM.focus({ preventScroll: true });
-        this.view.dispatch({
-          selection: { anchor: head },
-          effects: EditorView.scrollIntoView(head),
-        });
         this.stabilizeNativeCaret(0);
       });
     }
@@ -261,6 +262,9 @@ export function createImeAutoInsertVim(): {
       if (DIRECT_INSERT_KEYS.has(key) || changing) this.view.focus();
       Vim.handleKey(this.cm, key, "user");
       this.syncFocusToMode();
+      if (STRUCTURAL_INSERT_KEYS.has(key) || changing) {
+        this.scheduleNativeCaretStabilization();
+      }
     };
 
     private readonly onSinkFocus = (): void => {
