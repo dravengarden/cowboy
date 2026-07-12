@@ -15,6 +15,10 @@ interface DesktopWorkspaceContextValue {
   focusPane: (pane: DesktopPane) => void;
   mode: WorkspaceMode;
   setMode: (mode: WorkspaceMode) => void;
+  leaderPrefix: string[];
+  setLeaderPrefix: (prefix: string[]) => void;
+  leaderMessage: string | null;
+  setLeaderMessage: (message: string | null) => void;
 }
 
 const DesktopWorkspaceContext = createContext<DesktopWorkspaceContextValue | null>(null);
@@ -34,6 +38,8 @@ export function DesktopWorkspaceProvider({
 }): React.JSX.Element {
   const [focusedPane, setFocusedPane] = useState<DesktopPane>("prompt");
   const [mode, setMode] = useState<WorkspaceMode>("normal");
+  const [leaderPrefix, setLeaderPrefix] = useState<string[]>([]);
+  const [leaderMessage, setLeaderMessage] = useState<string | null>(null);
   const focusPane = useCallback((pane: DesktopPane): void => setFocusedPane(pane), []);
 
   useEffect(() => {
@@ -54,7 +60,11 @@ export function DesktopWorkspaceProvider({
     focusPane,
     mode,
     setMode,
-  }), [focusPane, focusedPane, mode]);
+    leaderPrefix,
+    setLeaderPrefix,
+    leaderMessage,
+    setLeaderMessage,
+  }), [focusPane, focusedPane, leaderMessage, leaderPrefix, mode]);
 
   return (
     <DesktopWorkspaceContext.Provider value={value}>

@@ -12,6 +12,8 @@ import {
 } from "@mui/material";
 import { Search } from "@mui/icons-material";
 import type { SessionMeta } from "../../protocol";
+import { useDesktopWorkspace } from "../DesktopWorkspaceController";
+import { DesktopLeaderBoard } from "./DesktopLeaderBoard";
 import {
   type DesktopCommand,
   useDesktopCommand,
@@ -36,6 +38,7 @@ export function DesktopCommandHost({
   onOpenSettings: () => void;
 }): React.JSX.Element {
   const registry = useDesktopCommands();
+  const workspace = useDesktopWorkspace();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -55,6 +58,9 @@ export function DesktopCommandHost({
     {
       id: "commandPalette.open",
       title: "Open Command Palette",
+      description: "Search every registered Desktop command",
+      group: "Open",
+      leader: "?",
       shortcut: "Mod+Shift+P",
       allowInEditor: true,
       run: () => {
@@ -66,6 +72,9 @@ export function DesktopCommandHost({
     {
       id: "session.new",
       title: "New Session",
+      description: "Create a Cowboy session",
+      group: "Session",
+      leader: "s n",
       shortcut: "Mod+N",
       allowInEditor: true,
       run: onNewSession,
@@ -73,30 +82,41 @@ export function DesktopCommandHost({
     {
       id: "session.previous",
       title: "Previous Session",
+      group: "Session",
+      leader: "s k",
       shortcut: "Mod+Shift+[",
       allowInEditor: true,
       when: () => sessions.length > 1,
+      disabledReason: "Only one session is available",
       run: () => moveSession(-1),
     },
     {
       id: "session.next",
       title: "Next Session",
+      group: "Session",
+      leader: "s j",
       shortcut: "Mod+Shift+]",
       allowInEditor: true,
       when: () => sessions.length > 1,
+      disabledReason: "Only one session is available",
       run: () => moveSession(1),
     },
     {
       id: "composer.focus",
       title: "Focus Composer",
+      group: "Prompt",
+      leader: "p f",
       shortcut: "Mod+L",
       allowInEditor: true,
       when: () => activeId !== null,
+      disabledReason: "No active session",
       run: onFocusComposer,
     },
     {
       id: "workspace.togglePromptPane",
       title: "Toggle Prompt Pane",
+      group: "Workspace",
+      leader: "w p",
       shortcut: "Mod+Alt+P",
       allowInEditor: true,
       run: onTogglePromptPane,
@@ -104,9 +124,32 @@ export function DesktopCommandHost({
     {
       id: "settings.open",
       title: "Open Settings",
+      group: "Settings",
+      leader: ",",
       shortcut: "Mod+\u002c",
       allowInEditor: true,
       run: onOpenSettings,
+    },
+    {
+      id: "workspace.focusSessions",
+      title: "Focus Sessions",
+      group: "Workspace",
+      leader: "w s",
+      run: () => workspace.focusPane("sessions"),
+    },
+    {
+      id: "workspace.focusPrompt",
+      title: "Focus Prompt",
+      group: "Workspace",
+      leader: "w e",
+      run: () => workspace.focusPane("prompt"),
+    },
+    {
+      id: "workspace.focusConversation",
+      title: "Focus Conversation",
+      group: "Workspace",
+      leader: "w c",
+      run: () => workspace.focusPane("conversation"),
     },
   ], [
     activeId,
@@ -116,6 +159,7 @@ export function DesktopCommandHost({
     onPickSession,
     onTogglePromptPane,
     sessions,
+    workspace,
   ]);
 
   // Hooks must be unconditional; the command list has a stable length and IDs.
@@ -126,11 +170,13 @@ export function DesktopCommandHost({
   useDesktopCommand(commands[4] as DesktopCommand);
   useDesktopCommand(commands[5] as DesktopCommand);
   useDesktopCommand(commands[6] as DesktopCommand);
+  useDesktopCommand(commands[7] as DesktopCommand);
+  useDesktopCommand(commands[8] as DesktopCommand);
+  useDesktopCommand(commands[9] as DesktopCommand);
 
   const normalized = query.trim().toLowerCase();
   const available = registry.list().filter((command) =>
     command.id !== "commandPalette.open" &&
-    command.when?.() !== false &&
     (!normalized ||
       `${command.title} ${command.id}`.toLowerCase().includes(normalized))
   );
@@ -144,12 +190,13 @@ export function DesktopCommandHost({
   const runSelected = (): void => {
     const command = available[selected];
     if (!command) return;
-    registry.execute(command.id);
-    setPaletteOpen(false);
+    if (registry.execute(command.id)) setPaletteOpen(false);
   };
 
   return (
-    <Dialog
+    <>
+      <DesktopLeaderBoard />
+      <Dialog
       open={paletteOpen}
       onClose={(): void => setPaletteOpen(false)}
       fullWidth
@@ -197,14 +244,21 @@ export function DesktopCommandHost({
             <ListItemButton
               key={command.id}
               selected={index === selected}
+              disabled={command.when?.() === false}
               onMouseMove={(): void => setSelected(index)}
               onClick={(): void => {
-                registry.execute(command.id);
-                setPaletteOpen(false);
+                if (registry.execute(command.id)) setPaletteOpen(false);
               }}
               sx={{ borderRadius: 1.5 }}
             >
-              <ListItemText primary={command.title} secondary={command.id} />
+              <ListItemText
+                primary={command.title}
+                secondary={command.when?.() === false
+                  ? (typeof command.disabledReason === "function"
+                    ? command.disabledReason()
+                    : command.disabledReason ?? "Unavailable")
+                  : command.description ?? command.id}
+              />
               {command.shortcut && (
                 <Typography
                   variant="caption"
@@ -218,6 +272,7 @@ export function DesktopCommandHost({
           ))}
         </List>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+    </>
   );
 }

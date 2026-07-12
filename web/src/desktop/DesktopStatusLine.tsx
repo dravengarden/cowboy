@@ -13,16 +13,19 @@ function Segment({
   tooltip,
   color = "text.secondary",
   mono = false,
+  onClick,
 }: {
   label: string;
   tooltip?: string;
   color?: string;
   mono?: boolean;
+  onClick?: () => void;
 }): React.JSX.Element {
   const body = (
     <ButtonBase
       disableRipple
       tabIndex={-1}
+      onClick={onClick}
       sx={{
         height: 28,
         px: 1,
@@ -48,7 +51,8 @@ export function DesktopStatusLine({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
-  const { focusedPane, mode } = useDesktopWorkspace();
+  const workspace = useDesktopWorkspace();
+  const { focusedPane, leaderPrefix, mode } = workspace;
   const vimEnabled = useVimSetting();
   const vimMode = useVimMode();
   const connected = useStoreSelector((snapshot) => snapshot.connected);
@@ -116,8 +120,17 @@ export function DesktopStatusLine({
           tooltip="Cowboy WebSocket connection"
           mono
         />
-        <Segment label="SPC commands" tooltip="Leader board arrives in the next phase" mono />
-        <Segment label="f hints" tooltip="Vimium hint mode arrives in a later phase" mono />
+        <Segment
+          label={mode === "leader" ? `SPC ${leaderPrefix.join(" ")}`.trim() : "SPC commands"}
+          tooltip="Open the discoverable Desktop command board"
+          mono
+          onClick={(): void => {
+            workspace.setLeaderPrefix([]);
+            workspace.setLeaderMessage(null);
+            workspace.setMode("leader");
+          }}
+        />
+        <Segment label="f hints · soon" tooltip="Vimium target hints arrive in Phase 4" mono />
       </Stack>
     </Box>
   );
