@@ -1262,14 +1262,6 @@ export function App({
                         borderColor: (t) => alpha(t.palette.primary.main, 0.58),
                         boxShadow: "none",
                     },
-                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer']):focus-visible": {
-                        boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.82)}`,
-                    },
-                    "& [data-desktop-region='prompt.queued'][data-desktop-focused='true']:focus-visible, & [data-desktop-region='prompt.draft'][data-desktop-focused='true']:focus-visible": {
-                        borderColor: (t) => alpha(t.palette.primary.main, 0.82),
-                        boxShadow: "none",
-                    },
                     // Composer is already an unmistakable editing canvas with a
                     // native caret and its own outlined Paper. Re-applying the
                     // generic region tint/rail made the whole full-height card a
