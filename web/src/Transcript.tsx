@@ -34,7 +34,6 @@ import {
   ExpandLess,
   ExpandMore,
   Folder,
-  Psychology,
   Refresh,
   Search,
   Stop,
@@ -175,6 +174,46 @@ const pulse = keyframes`
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
 
+// Codex's compact square activity language, rendered as a "workcell": a
+// rounded code-unit boundary with one illuminated edge travelling around it and
+// a tiny terminal caret breathing at the centre. Unlike a generic MUI ring it is
+// identifiable at 14–18px and never changes layout between frames.
+const codexTrace = keyframes`to { stroke-dashoffset: -52; }`;
+const codexCaret = keyframes`
+  0%, 100% { opacity: 0.35; transform: scaleX(0.7); }
+  50%      { opacity: 1; transform: scaleX(1); }
+`;
+
+function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
+  return (
+    <Box
+      component="svg"
+      viewBox="0 0 18 18"
+      aria-hidden
+      sx={{
+        width: size,
+        height: size,
+        display: "block",
+        flexShrink: 0,
+        overflow: "visible",
+        color: "primary.main",
+        "& .codex-workcell-trace": { animation: `${codexTrace} 1.45s linear infinite` },
+        "& .codex-workcell-caret": {
+          transformOrigin: "9px 10px",
+          animation: `${codexCaret} 1.1s ease-in-out infinite`,
+        },
+        "@media (prefers-reduced-motion: reduce)": {
+          "& .codex-workcell-trace, & .codex-workcell-caret": { animation: "none" },
+        },
+      }}
+    >
+      <rect x="2" y="2" width="14" height="14" rx="4" fill="none" stroke="currentColor" strokeWidth="1.25" opacity="0.2" />
+      <rect className="codex-workcell-trace" x="2" y="2" width="14" height="14" rx="4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeDasharray="9 43" />
+      <path className="codex-workcell-caret" d="M6.5 10h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </Box>
+  );
+}
+
 // Claude Code's morphing star glyph — the literal frames its terminal spinner
 // cycles through (from CC's Spinner/utils.ts `getDefaultCharacters`, the
 // non-darwin set). The "·→✢→*→✶→✻→✽" growth IS the animation. CC advances one
@@ -270,10 +309,26 @@ function ClaudeThinking(): React.JSX.Element {
   );
 }
 
-// Default indicator (Codex + any non-Claude provider): the plain Material UI
-// loading look — a small CircularProgress + a muted "Thinking…" caption. No
-// shimmer, no jargon; MUI's own spinner carries it, deliberately understated
-// next to the Claude flavor.
+function CodexThinking(): React.JSX.Element {
+  return (
+    <Stack
+      direction="row"
+      spacing={0.8}
+      alignItems="center"
+      sx={{ py: 0.5, alignSelf: "flex-start", color: "text.secondary" }}
+    >
+      <CodexWorkcell size={17} />
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ fontWeight: 550, letterSpacing: "0.015em" }}
+      >
+        Thinking…
+      </Typography>
+    </Stack>
+  );
+}
+
 function DefaultThinking(): React.JSX.Element {
   return (
     <Stack
@@ -290,14 +345,16 @@ function DefaultThinking(): React.JSX.Element {
   );
 }
 
-// The trailing "agent is working" indicator. Claude-code gets its playful
-// shimmer-jargon personality; every other provider gets the default MUI spinner.
+// Each provider keeps its own activity language: Claude's morphing spark, the
+// Codex workcell, and a neutral Material fallback for providers without one.
 function ThinkingIndicator({
   provider,
 }: {
   provider: string;
 }): React.JSX.Element {
-  return provider === "claude-code" ? <ClaudeThinking /> : <DefaultThinking />;
+  if (provider === "claude-code") return <ClaudeThinking />;
+  if (provider === "codex") return <CodexThinking />;
+  return <DefaultThinking />;
 }
 
 // Blinking text caret — Claude.ai / Cursor put one at the end of streaming
@@ -504,9 +561,11 @@ function ChunkView({
 function ThoughtSteps({
   sections,
   streaming,
+  codex,
 }: {
   sections: string[];
   streaming: boolean;
+  codex: boolean;
 }): React.JSX.Element {
   const visible = sections.filter((section) => section.trim() !== "");
   return (
@@ -519,38 +578,66 @@ function ThoughtSteps({
             // A thought section has no upstream id. Its index is stable because
             // Codex only appends sections while streaming this item.
             key={index}
-            sx={{ position: "relative", pl: 2, pb: hasNext ? 0.75 : 0 }}
+            sx={{
+              position: "relative",
+              pl: codex ? 2.75 : 2,
+              pr: codex && current ? 1 : 0,
+              py: codex && current ? 0.5 : 0,
+              mb: hasNext ? (codex ? 0.25 : 0.75) : 0,
+              borderRadius: codex && current ? 1.25 : 0,
+              bgcolor: codex && current ? "action.hover" : "transparent",
+            }}
           >
-            <Box
-              aria-hidden="true"
-              sx={{
-                position: "absolute",
-                left: 2,
-                top: "0.62em",
-                width: 5,
-                height: 5,
-                borderRadius: "50%",
-                bgcolor: current ? "primary.main" : "text.disabled",
-                animation: current ? `${pulse} 1.4s ease-in-out infinite` : "none",
-                "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-              }}
-            />
+            {codex && current
+              ? (
+                <Box sx={{ position: "absolute", left: 3, top: "0.48em" }}>
+                  <CodexWorkcell size={14} />
+                </Box>
+              )
+              : (
+                <Box
+                  aria-hidden="true"
+                  sx={{
+                    position: "absolute",
+                    left: codex ? 7 : 2,
+                    top: "0.62em",
+                    width: 5,
+                    height: 5,
+                    borderRadius: codex ? 1 : "50%",
+                    bgcolor: current ? "primary.main" : "text.disabled",
+                    animation: current ? `${pulse} 1.4s ease-in-out infinite` : "none",
+                    "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                  }}
+                />
+              )}
             {hasNext && (
               <Box
                 aria-hidden="true"
                 sx={{
                   position: "absolute",
-                  left: 4,
-                  top: "calc(0.62em + 6px)",
+                  left: codex ? 9 : 4,
+                  top: codex && current ? "calc(0.48em + 15px)" : "calc(0.62em + 6px)",
                   bottom: -2,
                   width: "1px",
                   bgcolor: "divider",
                 }}
               />
             )}
-            <Box sx={{ opacity: current || !streaming ? 1 : 0.68 }}>
+            <Box
+              sx={{
+                opacity: current || !streaming ? 1 : (codex ? 0.55 : 0.68),
+                fontStyle: "normal",
+                color: current ? "text.primary" : "text.secondary",
+                "& p": {
+                  m: 0,
+                  fontStyle: "normal",
+                  fontWeight: current ? 600 : 500,
+                  lineHeight: 1.45,
+                },
+              }}
+            >
               <Markdown text={section} />
-              {current && <StreamingCaret />}
+              {current && !codex && <StreamingCaret />}
             </Box>
           </Box>
         );
@@ -1043,11 +1130,13 @@ function PermissionCard({
 const ItemView = memo(function ItemView({
   item,
   streaming,
+  provider,
 }: {
   item: RenderItem;
   /** True when this item is the last assistant chunk-bearing item and the
    *  session is still busy. Adds a blinking caret / dots accordingly. */
   streaming?: boolean;
+  provider: string;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message":
@@ -1061,21 +1150,23 @@ const ItemView = memo(function ItemView({
       );
     case "thought":
       return (
-        <Stack
-          direction="row"
-          spacing={1}
+        <Box
           sx={{
             color: "text.secondary",
             alignSelf: "stretch",
             maxWidth: "100%",
+            px: provider === "codex" ? 0.25 : 0,
           }}
         >
-          <Psychology fontSize="medium" />
-          <Box sx={{ fontStyle: "italic", fontSize: "0.875rem", flex: 1, minWidth: 0 }}>
+          <Box sx={{ fontSize: "0.84rem", flex: 1, minWidth: 0 }}>
             {/* Empty Codex HTML separators become compact, connected steps. */}
-            <ThoughtSteps sections={item.sections} streaming={!!streaming} />
+            <ThoughtSteps
+              sections={item.sections}
+              streaming={!!streaming}
+              codex={provider === "codex"}
+            />
           </Box>
-        </Stack>
+        </Box>
       );
     case "tool":
       return <ToolCard item={item} />;
@@ -1832,7 +1923,11 @@ export function Transcript({
                     // than avoiding paint for off-screen Markdown rows.
                   }}
                 >
-                  <ItemView item={item} streaming={working && i === lastIdx} />
+                  <ItemView
+                    item={item}
+                    streaming={working && i === lastIdx}
+                    provider={provider}
+                  />
                 </Box>
               ))}
           </>
