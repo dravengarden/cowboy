@@ -81,7 +81,6 @@ export function DesktopCommandProvider(
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.isComposing || event.repeat) return;
       if (workspace.mode === "leader") {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -90,6 +89,7 @@ export function DesktopCommandProvider(
           workspace.setMode("normal");
           return;
         }
+        if (event.defaultPrevented || event.isComposing || event.repeat) return;
         if (event.key === "Backspace") {
           event.preventDefault();
           workspace.setLeaderPrefix(workspace.leaderPrefix.slice(0, -1));
@@ -127,6 +127,7 @@ export function DesktopCommandProvider(
         }
         return;
       }
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
       if (
         event.key === " " && !event.ctrlKey && !event.metaKey && !event.altKey &&
         !isTextEditingTarget(event.target) && !ownsSpaceKey(event.target)
@@ -150,8 +151,8 @@ export function DesktopCommandProvider(
         return;
       }
     };
-    globalThis.addEventListener("keydown", onKeyDown);
-    return () => globalThis.removeEventListener("keydown", onKeyDown);
+    globalThis.addEventListener("keydown", onKeyDown, true);
+    return () => globalThis.removeEventListener("keydown", onKeyDown, true);
   }, [workspace]);
 
   return (

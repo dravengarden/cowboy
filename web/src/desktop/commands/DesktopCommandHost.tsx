@@ -8,7 +8,6 @@ import {
   ListItemButton,
   ListItemText,
   TextField,
-  Typography,
 } from "@mui/material";
 import { Search } from "@mui/icons-material";
 import type { SessionMeta } from "../../protocol";
@@ -19,6 +18,7 @@ import {
   useDesktopCommand,
   useDesktopCommands,
 } from "./DesktopCommandProvider";
+import { DesktopShortcut } from "./DesktopKeycap";
 
 export function DesktopCommandHost({
   sessions,
@@ -260,13 +260,7 @@ export function DesktopCommandHost({
                   : command.description ?? command.id}
               />
               {command.shortcut && (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ ml: 2 }}
-                >
-                  {command.shortcut}
-                </Typography>
+                <DesktopShortcut shortcut={command.shortcut} />
               )}
             </ListItemButton>
           ))}

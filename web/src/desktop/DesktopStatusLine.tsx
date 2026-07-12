@@ -4,6 +4,7 @@ import { useStoreSelector } from "../store";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
+import { DesktopKeycap } from "./commands/DesktopKeycap";
 
 function Segment({
   label,
@@ -12,7 +13,7 @@ function Segment({
   mono = false,
   onClick,
 }: {
-  label: string;
+  label: React.ReactNode;
   tooltip?: string;
   color?: string;
   mono?: boolean;
@@ -31,7 +32,7 @@ function Segment({
         fontWeight: 650,
         letterSpacing: "0.035em",
         whiteSpace: "nowrap",
-        fontFamily: mono ? "monospace" : "inherit",
+        fontFamily: mono && typeof label === "string" ? "monospace" : "inherit",
         "&:hover": { bgcolor: "action.hover", color: "text.primary" },
       }}
     >
@@ -108,7 +109,15 @@ export function DesktopStatusLine({
           mono
         />
         <Segment
-          label={mode === "leader" ? `SPC ${leaderPrefix.join(" ")}`.trim() : "SPC commands"}
+          label={
+            <Stack direction="row" spacing={0.55} alignItems="center">
+              <DesktopKeycap keyLabel="SPC" accent={mode === "leader"} />
+              {leaderPrefix.map((key, index) => (
+                <DesktopKeycap key={`${key}-${String(index)}`} keyLabel={key} accent />
+              ))}
+              {mode !== "leader" && <Box component="span">Commands</Box>}
+            </Stack>
+          }
           tooltip="Open the discoverable Desktop command board"
           mono
           onClick={(): void => {

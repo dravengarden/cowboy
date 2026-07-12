@@ -1,7 +1,8 @@
-import { alpha, Box, ButtonBase, Chip, Paper, Stack, Typography } from "@mui/material";
+import { alpha, Box, ButtonBase, Modal, Paper, Stack, Typography } from "@mui/material";
 import { useMemo } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { useDesktopCommands, type DesktopCommand } from "./DesktopCommandProvider";
+import { DesktopKeycap } from "./DesktopKeycap";
 
 const GROUP_LABELS: Record<string, string> = {
   s: "Session",
@@ -66,80 +67,90 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
     workspace.setLeaderMessage(null);
   };
 
+  const close = (): void => {
+    workspace.setLeaderPrefix([]);
+    workspace.setLeaderMessage(null);
+    workspace.setMode("normal");
+  };
+
   return (
-    <Paper
-      data-desktop-leader
-      elevation={0}
-      sx={{
-        position: "fixed",
-        zIndex: (theme) => theme.zIndex.modal - 1,
-        left: { xs: "50%", lg: "calc(50% + 144px)" },
-        top: "50%",
-        transform: "translate(-50%, -50%)",
-        width: "min(680px, calc(100vw - 32px))",
-        border: 1,
-        borderColor: (theme) => alpha(theme.palette.primary.main, 0.24),
-        borderRadius: 3,
-        bgcolor: (theme) => alpha(
-          theme.palette.background.paper,
-          theme.palette.mode === "dark" ? 0.68 : 0.76,
-        ),
-        backgroundImage: (theme) =>
-          `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.06 : 0.42)}, transparent 55%)`,
-        backdropFilter: "blur(28px) saturate(145%)",
-        WebkitBackdropFilter: "blur(28px) saturate(145%)",
-        boxShadow: (theme) => [
-          `0 24px 70px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.48 : 0.2)}`,
-          `0 4px 18px ${alpha(theme.palette.primary.main, 0.12)}`,
-          `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.08 : 0.62)}`,
-        ].join(", "),
-        overflow: "hidden",
+    <Modal
+      open
+      onClose={close}
+      aria-label="Desktop command board"
+      slotProps={{
+        backdrop: {
+          sx: {
+            bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.42 : 0.28),
+            backdropFilter: "blur(3px)",
+          },
+        },
       }}
     >
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
+      <Paper
+        data-desktop-leader
+        elevation={0}
         sx={{
-          px: 1.5,
-          height: 42,
-          borderBottom: 1,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.72),
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "min(620px, calc(100vw - 32px))",
+          border: 1,
+          borderColor: (theme) => alpha(theme.palette.primary.main, 0.26),
+          borderRadius: 2.5,
+          bgcolor: (theme) => alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.96 : 0.92),
+          backgroundImage: (theme) =>
+            `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.05 : 0.46)}, transparent 55%)`,
+          backdropFilter: "blur(30px) saturate(150%)",
+          WebkitBackdropFilter: "blur(30px) saturate(150%)",
+          boxShadow: (theme) => [
+            `0 24px 70px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.5 : 0.2)}`,
+            `0 4px 18px ${alpha(theme.palette.primary.main, 0.12)}`,
+            `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.07 : 0.68)}`,
+          ].join(", "),
+          outline: "none",
+          overflow: "hidden",
         }}
       >
-        <Chip
-          label="SPC"
-          size="small"
-          color="primary"
-          sx={{ height: 24, fontFamily: "monospace", fontWeight: 800 }}
-        />
-        {workspace.leaderPrefix.map((key, index) => (
-          <Chip
-            key={`${key}-${String(index)}`}
-            label={key}
-            size="small"
-            sx={{ height: 24, fontFamily: "monospace", fontWeight: 700 }}
-          />
-        ))}
-        <Typography
-          variant="caption"
-          color={workspace.leaderMessage ? "error.main" : "text.secondary"}
-          sx={{ ml: 0.5 }}
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.65}
+          sx={{
+            px: 1.5,
+            minHeight: 42,
+            borderBottom: 1,
+            borderColor: (theme) => alpha(theme.palette.divider, 0.72),
+          }}
         >
-          {workspace.leaderMessage ?? "Choose a command · Esc closes · Backspace goes up"}
-        </Typography>
-      </Stack>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          gap: 0.75,
-          p: 1.25,
-          maxHeight: "min(38vh, 320px)",
-          overflowY: "auto",
-        }}
-      >
-        {entries.map((entry) => {
+          <DesktopKeycap keyLabel="SPC" accent />
+          {workspace.leaderPrefix.map((key, index) => (
+            <DesktopKeycap key={`${key}-${String(index)}`} keyLabel={key} accent />
+          ))}
+          <Typography
+            variant="caption"
+            color={workspace.leaderMessage ? "error.main" : "text.secondary"}
+            noWrap
+            sx={{ ml: 0.5, flex: 1 }}
+          >
+            {workspace.leaderMessage ?? "Choose a command"}
+          </Typography>
+          <DesktopKeycap keyLabel="Backspace" />
+          <DesktopKeycap keyLabel="Esc" />
+        </Stack>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 0.65,
+            p: 1.25,
+            maxHeight: "min(42vh, 320px)",
+            overflowY: "auto",
+            "@media (max-width: 760px)": { gridTemplateColumns: "repeat(2, minmax(0, 1fr))" },
+          }}
+        >
+          {entries.map((entry) => {
           const disabled = entry.command?.when?.() === false;
           const reason = disabled
             ? (typeof entry.command?.disabledReason === "function"
@@ -152,14 +163,14 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
               aria-disabled={disabled || undefined}
               onClick={(): void => choose(entry)}
               sx={{
-                minHeight: 54,
-                px: 1.25,
+                minHeight: 52,
+                px: 1,
                 border: 1,
                 borderColor: (theme) => alpha(theme.palette.divider, 0.58),
                 borderRadius: 1.5,
                 justifyContent: "flex-start",
                 textAlign: "left",
-                bgcolor: (theme) => alpha(theme.palette.background.paper, 0.28),
+                bgcolor: (theme) => alpha(theme.palette.background.default, 0.3),
                 transition: "background-color 100ms, border-color 100ms, transform 100ms",
                 "&:hover": {
                   bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
@@ -174,34 +185,30 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
                 opacity: disabled ? 0.48 : 1,
               }}
             >
-              <Box
-                component="kbd"
-                sx={{
-                  width: 28,
-                  height: 28,
-                  mr: 1.25,
-                  display: "grid",
-                  placeItems: "center",
-                  borderRadius: 1,
-                  bgcolor: "primary.main",
-                  color: "primary.contrastText",
-                  fontFamily: "monospace",
-                  fontWeight: 800,
-                  boxShadow: (theme) => `0 3px 9px ${alpha(theme.palette.primary.main, 0.24)}`,
-                }}
-              >
-                {entry.key}
-              </Box>
+              <Box sx={{ mr: 1 }}><DesktopKeycap keyLabel={entry.key} accent /></Box>
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" fontWeight={650} noWrap>{entry.label}</Typography>
-                <Typography variant="caption" color="text.secondary" noWrap>
+                <Typography
+                  variant="body2"
+                  fontWeight={650}
+                  noWrap
+                  sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}
+                >
+                  {entry.label}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}
+                >
                   {reason ?? (entry.branch ? "More commands" : entry.command?.group)}
                 </Typography>
               </Box>
             </ButtonBase>
           );
-        })}
-      </Box>
-    </Paper>
+          })}
+        </Box>
+      </Paper>
+    </Modal>
   );
 }
