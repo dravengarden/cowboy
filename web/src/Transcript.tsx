@@ -174,14 +174,16 @@ const pulse = keyframes`
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
 
-// Codex's compact square activity language, rendered as a "workcell": a
-// rounded code-unit boundary with one illuminated edge travelling around it and
-// a tiny terminal caret breathing at the centre. Unlike a generic MUI ring it is
-// identifiable at 14–18px and never changes layout between frames.
-const codexTrace = keyframes`to { stroke-dashoffset: -52; }`;
+// Codex activity uses the smallest useful coding gesture: a prompt chevron
+// advances toward a breathing caret. There is no enclosing spinner or badge,
+// so it stays calm beside transcript text while remaining provider-specific.
+const codexPrompt = keyframes`
+  0%, 100% { transform: translateX(0); opacity: 0.55; }
+  50%      { transform: translateX(1.5px); opacity: 1; }
+`;
 const codexCaret = keyframes`
-  0%, 100% { opacity: 0.35; transform: scaleX(0.7); }
-  50%      { opacity: 1; transform: scaleX(1); }
+  0%, 45%  { opacity: 1; }
+  55%, 100% { opacity: 0.24; }
 `;
 
 function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
@@ -197,19 +199,17 @@ function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
         flexShrink: 0,
         overflow: "visible",
         color: "primary.main",
-        "& .codex-workcell-trace": { animation: `${codexTrace} 1.45s linear infinite` },
+        "& .codex-workcell-prompt": { animation: `${codexPrompt} 1.25s ease-in-out infinite` },
         "& .codex-workcell-caret": {
-          transformOrigin: "9px 10px",
-          animation: `${codexCaret} 1.1s ease-in-out infinite`,
+          animation: `${codexCaret} 1.05s steps(1, end) infinite`,
         },
         "@media (prefers-reduced-motion: reduce)": {
-          "& .codex-workcell-trace, & .codex-workcell-caret": { animation: "none" },
+          "& .codex-workcell-prompt, & .codex-workcell-caret": { animation: "none" },
         },
       }}
     >
-      <rect x="2" y="2" width="14" height="14" rx="4" fill="none" stroke="currentColor" strokeWidth="1.25" opacity="0.2" />
-      <rect className="codex-workcell-trace" x="2" y="2" width="14" height="14" rx="4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeDasharray="9 43" />
-      <path className="codex-workcell-caret" d="M6.5 10h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path className="codex-workcell-prompt" d="M3.5 5.5 7 9l-3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path className="codex-workcell-caret" d="M9.5 12.5h5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </Box>
   );
 }

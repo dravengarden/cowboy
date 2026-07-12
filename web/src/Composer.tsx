@@ -1186,6 +1186,15 @@ export function ComposerWorkspace({
           position: "relative",
           display: "flex",
           flexDirection: "column",
+          ...(surface === "desktop" && {
+            // Match the Queue/Draft focus boundary without tinting this very
+            // large writing canvas. Keep the same 1px geometry at rest and in
+            // focus so neither the editor nor its caret shifts by a pixel.
+            transition: "border-color 120ms ease",
+            "&:focus-within": {
+              borderColor: (t) => alpha(t.palette.primary.main, 0.58),
+            },
+          }),
           bgcolor: column
             ? (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.18 : 0.34)
             : "transparent",

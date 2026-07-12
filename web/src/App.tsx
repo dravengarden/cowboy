@@ -1241,6 +1241,12 @@ export function App({
                         boxShadow: (t) =>
                             `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.82)}`,
                     },
+                    // Pending panels and the editor use one focus-boundary
+                    // token. Queue/Draft retain their compact left rail; the
+                    // full-height Composer uses only this border color.
+                    "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
+                        borderColor: (t) => alpha(t.palette.primary.main, 0.58),
+                    },
                     "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer']):focus-visible": {
                         boxShadow: (t) => [
                             `inset 2px 0 0 ${t.palette.primary.main}`,
