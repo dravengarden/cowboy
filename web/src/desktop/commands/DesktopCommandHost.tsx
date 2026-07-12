@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,8 @@ import {
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { useVimMode } from "../../vimModeStore";
+import { isMac } from "../../platform";
+import { isTextEditingTarget } from "./shortcut";
 
 export function DesktopCommandHost({
   sessions,
@@ -46,6 +48,50 @@ export function DesktopCommandHost({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const numberedStateRef = useRef({
+    sessions,
+    onPickSession,
+    vimMode,
+    workspaceMode: workspace.mode,
+  });
+  numberedStateRef.current = {
+    sessions,
+    onPickSession,
+    vimMode,
+    workspaceMode: workspace.mode,
+  };
+
+  // Stable hot path for the ten visible session slots. Session status updates
+  // replace the sessions array frequently; dynamic command registration can
+  // briefly sit between effect cleanup and re-registration. A single lifetime
+  // listener plus current refs makes Cmd+Digit atomic across those broadcasts.
+  useEffect(() => {
+    const onNumberedSession = (event: KeyboardEvent): void => {
+      const mod = isMac
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey;
+      if (
+        !mod || event.shiftKey || event.altKey || event.repeat || event.isComposing ||
+        isTextEditingTarget(event.target)
+      ) return;
+      const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
+      if (!match?.[1]) return;
+      const state = numberedStateRef.current;
+      if (
+        state.workspaceMode !== "normal" || state.vimMode !== "normal" ||
+        document.querySelector("[role='dialog'], [role='menu']") !== null
+      ) return;
+      const digit = Number(match[1]);
+      const index = digit === 0 ? 9 : digit - 1;
+      const session = state.sessions[index];
+      if (!session) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.onPickSession(session.id);
+    };
+    globalThis.addEventListener("keydown", onNumberedSession, true);
+    return () => globalThis.removeEventListener("keydown", onNumberedSession, true);
+  }, []);
 
   // Session slots follow the visible sidebar order: ⌘1…⌘9, then ⌘0. Register
   // them dynamically so Command Palette and the shortcuts dialog discover the
