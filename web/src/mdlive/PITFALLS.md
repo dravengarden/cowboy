@@ -286,7 +286,13 @@ here says otherwise.
     stale RAF then rewrites Selection and leaves underlined romanization frozen.
     Plain `i/I/a/A/R` only focus the content once; reserve deferred DOM/caret
     stabilization for structural commands (`o/O/s/S/C` and change operators)
-    that can create an empty line, with composition guards at every phase.
+    that can create an empty line, with composition guards at every phase. A
+    composition guard by itself is still racy: on macOS the first physical IME
+    key can reach the contenteditable before `compositionstart`. Structural
+    repair therefore captures a native-input epoch; any later content keydown,
+    beforeinput, or compositionstart invalidates every pending RAF/measure/write.
+    Never let a Vim-command callback call focus/dispatch/Selection.collapse after
+    native input has begun, even when `EditorView.composing` is not true yet.
 
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns

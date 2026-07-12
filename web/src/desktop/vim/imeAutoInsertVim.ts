@@ -87,8 +87,15 @@ export function createImeAutoInsertVim(): {
   // compositionend. Vim may change mode in that window, but Cowboy must not
   // move focus or stabilize the caret until the browser commits marked text.
   let composing = false;
+  // A structural Vim insert command may queue DOM-caret repair for a line that
+  // does not exist yet. The first physical key of a native IME reaches the
+  // contenteditable before `compositionstart` on macOS. Treat ANY subsequent
+  // native input as ownership transfer: every queued RAF/measure from the Vim
+  // command must become a no-op, even if compositionstart arrives a frame late.
+  let nativeInputEpoch = 0;
   const autoInsert = Prec.highest(EditorView.domEventHandlers({
     compositionstart: (_event, view): boolean => {
+      nativeInputEpoch++;
       composing = true;
       const cm = getCM(view);
       const state = cm?.state?.vim;
@@ -136,6 +143,11 @@ export function createImeAutoInsertVim(): {
       this.sink.addEventListener("focus", this.onSinkFocus);
       this.sink.addEventListener("blur", this.onSinkBlur);
       this.sink.addEventListener("keydown", this.onKeyDown);
+      // Capture runs before CodeMirror's input pipeline. In particular, the
+      // first pinyin key can precede compositionstart, so composition guards
+      // alone cannot protect a queued Selection rewrite.
+      view.contentDOM.addEventListener("keydown", this.onNativeInput, true);
+      view.contentDOM.addEventListener("beforeinput", this.onNativeInput, true);
       view.dom.append(this.sink);
       queueMicrotask(() => this.connect());
     }
@@ -154,6 +166,8 @@ export function createImeAutoInsertVim(): {
       this.sink.removeEventListener("focus", this.onSinkFocus);
       this.sink.removeEventListener("blur", this.onSinkBlur);
       this.sink.removeEventListener("keydown", this.onKeyDown);
+      this.view.contentDOM.removeEventListener("keydown", this.onNativeInput, true);
+      this.view.contentDOM.removeEventListener("beforeinput", this.onNativeInput, true);
       this.view.dom.classList.remove("cm-vim-command-focused");
       this.sink.remove();
     }
@@ -186,10 +200,14 @@ export function createImeAutoInsertVim(): {
 
     private scheduleNativeCaretStabilization(): void {
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
+      const epoch = nativeInputEpoch;
       this.focusFrame = requestAnimationFrame(() => {
         this.focusFrame = null;
-        if (!this.cm?.state?.vim?.insertMode || composing || this.view.composing) return;
-        this.stabilizeNativeCaret(0);
+        if (
+          epoch !== nativeInputEpoch || !this.cm?.state?.vim?.insertMode ||
+          composing || this.view.composing
+        ) return;
+        this.stabilizeNativeCaret(0, epoch);
       });
     }
 
@@ -201,7 +219,7 @@ export function createImeAutoInsertVim(): {
      * leaves WebKit/Chromium without a paintable native caret. Run inside CM6's
      * measure queue and retry only while the DOM point is still the root.
      */
-    private stabilizeNativeCaret(attempt: number): void {
+    private stabilizeNativeCaret(attempt: number, epoch: number): void {
       this.view.requestMeasure({
         read: () => {
           const head = this.view.state.selection.main.head;
@@ -210,7 +228,8 @@ export function createImeAutoInsertVim(): {
         },
         write: ({ dom, head, atContentRoot }) => {
           if (
-            !this.cm?.state?.vim?.insertMode || composing || this.view.composing
+            epoch !== nativeInputEpoch || !this.cm?.state?.vim?.insertMode ||
+            composing || this.view.composing
           ) return;
           this.view.contentDOM.focus({ preventScroll: true });
           const selection = window.getSelection();
@@ -218,9 +237,12 @@ export function createImeAutoInsertVim(): {
           if (atContentRoot && attempt < 2) {
             this.focusFrame = requestAnimationFrame(() => {
               this.focusFrame = null;
-              if (!this.cm?.state?.vim?.insertMode) return;
+              if (
+                epoch !== nativeInputEpoch || !this.cm?.state?.vim?.insertMode ||
+                composing || this.view.composing
+              ) return;
               this.view.dispatch({ selection: { anchor: head } });
-              this.stabilizeNativeCaret(attempt + 1);
+              this.stabilizeNativeCaret(attempt + 1, epoch);
             });
           }
         },
@@ -264,6 +286,14 @@ export function createImeAutoInsertVim(): {
       this.syncFocusToMode();
       if (STRUCTURAL_INSERT_KEYS.has(key) || changing) {
         this.scheduleNativeCaretStabilization();
+      }
+    };
+
+    private readonly onNativeInput = (): void => {
+      nativeInputEpoch++;
+      if (this.focusFrame !== null) {
+        cancelAnimationFrame(this.focusFrame);
+        this.focusFrame = null;
       }
     };
 
