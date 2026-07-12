@@ -6,6 +6,7 @@ import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
+import { useImeStatus } from "./vim/imeStatusStore";
 
 function Segment({
   label,
@@ -54,13 +55,17 @@ export function DesktopStatusLine({
   const { focusedPane, focusedRegion, leaderPrefix, mode } = workspace;
   const vimEnabled = useVimSetting();
   const vimMode = useVimMode();
+  const ime = useImeStatus();
   const connected = useStoreSelector((snapshot) => snapshot.connected);
   const effectiveMode = focusedPane === "prompt" && vimEnabled ? vimMode : mode;
   const modeColor = focusedPane === "prompt" && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
-  const imeAutoInsert = focusedPane === "prompt" && vimEnabled &&
-    vimMode !== "insert" && vimMode !== "replace";
+  const imeLabel = ime.phase === "composing"
+    ? (ime.autoInserted ? "IME → INSERT" : "IME · COMPOSING")
+    : ime.phase === "committed"
+    ? "IME · COMMITTED"
+    : null;
 
   return (
     <Box
@@ -99,11 +104,15 @@ export function DesktopStatusLine({
             mono
           />
         )}
-        {imeAutoInsert && (
+        {imeLabel && (
           <Segment
-            label="IME SAFE"
-            color="info.main"
-            tooltip="Normal commands use a non-editable focus target; CJK composition starts only in Insert"
+            label={imeLabel}
+            color={ime.phase === "committed" ? "success.main" : "info.main"}
+            tooltip={ime.autoInserted
+              ? "Cowboy detected native composition and safely entered Vim Insert mode"
+              : ime.phase === "committed"
+              ? "Native IME composition committed"
+              : "Native IME composition is active"}
             mono
           />
         )}

@@ -264,6 +264,11 @@ here says otherwise.
     composition guard and `EditorView.composing`. Likewise, the Normal command
     sink may only replace focus while its own EditorView still owns focus; a
     mount-time or stale microtask must never acquire focus from another region.
+    Desktop surfaces may expose this lifecycle through the Desktop-only IME
+    status store: composition is visible only while active, an auto-protected
+    Normal→Insert transition is labelled explicitly, and commit confirmation
+    expires after 600ms. Do not infer the user's language or input-source name;
+    browsers expose composition lifecycle, not the selected OS keyboard layout.
 
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns

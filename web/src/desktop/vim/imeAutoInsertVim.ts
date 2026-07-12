@@ -1,6 +1,11 @@
 import { Prec, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
+import {
+  clearImeStatus,
+  setImeCommitted,
+  setImeComposing,
+} from "./imeStatusStore";
 
 const CODE_KEYS: Readonly<Record<string, string>> = {
   Backquote: "`",
@@ -83,6 +88,7 @@ export function createImeAutoInsertVim(): {
       composing = true;
       const cm = getCM(view);
       const state = cm?.state?.vim;
+      setImeComposing(!!cm && !!state && !state.insertMode);
       if (!cm || !state || state.insertMode) return false;
       // Visual/operator-pending interpret `i` as part of a command. Esc first
       // normalizes every non-insert state and clears partial commands. It is
@@ -93,11 +99,13 @@ export function createImeAutoInsertVim(): {
     },
     compositionend: (): boolean => {
       composing = false;
+      setImeCommitted();
       return false;
     },
     blur: (): boolean => {
       // Self-heal an aborted composition (window switch / editor unmount).
       composing = false;
+      clearImeStatus();
       return false;
     },
   }));
@@ -134,6 +142,7 @@ export function createImeAutoInsertVim(): {
     }
 
     destroy(): void {
+      clearImeStatus();
       if (this.cm && this.modeHandler) {
         this.cm.off?.("vim-mode-change", this.modeHandler);
       }
