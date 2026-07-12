@@ -34,3 +34,22 @@ Deno.test("Mod maps to Command on macOS and Control elsewhere", () => {
     altKey: false,
   }, true));
 });
+
+Deno.test("numbered session shortcuts preserve digit identity", () => {
+  const first = parseShortcut("Mod+1");
+  const tenth = parseShortcut("Mod+0");
+  assert(matchesShortcut(first, {
+    key: "1",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
+  assert(matchesShortcut(tenth, {
+    key: "0",
+    metaKey: false,
+    ctrlKey: true,
+    shiftKey: false,
+    altKey: false,
+  }, false));
+});

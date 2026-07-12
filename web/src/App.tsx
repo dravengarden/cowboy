@@ -124,6 +124,10 @@ const DesktopComposer = lazy(async () => {
     const module = await import("./desktop/DesktopComposer");
     return { default: module.DesktopComposer };
 });
+const DesktopSessionShortcut = lazy(async () => {
+    const module = await import("./desktop/DesktopSessionShortcut");
+    return { default: module.DesktopSessionShortcut };
+});
 const DesktopWorkspace = lazy(async () => {
     const module = await import("./desktop/DesktopWorkspace");
     return { default: module.DesktopWorkspace };
@@ -328,6 +332,7 @@ function SessionList({
     onRequestRename,
     autoResumeDefault,
     loaded,
+    desktop,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -341,6 +346,7 @@ function SessionList({
     // list is genuinely UNKNOWN (not "empty") — distinguishing the two avoids the
     // false "No sessions yet." flash on a reload before the snapshot lands.
     loaded: boolean;
+    desktop: boolean;
 }): React.JSX.Element {
     // Per-row kebab Menu anchor + target. Standard Material list-row
     // pattern: trailing IconButton with MoreVert opens a Menu containing
@@ -392,7 +398,7 @@ function SessionList({
                     },
                 }}
             >
-                {sortable.order.map((id) => {
+                {sortable.order.map((id, index) => {
                     const s = byId.get(id);
                     if (!s) return null;
                     return (
@@ -487,6 +493,15 @@ function SessionList({
                                 },
                             }}
                         />
+                        {desktop && index < 10 && (
+                            <Suspense fallback={null}>
+                                <DesktopSessionShortcut
+                                    digit={index === 9 ? "0" : String(index + 1)}
+                                    active={s.id === activeId}
+                                    title={s.title}
+                                />
+                            </Suspense>
+                        )}
                         <IconButton
                             className="cowboy-session-actions"
                             aria-label={`row actions ${s.id}`}
@@ -1165,6 +1180,7 @@ export function App({
             }}
             autoResumeDefault={autoResumeDefaultOn}
             loaded={sessionsLoaded}
+            desktop={surface === "desktop"}
         />
     );
 

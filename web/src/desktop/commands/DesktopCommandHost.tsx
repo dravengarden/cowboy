@@ -20,6 +20,7 @@ import {
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
+import { useVimMode } from "../../vimModeStore";
 
 export function DesktopCommandHost({
   sessions,
@@ -40,10 +41,33 @@ export function DesktopCommandHost({
 }): React.JSX.Element {
   const registry = useDesktopCommands();
   const workspace = useDesktopWorkspace();
+  const vimMode = useVimMode();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Session slots follow the visible sidebar order: ⌘1…⌘9, then ⌘0. Register
+  // them dynamically so Command Palette and the shortcuts dialog discover the
+  // same commands as the keycaps. They are intentionally unavailable in Vim
+  // Insert/Replace, text controls, and any modal/menu interaction.
+  useEffect(() => {
+    const modalOpen = (): boolean =>
+      document.querySelector("[role='dialog'], [role='menu']") !== null;
+    const unregister = sessions.slice(0, 10).map((session, index) => {
+      const digit = index === 9 ? "0" : String(index + 1);
+      return registry.register({
+        id: `session.switch.${digit}`,
+        title: `Switch to Session ${digit}: ${session.title}`,
+        description: "Select the numbered session shown in the Desktop sidebar",
+        group: "Session",
+        shortcut: `Mod+${digit}`,
+        when: () => workspace.mode === "normal" && vimMode === "normal" && !modalOpen(),
+        run: () => onPickSession(session.id),
+      });
+    });
+    return () => unregister.forEach((remove) => remove());
+  }, [onPickSession, registry.register, sessions, vimMode, workspace.mode]);
 
   const moveSession = (delta: number): void => {
     if (sessions.length === 0) return;
