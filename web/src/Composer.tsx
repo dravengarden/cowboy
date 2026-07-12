@@ -3443,9 +3443,28 @@ function ComposerSheet({
   dead: boolean;
   onSelectOption: (configId: string, value: string | boolean) => void;
 }): React.JSX.Element {
-  const navbarAtBottom = useNavbarAtBottom();
+  // Phones and portrait touch tablets keep the bottom sheet. Pointer-driven
+  // devices from 768px and every viewport >=1024px get a centered dialog.
+  const useSheetSurface = useMediaQuery(
+    "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
+  );
   return (
-    <Sheet open={open} onClose={onClose} forceSheet={navbarAtBottom}>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      forceSheet={useSheetSurface}
+      wide
+      title={useSheetSurface ? undefined : (
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Typography variant="h6" component="span" sx={{ fontWeight: 700 }}>
+            Session settings
+          </Typography>
+          <IconButton aria-label="close session settings" onClick={onClose} size="small">
+            <Close fontSize="small" />
+          </IconButton>
+        </Stack>
+      )}
+    >
       {session && <SessionInfoSection session={session} />}
       {session && <QueueSection session={session} />}
       {(loading || options.length > 0) && (

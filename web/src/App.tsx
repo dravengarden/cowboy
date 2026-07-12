@@ -2136,7 +2136,15 @@ function SettingsShell({
         transition: "border-color 0.15s ease",
         "&:hover": { borderColor: active ? "primary.main" : "text.secondary" },
     });
-    const navbarAtBottom = useNavbarAtBottom();
+    // Surface policy for this content-heavy modal:
+    // - phones (<768px) stay a bottom sheet even with a fine pointer;
+    // - portrait/mid-size touch tablets (<1024px, coarse pointer) keep the
+    //   touch-native sheet;
+    // - landscape tablets and desktop windows (>=1024px), plus pointer-driven
+    //   devices from 768px up, use the centered dialog.
+    const useSheetSurface = useMediaQuery(
+        "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
+    );
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
@@ -2144,7 +2152,8 @@ function SettingsShell({
         <Sheet
             open={open}
             onClose={onClose}
-            forceSheet={navbarAtBottom}
+            forceSheet={useSheetSurface}
+            wide
             cover
         >
             {/* Tab switcher + close, rendered in the BODY rather than the shared
