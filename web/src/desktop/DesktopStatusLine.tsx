@@ -1,12 +1,9 @@
 import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
-import { useMemo } from "react";
 import type { Status } from "../protocol";
 import { useStoreSelector } from "../store";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
-
-const EMPTY_CONFIG_OPTIONS: never[] = [];
 
 function Segment({
   label,
@@ -45,7 +42,6 @@ function Segment({
 }
 
 export function DesktopStatusLine({
-  sessionId,
   status,
 }: {
   sessionId: string;
@@ -56,24 +52,12 @@ export function DesktopStatusLine({
   const vimEnabled = useVimSetting();
   const vimMode = useVimMode();
   const connected = useStoreSelector((snapshot) => snapshot.connected);
-  const session = useStoreSelector((snapshot) =>
-    snapshot.sessions.find((candidate) => candidate.id === sessionId)
-  );
-  const configOptionsBySession = useStoreSelector((snapshot) => snapshot.configOptions);
-  const configOptions = configOptionsBySession.get(sessionId) ?? EMPTY_CONFIG_OPTIONS;
-  const config = useMemo(
-    () => new Map(configOptions.map((option) => [option.id, String(option.currentValue)])),
-    [configOptions],
-  );
   const effectiveMode = focusedPane === "prompt" && vimEnabled ? vimMode : mode;
   const modeColor = focusedPane === "prompt" && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
   const imeAutoInsert = focusedPane === "prompt" && vimEnabled &&
     vimMode !== "insert" && vimMode !== "replace";
-  const contextPercent = session?.context_size
-    ? Math.round(((session.context_used ?? 0) / session.context_size) * 100)
-    : null;
 
   return (
     <Box
@@ -113,13 +97,6 @@ export function DesktopStatusLine({
             mono
           />
         )}
-        <Segment
-          label={session?.provider ?? "NO PROVIDER"}
-          tooltip={session?.title ?? "No active session"}
-        />
-        {config.get("model") && <Segment label={config.get("model") as string} tooltip="Model" />}
-        {config.get("effort") && <Segment label={config.get("effort") as string} tooltip="Reasoning effort" />}
-        {contextPercent !== null && <Segment label={`${String(contextPercent)}% ctx`} tooltip="Context window used" />}
       </Stack>
       <Box sx={{ flex: 1 }} />
       <Stack direction="row" alignItems="center" divider={<Divider orientation="vertical" flexItem />}>
@@ -140,7 +117,6 @@ export function DesktopStatusLine({
             workspace.setMode("leader");
           }}
         />
-        <Segment label="f hints · soon" tooltip="Vimium target hints arrive in Phase 4" mono />
       </Stack>
     </Box>
   );

@@ -399,7 +399,7 @@ export function DesktopTopBarControls({
                 <Typography variant="caption" fontWeight={750}>Compact</Typography>
                 {contextPercent !== null && (
                   <Typography variant="caption" color="text.secondary" fontWeight={650}>
-                    {contextPercent}% ctx
+                    {contextPercent}%
                   </Typography>
                 )}
               </Stack>
