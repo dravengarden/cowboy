@@ -14,9 +14,11 @@ function displayKey(key: string): string {
 export function DesktopKeycap({
   keyLabel,
   accent = false,
+  quiet = false,
 }: {
   keyLabel: string;
   accent?: boolean;
+  quiet?: boolean;
 }): React.JSX.Element {
   const rendered = displayKey(keyLabel);
   return (
@@ -26,21 +28,26 @@ export function DesktopKeycap({
       sx={{
         display: "inline-grid",
         placeItems: "center",
-        minWidth: rendered.length > 2 ? 28 : 20,
-        height: 20,
-        px: 0.5,
+        minWidth: quiet ? 24 : (rendered.length > 2 ? 28 : 20),
+        height: quiet ? 18 : 20,
+        px: quiet ? 0.25 : 0.5,
         borderRadius: 0.7,
         border: 1,
-        borderColor: (theme) => accent
+        borderColor: quiet
+          ? "transparent"
+          : (theme) => accent
           ? alpha(theme.palette.primary.main, 0.4)
           : alpha(theme.palette.divider, 0.72),
-        bgcolor: (theme) => accent
+        bgcolor: quiet
+          ? "transparent"
+          : (theme) => accent
           ? alpha(theme.palette.primary.main, 0.1)
           : alpha(theme.palette.background.paper, 0.66),
-        color: accent ? "primary.main" : "text.secondary",
-        boxShadow: (theme) =>
+        color: quiet ? (accent ? "text.secondary" : "text.disabled") :
+          (accent ? "primary.main" : "text.secondary"),
+        boxShadow: quiet ? "none" : (theme) =>
           `0 1px 2px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.18 : 0.07)}`,
-        backdropFilter: "blur(6px)",
+        backdropFilter: quiet ? "none" : "blur(6px)",
         pointerEvents: "none",
         userSelect: "none",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",

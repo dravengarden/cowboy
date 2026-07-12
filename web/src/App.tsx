@@ -423,6 +423,9 @@ function SessionList({
                                 pr: 0.5,
                                 py: 0.25,
                             },
+                            "&:hover .cowboy-session-shortcut, &:focus-visible .cowboy-session-shortcut, &.Mui-selected .cowboy-session-shortcut": {
+                                opacity: 0.82,
+                            },
                         }}
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
