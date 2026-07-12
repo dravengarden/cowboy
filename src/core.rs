@@ -3681,93 +3681,98 @@ impl Default for Hub {
 /// retry recalibrates it. The queue stays bounded by the server-side channel.
 pub async fn run_judge_worker(hub: Hub, mut rx: mpsc::Receiver<JudgeReq>, command: String) {
     let mut judge = crate::inference::codex::CodexJudge::new(command);
+    let mut circuit_opened_at: Option<std::time::Instant> = None;
     while let Some(req) = rx.recv().await {
-        let mut last_error = String::new();
-        let mut completed = false;
-        for attempt in 0..2u32 {
-            if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-            let started = std::time::Instant::now();
-            let call = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                judge.complete(&req.final_text),
-            )
-            .await;
-            let response = match call {
-                Ok(Ok(response)) => response,
-                Ok(Err(error)) => {
-                    last_error = error.to_string();
-                    tracing::warn!(session = %req.session_id, %last_error, attempt, "Codex judge attempt failed");
-                    continue;
-                }
-                Err(_) => {
-                    "Codex judge timed out after 30s".clone_into(&mut last_error);
-                    judge.reset();
-                    tracing::warn!(session = %req.session_id, attempt, "Codex judge attempt timed out");
-                    continue;
-                }
-            };
-            match crate::skills::confirm::classify_response(response) {
-                Ok(outcome) => {
-                    if !hub.judge_is_current(&req.session_id, req.seq) {
-                        completed = true;
-                        break;
-                    }
-                    let latency_ms =
-                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    let (hit, miss) = outcome
-                        .usage
-                        .as_ref()
-                        .map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
-                    tracing::info!(
-                        session = %req.session_id,
-                        awaiting = outcome.verdict.awaiting_user,
-                        done = outcome.verdict.done,
-                        confidence = outcome.verdict.confidence,
-                        reason = %outcome.verdict.reason,
-                        latency_ms,
-                        cache_hit = hit,
-                        cache_miss = miss,
-                        attempt,
-                        "confirm-detect verdict"
-                    );
-                    let at = now_ms();
-                    if !hub.apply_verdict(&req.session_id, req.seq, &outcome.verdict) {
-                        completed = true;
-                        break;
-                    }
-                    hub.emit_and_record_judge(
-                        &req.session_id,
-                        JudgeRun {
-                            id: format!("{at}-{}", req.seq),
-                            at,
-                            layer: outcome.layer.to_owned(),
-                            awaiting_user: outcome.verdict.awaiting_user,
-                            done: outcome.verdict.done,
-                            confidence: outcome.verdict.confidence,
-                            reason: outcome.verdict.reason.clone(),
-                            model: crate::inference::codex::MODEL.to_owned(),
-                            input: req.final_text.clone(),
-                            output: outcome.raw_output,
-                            cache_hit: hit,
-                            cache_miss: miss,
-                            latency_ms,
-                        },
-                    );
-                    hub.set_judging_if_current(&req.session_id, req.seq, false);
-                    completed = true;
-                    break;
-                }
-                Err(error) => {
-                    last_error = error.to_string();
-                    judge.reset();
-                    tracing::warn!(session = %req.session_id, %last_error, attempt, "parse Codex judge verdict failed");
-                }
-            }
+        // The judge is an advisory turn-end classifier, never part of the agent's
+        // critical path. When the model endpoint is unhealthy, one slow request
+        // must not hold this session for a minute and then serially do the same to
+        // every session behind it. Probe once with a short deadline; after a
+        // failure, fail open for a cooldown and drain queued requests immediately.
+        if circuit_opened_at
+            .is_some_and(|opened| opened.elapsed() < std::time::Duration::from_mins(1))
+        {
+            hub.finish_judge_failure(req, "classifier circuit open");
+            continue;
         }
-        if !completed {
-            hub.finish_judge_failure(req, &last_error);
+        circuit_opened_at = None;
+
+        let started = std::time::Instant::now();
+        let call = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            judge.complete(&req.final_text),
+        )
+        .await;
+        let response = match call {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                let error = error.to_string();
+                judge.reset();
+                circuit_opened_at = Some(std::time::Instant::now());
+                tracing::warn!(session = %req.session_id, %error, "Codex judge failed; opening circuit");
+                hub.finish_judge_failure(req, &error);
+                continue;
+            }
+            Err(_) => {
+                let error = "Codex judge timed out after 8s";
+                judge.reset();
+                circuit_opened_at = Some(std::time::Instant::now());
+                tracing::warn!(session = %req.session_id, "Codex judge timed out; opening circuit");
+                hub.finish_judge_failure(req, error);
+                continue;
+            }
+        };
+        match crate::skills::confirm::classify_response(response) {
+            Ok(outcome) => {
+                if !hub.judge_is_current(&req.session_id, req.seq) {
+                    continue;
+                }
+                let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let (hit, miss) = outcome
+                    .usage
+                    .as_ref()
+                    .map_or((0, 0), |u| (u.cache_hit_tokens, u.cache_miss_tokens));
+                tracing::info!(
+                    session = %req.session_id,
+                    awaiting = outcome.verdict.awaiting_user,
+                    done = outcome.verdict.done,
+                    confidence = outcome.verdict.confidence,
+                    reason = %outcome.verdict.reason,
+                    latency_ms,
+                    cache_hit = hit,
+                    cache_miss = miss,
+                    "confirm-detect verdict"
+                );
+                let at = now_ms();
+                if !hub.apply_verdict(&req.session_id, req.seq, &outcome.verdict) {
+                    continue;
+                }
+                hub.emit_and_record_judge(
+                    &req.session_id,
+                    JudgeRun {
+                        id: format!("{at}-{}", req.seq),
+                        at,
+                        layer: outcome.layer.to_owned(),
+                        awaiting_user: outcome.verdict.awaiting_user,
+                        done: outcome.verdict.done,
+                        confidence: outcome.verdict.confidence,
+                        reason: outcome.verdict.reason.clone(),
+                        model: crate::inference::codex::MODEL.to_owned(),
+                        input: req.final_text.clone(),
+                        output: outcome.raw_output,
+                        cache_hit: hit,
+                        cache_miss: miss,
+                        latency_ms,
+                    },
+                );
+                hub.set_judging_if_current(&req.session_id, req.seq, false);
+            }
+            Err(error) => {
+                let error = error.to_string();
+                judge.reset();
+                circuit_opened_at = Some(std::time::Instant::now());
+                tracing::warn!(session = %req.session_id, %error, "parse Codex judge verdict failed; opening circuit");
+                hub.finish_judge_failure(req, &error);
+            }
         }
     }
 }
