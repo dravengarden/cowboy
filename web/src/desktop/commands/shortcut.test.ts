@@ -52,4 +52,12 @@ Deno.test("numbered session shortcuts preserve digit identity", () => {
     shiftKey: false,
     altKey: false,
   }, false));
+  assert(matchesShortcut(parseShortcut("Mod+2"), {
+    key: "™",
+    code: "Digit2",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
 });

@@ -18,6 +18,7 @@ export function DesktopKeycap({
   keyLabel: string;
   accent?: boolean;
 }): React.JSX.Element {
+  const rendered = displayKey(keyLabel);
   return (
     <Box
       component="kbd"
@@ -25,26 +26,31 @@ export function DesktopKeycap({
       sx={{
         display: "inline-grid",
         placeItems: "center",
-        minWidth: keyLabel.length > 2 ? 30 : 24,
-        height: 24,
-        px: 0.65,
-        borderRadius: 0.8,
+        minWidth: rendered.length > 2 ? 28 : 20,
+        height: 20,
+        px: 0.5,
+        borderRadius: 0.7,
         border: 1,
-        borderColor: (theme) => alpha(theme.palette.primary.main, accent ? 0.58 : 0.28),
-        bgcolor: (theme) => alpha(theme.palette.primary.main, accent ? 0.16 : 0.07),
+        borderColor: (theme) => accent
+          ? alpha(theme.palette.primary.main, 0.4)
+          : alpha(theme.palette.divider, 0.72),
+        bgcolor: (theme) => accent
+          ? alpha(theme.palette.primary.main, 0.1)
+          : alpha(theme.palette.background.paper, 0.66),
         color: accent ? "primary.main" : "text.secondary",
-        boxShadow: (theme) => [
-          `0 1px 2px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.3 : 0.12)}`,
-          `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.06 : 0.65)}`,
-        ].join(", "),
+        boxShadow: (theme) =>
+          `0 1px 2px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.18 : 0.07)}`,
+        backdropFilter: "blur(6px)",
+        pointerEvents: "none",
+        userSelect: "none",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        fontSize: "0.6875rem",
+        fontSize: "0.625rem",
         fontWeight: 750,
         lineHeight: 1,
         whiteSpace: "nowrap",
       }}
     >
-      {displayKey(keyLabel)}
+      {rendered}
     </Box>
   );
 }

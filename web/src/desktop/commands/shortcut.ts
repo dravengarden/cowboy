@@ -21,12 +21,18 @@ export function matchesShortcut(
   event: Pick<
     KeyboardEvent,
     "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"
-  >,
+  > & { code?: string },
   mac: boolean,
 ): boolean {
   const modDown = mac ? event.metaKey : event.ctrlKey;
   const otherModDown = mac ? event.ctrlKey : event.metaKey;
-  return event.key.toLowerCase() === stroke.key &&
+  // Number-row shortcuts are positional. Some macOS input sources report a
+  // produced symbol (rather than "2") in `key` while Cmd is held, but `code`
+  // remains Digit2. This keeps session slots stable across keyboard layouts.
+  const keyMatches = event.key.toLowerCase() === stroke.key ||
+    (/^\d$/.test(stroke.key) &&
+      (event.code === `Digit${stroke.key}` || event.code === `Numpad${stroke.key}`));
+  return keyMatches &&
     modDown === stroke.mod &&
     !otherModDown &&
     event.shiftKey === stroke.shift &&
