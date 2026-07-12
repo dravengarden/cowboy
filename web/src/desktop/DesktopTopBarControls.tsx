@@ -117,7 +117,7 @@ function ConfigOptionControl({
               borderRadius: 1.25,
               fontSize: "0.75rem",
               fontWeight: 650,
-              "& .MuiSelect-select": { py: 0.75 },
+              "& .MuiSelect-select": { px: 1.2, py: 0.75 },
               bgcolor: (theme) => alpha(theme.palette.background.default, 0.42),
               "& .MuiOutlinedInput-notchedOutline": {
                 borderColor: (theme) => alpha(theme.palette.divider, 0.78),
@@ -149,8 +149,8 @@ function ConfigOptionControl({
           sx={{
             display: "flex",
             flexWrap: "nowrap",
-            gap: 0.4,
-            p: 0.35,
+            gap: 0.5,
+            p: 0.5,
             borderRadius: 1.5,
             bgcolor: (theme) => alpha(theme.palette.background.default, 0.48),
             border: 1,
@@ -175,9 +175,9 @@ function ConfigOptionControl({
               key={String(candidate.value)}
               value={String(candidate.value)}
               sx={{
-                minHeight: 27,
+                minHeight: 28,
                 minWidth: 0,
-                px: compact ? 0.9 : 1.15,
+                px: compact ? 1 : 1.25,
                 py: 0.2,
                 flex: compact ? "1 1 0" : "0 1 auto",
                 fontSize: "0.6875rem",
@@ -285,10 +285,30 @@ export function DesktopTopBarControls({
               sx={{
                 width: "clamp(190px, 18vw, 260px)",
                 height: 34,
+                px: 1.15,
                 justifyContent: "flex-start",
                 textTransform: "none",
                 flexShrink: 1,
                 minWidth: 170,
+                borderRadius: 1.5,
+                color: "text.primary",
+                borderColor: (theme) => alpha(theme.palette.primary.main, configAnchor ? 0.68 : 0.3),
+                bgcolor: (theme) => alpha(
+                  theme.palette.background.paper,
+                  configAnchor ? (theme.palette.mode === "dark" ? 0.78 : 0.82) : 0.46,
+                ),
+                boxShadow: configAnchor
+                  ? (theme) => `0 0 0 2px ${alpha(theme.palette.primary.main, 0.1)}`
+                  : "none",
+                "&:hover": {
+                  borderColor: (theme) => alpha(theme.palette.primary.main, 0.52),
+                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
+                },
+                "&.Mui-focusVisible": {
+                  borderColor: "primary.main",
+                  boxShadow: (theme) => `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
+                },
+                "& .MuiButton-startIcon": { mr: 0.8 },
                 "& .MuiButton-endIcon": { ml: "auto" },
               }}
             >
@@ -308,10 +328,10 @@ export function DesktopTopBarControls({
         slotProps={{
           paper: {
             sx: {
-              width: 420,
+              width: 428,
               maxWidth: "calc(100vw - 32px)",
               mt: 0.75,
-              p: 1.35,
+              p: 0,
               borderRadius: 2.5,
               border: 1,
               borderColor: (theme) => alpha(theme.palette.primary.main, 0.18),
@@ -329,8 +349,8 @@ export function DesktopTopBarControls({
           },
         }}
       >
-        <Stack spacing={1.15}>
-          <Box>
+        <Box>
+          <Box sx={{ px: 1.5, pt: 1.4, pb: 1.15 }}>
             <Stack direction="row" spacing={0.8} alignItems="center">
               <Tune sx={{ fontSize: 17, color: "primary.main" }} />
               <Typography variant="subtitle2" fontWeight={780}>Run configuration</Typography>
@@ -340,33 +360,34 @@ export function DesktopTopBarControls({
             </Typography>
           </Box>
           <Divider sx={{ borderColor: (theme) => alpha(theme.palette.divider, 0.72) }} />
-          <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)", gap: 1 }}>
-            {wideOptions.map((option) => (
-              <ConfigOptionControl key={option.id} option={option} sessionId={sessionId} />
-            ))}
-          </Box>
-          {compactOptions.length > 0 && (
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: compactOptions.length === 2
-                  ? "minmax(0, 2fr) minmax(110px, 1fr)"
-                  : "minmax(0, 1fr)",
-                gap: 1,
-                pt: 0.15,
-              }}
-            >
-              {compactOptions.map((option) => (
-                <ConfigOptionControl
-                  key={option.id}
-                  option={option}
-                  sessionId={sessionId}
-                  compact
-                />
+          <Stack spacing={1.2} sx={{ px: 1.5, pt: 1.2, pb: 1.5 }}>
+            <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)", gap: 1.2 }}>
+              {wideOptions.map((option) => (
+                <ConfigOptionControl key={option.id} option={option} sessionId={sessionId} />
               ))}
             </Box>
-          )}
-        </Stack>
+            {compactOptions.length > 0 && (
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: compactOptions.length === 2
+                    ? "minmax(0, 2fr) minmax(110px, 1fr)"
+                    : "minmax(0, 1fr)",
+                  gap: 1.2,
+                }}
+              >
+                {compactOptions.map((option) => (
+                  <ConfigOptionControl
+                    key={option.id}
+                    option={option}
+                    sessionId={sessionId}
+                    compact
+                  />
+                ))}
+              </Box>
+            )}
+          </Stack>
+        </Box>
       </Popover>
 
       <ButtonBase
