@@ -69,8 +69,6 @@ export function DesktopStatusLine({
   const modeColor = focusedPane === "prompt" && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
-  const imeLocked = focusedPane === "prompt" && vimEnabled &&
-    vimMode !== "insert" && vimMode !== "replace";
   const contextPercent = session?.context_size
     ? Math.round(((session.context_used ?? 0) / session.context_size) * 100)
     : null;
@@ -105,14 +103,6 @@ export function DesktopStatusLine({
           mono
         />
         <Segment label={focusedPane.toUpperCase()} tooltip="Focused workspace pane" mono />
-        {imeLocked && (
-          <Segment
-            label="IME LOCKED · i/a/o"
-            color="info.main"
-            tooltip="Normal mode blocks IME composition · press i, a, or o to type"
-            mono
-          />
-        )}
         <Segment
           label={session?.provider ?? "NO PROVIDER"}
           tooltip={session?.title ?? "No active session"}

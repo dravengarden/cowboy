@@ -71,7 +71,6 @@ here says otherwise.
 | `EditorView.theme({".cm-widgetBuffer":{visibility:"hidden"}})` | ✅ | hide the iOS broken-image dot (pitfall #4). |
 | `indentWithTab` | ✅ | Tab indent. |
 | `rectangularSelection()` / `allowMultipleSelections` | ❌ | multi-cursor; desktop-only nicety, needs drawSelection to render. Re-add desktop-only if ever wanted. |
-| Desktop Vim IME guard | ✅ Desktop only | `desktop/vim/imeSafeVim.ts` dynamically toggles `EditorView.editable` with a `Compartment`: Normal/Visual have no DOM IME target; Insert/Replace restore editing. Never load this module on Mobile. |
 | `history()` / `historyKeymap` / `defaultKeymap` | ❌ | **cowboy's `ComposerEditor` base already provides these.** A 2nd `history()` SPLITS UNDO. Never add here. |
 | `table-widget` / `image-blocks` / `wiki-links` | ❌ | the only **contenteditable** widgets = the IME landmine; and cowboy has no notes vault for `[[wiki-links]]`. Out of v1. See SYNC.md. |
 | `highlightSpecialChars()` | ❌ | renders dots for special chars — noise in a chat box. |
@@ -218,18 +217,6 @@ here says otherwise.
     **NOT yet device-verified** — the full iOS caret/IME/paste-menu matrix can't be
     reproduced in emulated Chrome; confirm on the Simulator/device before landing.
 
-13. **Desktop Vim Normal mode triggered the active CJK IME candidate window.**
-    `@replit/codemirror-vim` left a `contenteditable` DOM input target in Normal
-    mode, so macOS could consume pinyin before Vim interpreted `h/j/k/l`.
-    **Fix:** the dynamically imported Desktop Vim runtime owns an
-    `EditorView.editable` compartment. Normal/Visual/operator-pending reconfigure
-    it to false while retaining a focusable `tabindex`; Insert/Replace restore it
-    to true. This is not an OS input-source switch—browser code cannot control the
-    client Mac input source. **Isolation:** Mobile passes `vim=false` and must load
-    no `desktop/vim` resource. **Risk:** verify focus, mouse selection,
-    yank/paste/undo, and every Insert↔Normal transition in real Desktop Chrome.
-    The iOS matrix is unchanged because this module never loads there.
-
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
@@ -250,13 +237,3 @@ fullscreen editor:
 
 Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove
 #1–#3 — those are iOS-only.
-
-Desktop Vim IME guard:
-
-- [ ] Normal/Visual DOM has `data-vim-ime="locked"`, no `contenteditable`, and
-      remains focused; `h/j/k/l`, `dd`, `yy`, `p`, and `u` work.
-- [ ] `i`, `a`, `o`, `c`, and Replace restore `contenteditable=true` before the
-      next input; Chinese composition works without losing the first key.
-- [ ] Esc during active composition behaves predictably (IME cancel first when
-      owned by macOS, then Vim Normal) and the status line shows `IME LOCKED`.
-- [ ] 390px Mobile has no guard DOM attributes and loads no `desktop/vim` chunk.

@@ -121,7 +121,6 @@ type CmVimHandle = {
 };
 type VimApi = {
   getCM: (view: EditorView) => CmVimHandle | null;
-  syncIme: (view: EditorView, mode: string) => void;
 };
 
 // Backspace on an EMPTY symmetric markdown marker pair deletes BOTH sides at
@@ -166,10 +165,11 @@ function backspaceChain(view: EditorView): boolean {
     deleteTokenBackward(view);
 }
 
-// Desktop-only Vim. Loads the isolated IME-safe runtime lazily, and ONLY when
-// the device has a precise pointer + hover (a real keyboard) — touch never
-// imports it, so Mobile gets neither Vim nor the editable-compartment guard.
-// The runtime also publishes getCM/syncIme through apiRef for mode ownership.
+// Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
+// device has a precise pointer + hover (a real keyboard) — touch never imports
+// it, so it costs the mobile bundle nothing. (Plan Step 11 / REQ-2.) Also
+// publishes the module's `getCM` into `apiRef` so the Escape handler can read
+// the live vim mode without re-importing.
 function useVimExtension(
   enabled: boolean,
   apiRef: { current: VimApi | null },
@@ -184,15 +184,11 @@ function useVimExtension(
       return undefined;
     }
     let alive = true;
-    void import("./desktop/vim/imeSafeVim")
+    void import("@replit/codemirror-vim")
       .then((m) => {
         if (alive) {
-          const runtime = m.createImeSafeVim();
-          setExt(runtime.extension);
-          apiRef.current = {
-            getCM: runtime.getCM as VimApi["getCM"],
-            syncIme: runtime.syncIme,
-          };
+          setExt(m.vim());
+          apiRef.current = { getCM: m.getCM as VimApi["getCM"] };
         }
       })
       .catch(() => {
@@ -335,16 +331,12 @@ export const ComposerEditor = forwardRef<
     if (!(vim ?? false) || !vimExt) return undefined;
     const view = cmRef.current?.view;
     const cm = view ? vimApiRef.current?.getCM(view) : null;
-    if (!view || !cm?.on) return undefined;
+    if (!cm?.on) return undefined;
     const handler = (e: VimModeEvent): void => {
-      const mode = e.mode ?? "normal";
-      vimApiRef.current?.syncIme(view, mode);
-      onVimModeRef.current?.(mode);
+      onVimModeRef.current?.(e.mode ?? "normal");
     };
     cm.on("vim-mode-change", handler);
-    const initialMode = cm.state?.vim?.insertMode ? "insert" : "normal";
-    vimApiRef.current?.syncIme(view, initialMode);
-    onVimModeRef.current?.(initialMode);
+    onVimModeRef.current?.(cm.state?.vim?.insertMode ? "insert" : "normal");
     return (): void => cm.off?.("vim-mode-change", handler);
   }, [vim, vimExt]);
 
