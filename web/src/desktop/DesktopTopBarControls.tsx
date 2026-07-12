@@ -95,7 +95,13 @@ function ConfigOptionControl({
         <Typography
           variant="caption"
           fontWeight={750}
-          sx={{ display: "inline-block", mb: 0.55, cursor: option.description ? "help" : "default" }}
+          color="text.secondary"
+          sx={{
+            display: "inline-block",
+            mb: 0.55,
+            cursor: option.description ? "help" : "default",
+            letterSpacing: "0.02em",
+          }}
         >
           {label}
         </Typography>
@@ -108,10 +114,21 @@ function ConfigOptionControl({
             aria-label="Model"
             sx={{
               height: 34,
-              borderRadius: 1.5,
+              borderRadius: 1.25,
               fontSize: "0.75rem",
               fontWeight: 650,
               "& .MuiSelect-select": { py: 0.75 },
+              bgcolor: (theme) => alpha(theme.palette.background.default, 0.42),
+              "& .MuiOutlinedInput-notchedOutline": {
+                borderColor: (theme) => alpha(theme.palette.divider, 0.78),
+              },
+              "&:hover .MuiOutlinedInput-notchedOutline": {
+                borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
+              },
+              "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
+                borderWidth: 1,
+                borderColor: "primary.main",
+              },
             }}
           >
             {option.options.map((candidate) => (
@@ -132,8 +149,25 @@ function ConfigOptionControl({
           sx={{
             display: "flex",
             flexWrap: "nowrap",
-            gap: 0.35,
-            "& .MuiToggleButtonGroup-grouped": { borderRadius: 1.25, border: 1 },
+            gap: 0.4,
+            p: 0.35,
+            borderRadius: 1.5,
+            bgcolor: (theme) => alpha(theme.palette.background.default, 0.48),
+            border: 1,
+            borderColor: (theme) => alpha(theme.palette.divider, 0.62),
+            "& .MuiToggleButtonGroup-grouped": {
+              borderRadius: 1.1,
+              border: 0,
+              color: "text.secondary",
+              "&.Mui-selected": {
+                color: "primary.main",
+                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.14),
+                boxShadow: (theme) => `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.28)}`,
+              },
+              "&.Mui-selected:hover": {
+                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.18),
+              },
+            },
           }}
         >
           {option.options.map((candidate) => (
@@ -141,10 +175,10 @@ function ConfigOptionControl({
               key={String(candidate.value)}
               value={String(candidate.value)}
               sx={{
-                minHeight: 30,
+                minHeight: 27,
                 minWidth: 0,
                 px: compact ? 0.9 : 1.15,
-                py: 0.3,
+                py: 0.2,
                 flex: compact ? "1 1 0" : "0 1 auto",
                 fontSize: "0.6875rem",
                 lineHeight: 1.15,
@@ -274,27 +308,38 @@ export function DesktopTopBarControls({
         slotProps={{
           paper: {
             sx: {
-              width: 410,
+              width: 420,
               maxWidth: "calc(100vw - 32px)",
               mt: 0.75,
-              p: 1.15,
+              p: 1.35,
               borderRadius: 2.5,
               border: 1,
-              borderColor: "divider",
-              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
-              backdropFilter: "blur(22px)",
+              borderColor: (theme) => alpha(theme.palette.primary.main, 0.18),
+              bgcolor: (theme) => alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.97 : 0.92),
+              backgroundImage: (theme) =>
+                `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.035 : 0.48)}, transparent 52%)`,
+              backdropFilter: "blur(28px) saturate(145%)",
+              WebkitBackdropFilter: "blur(28px) saturate(145%)",
+              boxShadow: (theme) => [
+                `0 18px 48px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.42 : 0.16)}`,
+                `0 3px 12px ${alpha(theme.palette.primary.main, 0.1)}`,
+                `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.06 : 0.7)}`,
+              ].join(", "),
             },
           },
         }}
       >
-        <Stack spacing={1}>
+        <Stack spacing={1.15}>
           <Box>
-            <Typography variant="subtitle2" fontWeight={750}>Run configuration</Typography>
+            <Stack direction="row" spacing={0.8} alignItems="center">
+              <Tune sx={{ fontSize: 17, color: "primary.main" }} />
+              <Typography variant="subtitle2" fontWeight={780}>Run configuration</Typography>
+            </Stack>
             <Typography variant="caption" color="text.secondary">
               Changes apply immediately to this session.
             </Typography>
           </Box>
-          <Divider />
+          <Divider sx={{ borderColor: (theme) => alpha(theme.palette.divider, 0.72) }} />
           <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)", gap: 1 }}>
             {wideOptions.map((option) => (
               <ConfigOptionControl key={option.id} option={option} sessionId={sessionId} />
