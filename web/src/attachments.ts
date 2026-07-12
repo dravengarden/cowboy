@@ -327,6 +327,28 @@ export function imageTokensInText(
   return out;
 }
 
+/**
+ * Keep attachment bytes in lockstep with inline-image token deletion.
+ *
+ * Images and their `cowboy-att:` markers intentionally live in separate state.
+ * A CodeMirror delete changes the document first; without this reconciliation,
+ * saving a draft re-sends the stale image block and the server restores the
+ * picture. Only images that had a token in the previous text are eligible for
+ * removal, so legacy/gallery-only attachments and non-image files stay intact.
+ */
+export function reconcileDeletedInlineImages(
+  previousText: string,
+  nextText: string,
+  attachments: readonly Attachment[],
+): Attachment[] {
+  const previousIds = new Set(imageTokensInText(previousText).map((token) => token.id));
+  if (previousIds.size === 0) return [...attachments];
+  const nextIds = new Set(imageTokensInText(nextText).map((token) => token.id));
+  return attachments.filter((attachment) =>
+    !attachment.isImage || !previousIds.has(attachment.id) || nextIds.has(attachment.id)
+  );
+}
+
 /// Drop every inline-image token from `text` (for any plain-text view — the
 /// stored message `text` field / row previews must never show a raw token).
 /// Collapses the double space a removed mid-line token leaves behind.

@@ -103,7 +103,12 @@ import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
-import { type Attachment, filesToAttachments, stripImageTokens } from "./attachments";
+import {
+  type Attachment,
+  filesToAttachments,
+  reconcileDeletedInlineImages,
+  stripImageTokens,
+} from "./attachments";
 import {
   getInlineAttachment,
   registerInlineAttachment,
@@ -2865,6 +2870,7 @@ function PendingRow({
   onSchedule?: (() => void) | undefined;
 }): React.JSX.Element {
   const [draft, setDraft] = useState(message.text);
+  const editTextRef = useRef(message.text);
   // Per-row kebab (⋮) anchor — holds the draft's secondary actions (Edit / Move
   // / Remove) so the row shows only Send inline and stays uncluttered.
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
@@ -2878,6 +2884,12 @@ function PendingRow({
     seedInlineAttachments(message.attachments);
     return message.attachments;
   });
+  const updateEditDraft = (next: string): void => {
+    const previous = editTextRef.current;
+    editTextRef.current = next;
+    setEditAttachments((current) => reconcileDeletedInlineImages(previous, next, current));
+    setDraft(next);
+  };
   const editorRef = useRef<ComposerEditorHandle>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
@@ -3063,7 +3075,7 @@ function PendingRow({
               borderless
               vim={touchInput ? false : vim}
               onVimMode={setVimMode}
-              onChange={setDraft}
+              onChange={updateEditDraft}
               onSubmit={save}
               sessionId={sessionId}
               commands={commands}
@@ -3087,7 +3099,7 @@ function PendingRow({
           <FullscreenComposer
             editorRef={overlayEditorRef}
             value={draft}
-            onChange={setDraft}
+            onChange={updateEditDraft}
             onSubmit={(): void => {
               save();
               setOverlayOpen(false);

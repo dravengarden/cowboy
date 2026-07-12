@@ -266,6 +266,18 @@ here says otherwise.
     strands the production editor at the bottom—the exact failure the separate
     product shells are intended to prevent.
 
+15. **Deleting an inline image token must also delete its attachment block.**
+    The literal CM6 document and React's `attachments[]` are separate sources:
+    Backspace/Delete can remove `![name](cowboy-att:id)` while leaving the image
+    bytes in the array. Saving a queued message or draft then sends that stale
+    block and the server restores the image, so it appears to survive deletion.
+    Every editor text-change path (main compose plus queued/draft edit, inline or
+    fullscreen) must run `reconcileDeletedInlineImages(previous, next, attachments)`.
+    It removes only image attachments whose token existed in `previous` and no
+    longer exists in `next`; non-image files and legacy gallery-only images must
+    remain. Keep a synchronous previous-text ref because CM6 changes can arrive
+    faster than React renders.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

@@ -1,5 +1,9 @@
 import { type RefObject, useEffect, useRef, useState } from "react";
-import { type Attachment, filesToAttachments } from "../attachments";
+import {
+  type Attachment,
+  filesToAttachments,
+  reconcileDeletedInlineImages,
+} from "../attachments";
 import { getDraft, setDraft } from "../draftStore";
 import {
   registerInlineAttachment,
@@ -41,12 +45,20 @@ export function useComposerDraftController(
   editorRef: RefObject<ComposerEditorHandle | null>,
 ): ComposerDraftController {
   const seed = useRef(getDraft(sessionId)).current;
-  const [text, setText] = useState(seed.text);
+  const [text, setTextState] = useState(seed.text);
+  const textRef = useRef(seed.text);
   const initialText = useRef(seed.text);
   const [attachments, setAttachments] = useState<Attachment[]>(() => {
     seedInlineAttachments(seed.attachments);
     return seed.attachments;
   });
+
+  const setText = (next: string): void => {
+    const previous = textRef.current;
+    textRef.current = next;
+    setAttachments((current) => reconcileDeletedInlineImages(previous, next, current));
+    setTextState(next);
+  };
 
   useEffect(() => {
     setDraft(sessionId, { text, attachments });
