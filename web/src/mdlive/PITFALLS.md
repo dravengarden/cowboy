@@ -225,10 +225,15 @@ here says otherwise.
     the same `.cm-content` DOM node editable for the editor's whole lifetime. The
     Desktop-only `desktop/vim/imeAutoInsertVim.ts` extension listens for a real
     `compositionstart` at higher precedence and moves Vim to a clean Insert state
-    before the upstream Vim handler runs. English Normal-mode keys remain commands;
-    starting CJK composition means typing intent and auto-enters Insert. This module
-    is dynamically imported only by the Desktop composer; Mobile must neither load
-    it nor acquire Desktop Vim/IME behavior.
+    before the upstream Vim handler runs. That alone is too late for a physical
+    Normal-mode key: macOS can already show a candidate window before composition
+    starts. Therefore the same extension consumes unmodified physical command keys
+    by `KeyboardEvent.code` while outside Insert, prevents their native text-input
+    default, and sends their Latin command directly to Vim. This makes `i`, motions,
+    operators, counts, and punctuation work while a CJK input source is active;
+    composition-triggered auto-Insert remains a fallback for input without a
+    physical command key. This module is dynamically imported only by the Desktop
+    composer; Mobile must neither load it nor acquire Desktop Vim/IME behavior.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
@@ -254,6 +259,8 @@ Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove
 Desktop Vim + IME checks:
 
 - [ ] In Normal and Visual/operator-pending mode, `compositionstart` enters Insert.
+- [ ] With a CJK input source active, physical `i` enters Insert without opening a
+      candidate window; motions/operators remain Vim commands in Normal mode.
 - [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
 - [ ] Composition text is accepted with a visible, focused caret after the switch.
 - [ ] Escape returns to Normal and the status line shows `IME → INSERT AUTO`.
