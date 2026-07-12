@@ -127,11 +127,16 @@ export function DesktopShortcutsDialog({
   const paneCommands = useMemo<ShortcutRow[]>(() =>
     registry.commands
       .filter((command) =>
-        command.shortcut && command.id !== "shortcuts.open" &&
-        (!command.contexts || command.contexts.includes(workspace.focusedPane))
+        (command.contexts || command.regions) &&
+        (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
+        (!command.regions ||
+          (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion))) &&
+        (command.shortcut || command.leader)
       )
       .map((command) => ({
-        keys: [command.shortcut as string],
+        keys: command.shortcut
+          ? [command.shortcut]
+          : ["SPC", ...(command.leader?.split(/\s+/) ?? [])],
         title: command.title,
         ...(command.description ? { description: command.description } : {}),
       })), [registry.commands, workspace.focusedPane]);
@@ -161,7 +166,7 @@ export function DesktopShortcutsDialog({
           <Box>
             <Typography variant="h6" fontWeight={750}>Keyboard shortcuts</Typography>
             <Typography variant="body2" color="text.secondary">
-              Vim-first navigation · current pane: {workspace.focusedPane}
+              Vim-first navigation · {workspace.focusedRegion ?? workspace.focusedPane}
             </Typography>
           </Box>
           <Box sx={{ flex: 1 }} />
@@ -181,7 +186,7 @@ export function DesktopShortcutsDialog({
           <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
           {paneCommands.length > 0 && (
             <ShortcutSection
-              title={`${workspace.focusedPane} commands`}
+              title={`${workspace.focusedRegion ?? workspace.focusedPane} commands`}
               rows={paneCommands}
               active
             />
