@@ -60,6 +60,7 @@ import {
   Refresh,
   Schedule,
   Send,
+  South,
   Stop,
   SwapVert,
   Tune,
@@ -3460,15 +3461,64 @@ export function AutoScrollAndStop({
   sessionId,
   status,
   dense = false,
+  presentation = "icons",
 }: {
   sessionId: string;
   status: Status;
   dense?: boolean;
+  presentation?: "icons" | "desktop-toolbar";
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
   const [cancelOpen, setCancelOpen] = useState(false);
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
+  if (presentation === "desktop-toolbar") {
+    return (
+      <>
+        <Tooltip title={sticky ? "Pause automatic transcript following" : "Jump to and follow the latest output"}>
+          <Button
+            size="small"
+            color={sticky ? "primary" : "inherit"}
+            variant="text"
+            startIcon={<South fontSize="small" />}
+            onClick={(): void => {
+              haptic();
+              if (sticky) setSticky(sessionId, false);
+              else requestStickToBottom(sessionId);
+            }}
+            sx={{
+              textTransform: "none",
+              whiteSpace: "nowrap",
+              ...(sticky && { bgcolor: "action.selected" }),
+            }}
+          >
+            {sticky ? "Following" : "Follow"}
+          </Button>
+        </Tooltip>
+        {busy && (
+          <Button
+            size="small"
+            color="error"
+            variant="text"
+            startIcon={<Stop fontSize="small" />}
+            onClick={(): void => setCancelOpen(true)}
+            sx={{ textTransform: "none", whiteSpace: "nowrap" }}
+          >
+            Stop
+          </Button>
+        )}
+        <StopConfirmDialog
+          open={cancelOpen}
+          onClose={(): void => setCancelOpen(false)}
+          onConfirm={(): void => {
+            haptic(24);
+            send({ type: "cancel", session_id: sessionId });
+            setCancelOpen(false);
+          }}
+        />
+      </>
+    );
+  }
   return (
     <>
       {/* Auto-scroll / follow toggle. Default ON (primary = following the latest);

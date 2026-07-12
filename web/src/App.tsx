@@ -46,7 +46,7 @@ import {
     Schedule,
     Settings as SettingsIcon,
 } from "@mui/icons-material";
-import { AutoScrollAndStop, SessionControls } from "./Composer";
+import { SessionControls } from "./Composer";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import { Transcript } from "./Transcript";
@@ -115,6 +115,10 @@ const DesktopCommandHost = lazy(async () => {
 const DesktopStatusLine = lazy(async () => {
     const module = await import("./desktop/DesktopStatusLine");
     return { default: module.DesktopStatusLine };
+});
+const DesktopTopBarControls = lazy(async () => {
+    const module = await import("./desktop/DesktopTopBarControls");
+    return { default: module.DesktopTopBarControls };
 });
 const DesktopComposer = lazy(async () => {
     const module = await import("./desktop/DesktopComposer");
@@ -1601,7 +1605,11 @@ export function App({
                                 direction="row"
                                 alignItems="center"
                                 spacing={0.75}
-                                sx={{ flex: 1, minWidth: 0 }}
+                                sx={{
+                                    minWidth: 0,
+                                    flex: surface === "desktop" ? "0 1 280px" : 1,
+                                    maxWidth: surface === "desktop" ? 320 : "none",
+                                }}
                             >
                                 <StatusDot status={active.status} />
                                 <ProviderIcon
@@ -1635,18 +1643,21 @@ export function App({
                             live here in the navbar, left of Settings — they act on the
                             session, not the message being typed, so they were pulled out
                             of the composer toolbar. */}
-                        {active && (
+                        {active && surface === "desktop" ? (
+                            <Suspense fallback={null}>
+                                <DesktopTopBarControls
+                                    sessionId={active.id}
+                                    status={active.status}
+                                />
+                            </Suspense>
+                        ) : active ? (
                             <SessionControls
                                 sessionId={active.id}
                                 status={active.status}
                             />
-                        )}
-                        {active && surface === "desktop" && (
-                            <AutoScrollAndStop
-                                sessionId={active.id}
-                                status={active.status}
-                                dense
-                            />
+                        ) : null}
+                        {surface === "desktop" && (
+                            <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                         )}
                         <IconButton
                             onClick={(): void => openSettings("settings")}
