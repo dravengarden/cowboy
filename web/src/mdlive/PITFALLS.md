@@ -237,7 +237,12 @@ here says otherwise.
     active without a candidate window. Composition-triggered auto-Insert remains a
     fallback if editable focus is reached by an unusual input path. This module is
     dynamically imported only by the Desktop composer; Mobile must neither load it
-    nor acquire Desktop Vim/IME behavior.
+    nor acquire Desktop Vim/IME behavior. Insert commands that move/edit before the
+    mode transition (`a/A/o/O/s/S/C/R` and change operators) must focus CodeMirror
+    before dispatch. After the transition, resubmit the CM selection on the next
+    animation frame and collapse the native Selection at `view.domAtPos(head)`; in
+    particular `o/O` otherwise leave the browser selection on the content root
+    instead of the new `<div class="cm-line"><br></div>`, making the caret invisible.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
@@ -265,6 +270,8 @@ Desktop Vim + IME checks:
 - [ ] In Normal and Visual/operator-pending mode, `compositionstart` enters Insert.
 - [ ] With a CJK input source active, physical `i` enters Insert without opening a
       candidate window; motions/operators remain Vim commands in Normal mode.
+- [ ] `a/A/o/O/s/S/C/R` and `c{motion}` enter Insert with a visible native caret;
+      for `o/O`, the Selection anchor is the new active `.cm-line`, not `.cm-content`.
 - [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
 - [ ] Composition text is accepted with a visible, focused caret after the switch.
 - [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.

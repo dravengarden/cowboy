@@ -26,6 +26,8 @@ const CODE_KEYS: Readonly<Record<string, string>> = {
   Slash: "/",
 };
 
+const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
+
 function normalModeKey(event: KeyboardEvent): string | null {
   if (event.metaKey || event.ctrlKey || event.altKey) return null;
   if (/^Key[A-Z]$/.test(event.code)) {
@@ -89,6 +91,7 @@ export function createImeAutoInsertVim(): {
   const commandSink = ViewPlugin.fromClass(class {
     readonly sink: HTMLDivElement;
     private cm: ReturnType<typeof getCM> = null;
+    private focusFrame: number | null = null;
     private modeHandler: (() => void) | null = null;
 
     constructor(readonly view: EditorView) {
@@ -118,6 +121,7 @@ export function createImeAutoInsertVim(): {
       if (this.cm && this.modeHandler) {
         this.cm.off?.("vim-mode-change", this.modeHandler);
       }
+      if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
       this.sink.removeEventListener("keydown", this.onKeyDown);
       this.sink.remove();
     }
@@ -133,10 +137,29 @@ export function createImeAutoInsertVim(): {
 
     private syncFocusToMode(): void {
       if (this.cm?.state?.vim?.insertMode) {
-        queueMicrotask(() => this.view.focus());
+        this.focusEditorCaret();
       } else {
         this.focusSinkIfNormal();
       }
+    }
+
+    private focusEditorCaret(): void {
+      this.view.focus();
+      if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
+      this.focusFrame = requestAnimationFrame(() => {
+        this.focusFrame = null;
+        if (!this.cm?.state?.vim?.insertMode) return;
+        const head = this.view.state.selection.main.head;
+        this.view.focus();
+        this.view.dispatch({
+          selection: { anchor: head },
+          effects: EditorView.scrollIntoView(head),
+        });
+        const dom = this.view.domAtPos(head);
+        const selection = window.getSelection();
+        if (selection) selection.collapse(dom.node, dom.offset);
+        this.view.requestMeasure();
+      });
     }
 
     private focusSinkIfNormal(): void {
@@ -153,6 +176,14 @@ export function createImeAutoInsertVim(): {
       if (!key) return;
       event.preventDefault();
       event.stopPropagation();
+
+      // Commands such as `a` and `o` move the selection or edit the document
+      // before entering Insert. Run those with CodeMirror focused so it can
+      // synchronize the native DOM selection/caret. The triggering keydown is
+      // already consumed by the non-editable sink, so focusing here cannot
+      // start an IME composition for this command.
+      const changing = this.cm.state?.vim?.inputState?.operator === "change";
+      if (DIRECT_INSERT_KEYS.has(key) || changing) this.view.focus();
       Vim.handleKey(this.cm, key, "user");
       this.syncFocusToMode();
     };
