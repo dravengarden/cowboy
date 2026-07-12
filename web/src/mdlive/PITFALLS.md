@@ -256,6 +256,15 @@ here says otherwise.
     not show the upstream pink/hollow "unfocused" cursor while the command sink is
     active.
 
+    **IME focus/Selection ownership (2026-07-13):** `compositionstart` may switch
+    Vim into Insert, but it must not call `focus()`, dispatch a selection, or
+    collapse `window.getSelection()` until the native composition ends. Doing so
+    leaves macOS marked text visibly underlined while its input channel is dead.
+    Every deferred caret-stabilization callback must re-check both the local
+    composition guard and `EditorView.composing`. Likewise, the Normal command
+    sink may only replace focus while its own EditorView still owns focus; a
+    mount-time or stale microtask must never acquire focus from another region.
+
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns
     Mobile's overlay composer, bottom navigation, detent sheets, and progressive

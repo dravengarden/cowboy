@@ -74,8 +74,13 @@ export function createImeAutoInsertVim(): {
   extension: Extension;
   getCM: typeof getCM;
 } {
+  // Native IME owns focus and DOM Selection from compositionstart through
+  // compositionend. Vim may change mode in that window, but Cowboy must not
+  // move focus or stabilize the caret until the browser commits marked text.
+  let composing = false;
   const autoInsert = Prec.highest(EditorView.domEventHandlers({
     compositionstart: (_event, view): boolean => {
+      composing = true;
       const cm = getCM(view);
       const state = cm?.state?.vim;
       if (!cm || !state || state.insertMode) return false;
@@ -85,6 +90,15 @@ export function createImeAutoInsertVim(): {
       Vim.handleKey(cm, "<Esc>", "user");
       Vim.handleKey(cm, "i", "user");
       return false; // Never cancel the native composition.
+    },
+    compositionend: (): boolean => {
+      composing = false;
+      return false;
+    },
+    blur: (): boolean => {
+      // Self-heal an aborted composition (window switch / editor unmount).
+      composing = false;
+      return false;
     },
   }));
 
@@ -150,11 +164,15 @@ export function createImeAutoInsertVim(): {
 
     private focusEditorCaret(): void {
       this.view.dom.classList.remove("cm-vim-command-focused");
+      // Re-focusing or rewriting Selection after compositionstart detaches
+      // macOS marked text from its input context. The editable is already the
+      // native composition host, so let the browser own it until commit.
+      if (composing || this.view.composing) return;
       this.view.contentDOM.focus({ preventScroll: true });
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
       this.focusFrame = requestAnimationFrame(() => {
         this.focusFrame = null;
-        if (!this.cm?.state?.vim?.insertMode) return;
+        if (!this.cm?.state?.vim?.insertMode || composing || this.view.composing) return;
         const head = this.view.state.selection.main.head;
         this.view.contentDOM.focus({ preventScroll: true });
         this.view.dispatch({
@@ -181,7 +199,9 @@ export function createImeAutoInsertVim(): {
           return { dom, head, atContentRoot: dom.node === this.view.contentDOM };
         },
         write: ({ dom, head, atContentRoot }) => {
-          if (!this.cm?.state?.vim?.insertMode) return;
+          if (
+            !this.cm?.state?.vim?.insertMode || composing || this.view.composing
+          ) return;
           this.view.contentDOM.focus({ preventScroll: true });
           const selection = window.getSelection();
           if (selection) selection.collapse(dom.node, dom.offset);
@@ -198,9 +218,17 @@ export function createImeAutoInsertVim(): {
     }
 
     private focusSinkIfNormal(): void {
-      if (!this.cm?.state?.vim?.insertMode && document.activeElement !== this.sink) {
+      // Never acquire focus merely because an editor mounted in Normal mode.
+      // The sink may replace focus only while THIS editor still owns it.
+      const ownsFocus = this.view.hasFocus || this.view.dom.contains(document.activeElement);
+      if (
+        ownsFocus && !this.cm?.state?.vim?.insertMode &&
+        document.activeElement !== this.sink
+      ) {
         queueMicrotask(() => {
-          if (!this.cm?.state?.vim?.insertMode) {
+          const stillOwnsFocus = this.view.hasFocus ||
+            this.view.dom.contains(document.activeElement);
+          if (stillOwnsFocus && !this.cm?.state?.vim?.insertMode && !composing) {
             this.sink.focus();
             this.view.dom.classList.add("cm-vim-command-focused");
           }
