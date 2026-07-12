@@ -87,8 +87,16 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
       slotProps={{
         backdrop: {
           sx: {
-            bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.42 : 0.28),
-            backdropFilter: "blur(3px)",
+            // Preserve spatial context: the command board is a transient keyboard
+            // aid, not a context switch. A light neutral scrim gives it elevation
+            // without turning the entire three-pane workspace into an unreadable
+            // blur. The board itself keeps its local frosted material.
+            bgcolor: (theme) => alpha(
+              theme.palette.common.black,
+              theme.palette.mode === "dark" ? 0.28 : 0.1,
+            ),
+            backdropFilter: "none",
+            WebkitBackdropFilter: "none",
           },
         },
       }}

@@ -44,3 +44,7 @@ entry, `Mod+/`, or `SPC h k`. `SPC ?` remains the all-command entry.
 Only the focused region gets the subtle accent rail/background. The focused
 item uses the MUI selected/focus-visible treatment. Avoid simultaneous heavy
 outlines at pane, region and item levels.
+
+The Composer is the exception: its caret and outlined editing canvas already
+communicate focus, so `prompt.composer` must not receive the generic region
+background, accent rail, or focus ring.

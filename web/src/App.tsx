@@ -1236,16 +1236,30 @@ export function App({
                         outline: "none",
                         transition: "background-color 120ms ease, box-shadow 120ms ease",
                     },
-                    "& [data-desktop-region][data-desktop-focused='true']": {
+                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer'])": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.035),
                         boxShadow: (t) =>
                             `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.82)}`,
                     },
-                    "& [data-desktop-region][data-desktop-focused='true']:focus-visible": {
+                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer']):focus-visible": {
                         boxShadow: (t) => [
                             `inset 2px 0 0 ${t.palette.primary.main}`,
                             `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.2)}`,
                         ].join(", "),
+                    },
+                    // Composer is already an unmistakable editing canvas with a
+                    // native caret and its own outlined Paper. Re-applying the
+                    // generic region tint/rail made the whole full-height card a
+                    // heavy purple box. Its active region is communicated by the
+                    // Prompt header + status line instead; never stack another
+                    // focus treatment around the editor.
+                    "& [data-desktop-region='prompt.composer'][data-desktop-focused='true']": {
+                        bgcolor: "transparent",
+                        boxShadow: "none",
+                    },
+                    "& [data-desktop-region='prompt.composer']:focus-visible": {
+                        outline: "none",
+                        boxShadow: "none",
                     },
                     "& [data-desktop-item]:focus-visible": {
                         outline: "none",
