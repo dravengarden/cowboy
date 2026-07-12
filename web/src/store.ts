@@ -911,7 +911,7 @@ export function renameSession(sessionId: string, title: string): void {
   titleSync.mutate("rename", { session_id: sessionId, title: trimmed });
 }
 
-// --- Auto-resume interrupted turns (tasks/active/session-auto-resume) --------
+// --- Auto-resume interrupted turns (tasks/archive/2026/07/session-auto-resume) ---
 
 export const AUTO_RESUME_DEFAULT_KEY = "session.autoResume.default";
 export const AUTO_RESUME_TEMPLATE_KEY = "session.autoResume.template";

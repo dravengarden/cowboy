@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { isNativeShell } from "./nativeShell";
 
 // Publish the on-screen keyboard's overlap of the layout viewport as the
-// `--kb-inset` CSS var (px). The composer column lifts by this so it clears the
-// keyboard AND the iOS-native accessory / IME-candidate bar above it (that bar
-// is part of the system keyboard and can't be removed in a pure web app — see
-// the composer's CodeMirror history).
+// `--kb-inset` CSS var (px). Browser/PWA surfaces use it to clear the keyboard
+// and the iOS-native accessory / IME-candidate bar. The Tauri shell skips it
+// because its native layer already resizes the WKWebView.
 //
 // Why visualViewport, not `interactive-widget=resizes-content` alone: iOS Safari
 // doesn't reliably shrink the LAYOUT viewport for the keyboard, and never for
@@ -27,7 +26,7 @@ export function useKeyboardInset(): void {
     // composer a SECOND time → a keyboard-height blank gap between the composer and
     // the keyboard (observed on device). Native resize is the sole avoidance in the
     // shell; --kb-inset stays 0 so `bottom/pb: var(--kb-inset, 0px)` collapse to the
-    // native-resized bottom. The PWA path is unchanged.
+    // native-resized bottom. Browser surfaces continue to use visualViewport.
     if (isNativeShell()) return undefined;
     const vv = globalThis.visualViewport;
     if (!vv) return undefined;
@@ -40,11 +39,9 @@ export function useKeyboardInset(): void {
     const apply = (): void => {
       raf = 0;
       // Keyboard overlap = layout-viewport height − visual-viewport height. We do
-      // NOT add vv.offsetTop: the body is position:fixed + locked (standalone PWA /
-      // Tauri shell, no URL bar), so offsetTop is 0 at rest — but it SPIKES during
-      // an overscroll / rubber-band as the visual viewport pans, which inflated the
-      // inset and left the sheet lifted too high above the keyboard with a stale gap
-      // ("有时候滚动过头"). vv.height stays constant under that pan, so this is stable.
+      // NOT add vv.offsetTop: it spikes during an overscroll/rubber-band as the
+      // visual viewport pans, which inflated the inset and left the sheet too
+      // high above the keyboard. vv.height stays stable under that pan.
       const overlap = Math.round(Math.max(0, globalThis.innerHeight - vv.height));
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.

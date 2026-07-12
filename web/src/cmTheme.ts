@@ -83,29 +83,13 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         // 100% resolves to that — it only fills the fixed-height fullscreen editor.
         minHeight: "100%",
       },
-      // iOS PWA repaint fix lives on the SCROLLER, not `.cm-content`. On
-      // iPad/iPhone the composer's contenteditable sits inside the
-      // `position: fixed` body (index.html, for keyboard handling); WebKit then
-      // fails to invalidate the editable's paint rect on keystroke, so typed
-      // text stays invisible until a later edit/scroll forces a repaint (delete
-      // "reveals" it). A compositing layer in the subtree makes WebKit repaint
-      // on every input — BUT promoting `.cm-content` ITSELF (the contenteditable)
-      // breaks iOS's long-press text-interaction: the Copy/Paste callout +
-      // selection loupe compute rects in the layer's coordinate space and
-      // intermittently fail to attach, so long-press "often shows no paste menu".
-      // Promoting the PARENT `.cm-scroller` instead keeps the repaint fix (the
-      // editable still paints into the layer) while leaving the editable
-      // un-transformed, so WebKit's editing UI attaches normally. translateZ(0)
-      // is an identity transform (no visual shift), so CodeMirror's
-      // getBoundingClientRect-based cursor/selection measurement is unaffected.
       ".cm-scroller": {
         fontFamily: editorFont,
         fontSize: "1rem",
         lineHeight: "var(--cowboy-reading-line-height, 1.5)",
-        // No compositing-layer hack here: the native shell runs in normal flow
-        // (no position:fixed body), so there is no WebKit "won't repaint inside
-        // position:fixed" bug to work around. The old translateZ(0) layer (PWA
-        // only) is what broke the iOS long-press paste menu — removed at the root.
+        // Deliberately no compositing layer. The current normal-flow editor has
+        // no fixed-body repaint bug, and the retired translateZ workaround
+        // interfered with iOS native text interaction. See mdlive/PITFALLS.md.
       },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: accent },
       // Vim block ("fat") cursor → Zed look. @replit/codemirror-vim defaults to a

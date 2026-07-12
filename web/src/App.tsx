@@ -363,7 +363,7 @@ function StatusDot({
     );
 }
 
-// Auto-resume indicator (tasks/active/session-auto-resume). Shown whenever the
+// Auto-resume indicator (tasks/archive/2026/07/session-auto-resume). Shown whenever the
 // session's EFFECTIVE auto-resume is on — override if set, else the global
 // default — so turning the global default on marks every inherited session too.
 // Effective-off (incl. an explicit opt-out) shows nothing. While a session is
@@ -1973,7 +1973,7 @@ function interpolateTemplate(template: string, vars: Record<string, string>): st
     return template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
 }
 
-// Global auto-resume settings (tasks/active/session-auto-resume): the default
+// Global auto-resume settings (tasks/archive/2026/07/session-auto-resume): the default
 // toggle + a collapsed continuation-template editor with a live interpolated
 // preview. Server-authoritative (reads `state.settings`, writes via setSetting).
 function AutoResumeSettings(): React.JSX.Element {

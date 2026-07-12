@@ -3,7 +3,7 @@
 > **RESOLVED ARCHITECTURE CHANGE — task `cowboy-composer-drop-pwa-hacks`.** The
 > whole PWA iOS hack tower documented below is **REMOVED IN CURRENT CODE**: the
 > composer now runs one native-shell-oriented code path in normal flow.
-> code path in normal flow. Specifically gone — `.cm-scroller { translateZ(0) }`
+> Specifically gone — `.cm-scroller { translateZ(0) }`
 > (cmTheme), the `compositionstart/update/end/blur` transform+opacity dance
 > (ComposerEditor), `drawSelection()` + `dropCursor()` + the `.cm-composing`
 > dance (composerExtensions), the `position: fixed` body (index.html), the

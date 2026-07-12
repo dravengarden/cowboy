@@ -351,7 +351,7 @@ export type Inbound =
   // Inspector widget: delete one judge run from a session's history, or clear all.
   | { type: "remove_judge_run"; session_id: string; id: string }
   | { type: "clear_judge_runs"; session_id: string }
-  // Auto-resume (tasks/active/session-auto-resume): per-session override
+  // Auto-resume (tasks/archive/2026/07/session-auto-resume): per-session override
   // (`value: null` = inherit the global default) + a global setting upsert.
   | { type: "set_session_auto_resume"; session_id: string; value: boolean | null }
   // Confirm-detect: clear/set the "awaiting user" hold (the awaiting widget's
