@@ -1728,6 +1728,13 @@ export function Transcript({
           // item's STABLE key (first envelope seq) so prepending older history
           // doesn't re-mount/jump rows.
           <>
+            {/* column-reverse normally puts all unused space at the visual top,
+                which can leave a short turn floating halfway down the screen.
+                This DOM-first flex spacer is visual-last (below the newest row),
+                so it absorbs that slack at the bottom instead. It collapses to
+                zero as soon as the transcript overflows and, unlike changing
+                justifyContent, preserves column-reverse's scrollTop=0 anchor. */}
+            <Box aria-hidden sx={{ flex: "1 1 0", minHeight: 0 }} />
             {/* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.
                 cowboy no longer auto-kills a silent turn (see acp.rs) — the human
