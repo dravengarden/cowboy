@@ -1253,28 +1253,29 @@ export function App({
                         transition: "background-color 120ms ease, box-shadow 120ms ease",
                     },
                     "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer'])": {
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.035),
                         boxShadow: (t) =>
-                            `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.82)}`,
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.58)}`,
                     },
-                    // Pending panels and the editor use one focus-boundary
-                    // token. Queue/Draft retain their compact left rail; the
-                    // full-height Composer uses only this border color.
+                    // Regions with a real outlined surface recolor that existing
+                    // 1px edge instead of stacking an inset boundary on top.
                     "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
                         borderColor: (t) => alpha(t.palette.primary.main, 0.58),
+                        boxShadow: "none",
                     },
                     "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer']):focus-visible": {
-                        boxShadow: (t) => [
-                            `inset 2px 0 0 ${t.palette.primary.main}`,
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.2)}`,
-                        ].join(", "),
+                        boxShadow: (t) =>
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.82)}`,
+                    },
+                    "& [data-desktop-region='prompt.queued'][data-desktop-focused='true']:focus-visible, & [data-desktop-region='prompt.draft'][data-desktop-focused='true']:focus-visible": {
+                        borderColor: (t) => alpha(t.palette.primary.main, 0.82),
+                        boxShadow: "none",
                     },
                     // Composer is already an unmistakable editing canvas with a
                     // native caret and its own outlined Paper. Re-applying the
                     // generic region tint/rail made the whole full-height card a
                     // heavy purple box. Its active region is communicated by the
-                    // Prompt header + status line instead; never stack another
-                    // focus treatment around the editor.
+                    // Prompt header + the Paper's own focus-within border instead;
+                    // never stack another focus treatment around the editor.
                     "& [data-desktop-region='prompt.composer'][data-desktop-focused='true']": {
                         bgcolor: "transparent",
                         boxShadow: "none",
