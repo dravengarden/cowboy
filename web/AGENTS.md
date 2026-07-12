@@ -51,6 +51,11 @@ routinely breaks another.
 - A user who knows basic Vim must be productive without memorising Cowboy-only
   shortcuts. Prefer standard Vim motion, discoverable leader/which-key menus,
   and Vimium-style visible hints for arbitrary actions.
+- Prefer MUI's native component semantics and composition for Desktop UI:
+  AppBar/Toolbar, Tabs, Menu, List, Select, Dialog, Tooltip, theme tokens, and
+  `sx`. Build custom primitives only where MUI has no suitable interaction
+  model, such as pane splitters, the Vim status line, leader/which-key, and
+  Vimium hint overlays.
 - Share protocol, stores, API clients, domain logic, attachments, and markdown
   machinery. Desktop and mobile may intentionally duplicate layout, component,
   and interaction code so either product can evolve without responsive-UI

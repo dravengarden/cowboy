@@ -49,6 +49,7 @@ import {
 } from "@mui/icons-material";
 import { AutoScrollAndStop, SessionControls } from "./Composer";
 import { DesktopComposer } from "./desktop/DesktopComposer";
+import { DesktopWorkspace } from "./desktop/DesktopWorkspace";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { useTouchComposer } from "./ComposerTextarea";
 import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
@@ -81,7 +82,6 @@ import { useSortable } from "./useSortable";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
-    COMPOSER_COL_MIN,
     composerColWidthStore,
     setDesktopLayout,
     useDesktopLayout,
@@ -249,12 +249,6 @@ function AppStatusBar({
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 288;
-
-// In the three-pane desktop workspace the transcript is the primary reading
-// surface. A previously persisted, very wide composer column must never squeeze
-// it into a narrow feed: CSS caps the composer against this floor while still
-// allowing the user to drag it wider on genuinely large displays.
-const TRANSCRIPT_DESKTOP_MIN = 600;
 
 function clampSidebarWidth(px: number): number {
     return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
@@ -1787,127 +1781,23 @@ export function App({
                         // overlay — so it reserves no --composer-h and the composer no longer
                         // floats over it. The AppStatusBar is a full-width footer (order 2).
                         <>
-                            <Box
-                                sx={{
-                                    order: 1,
-                                    flex: 1,
-                                    minHeight: 0,
-                                    display: "flex",
-                                    flexDirection: "row",
-                                    position: "relative",
-                                }}
-                            >
-                                {/* Composer column (left) */}
-                                <Box
-                                    sx={{
-                                        // Honour the persisted preference until it would
-                                        // steal the transcript's minimum readable width.
-                                        // `max()` keeps the editor useful at the smallest
-                                        // desktop split size; tablets never enter split.
-                                        width: `min(${String(colWidth)}px, 45%, max(${String(COMPOSER_COL_MIN)}px, calc(100% - ${String(TRANSCRIPT_DESKTOP_MIN)}px)))`,
-                                        flexShrink: 0,
-                                        minWidth: 0,
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        minHeight: 0,
-                                        bgcolor: (t) => alpha(t.palette.background.paper, 0.24),
-                                    }}
-                                >
-                                    <Box
-                                        sx={{
-                                            minHeight: 36,
-                                            px: 2,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            borderBottom: 1,
-                                            borderColor: "divider",
-                                            flexShrink: 0,
-                                            bgcolor: (t) => alpha(t.palette.background.paper, 0.2),
-                                        }}
-                                    >
-                                        <Typography
-                                            variant="overline"
-                                            color="text.secondary"
-                                            sx={{ fontWeight: 700, letterSpacing: "0.09em", lineHeight: 1 }}
-                                        >
-                                            Prompt
-                                        </Typography>
+                            <DesktopWorkspace
+                                promptWidth={colWidth}
+                                resizing={colResizing}
+                                onResizeStart={startColResize}
+                                prompt={active.system ? (
+                                    <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
+                                        View-only system session — managed by cowboy
                                     </Box>
-                                    {active.system ? (
-                                        <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
-                                            View-only system session — managed by cowboy
-                                        </Box>
-                                    ) : (
-                                        <DesktopComposer
-                                            key={active.id}
-                                            sessionId={active.id}
-                                            status={active.status}
-                                            variant="column"
-                                        />
-                                    )}
-                                </Box>
-                                {/* Vertical splitter — straddles the column edge so its
-                                    6px hit area centres on the 1px divider line. */}
-                                <Box
-                                    role="separator"
-                                    aria-orientation="vertical"
-                                    aria-label="Resize composer column"
-                                    onPointerDown={startColResize}
-                                    sx={{
-                                        flex: "0 0 auto",
-                                        alignSelf: "stretch",
-                                        // Identical VSCode-style hairline to the sidebar
-                                        // divider above: a solid 1px line that recolours
-                                        // to the accent on hover / drag, with the same
-                                        // wide invisible hit area — so both read the same.
-                                        width: "1px",
-                                        bgcolor: colResizing ? "primary.main" : "divider",
-                                        transition: "background-color 120ms",
-                                        position: "relative",
-                                        cursor: "col-resize",
-                                        touchAction: "none",
-                                        zIndex: 3,
-                                        "&::after": {
-                                            content: '""',
-                                            position: "absolute",
-                                            top: 0,
-                                            bottom: 0,
-                                            left: "-11px",
-                                            right: "-11px",
-                                        },
-                                        "&:hover": { bgcolor: "primary.main" },
-                                    }}
-                                />
-                                {/* Transcript column (right) */}
-                                <Box
-                                    sx={{
-                                        flex: 1,
-                                        minWidth: 0,
-                                        position: "relative",
-                                        display: "flex",
-                                        flexDirection: "column",
-                                    }}
-                                >
-                                    <Box
-                                        sx={{
-                                            minHeight: 36,
-                                            px: 2,
-                                            display: "flex",
-                                            alignItems: "center",
-                                            borderBottom: 1,
-                                            borderColor: "divider",
-                                            flexShrink: 0,
-                                            bgcolor: (t) => alpha(t.palette.background.paper, 0.12),
-                                        }}
-                                    >
-                                        <Typography
-                                            variant="overline"
-                                            color="text.secondary"
-                                            sx={{ fontWeight: 700, letterSpacing: "0.09em", lineHeight: 1 }}
-                                        >
-                                            Conversation
-                                        </Typography>
-                                    </Box>
+                                ) : (
+                                    <DesktopComposer
+                                        key={active.id}
+                                        sessionId={active.id}
+                                        status={active.status}
+                                        variant="column"
+                                    />
+                                )}
+                                conversation={(
                                     <Transcript
                                         sessionId={active.id}
                                         timeline={activeTimeline ?? []}
@@ -1916,14 +1806,11 @@ export function App({
                                         cwd={active.cwd}
                                         loading={!activeHydrated}
                                         connected={connected}
-                                        // No floating chrome over this column: the AppBar is
-                                        // in-flow above it and the composer is a sibling
-                                        // column, so neither inset reserves anything.
                                         topInset="0px"
                                         bottomInset="0px"
                                     />
-                                </Box>
-                            </Box>
+                                )}
+                            />
                             {/* Full-width status-bar footer spanning both columns. */}
                             <Box sx={{ order: 2, position: "relative", zIndex: 2 }}>
                                 <AppStatusBar sessionId={active.id} status={active.status} />

@@ -15,6 +15,10 @@ Cowboy Desktop and Cowboy Mobile are separate products.
 - Shared code stops at protocol, stores, API clients, domain operations,
   attachments, and markdown machinery. Duplicate UI and interaction code is an
   intentional isolation mechanism.
+- Desktop visual primitives should use MUI semantics and theme tokens wherever
+  MUI already has the right interaction model. Custom UI is reserved for
+  editor/workspace primitives that MUI does not provide: splitters, Vim status,
+  leader/which-key, and Vimium target hints.
 
 ## Current architectural debt
 
