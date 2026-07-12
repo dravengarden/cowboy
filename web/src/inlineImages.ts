@@ -92,6 +92,16 @@ class InlineImageWidget extends WidgetType {
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
     if (att?.previewUrl !== undefined && att.isImage) {
+      const widget = document.createElement("span");
+      widget.className = "cm-inline-image-widget";
+      // @replit/codemirror-vim walks into the DOM immediately after an EOL
+      // cursor to borrow its font style. A block widget whose first descendant
+      // is an empty <img> makes that walk end at `undefined`, so its cursor
+      // measurement aborts and the Normal-mode block disappears on the text
+      // line above the image. Keep a zero-size text node first: it is inert for
+      // layout and accessibility, but gives the upstream measurement a safe
+      // terminal node. The document selection itself never enters this widget.
+      widget.appendChild(document.createTextNode("\u200b"));
       const img = document.createElement("img");
       img.className = this.selected
         ? "cm-inline-image cm-inline-image-selected"
@@ -125,7 +135,8 @@ class InlineImageWidget extends WidgetType {
         if (imageTapHandler !== null) imageTapHandler(id, img, e.clientX, e.clientY);
         else openLightbox([att], 0);
       });
-      return img;
+      widget.appendChild(img);
+      return widget;
     }
     // Bytes not locally available (e.g. a synced token with no blob on this
     // device) — a compact chip keeps the token visible + deletable.
@@ -228,6 +239,11 @@ export const inlineImageTrailingLine = EditorState.transactionFilter.of((tr) => 
 
 /// Thumbnail sizing/look. Kept here so any host of `inlineImagePlugin` gets it.
 export const inlineImageTheme = EditorView.theme({
+  ".cm-inline-image-widget": {
+    display: "block",
+    fontSize: "0",
+    lineHeight: "0",
+  },
   ".cm-inline-image": {
     display: "block",
     // A SMALL tap-to-open thumbnail, not a full inline preview: the token is a

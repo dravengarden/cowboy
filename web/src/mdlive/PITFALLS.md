@@ -78,6 +78,17 @@ here says otherwise.
 
 ## Known pitfalls (symptom → cause → fix → status)
 
+0. **Desktop Vim block cursor disappears on the text line immediately before a
+   block image.** The logical CM6 selection is correct; the failure is in
+   `@replit/codemirror-vim`'s cursor measurement. At EOL it walks into the next
+   block widget to read font style, then descends through the widget's `<img>`;
+   an image has no child node, so that measurement produces no cursor piece.
+   **Fix (`inlineImages.ts`):** the image widget owns a zero-size leading text
+   node inside a zero-line-height wrapper. It gives the upstream DOM walk a safe
+   terminal node without changing document positions, thumbnail geometry,
+   atomic ranges, pointer behavior, or Mobile's native caret. Keep block images;
+   reverting them to inline makes the caret as tall as the thumbnail.
+
 1. **Chinese pinyin IME drops/garbles on a marker line.** The original reason
    the mobile composer used a native `<textarea>`. CM6 contenteditable + IME on
    iOS is the hard constraint. **Mitigations that make it safe:** (a) the engine
