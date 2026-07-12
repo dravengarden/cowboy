@@ -1009,8 +1009,12 @@ export function ComposerWorkspace({
           while working). */
       }
       {pendingPermission ? (
-        <PermissionOverlay item={pendingPermission} sessionId={sessionId} />
-      ) : (
+        <PermissionOverlay
+          item={pendingPermission}
+          sessionId={sessionId}
+          inline={column}
+        />
+      ) : !column ? (
         <TurnStatusOverlay
           sessionId={sessionId}
           status={status}
@@ -1022,6 +1026,8 @@ export function ComposerWorkspace({
           queue={queue}
           onFocusComposer={(): void => editorRef.current?.focus()}
         />
+      ) : (
+        null
       )}
       <ScheduleSheet
         open={scheduleTarget !== null}

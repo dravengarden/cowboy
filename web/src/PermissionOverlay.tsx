@@ -26,9 +26,11 @@ import { haptic } from "./haptic";
 export function PermissionOverlay({
   item,
   sessionId,
+  inline = false,
 }: {
   item: PendingPermission;
   sessionId: string;
+  inline?: boolean;
 }): React.JSX.Element {
   // `useSticky` is the existing "is the transcript pinned to the bottom" signal,
   // toggled the instant the user wheels/touches away — so it's exactly the
@@ -60,10 +62,10 @@ export function PermissionOverlay({
         // Same anchor as TurnStatusOverlay: floats just above the composer (its
         // relative container), so it's positioned correctly in BOTH the mobile
         // (transcript-is-absolute-background) and desktop (two-column) layouts.
-        position: "absolute",
+        position: inline ? "relative" : "absolute",
         left: 0,
         right: 0,
-        bottom: "100%",
+        bottom: inline ? "auto" : "100%",
         display: "flex",
         justifyContent: "center",
         px: 2,
