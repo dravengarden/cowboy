@@ -121,17 +121,11 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         opacity: "0 !important",
         outline: "none !important",
       },
-      // In Vim the first character cell belongs to the cursor. Reserve it in
-      // every mode so Normal/Insert/blur only change cursor shape, never the
-      // placeholder's x-position. Non-Vim and Mobile themes keep native MUI
-      // placeholder alignment.
-      ...(mono
-        ? {
-          ".cm-line:has(> .cm-placeholder) .cm-placeholder": {
-            marginLeft: "1.15ch",
-          },
-        }
-        : {}),
+      // The placeholder and the first document character must share the exact
+      // same inline origin. Vim's block cursor is paint, not layout: reserving a
+      // character cell only for `.cm-placeholder` made the prompt jump left by
+      // 1.15ch as soon as the first character was entered. This stays ungated so
+      // Normal / Insert / blur all inherit CodeMirror's zero-offset placeholder.
       // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
       // blinks via a JS-set CSS animation on `.cm-vimCursorLayer`; cancel it.
       ".cm-cursorLayer.cm-vimCursorLayer": { animation: "none !important" },

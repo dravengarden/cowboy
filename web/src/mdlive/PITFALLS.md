@@ -248,11 +248,13 @@ here says otherwise.
     the caret intermittently invisible. Apply this stabilization to every direct
     Insert command, not an `o/O` special case.
     The sink is keyboard focus within the editor, so it adds
-    `.cm-vim-command-focused`: Normal uses the solid theme-accent block and an
-    empty-document placeholder always leaves one character cell whenever the Vim
-    theme is loaded. Never gate that margin on focus/mode: doing so makes
-    `Message the agent…` jump horizontally across Normal, Insert, and blur. Do not
-    show the upstream pink/hollow "unfocused" cursor while the command sink is active.
+    `.cm-vim-command-focused`: Normal uses the solid theme-accent block. The block
+    cursor is paint, never layout: the empty-document placeholder and the first
+    real document character must use CodeMirror's same zero-offset inline origin.
+    Do not add a placeholder-only character-cell margin; it makes
+    `Message the agent…` jump left as soon as the first character is entered. Do
+    not show the upstream pink/hollow "unfocused" cursor while the command sink is
+    active.
 
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns
