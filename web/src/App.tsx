@@ -1194,6 +1194,7 @@ export function App({
     // Drawer and the brand goes in the AppBar instead.
     const sidebarHeader = (
         <Toolbar
+            data-desktop-pane-header
             variant="dense"
             sx={{
                 borderBottom: 1,
@@ -1255,12 +1256,9 @@ export function App({
                         outline: "none",
                         transition: "background-color 120ms ease, box-shadow 120ms ease",
                     },
-                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer'])": {
+                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
                         boxShadow: (t) =>
                             `inset 0 0 0 1px ${desktopFocusBoundary(t)}`,
-                    },
-                    "& [data-desktop-region='conversation.transcript'][data-desktop-focused='true'], & [data-desktop-region='sessions.list'][data-desktop-focused='true']": {
-                        boxShadow: "none",
                     },
                     // Regions with a real outlined surface recolor that existing
                     // 1px edge instead of stacking an inset boundary on top.
@@ -1619,7 +1617,6 @@ export function App({
                     }}
                 >
         <Toolbar
-            data-desktop-pane-header
             variant="dense"
                         sx={{
                             // No border in either mode — the frosted slab behind the bar
