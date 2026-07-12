@@ -11,6 +11,7 @@ export function DesktopComposer({
       sessionId={sessionId}
       status={status}
       variant={variant}
+      surface="desktop"
     />
   );
 }

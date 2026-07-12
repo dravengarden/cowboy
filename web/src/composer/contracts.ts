@@ -6,4 +6,5 @@ export interface ComposerWorkspaceProps {
   sessionId: string;
   status: Status;
   variant?: ComposerVariant;
+  surface?: "desktop" | "mobile";
 }

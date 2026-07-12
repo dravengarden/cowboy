@@ -591,6 +591,7 @@ export function ComposerWorkspace({
   sessionId,
   status,
   variant = "overlay",
+  surface = "mobile",
 }: ComposerWorkspaceProps): React.JSX.Element {
   /// "overlay" (default): the composer floats over the transcript at the bottom
   /// (single-column / mobile). "column": the desktop two-column layout — the
@@ -604,6 +605,7 @@ export function ComposerWorkspace({
   // (float padding, --composer-h reservation lives in App, expand toggle, resize
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
+  const desktop = surface === "desktop";
   const editorRef = useRef<ComposerEditorHandle>(null);
   const {
     text,
@@ -712,6 +714,8 @@ export function ComposerWorkspace({
   // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
   const [holding, setHolding] = useState(false);
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
+  const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<HTMLElement | null>(null);
+  const desktopMoreButtonRef = useRef<HTMLButtonElement | null>(null);
   // The Queue button — also the anchor for a KEYBOARD-triggered force-push (held
   // ⌘⏎), so the confirm rises from the same spot whether opened by hold or key.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -1307,6 +1311,171 @@ export function ComposerWorkspace({
             separate toolbar strip below the input AND the absolute send overlay —
             one cohesive card. `px`/`pb` (not the nav gutters) inset the row to the
             card's own edges. */}
+        {desktop ? (
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={0.25}
+            sx={{ px: 1, pb: 1, minHeight: 40 }}
+          >
+            <Tooltip title="Slash command / skill">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="slash command"
+                  disabled={dead}
+                  onClick={(): void => editorRef.current?.insertTrigger("/")}
+                >
+                  <Box component="span" sx={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1 }}>/</Box>
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Reference a file (@)">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="reference a file"
+                  disabled={dead}
+                  onClick={(): void => editorRef.current?.insertTrigger("@")}
+                >
+                  <AlternateEmail fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Attach image or file">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="attach image or file"
+                  disabled={dead}
+                  onClick={(): void => fileInputRef.current?.click()}
+                >
+                  <AttachFile fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            {compactAction && (
+              <Tooltip title={compacting
+                ? "Compacting…"
+                : compactTooltip(session?.context_used ?? 0, session?.context_size ?? 0)}>
+                <span>
+                  <IconButton
+                    size="small"
+                    aria-label="compact conversation"
+                    disabled={dead || compacting}
+                    onClick={(): void => setCmdConfirm(compactAction)}
+                  >
+                    <CompactIcon
+                      used={session?.context_used ?? 0}
+                      size={session?.context_size ?? 0}
+                      active={compacting}
+                    />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
+
+            <Box sx={{ flex: 1 }} />
+
+            <Tooltip title="More delivery options">
+              <span>
+                <IconButton
+                  ref={desktopMoreButtonRef}
+                  size="small"
+                  aria-label="more delivery options"
+                  aria-controls={desktopMoreAnchor ? "desktop-composer-more" : undefined}
+                  aria-expanded={desktopMoreAnchor ? "true" : undefined}
+                  onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
+                >
+                  <MoreVert fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Menu
+              id="desktop-composer-more"
+              anchorEl={desktopMoreAnchor}
+              open={desktopMoreAnchor !== null}
+              onClose={(): void => setDesktopMoreAnchor(null)}
+              anchorOrigin={{ vertical: "top", horizontal: "right" }}
+              transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+            >
+              <MenuItem
+                disabled={!sendable}
+                onClick={(): void => {
+                  setDesktopMoreAnchor(null);
+                  saveDraft();
+                }}
+              >
+                <EditNoteOutlined fontSize="small" sx={{ mr: 1.25 }} />
+                Save as draft
+              </MenuItem>
+              <MenuItem
+                disabled={!sendable}
+                onClick={(): void => {
+                  setDesktopMoreAnchor(null);
+                  setScheduleTarget({ id: undefined, initial: null });
+                }}
+              >
+                <Schedule fontSize="small" sx={{ mr: 1.25 }} />
+                Schedule send
+              </MenuItem>
+              <Divider />
+              <MenuItem
+                disabled={!sendable || queue.length === 0}
+                onClick={(): void => {
+                  setDesktopMoreAnchor(null);
+                  jumpToFront();
+                }}
+              >
+                <VerticalAlignTop fontSize="small" sx={{ mr: 1.25 }} />
+                Jump to front of queue
+              </MenuItem>
+              <MenuItem
+                disabled={!sendable || !(busy || starting || paused)}
+                onClick={(): void => {
+                  setDesktopMoreAnchor(null);
+                  setForceAnchor(desktopMoreButtonRef.current);
+                }}
+              >
+                <Bolt fontSize="small" color="warning" sx={{ mr: 1.25 }} />
+                Force push…
+              </MenuItem>
+              {clearAction && <Divider />}
+              {clearAction && (
+                <MenuItem
+                  disabled={dead}
+                  onClick={(): void => {
+                    setDesktopMoreAnchor(null);
+                    setCmdConfirm(clearAction);
+                  }}
+                >
+                  <CleaningServices fontSize="small" sx={{ mr: 1.25 }} />
+                  Clear conversation…
+                </MenuItem>
+              )}
+            </Menu>
+
+            <Button
+              ref={queueBtnRef}
+              variant="contained"
+              size="small"
+              disableElevation
+              startIcon={<Send fontSize="small" />}
+              aria-label={busy || starting ? "queue message" : "send"}
+              disabled={!sendable}
+              onClick={busy || starting ? onQueueClick : submit}
+              sx={{
+                ml: 0.5,
+                minWidth: 86,
+                borderRadius: 1.5,
+                textTransform: "none",
+                fontWeight: 650,
+              }}
+            >
+              {busy || starting ? "Queue" : "Send"}
+            </Button>
+          </Stack>
+        ) : (
         <Stack
           direction="row"
           alignItems="center"
@@ -1571,6 +1740,7 @@ export function ComposerWorkspace({
           </span>
         </Tooltip>
         </Stack>
+        )}
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}
       </Paper>

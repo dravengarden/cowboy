@@ -10,6 +10,7 @@ export function MobileComposer({
       sessionId={sessionId}
       status={status}
       variant="overlay"
+      surface="mobile"
     />
   );
 }
