@@ -844,25 +844,26 @@ export function App({
         // duplicate messages) have a hook. Keeps the reactive trace explicit.
     }, [lastError?.seq]);
     const theme = useTheme();
-    // Sidebar collapse aka "drawer mode". Anything below the `lg` breakpoint
-    // (1200px) hides the persistent sidebar and shows a hamburger that opens
-    // the Drawer — this catches both iPad orientations (portrait ~820,
-    // landscape ~1180), not just phones. The session-list-as-persistent-
-    // rail layout reads as cramped on iPad: the transcript pane loses too
-    // many columns, and the chip row gets squeezed. Matches Mail.app /
-    // Messages on iPad, which also collapse their sidebars in both
-    // orientations until the device is wider than ~1200pt.
-    const narrow = useMediaQuery(theme.breakpoints.down("lg"));
-    // A desktop window remains the desktop product when narrowed; only its
-    // navigation collapses. Touch surfaces always use the mobile/tablet shell.
-    const mobile = surface === "touch" || narrow;
-    // Navbar placement: when the user picks "bottom" on the compact tier
-    // (`< lg`, tablets included) the AppBar moves below the transcript, just
+    // Product identity and available space are deliberately separate axes.
+    // Touch is the Mobile product; narrowing a Desktop window must never opt it
+    // into Mobile's overlay composer, bottom navigation, sheets, or progressive
+    // disclosure. Only the Sessions rail is allowed to collapse, below 1100px,
+    // leaving the keyboard-first Prompt + Conversation workspace intact. That
+    // threshold follows the useful pane floors (roughly 360 Prompt + 520
+    // Conversation + rail), not a device label: Desktop spends horizontal space
+    // on parallel context without squeezing the actual work panes into slivers.
+    const mobile = surface === "touch";
+    const compactDesktopWidth = useMediaQuery("(max-width:1099px)");
+    const desktopNavCollapsed = surface === "desktop" && compactDesktopWidth;
+    const sessionsInDrawer = mobile || desktopNavCollapsed;
+    // Navbar placement belongs exclusively to the Touch product. When its user
+    // picks "bottom", the AppBar moves below the transcript, just
     // above the composer (mobile-browser bottom-bar feel). The modals read the
     // same flag and force their bottom-sheet surface (see BottomSheet
     // `forceSheet`), so a tablet's bottom navbar gets bottom-up modals too
     // rather than centered dialogs.
-    const navbarAtBottom = useNavbarAtBottom();
+    const prefersNavbarAtBottom = useNavbarAtBottom();
+    const navbarAtBottom = mobile && prefersNavbarAtBottom;
     // A full-screen frosted COVER sheet (compose/edit/settings) bleeds the app's
     // own frosted navbar/composer chrome through it as a bright blob (double
     // frosting). Fade that chrome out while ANY sheet is open so the cover shows
@@ -978,13 +979,12 @@ export function App({
             body.style.userSelect = prevSelect;
         };
     }, [resizing]);
-    // Two-column (Zed-style) split layout — desktop-only, opt-in. Active only when
-    // the setting is "split" AND this is a real desktop: a fine pointer (not a
-    // touch tablet) and ≥lg so the session list is a column (not a Drawer) — i.e.
-    // there's room for THREE columns (sessions | composer | chat). Otherwise the
-    // single-column overlay renders and the setting is a no-op (mobile unaffected).
+    // Two-pane working area (plus the Sessions rail when space permits). Desktop
+    // remains split even when the rail collapses: a narrower desktop is still a
+    // keyboard-first production surface, not Mobile. Mobile never reads this
+    // preference and always owns its separate overlay composer path.
     const splitLayout = useDesktopLayout();
-    const splitActive = splitLayout === "split" && !mobile && surface === "desktop";
+    const splitActive = splitLayout === "split" && surface === "desktop";
     // Composer-column width + live-drag, mirroring the sidebar splitter: a local
     // value during the drag (persisted on release, not per-pixel) backed by the
     // global composer-col-width store. `colResizing` drives the body drag cursor.
@@ -1261,14 +1261,11 @@ export function App({
                     />
                 </Suspense>
             )}
-            {mobile ? (
-                // The shared momentum sheet — same affordance as every other
-                // mobile sheet (Settings, etc.). Its anchor FOLLOWS the navbar:
-                // when the navbar sits at the bottom the list rises from the
-                // bottom too (mobile-browser feel), otherwise it drops from the
-                // top. DetentSheet owns the safe-area insets for its anchored
-                // edge, so the iPhone/iPad notch + rounded corners are cleared
-                // without per-anchor padding here.
+            {sessionsInDrawer ? (
+                // The shared momentum sheet presents the Sessions rail only when
+                // it is out of flow. Touch follows its configurable navbar anchor;
+                // compact Desktop always opens from the top and otherwise retains
+                // the Desktop workspace, dialogs, and keyboard behavior.
                 <DetentSheet
                     open={drawerOpen}
                     onClose={(): void => setDrawerOpen(false)}
@@ -1569,17 +1566,16 @@ export function App({
                             // past them only in that mode — when the sidebar is
                             // visible the controls sit over it instead (see
                             // sidebarHeader), and this bar must stay flush.
-                            ...(mobile && {
+                            ...(sessionsInDrawer && {
                                 "@media (display-mode: window-controls-overlay)": {
                                     pl: "calc(env(titlebar-area-x, 0px) + 12px)",
                                 },
                             }),
                         }}
                     >
-                        {/* On mobile the sidebar (with its launcher) is hidden, so the
-                drawer toggle leads the bar; the launcher moves to the far right,
-                after Settings (the app's chosen placement on this bar). */}
-                        {mobile && (
+                        {/* Whenever the Sessions rail is hidden, its drawer toggle
+                            leads the bar. This does not change the product surface. */}
+                        {sessionsInDrawer && (
                             // No `edge="start"`: its negative left margin pulled the
                             // hamburger tight to the screen edge, while Settings (no
                             // edge="end") sits at the Toolbar's normal gutter — so the

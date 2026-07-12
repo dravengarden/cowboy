@@ -250,6 +250,18 @@ here says otherwise.
     `Message the agent…` jump horizontally across Normal, Insert, and blur. Do not
     show the upstream pink/hollow "unfocused" cursor while the command sink is active.
 
+14. **A narrow Desktop window is not the Mobile product.** Do not derive
+    composer mode from a viewport breakpoint. `surface === "touch"` alone owns
+    Mobile's overlay composer, bottom navigation, detent sheets, and progressive
+    disclosure. Desktop defaults to the split Prompt + Conversation workspace;
+    below 1100px only its Sessions rail may move into a drawer, while the Desktop
+    composer stays in column mode with its queue/drafts in a bounded internal
+    scroller. This layout rule changes no CM6 extension or editor DOM and keeps
+    the Desktop-only Vim/IME chunk isolated from Mobile. Regressing to
+    `mobile = touch || narrow` makes queued/draft panels consume the viewport and
+    strands the production editor at the bottom—the exact failure the separate
+    product shells are intended to prevent.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

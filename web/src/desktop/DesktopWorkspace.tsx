@@ -1,8 +1,8 @@
 import { alpha, Box, Typography } from "@mui/material";
 import { useDesktopWorkspace, type DesktopPane } from "./DesktopWorkspaceController";
 
-const PROMPT_MIN = 320;
-const CONVERSATION_MIN = 600;
+const PROMPT_MIN = 360;
+const CONVERSATION_MIN = 520;
 
 function PaneHeader({
   pane,
@@ -71,8 +71,13 @@ export function DesktopWorkspace({
         aria-label="Prompt pane"
         data-desktop-pane="prompt"
         sx={{
+          // Prefer the persisted working width, but protect both productive
+          // surfaces. The conversation floor is deliberately lower than before:
+          // at a compact Desktop width the Sessions rail collapses first, then
+          // Prompt and Conversation share the full window instead of falling
+          // back to Mobile's vertical stack.
           width:
-            `min(${String(promptWidth)}px, 45%, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
+            `min(${String(promptWidth)}px, 46%, max(${String(PROMPT_MIN)}px, calc(100% - ${String(CONVERSATION_MIN)}px)))`,
           flexShrink: 0,
           minWidth: 0,
           display: "flex",

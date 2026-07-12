@@ -2,13 +2,17 @@ import { persisted, useStore } from "./_store/mod.ts";
 
 // Desktop layout preference (DESKTOP-ONLY, persisted per device). Mobile/touch
 // always uses "overlay" and ignores this. Same shape as composerExpand.ts.
-//   - "overlay": the default single column — transcript full-bleed, the composer
-//     floats over it at the bottom.
-//   - "split": a two-column Zed-style layout — composer column (queued + drafts +
-//     input) on the left, transcript on the right.
+//   - "split": the Desktop default — composer column (queued + drafts + input)
+//     on the left, transcript on the right. With the Sessions rail this is the
+//     three-column production workspace.
+//   - "overlay": an explicit distraction-free escape hatch; never selected by
+//     a viewport breakpoint and never shared with Mobile's layout preference.
 export type DesktopLayout = "overlay" | "split";
 
-const layout = persisted<DesktopLayout>("cowboy:desktop-layout", "overlay", {
+// v2 intentionally migrates the old overlay-by-default era. Desktop and Mobile
+// have since become separate products, so every Desktop installation gets the
+// productivity-first split baseline once; subsequent user choices persist.
+const layout = persisted<DesktopLayout>("cowboy:desktop-layout-v2", "split", {
   serialize: (v) => v,
   deserialize: (s) => (s === "split" ? "split" : "overlay"),
 });
