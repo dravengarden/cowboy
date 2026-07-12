@@ -68,7 +68,12 @@ import {
   VerticalAlignTop,
   Visibility,
 } from "@mui/icons-material";
-import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import {
+  PlatformComposerEditor,
+  type ComposerEditorHandle,
+} from "./composer/PlatformComposerEditor";
+import { useComposerDraftController } from "./composer/useComposerDraftController";
+import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -102,15 +107,12 @@ import {
 import {
   activateAllDrafts,
   activateDraft,
-  addDraft,
   clearDrafts,
   clearQueue,
   discardQueued,
   editDraft,
   editQueued,
-  forcePrompt,
   resetSession,
-  frontPrompt,
   forcePushQueued,
   moveDraft,
   type QueuedMessage,
@@ -134,7 +136,6 @@ import { ScheduleSheet } from "./ScheduleSheet";
 import { fireLabel } from "./scheduleTime";
 import { haptic } from "./haptic";
 import { useSortable } from "./useSortable";
-import { getDraft, setDraft } from "./draftStore";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
 import { originLabel } from "./protocol";
@@ -586,57 +587,39 @@ function ComposeBar(
   );
 }
 
-export function Composer({
+export function ComposerWorkspace({
   sessionId,
   status,
   variant = "overlay",
-}: {
-  sessionId: string;
-  status: Status;
+}: ComposerWorkspaceProps): React.JSX.Element {
   /// "overlay" (default): the composer floats over the transcript at the bottom
   /// (single-column / mobile). "column": the desktop two-column layout — the
   /// composer is a full-height left column (queued + drafts scroll at the top,
   /// the editor card fills the rest), so it does NOT float and the
   /// compact↔expand toggle + drag-resize handle are dropped (the column height
   /// IS the editor size). See desktopLayout.ts.
-  variant?: "overlay" | "column";
-}): React.JSX.Element {
+  // `variant` is intentionally constrained by the product shell wrappers:
+  // Mobile always requests overlay; only Desktop can request a column.
   // Two-column (desktop split) mode — gates every overlay-specific affordance
   // (float padding, --composer-h reservation lives in App, expand toggle, resize
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
-  // Draft state is seeded from the per-session draft store and persisted back to
-  // it (see the effect below). The Composer is remounted per session (key in
-  // App), so these initializers read the right session's draft on mount and a
-  // session switch never carries a draft across.
-  const [text, setText] = useState<string>(() => getDraft(sessionId).text);
-  // CodeMirror is UNCONTROLLED: it's seeded with the session's draft once (this
-  // stable ref, captured at mount — the Composer remounts per session via the
-  // App-level key) and then OWNS its document. We deliberately never feed `text`
-  // back as the editor's `value` on every keystroke. Doing so re-applied the doc
-  // on each render, which on iOS (a) left the just-sent text on screen after
-  // clear() and (b) bounced the caret — a typed comma landing after the cursor.
-  // onChange keeps `text` in sync for send / sendable / draft; clear() empties
-  // the doc imperatively on submit.
-  const initialDraftText = useRef<string>(getDraft(sessionId).text);
-  // Staged image / file attachments — the byte/preview store + ACP content blocks
-  // (see attachments.ts). Images render INLINE in the editor (Obsidian-style) via
-  // `![](cowboy-att:id)` tokens; this array stays the bytes/send source. Seed the
-  // inline-image registry from the persisted draft so its tokens render as
-  // thumbnails on mount. Cleared on send.
-  const [attachments, setAttachments] = useState<Attachment[]>(() => {
-    const seeded = getDraft(sessionId).attachments;
-    seedInlineAttachments(seeded);
-    return seeded;
-  });
-  // Persist the in-progress draft per session so switching away and back
-  // restores it, and so it never bleeds into another session. Runs on mount too
-  // (idempotent re-write of the seed); on submit, text/attachments go empty and
-  // setDraft drops the entry.
-  useEffect(() => {
-    setDraft(sessionId, { text, attachments });
-  }, [sessionId, text, attachments]);
   const editorRef = useRef<ComposerEditorHandle>(null);
+  const {
+    text,
+    setText,
+    attachments,
+    setAttachments,
+    initialText: initialDraftText,
+    sendable,
+    addFiles,
+    removeAttachment,
+    submit,
+    force: forceCurrentPrompt,
+    jumpToFront: jumpCurrentPromptToFront,
+    saveAsDraft,
+    scheduleNew,
+  } = useComposerDraftController(sessionId, editorRef);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const drafts = useStoreSelector((snapshot) => snapshot.drafts);
   const queues = useStoreSelector((snapshot) => snapshot.queues);
@@ -788,30 +771,6 @@ export function Composer({
   // the agent via session/load — see supervisor.rs). Matches Zed, where a
   // thread is never permanently unusable just because its agent process ended.
   // An attachment-only prompt (e.g. just a pasted screenshot) is also sendable.
-  const sendable = !!text.trim() || attachments.length > 0;
-  // Read picked / pasted files into ACP content blocks and stage them. Async
-  // (FileReader), so previews appear once each file is encoded; unreadable
-  // files are silently dropped (filesToAttachments filters them).
-  function addFiles(files: File[]): void {
-    if (files.length === 0) return;
-    void filesToAttachments(files).then((added) => {
-      if (added.length === 0) return;
-      // Register bytes BEFORE inserting the tokens so the inline-image decoration
-      // resolves each preview synchronously on the docChange the insert triggers
-      // (no React-render race). attachments[] stays the send/persist source.
-      added.forEach(registerInlineAttachment);
-      setAttachments((prev) => [...prev, ...added]);
-      // Drop each image into the editor at the caret as an inline thumbnail token
-      // (Obsidian-style). The shared editorRef points at whichever surface (inline
-      // or fullscreen) is mounted. Non-image files keep the inline chip too.
-      added.forEach((a) => editorRef.current?.insertImage(a));
-    });
-  }
-
-  function removeAttachment(id: string): void {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  }
-
   // Slash skills + `@` file references are handled inside the editor now, via
   // CodeMirror autocomplete (see ComposerEditor + composerCompletions): no more
   // Popper pickers or caret/regex bookkeeping here. The editor reads the
@@ -896,26 +855,6 @@ export function Composer({
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
 
-  function submit(): void {
-    if (!sendable) return;
-    // Light tap confirming the prompt committed (sent or queued). This is THE
-    // send path — Send button, Enter-to-send, and the Queue short-tap
-    // (onQueueClick) all route here, so one haptic covers them all.
-    haptic();
-    const trimmed = text.trimEnd();
-    // The daemon decides: dispatch straight through when the session can take a
-    // turn now, else stack the prompt on the (server-owned) queue.
-    submitPrompt(sessionId, trimmed, attachments);
-    // Clear the CodeMirror document imperatively, not just via `value=""`: the
-    // editor's 200ms typing latch defers prop-driven clears when you submit
-    // right after typing, leaving the sent text lingering. See clear() in
-    // ComposerEditor. setText("") then keeps React state in sync (idempotent —
-    // value now matches the empty doc, so no second dispatch).
-    editorRef.current?.clear();
-    setText("");
-    setAttachments([]);
-  }
-
   // --- Long-press → force-push ------------------------------------------------
   const LP_MS = 450;
   function clearLongPress(): void {
@@ -958,23 +897,13 @@ export function Composer({
   }
   function confirmForce(): void {
     setForceAnchor(null);
-    if (!sendable) return;
-    haptic();
-    forcePrompt(sessionId, text.trimEnd(), attachments);
-    editorRef.current?.clear();
-    setText("");
-    setAttachments([]);
+    forceCurrentPrompt();
   }
   // "Jump to front of queue" (no interrupt): send the composed prompt to the
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
   // of the queue. Only meaningful when there's already a queue to jump ahead of.
   function jumpToFront(): void {
-    if (!sendable || queue.length === 0) return;
-    haptic();
-    frontPrompt(sessionId, text.trimEnd(), attachments);
-    editorRef.current?.clear();
-    setText("");
-    setAttachments([]);
+    jumpCurrentPromptToFront(queue.length);
   }
   // Enter confirms the force-push popover (it doesn't autofocus a button the way
   // the Dialogs do). Held-⌘⏎ repeats are ignored inside the hook, so the still-
@@ -987,11 +916,7 @@ export function Composer({
   // Park the composer's content as a draft (the Draft button) and clear the
   // input. Drafts persist and are activated later from the Drafts panel.
   function saveDraft(): void {
-    if (!sendable) return;
-    addDraft(sessionId, text.trimEnd(), attachments);
-    editorRef.current?.clear();
-    setText("");
-    setAttachments([]);
+    saveAsDraft();
   }
 
   // The schedule picker: `null` = closed; `{id}` present = editing an existing
@@ -1006,10 +931,7 @@ export function Composer({
       return;
     }
     // Fresh: schedule the composer's content, then clear the input like saveDraft.
-    scheduleDraft(sessionId, { text: text.trimEnd(), attachments, fireAtMs, delivery });
-    editorRef.current?.clear();
-    setText("");
-    setAttachments([]);
+    scheduleNew(fireAtMs, delivery);
   }
 
   return (
@@ -1202,20 +1124,26 @@ export function Composer({
           floats over the frosted bottom slab (a solid paper would hide the glass).
           A flex column so a later step can pin an inline toolbar to the bottom. */}
       <Paper
-        // Desktop (column) drops the frame: the two-column split already delineates
-        // the composer column (the draggable divider is its edge), so the outlined
-        // box read as a redundant nested frame. Mobile/overlay keeps the outline —
-        // there it's a floating card over the transcript and needs the boundary.
-        variant={column ? "elevation" : "outlined"}
+        // Column mode is a dedicated writing workspace. Its subtle card boundary
+        // makes an empty tall editor read as an intentional canvas, not a blank
+        // hole between the session rail and transcript.
+        variant="outlined"
         elevation={0}
         sx={{
           position: "relative",
           display: "flex",
           flexDirection: "column",
-          bgcolor: "transparent",
+          bgcolor: column
+            ? (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.18 : 0.34)
+            : "transparent",
           // Column mode: the card fills the column's remaining height (below the
           // queued/drafts panels) so the editor is always in its tall form.
-          ...(column && { flex: 1, minHeight: 0 }),
+          ...(column && {
+            flex: 1,
+            minHeight: 0,
+            borderRadius: 2,
+            overflow: "hidden",
+          }),
         }}
       >
       {/* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
@@ -1275,7 +1203,7 @@ export function Composer({
               ...(column && { flex: 1 }),
             }}
           >
-          <ComposerEditor
+          <PlatformComposerEditor
             ref={editorRef}
             // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
             value={initialDraftText.current}
@@ -2882,7 +2810,7 @@ function PendingRow({
           {/* Inline editor — hidden while the focused overlay owns the edit so only
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */}
           {!overlayOpen && (
-            <ComposerEditor
+            <PlatformComposerEditor
               ref={editorRef}
               // Seeds from the shared `draft` and re-mounts on overlay close, so
               // it reflects edits made in the overlay. Uncontrolled thereafter —
@@ -3308,6 +3236,13 @@ export function AutoScrollAndStop({
             if (sticky) setSticky(sessionId, false);
             else requestStickToBottom(sessionId);
           }}
+          sx={dense
+            ? {
+              width: 32,
+              height: 32,
+              "& .MuiSvgIcon-root": { fontSize: 18 },
+            }
+            : undefined}
         >
           <VerticalAlignBottom fontSize={size} />
         </IconButton>
@@ -3323,6 +3258,13 @@ export function AutoScrollAndStop({
             aria-label="cancel"
             disabled={!busy}
             onClick={(): void => setCancelOpen(true)}
+            sx={dense
+              ? {
+                width: 32,
+                height: 32,
+                "& .MuiSvgIcon-root": { fontSize: 18 },
+              }
+              : undefined}
           >
             <Stop fontSize={size} />
           </IconButton>
@@ -3546,7 +3488,7 @@ function SessionInfoSection({
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
     { label: "Working dir", value: session.cwd, mono: true },
-    { label: "Origin", value: originLabel(session.origin) },
+    { label: "Source", value: originLabel(session.origin) },
     { label: "Status", value: session.status },
     { label: "Session id", value: session.id, mono: true },
   ];

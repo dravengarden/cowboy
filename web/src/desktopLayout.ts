@@ -25,7 +25,7 @@ export function setDesktopLayout(v: DesktopLayout): void {
 // (like the session sidebar width), not per-session.
 export const COMPOSER_COL_MIN = 320;
 export const COMPOSER_COL_MAX = 720;
-const COMPOSER_COL_DEFAULT = 420;
+const COMPOSER_COL_DEFAULT = 440;
 
 function clampColWidth(px: number): number {
   return Math.min(COMPOSER_COL_MAX, Math.max(COMPOSER_COL_MIN, Math.round(px)));

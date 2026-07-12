@@ -3,7 +3,6 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -11,16 +10,13 @@ import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
-// True on touch devices (coarse pointer). Computed once — a device doesn't flip
-// pointer type mid-session, and the composer remounts per session anyway.
+// Compatibility hook for composer call sites. Platform classification is owned
+// centrally by SurfaceProvider so every part of the app agrees on the active
+// interaction model (especially iPad + trackpad and hybrid devices).
 export function useTouchComposer(): boolean {
-  return useMemo(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(pointer: coarse)").matches,
-    [],
-  );
+  return useSurfaceProfile().kind !== "desktop";
 }
 
 interface PickerOption {

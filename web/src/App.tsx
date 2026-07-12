@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
     Alert,
     alpha,
@@ -47,7 +47,9 @@ import {
     Schedule,
     Settings as SettingsIcon,
 } from "@mui/icons-material";
-import { AutoScrollAndStop, Composer, SessionControls } from "./Composer";
+import { AutoScrollAndStop, SessionControls } from "./Composer";
+import { DesktopComposer } from "./desktop/DesktopComposer";
+import { MobileComposer } from "./mobile/MobileComposer";
 import { useTouchComposer } from "./ComposerTextarea";
 import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
 import { claimKeyboard } from "./keyboardClaim";
@@ -79,6 +81,7 @@ import { useSortable } from "./useSortable";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
+    COMPOSER_COL_MIN,
     composerColWidthStore,
     setDesktopLayout,
     useDesktopLayout,
@@ -109,6 +112,11 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import type { Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
+
+const DesktopCommandHost = lazy(async () => {
+    const module = await import("./desktop/commands/DesktopCommandHost");
+    return { default: module.DesktopCommandHost };
+});
 
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
@@ -184,8 +192,8 @@ function StatusItem({
 // wrapper, so the transcript's --composer-h reservation includes it). Renders
 // nothing until at least one item exists.
 function AppStatusBar({
-    sessionId,
-    status,
+    sessionId: _sessionId,
+    status: _status,
 }: {
     sessionId?: string;
     status?: Status;
@@ -210,6 +218,9 @@ function AppStatusBar({
             />,
         );
     }
+    // Live controls belong with the other session actions in the top toolbar.
+    // Avoid a full-width fourth strip when there is no actual status content.
+    if (left.length === 0) return null;
 
     return (
         <Box
@@ -231,19 +242,19 @@ function AppStatusBar({
                 {left}
             </Stack>
             <Box sx={{ flex: 1 }} />
-            {/* The session's live controls — auto-scroll follow + Stop — moved off
-                the navbar into the status bar on desktop (Zed/VSCode keep run/stop in
-                the bottom bar). `dense` shrinks them to fit the strip. */}
-            {sessionId !== undefined && status !== undefined && (
-                <AutoScrollAndStop sessionId={sessionId} status={status} dense />
-            )}
         </Box>
     );
 }
 
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
-const SIDEBAR_DEFAULT = 300;
+const SIDEBAR_DEFAULT = 288;
+
+// In the three-pane desktop workspace the transcript is the primary reading
+// surface. A previously persisted, very wide composer column must never squeeze
+// it into a narrow feed: CSS caps the composer against this floor while still
+// allowing the user to drag it wider on genuinely large displays.
+const TRANSCRIPT_DESKTOP_MIN = 600;
 
 function clampSidebarWidth(px: number): number {
     return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
@@ -474,7 +485,27 @@ function SessionList({
                     New session
                 </Button>
             </Box>
-            <List dense ref={listRef} sx={{ flex: 1, overflowY: "auto" }}>
+            <List
+                dense
+                ref={listRef}
+                sx={{
+                    flex: 1,
+                    overflowY: "auto",
+                    // Fine-pointer desktops do not need phone-sized 44px controls
+                    // in every row. Keep the generous targets for touch/tablet,
+                    // while fitting more sessions without making the rail noisy.
+                    "@media (pointer: fine) and (hover: hover)": {
+                        py: 0.5,
+                        "& .cowboy-session-grip, & .cowboy-session-actions": {
+                            width: 32,
+                            height: 32,
+                        },
+                        "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
+                            fontSize: 18,
+                        },
+                    },
+                }}
+            >
                 {sortable.order.map((id) => {
                     const s = byId.get(id);
                     if (!s) return null;
@@ -492,6 +523,13 @@ function SessionList({
                         sx={{
                             pl: "max(env(safe-area-inset-left), 12px)",
                             pr: "max(env(safe-area-inset-right), 12px)",
+                            borderRadius: 1.5,
+                            mx: 0.5,
+                            "@media (pointer: fine) and (hover: hover)": {
+                                pl: 0.75,
+                                pr: 0.5,
+                                py: 0.25,
+                            },
                         }}
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
@@ -503,6 +541,7 @@ function SessionList({
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
                         <IconButton
+                            className="cowboy-session-grip"
                             {...sortable.handleProps(s.id)}
                             aria-label="Drag to reorder"
                             sx={{
@@ -562,6 +601,7 @@ function SessionList({
                             }}
                         />
                         <IconButton
+                            className="cowboy-session-actions"
                             aria-label={`row actions ${s.id}`}
                             onClick={(e): void => {
                                 e.stopPropagation();
@@ -846,9 +886,11 @@ function NewSessionDialog({
 export function App({
     themeMode,
     onSetThemeMode,
+    surface,
 }: {
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
+    surface: "desktop" | "touch";
 }): React.JSX.Element {
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
@@ -874,7 +916,10 @@ export function App({
     // many columns, and the chip row gets squeezed. Matches Mail.app /
     // Messages on iPad, which also collapse their sidebars in both
     // orientations until the device is wider than ~1200pt.
-    const mobile = useMediaQuery(theme.breakpoints.down("lg"));
+    const narrow = useMediaQuery(theme.breakpoints.down("lg"));
+    // A desktop window remains the desktop product when narrowed; only its
+    // navigation collapses. Touch surfaces always use the mobile/tablet shell.
+    const mobile = surface === "touch" || narrow;
     // Navbar placement: when the user picks "bottom" on the compact tier
     // (`< lg`, tablets included) the AppBar moves below the transcript, just
     // above the composer (mobile-browser bottom-bar feel). The modals read the
@@ -1003,8 +1048,7 @@ export function App({
     // there's room for THREE columns (sessions | composer | chat). Otherwise the
     // single-column overlay renders and the setting is a no-op (mobile unaffected).
     const splitLayout = useDesktopLayout();
-    const pointerFine = useMediaQuery("(pointer: fine) and (hover: hover)");
-    const splitActive = splitLayout === "split" && !mobile && pointerFine;
+    const splitActive = splitLayout === "split" && !mobile && surface === "desktop";
     // Composer-column width + live-drag, mirroring the sidebar splitter: a local
     // value during the drag (persisted on release, not per-pixel) backed by the
     // global composer-col-width store. `colResizing` drives the body drag cursor.
@@ -1219,10 +1263,26 @@ export function App({
                 },
             }}
         >
-            {/* Brand label intentionally omitted — the empty bar is kept only
-                for its two structural roles: matching the right pane's AppBar
-                height (so the session list aligns with the chat header) and
-                serving as the PWA window-drag region (see sx above). */}
+            <Typography
+                variant="overline"
+                sx={{
+                    color: "text.secondary",
+                    fontWeight: 700,
+                    letterSpacing: "0.09em",
+                    lineHeight: 1,
+                    WebkitAppRegion: "no-drag",
+                }}
+            >
+                Sessions
+            </Typography>
+            <Box sx={{ flex: 1 }} />
+            <Typography
+                variant="caption"
+                color="text.disabled"
+                sx={{ fontVariantNumeric: "tabular-nums", WebkitAppRegion: "no-drag" }}
+            >
+                {sessions.length}
+            </Typography>
         </Toolbar>
     );
 
@@ -1248,6 +1308,23 @@ export function App({
                     width: "100%",
                 }}
             >
+            {surface === "desktop" && (
+                <Suspense fallback={null}>
+                    <DesktopCommandHost
+                        sessions={sessions}
+                        activeId={active?.id ?? null}
+                        onPickSession={pick}
+                        onNewSession={(): void => setDialogOpen(true)}
+                        onFocusComposer={(): void => {
+                            const editor = document.querySelector<HTMLElement>(".cm-content[contenteditable='true']");
+                            editor?.focus();
+                        }}
+                        onTogglePromptPane={(): void =>
+                            setDesktopLayout(splitLayout === "split" ? "overlay" : "split")}
+                        onOpenSettings={(): void => openSettings("settings")}
+                    />
+                </Suspense>
+            )}
             {mobile ? (
                 // The shared momentum sheet — same affordance as every other
                 // mobile sheet (Settings, etc.). Its anchor FOLLOWS the navbar:
@@ -1631,6 +1708,13 @@ export function App({
                                 status={active.status}
                             />
                         )}
+                        {active && surface === "desktop" && (
+                            <AutoScrollAndStop
+                                sessionId={active.id}
+                                status={active.status}
+                                dense
+                            />
+                        )}
                         <IconButton
                             onClick={(): void => openSettings("settings")}
                             aria-label="settings"
@@ -1666,20 +1750,45 @@ export function App({
                                 {/* Composer column (left) */}
                                 <Box
                                     sx={{
-                                        width: colWidth,
+                                        // Honour the persisted preference until it would
+                                        // steal the transcript's minimum readable width.
+                                        // `max()` keeps the editor useful at the smallest
+                                        // desktop split size; tablets never enter split.
+                                        width: `min(${String(colWidth)}px, 45%, max(${String(COMPOSER_COL_MIN)}px, calc(100% - ${String(TRANSCRIPT_DESKTOP_MIN)}px)))`,
                                         flexShrink: 0,
                                         minWidth: 0,
                                         display: "flex",
                                         flexDirection: "column",
                                         minHeight: 0,
+                                        bgcolor: (t) => alpha(t.palette.background.paper, 0.24),
                                     }}
                                 >
+                                    <Box
+                                        sx={{
+                                            minHeight: 36,
+                                            px: 2,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            borderBottom: 1,
+                                            borderColor: "divider",
+                                            flexShrink: 0,
+                                            bgcolor: (t) => alpha(t.palette.background.paper, 0.2),
+                                        }}
+                                    >
+                                        <Typography
+                                            variant="overline"
+                                            color="text.secondary"
+                                            sx={{ fontWeight: 700, letterSpacing: "0.09em", lineHeight: 1 }}
+                                        >
+                                            Prompt
+                                        </Typography>
+                                    </Box>
                                     {active.system ? (
                                         <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                             View-only system session — managed by cowboy
                                         </Box>
                                     ) : (
-                                        <Composer
+                                        <DesktopComposer
                                             key={active.id}
                                             sessionId={active.id}
                                             status={active.status}
@@ -1729,6 +1838,26 @@ export function App({
                                         flexDirection: "column",
                                     }}
                                 >
+                                    <Box
+                                        sx={{
+                                            minHeight: 36,
+                                            px: 2,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            borderBottom: 1,
+                                            borderColor: "divider",
+                                            flexShrink: 0,
+                                            bgcolor: (t) => alpha(t.palette.background.paper, 0.12),
+                                        }}
+                                    >
+                                        <Typography
+                                            variant="overline"
+                                            color="text.secondary"
+                                            sx={{ fontWeight: 700, letterSpacing: "0.09em", lineHeight: 1 }}
+                                        >
+                                            Conversation
+                                        </Typography>
+                                    </Box>
                                     <Transcript
                                         sessionId={active.id}
                                         timeline={activeTimeline ?? []}
@@ -1815,17 +1944,23 @@ export function App({
                                 <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                     View-only system session — managed by cowboy
                                 </Box>
-                            ) : (
-                                <Composer
-                                    // Remount per session: each session owns its draft
-                                    // (seeded from the per-session draft store) and a
-                                    // fresh CodeMirror editor, so one session's
-                                    // in-progress text never bleeds into another.
-                                    key={active.id}
-                                    sessionId={active.id}
-                                    status={active.status}
-                                />
-                            )}
+                            ) : surface === "desktop" ? (
+                                    <DesktopComposer
+                                        // Remount per session: each session owns its draft
+                                        // (seeded from the per-session draft store) and a
+                                        // fresh CodeMirror editor, so one session's
+                                        // in-progress text never bleeds into another.
+                                        key={active.id}
+                                        sessionId={active.id}
+                                        status={active.status}
+                                    />
+                                ) : (
+                                    <MobileComposer
+                                        key={active.id}
+                                        sessionId={active.id}
+                                        status={active.status}
+                                    />
+                                )}
                             {/* Zed/VSCode-style status bar at the very bottom of
                                 the window; inside this measured wrapper so the
                                 transcript reserves it via --composer-h. */}
@@ -2504,13 +2639,12 @@ function DeleteSessionShell({
     const navbarAtBottom = useNavbarAtBottom();
     useConfirmEnter(session !== null, onConfirm);
     if (!session) return null;
-    const surface = originLabel(session.origin);
     return (
         <Sheet
             forceSheet={navbarAtBottom}
             open
             onClose={onClose}
-            title={`Delete this ${surface} session?`}
+            title="Delete this session?"
             actions={
                 <>
                     <Button onClick={onClose} color="inherit">

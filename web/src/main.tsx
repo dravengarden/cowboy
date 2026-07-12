@@ -1,12 +1,21 @@
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
-import { App } from "./App";
 import { AppErrorBoundary } from "./AppErrorBoundary";
+import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
+
+const DesktopApp = lazy(async () => {
+  const module = await import("./desktop/DesktopApp");
+  return { default: module.DesktopApp };
+});
+const MobileApp = lazy(async () => {
+  const module = await import("./mobile/MobileApp");
+  return { default: module.MobileApp };
+});
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
@@ -17,6 +26,10 @@ function Root(): React.JSX.Element {
   // Publish the keyboard overlap as `--kb-inset` so the composer lifts clear of
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
+  const surface = useSurfaceProfile();
+  const app = surface.kind === "desktop"
+    ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />
+    : <MobileApp themeMode={mode} onSetThemeMode={setMode} />;
   return (
     <ThemeProvider theme={theme}>
       {/* `enableColorScheme` writes `:root { color-scheme: light|dark }` from the
@@ -28,7 +41,7 @@ function Root(): React.JSX.Element {
       {/* Top-level boundary: a render crash anywhere in <App> degrades to a red
           error card with a reload instead of a blank white screen. */}
       <AppErrorBoundary>
-        <App themeMode={mode} onSetThemeMode={setMode} />
+        <Suspense fallback={null}>{app}</Suspense>
       </AppErrorBoundary>
     </ThemeProvider>
   );
@@ -53,7 +66,9 @@ const el = document.getElementById("root");
 if (el) {
   createRoot(el).render(
     <StrictMode>
-      <Root />
+      <SurfaceProvider>
+        <Root />
+      </SurfaceProvider>
     </StrictMode>,
   );
 }

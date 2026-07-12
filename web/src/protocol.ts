@@ -12,20 +12,23 @@ export type Status =
   // finished (src/core.rs Hub::restore). A dead/resumable state like exited.
   | "interrupted";
 
-// Which surface opened the session — for the sidebar badge.
+// Which surface opened the session — for the sidebar badge. The wire values are
+// legacy implementation names: "web" also covers the PWA/native shell, while
+// "api" covers ACP clients such as Zed as well as direct API callers.
 // Mirrors src/core.rs `SessionOrigin`. Older daemons that predate this field
 // will omit it; treat absent as "api". (Legacy "zed" rows from the retired
 // bridge now read back as "api".)
 export type SessionOrigin = "api" | "web";
 
-// Human label for the surface that opened a session. Absent origin (older
-// daemons) reads as "API", matching the daemon's `SessionOrigin` default.
+// User-facing source names describe the actual ownership boundary rather than
+// the transport used internally. Absent origin (older daemons) is external,
+// matching the daemon's `SessionOrigin` default.
 export function originLabel(o: SessionOrigin | undefined): string {
   switch (o ?? "api") {
     case "web":
-      return "Web";
+      return "Cowboy";
     default:
-      return "API";
+      return "External";
   }
 }
 
