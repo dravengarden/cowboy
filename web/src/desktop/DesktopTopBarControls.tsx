@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { latestAvailableCommands, resolveSessionAction } from "../agentCommands";
 import { isCompactingTail } from "../derive";
-import type { ConfigOption, Status } from "../protocol";
+import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import {
   fullResetTime,
@@ -46,6 +46,11 @@ const OPTION_RANK: Record<string, number> = {
   fast: 3,
   fast_mode: 3,
 };
+
+// useSyncExternalStore selectors must return a referentially stable snapshot.
+// A fresh `[]` while a newly selected session has no timeline yet causes React
+// error #185 (infinite render), taking the whole Desktop input surface down.
+const EMPTY_TIMELINE: Envelope[] = [];
 
 function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();
@@ -206,7 +211,9 @@ export function DesktopTopBarControls({
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
-  const timeline = useStoreSelector((snapshot) => snapshot.timelines.get(sessionId) ?? []);
+  const timeline = useStoreSelector((snapshot) =>
+    snapshot.timelines.get(sessionId) ?? EMPTY_TIMELINE
+  );
   const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
