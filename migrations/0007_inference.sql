@@ -1,4 +1,4 @@
--- LLM inference providers (design: tasks/archive/2026/06/confirm-detect-skills).
+-- LLM inference providers (design: tasks/active/confirm-detect-skills).
 --
 -- Skills' L2 judge calls an external LLM ("inference provider", e.g. DeepSeek).
 -- Two small per-provider tables, keyed by the provider id:
