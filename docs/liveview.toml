@@ -1,6 +1,7 @@
 schema = 1
 slug = "cowboy-architecture"
 title = "Cowboy Architecture"
+cover = "liveview-cover.webp"
 source = "architecture"
 description = "Architecture, protocols, storage, deployment, and operations for Cowboy."
 collection = "Project Docs"
