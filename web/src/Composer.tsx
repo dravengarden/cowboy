@@ -1098,6 +1098,7 @@ export function ComposerWorkspace({
               drain one per turn-end. */}
           {queue.length > 0 && (
             <PendingPanel
+              desktop={surface === "desktop"}
               kind="queued"
               sessionId={sessionId}
               items={queue}
@@ -1109,6 +1110,7 @@ export function ComposerWorkspace({
           {/* Drafts: parked messages the user holds + activates on demand. */}
           {draftList.length > 0 && (
             <PendingPanel
+              desktop={surface === "desktop"}
               kind="draft"
               sessionId={sessionId}
               items={draftList}
@@ -1168,6 +1170,13 @@ export function ComposerWorkspace({
           floats over the frosted bottom slab (a solid paper would hide the glass).
           A flex column so a later step can pin an inline toolbar to the bottom. */}
       <Paper
+        {...(surface === "desktop"
+          ? {
+            "data-desktop-region": "prompt.composer",
+            "data-desktop-focus-default": true,
+            tabIndex: -1,
+          }
+          : {})}
         // Column mode is a dedicated writing workspace. Its subtle card boundary
         // makes an empty tall editor read as an intentional canvas, not a blank
         // hole between the session rail and transcript.
@@ -2524,6 +2533,7 @@ function ConfirmButton({
 // for drafts) over a scroll-capped list of rows. Drafts sit BELOW the queue and
 // above the composer (see the Composer render).
 function PendingPanel({
+  desktop,
   kind,
   sessionId,
   items,
@@ -2533,6 +2543,7 @@ function PendingPanel({
   onScheduleDraft,
   unbounded,
 }: {
+  desktop: boolean;
   kind: "queued" | "draft";
   sessionId: string;
   items: QueuedMessage[];
@@ -2619,6 +2630,13 @@ function PendingPanel({
   const noun = kind === "queued" ? "Queued Message" : "Draft";
   return (
     <Box
+      {...(desktop
+        ? {
+          "data-desktop-region": `prompt.${kind}`,
+          "data-desktop-focus-default": true,
+          tabIndex: -1,
+        }
+        : {})}
       sx={{
         mb: 1,
         // The original framed container, KEPT (the user liked it): a soft tinted,
@@ -2650,6 +2668,7 @@ function PendingPanel({
         sx={{ pl: 0.5, pr: 0.75, py: 0, minHeight: 44 }}
       >
         <IconButton
+          data-desktop-item-action="default"
           size="small"
           aria-label={collapsed ? "expand" : "collapse"}
           onClick={toggleCollapsed}
@@ -2768,6 +2787,12 @@ function PendingPanel({
             return (
               <Stack
                 key={m.id}
+                {...(desktop
+                  ? {
+                    "data-desktop-item": m.id,
+                    tabIndex: -1,
+                  }
+                  : {})}
                 ref={sortable.registerItem(m.id)}
                 style={sortable.itemStyle(m.id)}
                 direction="row"
@@ -3200,6 +3225,7 @@ function PendingRow({
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
         <IconButton
+          data-desktop-item-action="default"
           size="small"
           color="primary"
           aria-label="send draft"
@@ -3213,6 +3239,7 @@ function PendingRow({
     primary = (
       <Tooltip title="Send now">
         <IconButton
+          data-desktop-item-action="default"
           size="small"
           color="primary"
           aria-label="send now"

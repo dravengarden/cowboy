@@ -398,6 +398,7 @@ function SessionList({
                     return (
                     <ListItemButton
                         key={s.id}
+                        data-desktop-item={s.id}
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
@@ -1229,6 +1230,30 @@ export function App({
                 flexDirection: "column",
                 height: "100%",
                 width: "100%",
+                ...(surface === "desktop" && {
+                    "& [data-desktop-region]": {
+                        position: "relative",
+                        outline: "none",
+                        transition: "background-color 120ms ease, box-shadow 120ms ease",
+                    },
+                    "& [data-desktop-region][data-desktop-focused='true']": {
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.035),
+                        boxShadow: (t) =>
+                            `inset 2px 0 0 ${alpha(t.palette.primary.main, 0.82)}`,
+                    },
+                    "& [data-desktop-region][data-desktop-focused='true']:focus-visible": {
+                        boxShadow: (t) => [
+                            `inset 2px 0 0 ${t.palette.primary.main}`,
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.2)}`,
+                        ].join(", "),
+                    },
+                    "& [data-desktop-item]:focus-visible": {
+                        outline: "none",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
+                        boxShadow: (t) =>
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.34)}`,
+                    },
+                }),
             }}
         >
             {/* Full-width connection/version banner, above the whole layout so
@@ -1289,6 +1314,9 @@ export function App({
             ) : (
                 <Stack
                     data-desktop-pane="sessions"
+                    data-desktop-region="sessions.list"
+                    data-desktop-focus-default
+                    tabIndex={-1}
                     sx={{
                         width: sidebarWidth,
                         flexShrink: 0,

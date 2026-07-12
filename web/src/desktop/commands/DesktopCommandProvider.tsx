@@ -24,6 +24,7 @@ export interface DesktopCommand {
   leader?: string;
   shortcut?: string;
   contexts?: DesktopPane[];
+  regions?: string[];
   /** Global commands skip text editors unless explicitly opted in. */
   allowInEditor?: boolean;
   when?: () => boolean;
@@ -53,6 +54,8 @@ export function DesktopCommandProvider(
   { children }: { children: React.ReactNode },
 ): React.JSX.Element {
   const commands = useRef(new Map<string, DesktopCommand>());
+  const windowChord = useRef<number | null>(null);
+  const itemChord = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
   const workspace = useDesktopWorkspace();
   const register = useCallback((command: DesktopCommand): () => void => {
@@ -67,10 +70,15 @@ export function DesktopCommandProvider(
   }, []);
   const execute = useCallback((id: string): boolean => {
     const command = commands.current.get(id);
-    if (!command || command.when?.() === false) return false;
+    if (
+      !command || command.when?.() === false ||
+      (command.contexts && !command.contexts.includes(workspace.focusedPane)) ||
+      (command.regions &&
+        (!workspace.focusedRegion || !command.regions.includes(workspace.focusedRegion)))
+    ) return false;
     command.run();
     return true;
-  }, []);
+  }, [workspace.focusedPane, workspace.focusedRegion]);
   const commandList = useMemo(() => [...commands.current.values()], [revision]);
   const value = useMemo<DesktopCommandContextValue>(() => ({
     register,
@@ -81,6 +89,36 @@ export function DesktopCommandProvider(
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      // Standard Vim window navigation. The first Ctrl-W arms a short chord;
+      // the following h/l moves panes, j/k moves vertical regions in the current
+      // pane, and w cycles every visible region. Capture-phase handling keeps the
+      // same contract while the CM6 editor owns keyboard focus.
+      if (windowChord.current !== null) {
+        globalThis.clearTimeout(windowChord.current);
+        windowChord.current = null;
+        const key = event.key.toLowerCase();
+        if (["h", "j", "k", "l", "w"].includes(key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (key === "h") workspace.focusAdjacentPane(-1);
+          else if (key === "l") workspace.focusAdjacentPane(1);
+          else if (key === "j") workspace.focusAdjacentRegion(1);
+          else if (key === "k") workspace.focusAdjacentRegion(-1);
+          else workspace.cycleRegion();
+          return;
+        }
+      }
+      if (
+        event.ctrlKey && !event.metaKey && !event.altKey &&
+        event.key.toLowerCase() === "w" && !event.isComposing
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        windowChord.current = globalThis.setTimeout(() => {
+          windowChord.current = null;
+        }, 1200);
+        return;
+      }
       if (workspace.mode === "leader") {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -100,10 +138,16 @@ export function DesktopCommandProvider(
         event.preventDefault();
         const next = [...workspace.leaderPrefix, event.key.toLowerCase()];
         const exact = [...commands.current.values()].find((command) =>
-          command.leader?.split(/\s+/).join("") === next.join("")
+          command.leader?.split(/\s+/).join("") === next.join("") &&
+          (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
+          (!command.regions ||
+            (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion)))
         );
         const branch = [...commands.current.values()].some((command) =>
-          command.leader?.split(/\s+/).join("").startsWith(next.join(""))
+          command.leader?.split(/\s+/).join("").startsWith(next.join("")) &&
+          (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
+          (!command.regions ||
+            (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion)))
         );
         if (exact) {
           if (exact.when?.() === false) {
@@ -126,6 +170,70 @@ export function DesktopCommandProvider(
           workspace.setLeaderMessage(`No command for SPC ${next.join(" ")}`);
         }
         return;
+      }
+      // Region-local Vim list navigation. It is intentionally inactive inside
+      // text editors and native controls; those surfaces keep their own j/k,
+      // arrows and IME semantics. Regions expose items through a tiny DOM
+      // contract so Sessions, Queue and Drafts share one implementation.
+      if (
+        workspace.mode === "normal" && !isTextEditingTarget(event.target) &&
+        !event.ctrlKey && !event.metaKey && !event.altKey
+      ) {
+        const key = event.key;
+        const region = workspace.focusedRegion
+          ? document.querySelector<HTMLElement>(
+            `[data-desktop-region="${CSS.escape(workspace.focusedRegion)}"]`,
+          )
+          : null;
+        const items = [...(region?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
+          .filter((element) => element.offsetParent !== null);
+        if (items.length > 0) {
+          const active = document.activeElement instanceof HTMLElement
+            ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)
+            : -1;
+          let next = -1;
+          if (itemChord.current !== null) {
+            globalThis.clearTimeout(itemChord.current);
+            itemChord.current = null;
+            if (key === "g") next = 0;
+          } else if (key === "g") {
+            event.preventDefault();
+            itemChord.current = globalThis.setTimeout(() => {
+              itemChord.current = null;
+            }, 900);
+            return;
+          }
+          if (key === "j") next = Math.min(items.length - 1, Math.max(0, active + 1));
+          else if (key === "k") next = Math.max(0, active < 0 ? items.length - 1 : active - 1);
+          else if (key === "G") next = items.length - 1;
+          if (next >= 0) {
+            event.preventDefault();
+            items[next]?.focus({ preventScroll: true });
+            items[next]?.scrollIntoView({ block: "nearest" });
+            return;
+          }
+          if (key === "Enter" && active >= 0) {
+            const item = items[active];
+            const action = item?.matches("button,[role='button']")
+              ? item
+              : item?.querySelector<HTMLElement>("[data-desktop-item-action='default']");
+            if (action) {
+              event.preventDefault();
+              action.click();
+              return;
+            }
+          }
+          if (key.toLowerCase() === "i" && active >= 0) {
+            const edit = items[active]?.querySelector<HTMLElement>(
+              "[data-desktop-item-action='edit'], button[aria-label='Edit']",
+            );
+            if (edit) {
+              event.preventDefault();
+              edit.click();
+              return;
+            }
+          }
+        }
       }
       if (event.defaultPrevented || event.isComposing || event.repeat) return;
       if (
@@ -152,7 +260,17 @@ export function DesktopCommandProvider(
       }
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
-    return () => globalThis.removeEventListener("keydown", onKeyDown, true);
+    return () => {
+      globalThis.removeEventListener("keydown", onKeyDown, true);
+      if (windowChord.current !== null) {
+        globalThis.clearTimeout(windowChord.current);
+        windowChord.current = null;
+      }
+      if (itemChord.current !== null) {
+        globalThis.clearTimeout(itemChord.current);
+        itemChord.current = null;
+      }
+    };
   }, [workspace]);
 
   return (

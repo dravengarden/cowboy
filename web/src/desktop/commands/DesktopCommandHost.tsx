@@ -19,6 +19,7 @@ import {
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
+import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 
 export function DesktopCommandHost({
   sessions,
@@ -42,6 +43,7 @@ export function DesktopCommandHost({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const moveSession = (delta: number): void => {
     if (sessions.length === 0) return;
@@ -55,6 +57,16 @@ export function DesktopCommandHost({
   };
 
   const commands = useMemo<DesktopCommand[]>(() => [
+    {
+      id: "shortcuts.open",
+      title: "Keyboard Shortcuts",
+      description: "Vim navigation and commands for the current Desktop context",
+      group: "Help",
+      leader: "h k",
+      shortcut: "Mod+/",
+      allowInEditor: true,
+      run: () => setShortcutsOpen(true),
+    },
     {
       id: "commandPalette.open",
       title: "Open Command Palette",
@@ -151,6 +163,44 @@ export function DesktopCommandHost({
       leader: "w c",
       run: () => workspace.focusPane("conversation"),
     },
+    {
+      id: "prompt.focusQueue",
+      title: "Focus Queue",
+      description: "Move keyboard focus to queued prompts",
+      group: "Prompt",
+      leader: "p q",
+      contexts: ["prompt"],
+      when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
+      disabledReason: "The queue is empty",
+      run: () => workspace.focusRegion("prompt.queued"),
+    },
+    {
+      id: "prompt.focusDrafts",
+      title: "Focus Drafts",
+      description: "Move keyboard focus to parked drafts",
+      group: "Prompt",
+      leader: "p d",
+      contexts: ["prompt"],
+      when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
+      disabledReason: "There are no drafts",
+      run: () => workspace.focusRegion("prompt.draft"),
+    },
+    {
+      id: "prompt.focusEditor",
+      title: "Focus Prompt Editor",
+      group: "Prompt",
+      leader: "p e",
+      contexts: ["prompt"],
+      run: () => workspace.focusRegion("prompt.composer"),
+    },
+    {
+      id: "conversation.focusTranscript",
+      title: "Focus Transcript",
+      group: "Conversation",
+      leader: "c c",
+      contexts: ["conversation"],
+      run: () => workspace.focusRegion("conversation.transcript"),
+    },
   ], [
     activeId,
     onFocusComposer,
@@ -173,6 +223,11 @@ export function DesktopCommandHost({
   useDesktopCommand(commands[7] as DesktopCommand);
   useDesktopCommand(commands[8] as DesktopCommand);
   useDesktopCommand(commands[9] as DesktopCommand);
+  useDesktopCommand(commands[10] as DesktopCommand);
+  useDesktopCommand(commands[11] as DesktopCommand);
+  useDesktopCommand(commands[12] as DesktopCommand);
+  useDesktopCommand(commands[13] as DesktopCommand);
+  useDesktopCommand(commands[14] as DesktopCommand);
 
   const normalized = query.trim().toLowerCase();
   const available = registry.list().filter((command) =>
@@ -196,6 +251,10 @@ export function DesktopCommandHost({
   return (
     <>
       <DesktopLeaderBoard />
+      <DesktopShortcutsDialog
+        open={shortcutsOpen}
+        onClose={(): void => setShortcutsOpen(false)}
+      />
       <Dialog
       open={paletteOpen}
       onClose={(): void => setPaletteOpen(false)}

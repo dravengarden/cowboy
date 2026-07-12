@@ -12,6 +12,7 @@ const GROUP_LABELS: Record<string, string> = {
   a: "Actions",
   g: "Go",
   f: "Find",
+  h: "Help",
   o: "Open",
   x: "Stop / cancel",
   ",": "Settings",
@@ -32,6 +33,11 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
   const entries = useMemo<LeaderEntry[]>(() => {
     const byKey = new Map<string, LeaderEntry>();
     for (const command of registry.commands) {
+      if (command.contexts && !command.contexts.includes(workspace.focusedPane)) continue;
+      if (
+        command.regions &&
+        (!workspace.focusedRegion || !command.regions.includes(workspace.focusedRegion))
+      ) continue;
       const sequence = command.leader?.split(/\s+/).join("");
       if (!sequence?.startsWith(prefix) || sequence.length <= prefix.length) continue;
       const key = sequence[prefix.length] as string;
@@ -45,7 +51,7 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
       });
     }
     return [...byKey.values()].sort((left, right) => left.key.localeCompare(right.key));
-  }, [prefix, registry.commands]);
+  }, [prefix, registry.commands, workspace.focusedPane, workspace.focusedRegion]);
 
   if (workspace.mode !== "leader") return null;
 

@@ -70,6 +70,7 @@ export function DesktopWorkspace({
         component="section"
         aria-label="Prompt pane"
         data-desktop-pane="prompt"
+        tabIndex={-1}
         sx={{
           // Prefer the persisted working width, but protect both productive
           // surfaces. The conversation floor is deliberately lower than before:
@@ -121,6 +122,7 @@ export function DesktopWorkspace({
         component="section"
         aria-label="Conversation pane"
         data-desktop-pane="conversation"
+        tabIndex={-1}
         sx={{
           flex: 1,
           minWidth: 0,
@@ -130,7 +132,14 @@ export function DesktopWorkspace({
         }}
       >
         <PaneHeader pane="conversation">Conversation</PaneHeader>
-        {conversation}
+        <Box
+          data-desktop-region="conversation.transcript"
+          data-desktop-focus-default
+          tabIndex={-1}
+          sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          {conversation}
+        </Box>
       </Box>
     </Box>
   );

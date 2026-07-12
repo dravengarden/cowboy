@@ -5,6 +5,7 @@ import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap } from "./commands/DesktopKeycap";
+import { useDesktopCommands } from "./commands/DesktopCommandProvider";
 
 function Segment({
   label,
@@ -49,7 +50,8 @@ export function DesktopStatusLine({
   status: Status;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
-  const { focusedPane, leaderPrefix, mode } = workspace;
+  const commands = useDesktopCommands();
+  const { focusedPane, focusedRegion, leaderPrefix, mode } = workspace;
   const vimEnabled = useVimSetting();
   const vimMode = useVimMode();
   const connected = useStoreSelector((snapshot) => snapshot.connected);
@@ -90,6 +92,13 @@ export function DesktopStatusLine({
           mono
         />
         <Segment label={focusedPane.toUpperCase()} tooltip="Focused workspace pane" mono />
+        {focusedRegion && (
+          <Segment
+            label={(focusedRegion.split(".").at(-1) ?? focusedRegion).toUpperCase()}
+            tooltip="Focused region"
+            mono
+          />
+        )}
         {imeAutoInsert && (
           <Segment
             label="IME SAFE"
@@ -124,6 +133,18 @@ export function DesktopStatusLine({
             workspace.setLeaderPrefix([]);
             workspace.setLeaderMessage(null);
             workspace.setMode("leader");
+          }}
+        />
+        <Segment
+          label={
+            <Stack direction="row" spacing={0.55} alignItems="center">
+              <DesktopKeycap keyLabel="?" />
+              <Box component="span">Shortcuts</Box>
+            </Stack>
+          }
+          tooltip="Open the Desktop keyboard shortcut guide (Mod+/)"
+          onClick={(): void => {
+            commands.execute("shortcuts.open");
           }}
         />
       </Stack>
