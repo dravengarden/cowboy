@@ -1728,13 +1728,6 @@ export function Transcript({
           // item's STABLE key (first envelope seq) so prepending older history
           // doesn't re-mount/jump rows.
           <>
-            {/* column-reverse normally puts all unused space at the visual top,
-                which can leave a short turn floating halfway down the screen.
-                This DOM-first flex spacer is visual-last (below the newest row),
-                so it absorbs that slack at the bottom instead. It collapses to
-                zero as soon as the transcript overflows and, unlike changing
-                justifyContent, preserves column-reverse's scrollTop=0 anchor. */}
-            <Box aria-hidden sx={{ flex: "1 1 0", minHeight: 0 }} />
             {/* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.
                 cowboy no longer auto-kills a silent turn (see acp.rs) — the human
@@ -1797,17 +1790,11 @@ export function Transcript({
                     py: 0.625,
                     display: "flex",
                     flexDirection: "column",
-                    // Skip layout+paint for rows scrolled off-screen. The whole
-                    // transcript reflows whenever the composer height changes (a
-                    // draft expands → --composer-h → the reserved padding-bottom),
-                    // and repainting every heavy markdown/code row on that reflow is
-                    // the stutter. content-visibility bounds that work to the visible
-                    // viewport; `auto` in contain-intrinsic-size makes each row
-                    // remember its real height after first render, so scrolling back
-                    // up through history doesn't jump. The streaming bottom row is on
-                    // screen, so it renders normally (this only affects off-screen).
-                    contentVisibility: "auto",
-                    containIntrinsicSize: "auto 96px",
+                    // Do not use content-visibility here. iOS WebKit can retain the
+                    // intrinsic height but skip painting a row when it is inside a
+                    // column-reverse scroller, leaving a large blank hole until the
+                    // user scrolls. Correct transcript rendering is more important
+                    // than avoiding paint for off-screen Markdown rows.
                   }}
                 >
                   <ItemView item={item} streaming={working && i === lastIdx} />
