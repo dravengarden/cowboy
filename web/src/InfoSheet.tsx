@@ -1,14 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
   Box,
+  CircularProgress,
   Divider,
+  IconButton,
+  LinearProgress,
   Stack,
   Typography,
 } from "@mui/material";
-import { ExpandMore } from "@mui/icons-material";
+import { ExpandMore, Refresh } from "@mui/icons-material";
 import { useSkills } from "./store";
 
 function formatBytes(n: number): string {
@@ -42,6 +45,213 @@ interface MetricsData {
   sessions_live: number;
   sessions_deleted: number;
   daemon_rss_bytes: number;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+interface ProviderUsage {
+  provider: string;
+  status: string;
+  source: string;
+  observed_at_ms: number;
+  account?: JsonRecord;
+  rate_limits?: JsonRecord;
+  activity?: JsonRecord;
+  error?: string;
+}
+
+interface UsageSnapshot {
+  refreshed_at_ms: number;
+  providers: ProviderUsage[];
+}
+
+function record(value: unknown): JsonRecord | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonRecord
+    : undefined;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function relativeTime(ms: number): string {
+  if (ms <= 0) return "Not updated";
+  const seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (seconds < 5) return "Updated just now";
+  if (seconds < 60) return `Updated ${String(seconds)}s ago`;
+  return `Updated ${String(Math.round(seconds / 60))}m ago`;
+}
+
+function resetText(epochSeconds: number | undefined): string | undefined {
+  if (epochSeconds === undefined) return undefined;
+  const date = new Date(epochSeconds * 1000);
+  const delta = Math.max(0, date.getTime() - Date.now());
+  const mins = Math.ceil(delta / 60_000);
+  const relative = mins < 60
+    ? `${String(mins)}m`
+    : mins < 1440
+    ? `${String(Math.floor(mins / 60))}h ${String(mins % 60)}m`
+    : `${String(Math.floor(mins / 1440))}d ${String(Math.floor((mins % 1440) / 60))}h`;
+  return `Resets in ${relative} · ${date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
+}
+
+function windowLabel(minutes: number | undefined): string {
+  if (minutes === undefined) return "Usage limit";
+  if (minutes < 60) return `${String(minutes)} minute limit`;
+  if (minutes < 1440) return `${String(Math.round(minutes / 60))} hour limit`;
+  if (minutes >= 10080) return "Weekly usage limit";
+  return `${String(Math.round(minutes / 1440))} day limit`;
+}
+
+function LimitRow({ value, prefix }: { value: JsonRecord; prefix: string | undefined }): React.JSX.Element {
+  const used = Math.min(100, Math.max(0, num(value.usedPercent) ?? 0));
+  const remaining = Math.round(100 - used);
+  return (
+    <Stack spacing={0.65}>
+      <Stack direction="row" justifyContent="space-between" spacing={1}>
+        <Typography variant="body2">{prefix ? `${prefix} · ` : ""}{windowLabel(num(value.windowDurationMins))}</Typography>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>{remaining}% remaining</Typography>
+      </Stack>
+      <LinearProgress
+        variant="determinate"
+        value={remaining}
+        sx={{ height: 7, borderRadius: 99, bgcolor: "action.selected", "& .MuiLinearProgress-bar": { borderRadius: 99 } }}
+      />
+      {resetText(num(value.resetsAt)) && (
+        <Typography variant="caption" color="text.secondary">{resetText(num(value.resetsAt))}</Typography>
+      )}
+    </Stack>
+  );
+}
+
+function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Element {
+  const rateRoot = record(usage.rate_limits?.rateLimits);
+  const buckets = record(usage.rate_limits?.rateLimitsByLimitId);
+  const limits = useMemo(() => {
+    const source = buckets
+      ? Object.values(buckets).map(record).filter((v): v is JsonRecord => v !== undefined)
+      : rateRoot ? [rateRoot] : [];
+    return source.flatMap((bucket) => {
+      const prefix = str(bucket.limitName);
+      return [record(bucket.primary), record(bucket.secondary)]
+        .filter((v): v is JsonRecord => v !== undefined)
+        .map((value) => ({ value, prefix }));
+    });
+  }, [buckets, rateRoot]);
+  const account = record(usage.account?.account);
+  const plan = account ? str(account.planType) : undefined;
+  const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
+  const availableCredits = resetCredits ? num(resetCredits.availableCount) : undefined;
+  const credits = Array.isArray(resetCredits?.credits)
+    ? resetCredits.credits.map(record).filter((v): v is JsonRecord => v !== undefined)
+    : [];
+  const summary = record(usage.activity?.summary);
+  const sessionUsage = record(usage.activity?.session);
+  const sessionCost = record(sessionUsage?.cost);
+  const title = usage.provider === "claude-code" ? "Claude Code" : usage.provider === "gemini" ? "Gemini" : "Codex";
+
+  return (
+    <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, px: 1.5, py: 1.4 }}>
+      <Stack spacing={1.35}>
+        <Stack direction="row" justifyContent="space-between" alignItems="baseline">
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{title}</Typography>
+          <Typography variant="caption" color={usage.status === "available" ? "success.main" : "text.secondary"}>
+            {plan ? plan.toUpperCase() : usage.status === "available" ? "Live" : "Unavailable"}
+          </Typography>
+        </Stack>
+        {limits.map((limit, index) => <LimitRow key={index} value={limit.value} prefix={limit.prefix} />)}
+        {availableCredits !== undefined && (
+          <InfoRow k="Full resets" v={`${String(availableCredits)} available`} />
+        )}
+        {credits.map((credit, index) => {
+          const expiresAt = num(credit.expiresAt);
+          return (
+            <Box key={str(credit.id) ?? index} sx={{ pl: 1, borderLeft: 2, borderColor: "divider" }}>
+              <Typography variant="body2">{str(credit.title) ?? "Rate-limit reset"}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {expiresAt === undefined
+                  ? "No expiry reported"
+                  : `Expires ${new Date(expiresAt * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`}
+              </Typography>
+            </Box>
+          );
+        })}
+        {summary && num(summary.lifetimeTokens) !== undefined && (
+          <InfoRow k="Lifetime tokens" v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"} />
+        )}
+        {sessionUsage && num(sessionUsage.used) !== undefined && num(sessionUsage.size) !== undefined && (
+          <InfoRow
+            k="Latest context"
+            v={`${num(sessionUsage.used)?.toLocaleString() ?? "0"} / ${num(sessionUsage.size)?.toLocaleString() ?? "0"}`}
+          />
+        )}
+        {sessionCost && num(sessionCost.amount) !== undefined && (
+          <InfoRow
+            k="Session cost"
+            v={`${str(sessionCost.currency) ?? "USD"} ${String(num(sessionCost.amount) ?? 0)}`}
+          />
+        )}
+        {limits.length === 0 && (
+          <Typography variant="body2" color="text.secondary">{usage.error ?? "Detailed limits are not available."}</Typography>
+        )}
+        <Typography variant="caption" color="text.secondary">
+          {usage.source} · {relativeTime(usage.observed_at_ms)}
+        </Typography>
+      </Stack>
+    </Box>
+  );
+}
+
+function UsageInfoSection(): React.JSX.Element {
+  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async (manual: boolean): Promise<void> => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      let response = await fetch("/api/usage", { method: manual ? "POST" : "GET" });
+      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+      let next = await response.json() as UsageSnapshot;
+      // Opening Info is cache-first for instant paint, then refreshes only when
+      // the account snapshot is old. Session ACP usage is overlaid live server-side.
+      if (!manual && Date.now() - next.refreshed_at_ms > 60_000) {
+        response = await fetch("/api/usage", { method: "POST" });
+        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+        next = await response.json() as UsageSnapshot;
+      }
+      setSnapshot(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing]);
+  useEffect(() => { void load(false); }, []); // load only when Info mounts
+
+  return (
+    <Stack spacing={1.25}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Box>
+          <Typography variant="overline" color="text.secondary">Usage</Typography>
+          <Typography variant="caption" color={error ? "error.main" : "text.secondary"} sx={{ display: "block" }}>
+            {error ? `Refresh failed · ${relativeTime(snapshot?.refreshed_at_ms ?? 0)}` : relativeTime(snapshot?.refreshed_at_ms ?? 0)}
+          </Typography>
+        </Box>
+        <IconButton aria-label="Refresh usage" disabled={refreshing} onClick={() => void load(true)} sx={{ width: 44, height: 44 }}>
+          {refreshing ? <CircularProgress size={20} /> : <Refresh />}
+        </IconButton>
+      </Stack>
+      {snapshot?.providers.map((provider) => <ProviderUsageCard key={provider.provider} usage={provider} />)}
+      {!snapshot && !error && <Typography variant="body2" color="text.secondary">Loading usage…</Typography>}
+    </Stack>
+  );
 }
 
 // Storage/runtime metrics (GET /api/metrics). Migrated here from user Settings —
@@ -85,6 +295,8 @@ export function InfoContent(): React.JSX.Element {
 
   return (
     <Stack spacing={2.5} sx={{ mt: 1 }}>
+        <UsageInfoSection />
+        <Divider />
         <Box>
           <Typography variant="overline" color="text.secondary">
             Turn classifier

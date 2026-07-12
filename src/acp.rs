@@ -623,9 +623,17 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0)
                 };
-                state
-                    .sink
-                    .set_context_usage(&state.session_id, field("used"), field("size"));
+                state.sink.set_session_usage(
+                    &state.session_id,
+                    crate::agent_model::SessionUsage {
+                        used: field("used"),
+                        size: field("size"),
+                        raw: update,
+                        observed_at_ms: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
+                    },
+                );
                 return;
             }
             // Honor a ScheduleWakeup BEFORE pushing — the event is still stored

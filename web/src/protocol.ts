@@ -64,6 +64,14 @@ export interface SessionMeta {
    *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
   context_used?: number;
   context_size?: number;
+  /** Full latest ACP usage update. `raw` retains optional standard cost and
+   * provider `_meta` rate-limit fields for the Info → Usage panel. */
+  usage?: {
+    used: number;
+    size: number;
+    raw: Record<string, unknown> | null;
+    observed_at_ms: number;
+  };
   /** Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
    *  absent if none. Drives the session-row clock badge. Transient. */
   next_schedule_ms?: number;

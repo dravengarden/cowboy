@@ -313,6 +313,9 @@ pub struct SessionMeta {
     pub context_used: u64,
     #[serde(default)]
     pub context_size: u64,
+    /// Full latest ACP usage update, including optional cost and provider `_meta`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::agent_model::SessionUsage>,
     /// Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
     /// `None` if none are scheduled. Derived from the drafts in `session_list`
     /// (not stored on the struct proper) so the session-row clock badge can show
@@ -1599,6 +1602,7 @@ impl Hub {
             system,
             context_used: 0,
             context_size: 0,
+            usage: None,
             next_schedule_ms: None,
         };
         {
@@ -1818,13 +1822,14 @@ impl Hub {
     /// persisted). Deduped — the agent re-emits identical usage several times per
     /// turn, so we only broadcast when the numbers actually move, keeping the
     /// session-list churn (and mobile bandwidth) down.
-    pub fn set_context_usage(&self, session_id: &str, used: u64, size: u64) {
+    pub fn set_session_usage(&self, session_id: &str, usage: crate::agent_model::SessionUsage) {
         let changed = {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
-                Some(s) if s.meta.context_used != used || s.meta.context_size != size => {
-                    s.meta.context_used = used;
-                    s.meta.context_size = size;
+                Some(s) if s.meta.usage.as_ref() != Some(&usage) => {
+                    s.meta.context_used = usage.used;
+                    s.meta.context_size = usage.size;
+                    s.meta.usage = Some(usage);
                     true
                 }
                 _ => false,

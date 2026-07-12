@@ -42,6 +42,7 @@ use crate::runtime::RuntimeHealth;
 use crate::runtime_wire::StartSession;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
+use crate::usage::UsageService;
 use tokio::sync::{mpsc, watch};
 
 struct AppState {
@@ -54,6 +55,7 @@ struct AppState {
     runtime_health: Arc<RuntimeHealth>,
     remote_runtime: Option<Arc<RemoteRuntime>>,
     web_root: PathBuf,
+    usage: UsageService,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -67,6 +69,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // requeue against the writer closing its receiver.
     let (store_shutdown_tx, store_shutdown_rx) = watch::channel(false);
     let runtime_health = Arc::new(RuntimeHealth::default());
+    let usage = UsageService::new(args.codex_command.clone());
+    let initial_usage = usage.clone();
+    tokio::spawn(async move {
+        loop {
+            initial_usage.refresh().await;
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        }
+    });
     // Acquire the controller lease before restoring Hub state. Its worker
     // snapshot is the authority for whether a persisted Busy turn actually
     // survived this control-plane restart.
@@ -334,6 +344,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             runtime_health,
             remote_runtime: remote_runtime.clone(),
             web_root: args.web_root,
+            usage,
         },
         shutdown_tx,
     )
@@ -729,6 +740,7 @@ async fn serve_axum(
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
+        .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/sessions", post(api_new_session))
@@ -927,6 +939,18 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         runtime_pending_commands: runtime.pending_commands,
     })
     .into_response()
+}
+
+async fn api_usage(State(state): State<Arc<AppState>>) -> Response {
+    let snapshot =
+        crate::usage::with_session_usage(state.usage.snapshot().await, &state.hub.session_list());
+    Json(snapshot).into_response()
+}
+
+async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
+    let snapshot =
+        crate::usage::with_session_usage(state.usage.refresh().await, &state.hub.session_list());
+    Json(snapshot).into_response()
 }
 
 async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {

@@ -212,6 +212,10 @@ pub enum RuntimeEvent {
     ContextUsage {
         used: u64,
         size: u64,
+        #[serde(default)]
+        raw: serde_json::Value,
+        #[serde(default)]
+        observed_at_ms: i64,
     },
     PermissionRequest {
         request_id: String,

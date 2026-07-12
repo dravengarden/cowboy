@@ -719,7 +719,15 @@ fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) {
         hub.set_config_options(&worker.session_id, options.clone());
     }
     if let (Some(used), Some(size)) = (worker.context_used, worker.context_size) {
-        hub.set_context_usage(&worker.session_id, used, size);
+        hub.set_session_usage(
+            &worker.session_id,
+            crate::agent_model::SessionUsage {
+                used,
+                size,
+                raw: serde_json::Value::Null,
+                observed_at_ms: 0,
+            },
+        );
     }
     hub.set_status(&worker.session_id, worker_status(worker.state), None);
 }
@@ -766,7 +774,7 @@ fn update_snapshot_from_event(
         RuntimeEvent::ConfigOptions { options } => {
             worker.config_options = Some(options.clone());
         }
-        RuntimeEvent::ContextUsage { used, size } => {
+        RuntimeEvent::ContextUsage { used, size, .. } => {
             worker.context_used = Some(*used);
             worker.context_size = Some(*size);
         }
@@ -793,7 +801,20 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             hub.push_tagged(session_id, Event::Update { update }, cmid);
         }
         RuntimeEvent::ConfigOptions { options } => hub.set_config_options(session_id, options),
-        RuntimeEvent::ContextUsage { used, size } => hub.set_context_usage(session_id, used, size),
+        RuntimeEvent::ContextUsage {
+            used,
+            size,
+            raw,
+            observed_at_ms,
+        } => hub.set_session_usage(
+            session_id,
+            crate::agent_model::SessionUsage {
+                used,
+                size,
+                raw,
+                observed_at_ms,
+            },
+        ),
         RuntimeEvent::PermissionRequest {
             request_id,
             tool_call,

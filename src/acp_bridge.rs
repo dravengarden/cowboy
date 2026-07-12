@@ -1594,6 +1594,7 @@ mod tests {
             system: false,
             context_used: 0,
             context_size: 0,
+            usage: None,
             next_schedule_ms: None,
         };
         let status = Bridge::status_from_cached(&meta, None);

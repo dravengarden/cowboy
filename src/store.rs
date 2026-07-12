@@ -741,6 +741,7 @@ impl SessionRow {
             // Not persisted — a fresh usage_update re-seeds it right after revive.
             context_used: 0,
             context_size: 0,
+            usage: None,
             // Derived from restored drafts in `session_list`, not stored here.
             next_schedule_ms: None,
         }

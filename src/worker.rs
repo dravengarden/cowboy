@@ -108,7 +108,7 @@ impl Shared {
             RuntimeEvent::ConfigOptions { options } => {
                 snapshot.config_options = Some(options.clone());
             }
-            RuntimeEvent::ContextUsage { used, size } => {
+            RuntimeEvent::ContextUsage { used, size, .. } => {
                 snapshot.context_used = Some(*used);
                 snapshot.context_size = Some(*size);
             }
@@ -220,8 +220,13 @@ impl AgentSink for RemoteSink {
             .emit(RuntimeEvent::AgentSessionId { agent_session_id });
     }
 
-    fn set_context_usage(&self, _session_id: &str, used: u64, size: u64) {
-        self.shared.emit(RuntimeEvent::ContextUsage { used, size });
+    fn set_session_usage(&self, _session_id: &str, usage: crate::agent_model::SessionUsage) {
+        self.shared.emit(RuntimeEvent::ContextUsage {
+            used: usage.used,
+            size: usage.size,
+            raw: usage.raw,
+            observed_at_ms: usage.observed_at_ms,
+        });
     }
 
     fn schedule_wakeup(&self, _session_id: &str, delay_seconds: i64, prompt: String) {

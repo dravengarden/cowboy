@@ -46,6 +46,8 @@ mod store;
 #[cfg(feature = "full")]
 mod supervisor;
 #[cfg(feature = "full")]
+mod usage;
+#[cfg(feature = "full")]
 pub mod worker;
 
 #[cfg(all(test, feature = "full"))]

@@ -22,6 +22,19 @@ pub enum Status {
     Interrupted,
 }
 
+/// Latest provider-reported usage for one ACP session. `raw` preserves optional
+/// standard fields (`cost`) and provider extensions (`_meta`) without teaching
+/// the worker protocol every provider's private schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionUsage {
+    pub used: u64,
+    pub size: u64,
+    #[serde(default)]
+    pub raw: serde_json::Value,
+    #[serde(default)]
+    pub observed_at_ms: i64,
+}
+
 /// A normalized session event fanned out to clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

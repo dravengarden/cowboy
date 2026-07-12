@@ -853,7 +853,7 @@ impl Broker {
             RuntimeEvent::ConfigOptions { options } => {
                 worker.snapshot.config_options = Some(options.clone());
             }
-            RuntimeEvent::ContextUsage { used, size } => {
+            RuntimeEvent::ContextUsage { used, size, .. } => {
                 worker.snapshot.context_used = Some(*used);
                 worker.snapshot.context_size = Some(*size);
             }

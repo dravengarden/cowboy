@@ -12,6 +12,8 @@ the same binary is both frontend and backend.
 | `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
 | `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
+| `GET /api/usage` | cached provider account limits plus latest live ACP session usage |
+| `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
 | `GET /api/workspaces` | selectable session roots — Columbus projects + `workspace_root` subdirs |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
@@ -69,6 +71,8 @@ TypeScript checks. See [Core — the Hub](02-core-hub.md) for the full catalogs.
 - **store writer** — drains `StoreWrite` intents ([Storage](05-storage.md))
 - **purge sweeper** — hard-deletes soft-deleted sessions past 3 days (every 6h)
 - **dispatcher** — drains the Hub→supervisor hand-off and forwards prompts
+- **usage collector** — refreshes provider account limits every five minutes;
+  failures remain provider-local and preserve explicit unavailable/stale state
 
 ## Auth
 

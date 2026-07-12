@@ -4,7 +4,7 @@
 //! worker implements the same contract by emitting versioned runtime frames,
 //! keeping ACP's connection/futures out of the restartable Cowboy daemon.
 
-use crate::agent_model::{Event, Status};
+use crate::agent_model::{Event, SessionUsage, Status};
 use crate::core::Hub;
 
 pub trait AgentSink: Send + Sync + 'static {
@@ -13,7 +13,7 @@ pub trait AgentSink: Send + Sync + 'static {
     fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>);
     fn set_config_options(&self, session_id: &str, options: serde_json::Value);
     fn set_agent_session_id(&self, session_id: &str, agent_session_id: String);
-    fn set_context_usage(&self, session_id: &str, used: u64, size: u64);
+    fn set_session_usage(&self, session_id: &str, usage: SessionUsage);
     fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String);
     fn session_is_system(&self, session_id: &str) -> bool;
     fn broadcast_error(&self, session_id: Option<String>, message: String);
@@ -59,8 +59,8 @@ impl AgentSink for HubAgentSink {
         self.hub.set_agent_session_id(session_id, agent_session_id);
     }
 
-    fn set_context_usage(&self, session_id: &str, used: u64, size: u64) {
-        self.hub.set_context_usage(session_id, used, size);
+    fn set_session_usage(&self, session_id: &str, usage: SessionUsage) {
+        self.hub.set_session_usage(session_id, usage);
     }
 
     fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String) {
