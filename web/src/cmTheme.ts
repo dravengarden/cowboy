@@ -107,15 +107,24 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // Vim Normal keeps keyboard focus on a non-editable command sink so a
       // CJK input source cannot start composition. That is still an ACTIVE
       // editor state, not a visually unfocused editor: keep the block solid.
-      "&.cm-vim-command-focused:not(.cm-focused) .cm-fat-cursor": {
+      "&:focus-within:not(.cm-focused) .cm-fat-cursor, &.cm-vim-command-focused:not(.cm-focused) .cm-fat-cursor": {
         background: `${accent} !important`,
         color: `${theme.palette.primary.contrastText} !important`,
+        outline: "none !important",
+        opacity: "1 !important",
+      },
+      // A genuinely unfocused editor should not retain the upstream pink
+      // hollow block (it reads as a stray bracket on an empty document).
+      "&:not(.cm-focused):not(:focus-within):not(.cm-vim-command-focused) .cm-fat-cursor": {
+        background: "transparent !important",
+        color: "transparent !important",
+        opacity: "0 !important",
         outline: "none !important",
       },
       // On an empty document the Vim block occupies the first character cell.
       // Give the placeholder one cell of breathing room instead of drawing the
       // block over the M in “Message the agent…”.
-      "&.cm-vim-command-focused .cm-line:has(> .cm-placeholder) .cm-placeholder": {
+      "&:focus-within .cm-line:has(> .cm-placeholder) .cm-placeholder, &.cm-vim-command-focused .cm-line:has(> .cm-placeholder) .cm-placeholder": {
         marginLeft: "1.15ch",
       },
       // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
