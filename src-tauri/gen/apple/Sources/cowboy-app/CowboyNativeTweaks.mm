@@ -17,7 +17,8 @@
 // owner can, by making the private WKContentView return a nil inputAccessoryView.
 // cowboy has its own in-UI send/compose affordances, so the bar is pure noise.
 //
-// A/B DIAGNOSTIC (tasks/active/cowboy-ios-native-shell-fixes, BUG 1). After the
+// A/B DIAGNOSTIC (work-items/archive/2026/07/cowboy-ios-native-shell-fixes,
+// BUG 1). After the
 // keyboard avoider (#3) was RULED OUT on-device, this swizzle is the prime suspect
 // for the missing empty-area Paste callout: it mutates `WKContentView` — the SAME
 // private view that hosts the caret / selection / edit-menu text interaction. Set
@@ -193,7 +194,7 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
 // web arms this path off `window.__cowboyNativeShell` (injected above). A pure-web
 // PWA can't do this: WKWebView does NOT honour interactive-widget/visualViewport
 // for the keyboard, so only the native owner can shrink the viewport.
-// See tasks/active/cowboy-native-keyboard-ime.
+// See work-items/archive/2026/07/cowboy-native-keyboard-ime.
 @interface CowboyKeyboardAvoider : NSObject
 @end
 
@@ -295,7 +296,8 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
 
 @end
 
-// A/B DIAGNOSTIC TOGGLE (tasks/active/cowboy-ios-native-shell-fixes, BUG 1).
+// A/B DIAGNOSTIC TOGGLE
+// (work-items/archive/2026/07/cowboy-ios-native-shell-fixes, BUG 1).
 // Set to 1 to BUILD WITHOUT the keyboard avoider, to test whether its `wv.frame`
 // mutation is what suppresses the empty-area long-press Paste callout. With this
 // =1 the keyboard will OVERLAP the composer (no native viewport shrink) — that's

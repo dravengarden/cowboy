@@ -76,7 +76,7 @@ struct Bridge {
 }
 
 /// Translate one daemon-side Hub `Event` into ACP outbound calls. Mirrors the
-/// table in `tasks/active/cowboy-zed-acp/design.md §4.6`.
+/// table in `tasks/archive/2026/06/cowboy-zed-acp/design.md §4.6`.
 fn handle_envelope(
     cx: &ConnectionTo<Client>,
     state: &Arc<Bridge>,
