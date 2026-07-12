@@ -1,18 +1,30 @@
 import {
+  alpha,
   Box,
-  FormControl,
+  Button,
+  ButtonBase,
+  CircularProgress,
+  Divider,
   LinearProgress,
-  MenuItem,
-  Select,
+  Popover,
   Skeleton,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useMemo } from "react";
+import { ExpandMore, Refresh, Tune } from "@mui/icons-material";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoScrollAndStop } from "../Composer";
 import type { ConfigOption, Status } from "../protocol";
 import { send, useStoreSelector } from "../store";
+import {
+  fullResetTime,
+  providerUsage,
+  type UsageSnapshot,
+  usageLimits,
+} from "../usageLimits";
 
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
@@ -22,29 +34,19 @@ const OPTION_RANK: Record<string, number> = {
   fast: 3,
   fast_mode: 3,
 };
-const OPTION_LABELS: Record<string, string> = {
-  mode: "Mode",
-  model: "Model",
-  effort: "Effort",
-  reasoning_effort: "Effort",
-  fast: "Fast",
-  fast_mode: "Fast",
-};
-
-function optionWidth(option: ConfigOption): number {
-  if (option.id === "model") return 180;
-  if (option.id === "mode") return 160;
-  if (option.id === "fast" || option.id === "fast_mode") return 100;
-  return 120;
-}
 
 function optionLabel(option: ConfigOption): string {
-  const mapped = OPTION_LABELS[option.id];
-  if (mapped) return mapped;
   const name = option.name.toLowerCase();
-  if (name.includes("reasoning") && name.includes("effort")) return "Effort";
-  if (name.includes("fast")) return "Fast";
+  if (option.id === "mode") return "Agent mode";
+  if (option.id === "model") return "Model";
+  if (name.includes("reasoning") && name.includes("effort")) return "Reasoning effort";
+  if (name.includes("fast")) return "Fast mode";
   return option.name;
+}
+
+function currentOptionName(option: ConfigOption): string {
+  return option.options.find((candidate) => String(candidate.value) === String(option.currentValue))?.name ??
+    String(option.currentValue);
 }
 
 export function DesktopTopBarControls({
@@ -58,6 +60,10 @@ export function DesktopTopBarControls({
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
+  const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
+  const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
+  const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const dead = status === "exited" || status === "crashed" || status === "interrupted";
   const options = useMemo(() => {
     const raw = optionsBySession.get(sessionId) ?? [];
@@ -68,9 +74,22 @@ export function DesktopTopBarControls({
       return leftIndex - rightIndex;
     });
   }, [optionsBySession, sessionId]);
-  const contextPercent = session?.context_size
-    ? Math.round(((session.context_used ?? 0) / session.context_size) * 100)
-    : null;
+  const configSummary = options.map(currentOptionName).join(" · ");
+  const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/usage", { method: manual ? "POST" : "GET" });
+      if (response.ok) setSnapshot(await response.json() as UsageSnapshot);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing]);
+  useEffect(() => { void loadUsage(false); }, []);
+  const usage = providerUsage(snapshot, session?.provider);
+  const limits = useMemo(() => usageLimits(usage), [usage]);
+  const accountLimits = limits.filter((limit) => !limit.label.includes(" · "));
+  const visibleLimits = (accountLimits.length >= 2 ? accountLimits : limits).slice(0, 2);
 
   return (
     <Stack
@@ -81,34 +100,78 @@ export function DesktopTopBarControls({
       sx={{ flex: 1, minWidth: 0, ml: 2, overflow: "hidden" }}
     >
       {options.length === 0 && !dead && (status === "starting" || status === "running")
-        ? <Skeleton variant="rounded" width={320} height={34} />
-        : options.map((option) => (
-          <Tooltip key={option.id} title={option.description ?? option.name}>
-            <FormControl
+        ? <Skeleton variant="rounded" width={300} height={34} />
+        : (
+          <Tooltip title={configSummary || "Run configuration"}>
+            <Button
+              data-desktop-run-config
               size="small"
-              disabled={dead}
-              sx={{ width: optionWidth(option), flexShrink: 1, minWidth: 92 }}
+              color="inherit"
+              variant="outlined"
+              startIcon={<Tune fontSize="small" />}
+              endIcon={<ExpandMore fontSize="small" />}
+              disabled={dead || options.length === 0}
+              onClick={(event): void => setConfigAnchor(event.currentTarget)}
+              sx={{
+                width: "clamp(240px, 28vw, 370px)",
+                height: 34,
+                justifyContent: "flex-start",
+                textTransform: "none",
+                flexShrink: 1,
+                minWidth: 210,
+                "& .MuiButton-endIcon": { ml: "auto" },
+              }}
             >
-              <Select
+              <Typography variant="caption" fontWeight={650} noWrap>
+                {configSummary || "Run configuration"}
+              </Typography>
+            </Button>
+          </Tooltip>
+        )}
+
+      <Popover
+        open={configAnchor !== null}
+        anchorEl={configAnchor}
+        onClose={(): void => setConfigAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        slotProps={{
+          paper: {
+            sx: {
+              width: 520,
+              maxWidth: "calc(100vw - 32px)",
+              mt: 0.75,
+              p: 1.5,
+              borderRadius: 2.5,
+              border: 1,
+              borderColor: "divider",
+              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
+              backdropFilter: "blur(22px)",
+            },
+          },
+        }}
+      >
+        <Stack spacing={1.5}>
+          <Box>
+            <Typography variant="subtitle2" fontWeight={750}>Run configuration</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Changes apply immediately to this session.
+            </Typography>
+          </Box>
+          <Divider />
+          {options.map((option) => (
+            <Box key={option.id}>
+              <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2} sx={{ mb: 0.65 }}>
+                <Typography variant="body2" fontWeight={700}>{optionLabel(option)}</Typography>
+                <Typography variant="caption" color="text.secondary" noWrap>{option.description}</Typography>
+              </Stack>
+              <ToggleButtonGroup
+                exclusive
+                size="small"
                 value={String(option.currentValue)}
-                inputProps={{ "aria-label": option.name }}
-                renderValue={(value): React.ReactNode => {
+                onChange={(_event, value: string | null): void => {
+                  if (value === null) return;
                   const selected = option.options.find((candidate) => String(candidate.value) === value);
-                  return (
-                    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0 }}>
-                      <Typography variant="caption" color="text.secondary" noWrap>
-                        {optionLabel(option)}
-                      </Typography>
-                      <Typography variant="caption" fontWeight={700} noWrap>
-                        {selected?.name ?? String(option.currentValue)}
-                      </Typography>
-                    </Stack>
-                  );
-                }}
-                onChange={(event): void => {
-                  const selected = option.options.find((candidate) =>
-                    String(candidate.value) === event.target.value
-                  );
                   if (!selected) return;
                   send({
                     type: "set_config_option",
@@ -117,41 +180,117 @@ export function DesktopTopBarControls({
                     value: selected.value,
                   });
                 }}
-                sx={{
-                  height: 34,
-                  fontSize: "0.75rem",
-                  "& .MuiSelect-select": { display: "flex", alignItems: "center", py: 0.5 },
-                }}
+                sx={{ flexWrap: "wrap", gap: 0.5, "& .MuiToggleButtonGroup-grouped": { borderRadius: 1, border: 1 } }}
               >
                 {option.options.map((candidate) => (
-                  <MenuItem key={String(candidate.value)} value={String(candidate.value)}>
+                  <ToggleButton
+                    key={String(candidate.value)}
+                    value={String(candidate.value)}
+                    sx={{ px: 1.25, py: 0.5, textTransform: "none" }}
+                  >
                     {candidate.name}
-                  </MenuItem>
+                  </ToggleButton>
                 ))}
-              </Select>
-            </FormControl>
-          </Tooltip>
-        ))}
+              </ToggleButtonGroup>
+            </Box>
+          ))}
+        </Stack>
+      </Popover>
+
+      <ButtonBase
+        data-desktop-quota
+        onClick={(event): void => setUsageAnchor(event.currentTarget)}
+        sx={{
+          height: 38,
+          px: 0.75,
+          borderRadius: 1.25,
+          flexShrink: 0,
+          "&:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        {visibleLimits.length > 0 ? (
+          <Stack direction="row" spacing={0.5}>
+            {visibleLimits.map((limit) => (
+              <Box
+                key={limit.id}
+                sx={{
+                  width: 142,
+                  px: 0.75,
+                  py: 0.25,
+                  textAlign: "left",
+                  borderRadius: 1,
+                  bgcolor: "action.hover",
+                }}
+              >
+                <Stack direction="row" justifyContent="space-between" spacing={0.75}>
+                  <Typography variant="caption" color="text.secondary" noWrap>{limit.label}</Typography>
+                  <Typography variant="caption" fontWeight={800} noWrap>{limit.remaining}%</Typography>
+                </Stack>
+                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
+                  {fullResetTime(limit.resetsAt)}
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
+        ) : (
+          <Typography variant="caption" color="text.secondary">
+            {snapshot ? "Usage unavailable" : "Loading usage…"}
+          </Typography>
+        )}
+      </ButtonBase>
+
+      <Popover
+        open={usageAnchor !== null}
+        anchorEl={usageAnchor}
+        onClose={(): void => setUsageAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { sx: { width: 390, mt: 0.75, p: 1.5, borderRadius: 2.5 } } }}
+      >
+        <Stack spacing={1.25}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Box>
+              <Typography variant="subtitle2" fontWeight={750}>Usage limits</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {session?.provider ?? "Provider"} · {usage?.status ?? "unavailable"}
+              </Typography>
+            </Box>
+            <Button
+              size="small"
+              startIcon={refreshing ? <CircularProgress size={14} /> : <Refresh fontSize="small" />}
+              disabled={refreshing}
+              onClick={(): void => { void loadUsage(true); }}
+              sx={{ textTransform: "none" }}
+            >
+              Refresh
+            </Button>
+          </Stack>
+          <Divider />
+          {limits.map((limit) => (
+            <Stack key={limit.id} spacing={0.5}>
+              <Stack direction="row" justifyContent="space-between">
+                <Typography variant="body2">{limit.label}</Typography>
+                <Typography variant="body2" fontWeight={750}>{limit.remaining}% remaining</Typography>
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={limit.remaining}
+                sx={{ height: 6, borderRadius: 99, "& .MuiLinearProgress-bar": { borderRadius: 99 } }}
+              />
+              <Typography variant="caption" color="text.secondary">
+                Resets {fullResetTime(limit.resetsAt)}
+              </Typography>
+            </Stack>
+          ))}
+          {limits.length === 0 && (
+            <Typography variant="body2" color="text.secondary">
+              {usage?.error ?? "This provider has not exposed account limits."}
+            </Typography>
+          )}
+        </Stack>
+      </Popover>
 
       <Box sx={{ flex: 1, minWidth: 4 }} />
-
-      {contextPercent !== null && (
-        <Tooltip title={`${String(session?.context_used ?? 0)} / ${String(session?.context_size ?? 0)} context tokens`}>
-          <Box sx={{ width: 96, flexShrink: 0 }}>
-            <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.25 }}>
-              <Typography variant="caption" color="text.secondary">Context</Typography>
-              <Typography variant="caption" fontWeight={700}>{contextPercent}%</Typography>
-            </Stack>
-            <LinearProgress
-              variant="determinate"
-              value={Math.min(100, contextPercent)}
-              color={contextPercent >= 85 ? "warning" : "primary"}
-              sx={{ height: 3, borderRadius: 2 }}
-            />
-          </Box>
-        </Tooltip>
-      )}
-
       <AutoScrollAndStop
         sessionId={sessionId}
         status={status}
