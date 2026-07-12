@@ -10,9 +10,12 @@ import {
   DialogContentText,
   DialogTitle,
   Divider,
+  FormControl,
+  MenuItem,
   LinearProgress,
   Popover,
   Skeleton,
+  Select,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
@@ -73,6 +76,17 @@ function ConfigOptionControl({
   sessionId: string;
   compact?: boolean;
 }): React.JSX.Element {
+  const label = optionLabel(option);
+  const setValue = (value: string): void => {
+    const selected = option.options.find((candidate) => String(candidate.value) === value);
+    if (!selected) return;
+    send({
+      type: "set_config_option",
+      session_id: sessionId,
+      config_id: option.id,
+      value: selected.value,
+    });
+  };
   return (
     <Box sx={{ minWidth: 0 }}>
       <Tooltip title={option.description ?? ""} placement="right">
@@ -81,48 +95,66 @@ function ConfigOptionControl({
           fontWeight={750}
           sx={{ display: "inline-block", mb: 0.55, cursor: option.description ? "help" : "default" }}
         >
-          {optionLabel(option)}
+          {label}
         </Typography>
       </Tooltip>
-      <ToggleButtonGroup
-        exclusive
-        size="small"
-        value={String(option.currentValue)}
-        onChange={(_event, value: string | null): void => {
-          if (value === null) return;
-          const selected = option.options.find((candidate) => String(candidate.value) === value);
-          if (!selected) return;
-          send({
-            type: "set_config_option",
-            session_id: sessionId,
-            config_id: option.id,
-            value: selected.value,
-          });
-        }}
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 0.4,
-          "& .MuiToggleButtonGroup-grouped": { borderRadius: 1, border: 1 },
-        }}
-      >
-        {option.options.map((candidate) => (
-          <ToggleButton
-            key={String(candidate.value)}
-            value={String(candidate.value)}
+      {label === "Model" ? (
+        <FormControl fullWidth size="small">
+          <Select
+            value={String(option.currentValue)}
+            onChange={(event): void => setValue(String(event.target.value))}
+            aria-label="Model"
             sx={{
-              minHeight: 28,
-              px: compact ? 1 : 1.1,
-              py: 0.35,
-              fontSize: "0.6875rem",
-              lineHeight: 1.2,
-              textTransform: "none",
+              height: 34,
+              borderRadius: 1.5,
+              fontSize: "0.75rem",
+              fontWeight: 650,
+              "& .MuiSelect-select": { py: 0.75 },
             }}
           >
-            {candidate.name}
-          </ToggleButton>
-        ))}
-      </ToggleButtonGroup>
+            {option.options.map((candidate) => (
+              <MenuItem key={String(candidate.value)} value={String(candidate.value)} dense>
+                {candidate.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      ) : (
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          value={String(option.currentValue)}
+          onChange={(_event, value: string | null): void => {
+            if (value !== null) setValue(value);
+          }}
+          sx={{
+            display: "flex",
+            flexWrap: "nowrap",
+            gap: 0.35,
+            "& .MuiToggleButtonGroup-grouped": { borderRadius: 1.25, border: 1 },
+          }}
+        >
+          {option.options.map((candidate) => (
+            <ToggleButton
+              key={String(candidate.value)}
+              value={String(candidate.value)}
+              sx={{
+                minHeight: 30,
+                minWidth: 0,
+                px: compact ? 0.9 : 1.15,
+                py: 0.3,
+                flex: compact ? "1 1 0" : "0 1 auto",
+                fontSize: "0.6875rem",
+                lineHeight: 1.15,
+                textTransform: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {candidate.name}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+      )}
     </Box>
   );
 }
@@ -209,12 +241,12 @@ export function DesktopTopBarControls({
               disabled={dead || options.length === 0}
               onClick={(event): void => setConfigAnchor(event.currentTarget)}
               sx={{
-                width: "clamp(220px, 22vw, 320px)",
+                width: "clamp(190px, 18vw, 260px)",
                 height: 34,
                 justifyContent: "flex-start",
                 textTransform: "none",
                 flexShrink: 1,
-                minWidth: 190,
+                minWidth: 170,
                 "& .MuiButton-endIcon": { ml: "auto" },
               }}
             >
@@ -234,10 +266,10 @@ export function DesktopTopBarControls({
         slotProps={{
           paper: {
             sx: {
-              width: 440,
+              width: 410,
               maxWidth: "calc(100vw - 32px)",
               mt: 0.75,
-              p: 1.25,
+              p: 1.15,
               borderRadius: 2.5,
               border: 1,
               borderColor: "divider",
@@ -247,7 +279,7 @@ export function DesktopTopBarControls({
           },
         }}
       >
-        <Stack spacing={1.15}>
+        <Stack spacing={1}>
           <Box>
             <Typography variant="subtitle2" fontWeight={750}>Run configuration</Typography>
             <Typography variant="caption" color="text.secondary">
@@ -255,9 +287,11 @@ export function DesktopTopBarControls({
             </Typography>
           </Box>
           <Divider />
-          {wideOptions.map((option) => (
-            <ConfigOptionControl key={option.id} option={option} sessionId={sessionId} />
-          ))}
+          <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)", gap: 1 }}>
+            {wideOptions.map((option) => (
+              <ConfigOptionControl key={option.id} option={option} sessionId={sessionId} />
+            ))}
+          </Box>
           {compactOptions.length > 0 && (
             <Box
               sx={{
@@ -265,7 +299,7 @@ export function DesktopTopBarControls({
                 gridTemplateColumns: compactOptions.length === 2
                   ? "minmax(0, 2fr) minmax(110px, 1fr)"
                   : "minmax(0, 1fr)",
-                gap: 1.25,
+                gap: 1,
                 pt: 0.15,
               }}
             >
