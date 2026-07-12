@@ -69,18 +69,30 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
   return (
     <Paper
       data-desktop-leader
-      elevation={8}
-      square
+      elevation={0}
       sx={{
         position: "fixed",
         zIndex: (theme) => theme.zIndex.modal - 1,
-        left: { xs: 16, lg: 304 },
-        right: 16,
-        bottom: 29,
+        left: { xs: "50%", lg: "calc(50% + 144px)" },
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        width: "min(680px, calc(100vw - 32px))",
         border: 1,
-        borderColor: "divider",
-        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.97),
-        backdropFilter: "blur(16px)",
+        borderColor: (theme) => alpha(theme.palette.primary.main, 0.24),
+        borderRadius: 3,
+        bgcolor: (theme) => alpha(
+          theme.palette.background.paper,
+          theme.palette.mode === "dark" ? 0.68 : 0.76,
+        ),
+        backgroundImage: (theme) =>
+          `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.06 : 0.42)}, transparent 55%)`,
+        backdropFilter: "blur(28px) saturate(145%)",
+        WebkitBackdropFilter: "blur(28px) saturate(145%)",
+        boxShadow: (theme) => [
+          `0 24px 70px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.48 : 0.2)}`,
+          `0 4px 18px ${alpha(theme.palette.primary.main, 0.12)}`,
+          `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.08 : 0.62)}`,
+        ].join(", "),
         overflow: "hidden",
       }}
     >
@@ -88,22 +100,41 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
         direction="row"
         alignItems="center"
         spacing={1}
-        sx={{ px: 1.5, height: 36, borderBottom: 1, borderColor: "divider" }}
+        sx={{
+          px: 1.5,
+          height: 42,
+          borderBottom: 1,
+          borderColor: (theme) => alpha(theme.palette.divider, 0.72),
+        }}
       >
-        <Chip label="SPC" size="small" color="primary" sx={{ fontFamily: "monospace", fontWeight: 800 }} />
+        <Chip
+          label="SPC"
+          size="small"
+          color="primary"
+          sx={{ height: 24, fontFamily: "monospace", fontWeight: 800 }}
+        />
         {workspace.leaderPrefix.map((key, index) => (
-          <Chip key={`${key}-${String(index)}`} label={key} size="small" sx={{ fontFamily: "monospace" }} />
+          <Chip
+            key={`${key}-${String(index)}`}
+            label={key}
+            size="small"
+            sx={{ height: 24, fontFamily: "monospace", fontWeight: 700 }}
+          />
         ))}
-        <Typography variant="caption" color={workspace.leaderMessage ? "error.main" : "text.secondary"}>
+        <Typography
+          variant="caption"
+          color={workspace.leaderMessage ? "error.main" : "text.secondary"}
+          sx={{ ml: 0.5 }}
+        >
           {workspace.leaderMessage ?? "Choose a command · Esc closes · Backspace goes up"}
         </Typography>
       </Stack>
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-          gap: 0.5,
-          p: 1,
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 0.75,
+          p: 1.25,
           maxHeight: "min(38vh, 320px)",
           overflowY: "auto",
         }}
@@ -121,28 +152,42 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
               aria-disabled={disabled || undefined}
               onClick={(): void => choose(entry)}
               sx={{
-                minHeight: 48,
-                px: 1,
-                borderRadius: 1,
+                minHeight: 54,
+                px: 1.25,
+                border: 1,
+                borderColor: (theme) => alpha(theme.palette.divider, 0.58),
+                borderRadius: 1.5,
                 justifyContent: "flex-start",
                 textAlign: "left",
-                "&:hover": { bgcolor: "action.hover" },
+                bgcolor: (theme) => alpha(theme.palette.background.paper, 0.28),
+                transition: "background-color 100ms, border-color 100ms, transform 100ms",
+                "&:hover": {
+                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
+                  borderColor: (theme) => alpha(theme.palette.primary.main, 0.34),
+                  transform: "translateY(-1px)",
+                },
+                "&:focus-visible": {
+                  outline: "2px solid",
+                  outlineColor: "primary.main",
+                  outlineOffset: -2,
+                },
                 opacity: disabled ? 0.48 : 1,
               }}
             >
               <Box
                 component="kbd"
                 sx={{
-                  width: 26,
-                  height: 26,
-                  mr: 1,
+                  width: 28,
+                  height: 28,
+                  mr: 1.25,
                   display: "grid",
                   placeItems: "center",
-                  borderRadius: 0.75,
+                  borderRadius: 1,
                   bgcolor: "primary.main",
                   color: "primary.contrastText",
                   fontFamily: "monospace",
                   fontWeight: 800,
+                  boxShadow: (theme) => `0 3px 9px ${alpha(theme.palette.primary.main, 0.24)}`,
                 }}
               >
                 {entry.key}
