@@ -24,6 +24,7 @@ use crate::runtime_wire::{
 
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
+const TRANSIENT_UNIT_COLLECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnMode {
@@ -981,6 +982,7 @@ impl Broker {
             SpawnMode::SystemdUser => {
                 let mut command = Command::new("systemd-run");
                 let unit = worker_unit_name(&session.session_id);
+                wait_for_unit_collected(&unit).await?;
                 command.args([
                     "--user",
                     "--quiet",
@@ -1056,6 +1058,33 @@ impl Broker {
             }
         }
         Ok(())
+    }
+}
+
+/// `systemd-run --collect` removes a transient unit asynchronously after its
+/// process exits. A rolling cutover learns about the disconnect before that
+/// collection finishes, so immediately reusing the stable per-session unit name
+/// races systemd with "already loaded or has a fragment file". Wait for the
+/// unit to disappear before either the desired generation or its fallback is
+/// launched. A brand-new session returns `not-found` immediately.
+async fn wait_for_unit_collected(unit: &str) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + TRANSIENT_UNIT_COLLECT_TIMEOUT;
+    loop {
+        let output = Command::new("systemctl")
+            .args(["--user", "show", unit, "--property=LoadState", "--value"])
+            .output()
+            .await
+            .with_context(|| format!("checking transient worker unit {unit}"))?;
+        let load_state = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if !output.status.success() || load_state.is_empty() || load_state == "not-found" {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "transient worker unit {unit} was not collected (LoadState={load_state})"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

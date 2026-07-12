@@ -4,8 +4,8 @@
 //
 // A JavaScript virtualizer was deliberately removed: unmounting variable-height
 // rows breaks the iOS column-reverse anchor and loses local tool/permission-card
-// state. Server history paging, live event coalescing, and `content-visibility`
-// bound the expensive work without fighting native momentum scrolling.
+// state. Server history paging and live event coalescing bound the expensive
+// work without fighting native momentum scrolling.
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -1396,6 +1396,30 @@ export function Transcript({
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
   const paging = useStoreSelector((snapshot) => snapshot.pagination.get(sessionId));
+
+  // Bootstrap history until the viewport is actually filled. Older pages were
+  // previously requested only from the scroll listener below; when the initial
+  // compacted tail was shorter than one screen there was no overflow, therefore
+  // no scroll event, therefore no way to fetch the thousands of older events.
+  // Re-check after every page lands and stop as soon as content overflows or the
+  // server says we reached the beginning. requestAnimationFrame lets Markdown
+  // and the column-reverse flex layout publish their final height first.
+  useLayoutEffect(() => {
+    const el = parentRef.current;
+    if (
+      !el ||
+      !paging ||
+      paging.reachedStart ||
+      paging.loadingOlder ||
+      paging.beforeSeq === null
+    ) return undefined;
+    const raf = requestAnimationFrame(() => {
+      if (el.scrollHeight <= el.clientHeight + 1) {
+        void loadOlder(sessionId);
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [items.length, paging?.beforeSeq, paging?.loadingOlder, paging?.reachedStart, sessionId]);
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
   // user bubbles below the latest real item (newest at the very bottom), dropped
   // by cmid the moment the echo lands. Empty in the common (confirmed) case.
