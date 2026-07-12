@@ -150,21 +150,50 @@ export function createImeAutoInsertVim(): {
 
     private focusEditorCaret(): void {
       this.view.dom.classList.remove("cm-vim-command-focused");
-      this.view.focus();
+      this.view.contentDOM.focus({ preventScroll: true });
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
       this.focusFrame = requestAnimationFrame(() => {
         this.focusFrame = null;
         if (!this.cm?.state?.vim?.insertMode) return;
         const head = this.view.state.selection.main.head;
-        this.view.focus();
+        this.view.contentDOM.focus({ preventScroll: true });
         this.view.dispatch({
           selection: { anchor: head },
           effects: EditorView.scrollIntoView(head),
         });
-        const dom = this.view.domAtPos(head);
-        const selection = window.getSelection();
-        if (selection) selection.collapse(dom.node, dom.offset);
-        this.view.requestMeasure();
+        this.stabilizeNativeCaret(0);
+      });
+    }
+
+    /**
+     * Vim's direct Insert commands may edit the document before their mode
+     * transition. In particular, o/O create a new empty line. The logical CM6
+     * selection is ready synchronously, but the matching `.cm-line` can arrive
+     * one layout cycle later. A one-shot domAtPos then returns contentDOM and
+     * leaves WebKit/Chromium without a paintable native caret. Run inside CM6's
+     * measure queue and retry only while the DOM point is still the root.
+     */
+    private stabilizeNativeCaret(attempt: number): void {
+      this.view.requestMeasure({
+        read: () => {
+          const head = this.view.state.selection.main.head;
+          const dom = this.view.domAtPos(head);
+          return { dom, head, atContentRoot: dom.node === this.view.contentDOM };
+        },
+        write: ({ dom, head, atContentRoot }) => {
+          if (!this.cm?.state?.vim?.insertMode) return;
+          this.view.contentDOM.focus({ preventScroll: true });
+          const selection = window.getSelection();
+          if (selection) selection.collapse(dom.node, dom.offset);
+          if (atContentRoot && attempt < 2) {
+            this.focusFrame = requestAnimationFrame(() => {
+              this.focusFrame = null;
+              if (!this.cm?.state?.vim?.insertMode) return;
+              this.view.dispatch({ selection: { anchor: head } });
+              this.stabilizeNativeCaret(attempt + 1);
+            });
+          }
+        },
       });
     }
 

@@ -240,9 +240,13 @@ here says otherwise.
     nor acquire Desktop Vim/IME behavior. Insert commands that move/edit before the
     mode transition (`a/A/o/O/s/S/C/R` and change operators) must focus CodeMirror
     before dispatch. After the transition, resubmit the CM selection on the next
-    animation frame and collapse the native Selection at `view.domAtPos(head)`; in
-    particular `o/O` otherwise leave the browser selection on the content root
-    instead of the new `<div class="cm-line"><br></div>`, making the caret invisible.
+    animation frame, then restore the native Selection from CM6's `requestMeasure`
+    queue. If `view.domAtPos(head)` still returns `contentDOM`, retry across at most
+    two animation frames; in particular `o/O` create an empty line whose DOM can
+    land after the first frame, otherwise leaving the browser selection on the
+    content root instead of the new `<div class="cm-line"><br></div>` and making
+    the caret intermittently invisible. Apply this stabilization to every direct
+    Insert command, not an `o/O` special case.
     The sink is keyboard focus within the editor, so it adds
     `.cm-vim-command-focused`: Normal uses the solid theme-accent block and an
     empty-document placeholder always leaves one character cell whenever the Vim
