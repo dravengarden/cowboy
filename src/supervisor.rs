@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
@@ -17,12 +18,19 @@ use tokio::sync::mpsc;
 use crate::acp::{self, AgentCommand};
 use crate::core::{Hub, SessionOrigin, Status};
 use crate::provider::{self, LaunchSpec};
+use crate::remote_runtime::RemoteRuntime;
+use crate::runtime_wire::StartSession;
+
+enum Backend {
+    Local(Mutex<HashMap<String, mpsc::UnboundedSender<AgentCommand>>>),
+    Remote(Arc<RemoteRuntime>),
+}
 
 /// Spawns and tracks agent sessions; routes commands to their threads.
 pub struct Supervisor {
     hub: Hub,
     workspace_root: PathBuf,
-    senders: Mutex<HashMap<String, mpsc::UnboundedSender<AgentCommand>>>,
+    backend: Backend,
     counter: AtomicU64,
 }
 
@@ -55,7 +63,28 @@ impl Supervisor {
         Self {
             hub,
             workspace_root,
-            senders: Mutex::new(HashMap::new()),
+            backend: Backend::Local(Mutex::new(HashMap::new())),
+            counter: AtomicU64::new(initial),
+        }
+    }
+
+    #[must_use]
+    pub fn new_remote(
+        hub: Hub,
+        workspace_root: PathBuf,
+        persistent_floor: u64,
+        runtime: Arc<RemoteRuntime>,
+    ) -> Self {
+        let clock_floor = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+            .unwrap_or(1);
+        let initial = initial_counter(&hub, persistent_floor, clock_floor);
+        Self {
+            hub,
+            workspace_root,
+            backend: Backend::Remote(runtime),
             counter: AtomicU64::new(initial),
         }
     }
@@ -70,11 +99,17 @@ impl Supervisor {
 
     #[must_use]
     pub fn resource_stats(&self) -> Vec<(String, crate::cgroup::Stats)> {
-        self.senders
-            .lock()
-            .keys()
-            .filter_map(|id| crate::cgroup::stats(id).map(|stats| (id.clone(), stats)))
-            .collect()
+        match &self.backend {
+            Backend::Local(senders) => senders
+                .lock()
+                .keys()
+                .filter_map(|id| crate::cgroup::stats(id).map(|stats| (id.clone(), stats)))
+                .collect(),
+            // Detached worker cgroups are sibling user units. Agentd exports
+            // their resource telemetry separately; the legacy in-process path
+            // remains available for dev/tests.
+            Backend::Remote(_) => Vec::new(),
+        }
     }
 
     /// Create a new session for `provider`, optionally rooted at `cwd`
@@ -146,7 +181,23 @@ impl Supervisor {
         cwd: PathBuf,
         resume: Option<String>,
     ) -> Result<(), String> {
-        let mut senders = self.senders.lock();
+        let Backend::Local(senders) = &self.backend else {
+            let Backend::Remote(runtime) = &self.backend else {
+                unreachable!();
+            };
+            runtime.ensure(StartSession {
+                session_id: session_id.to_owned(),
+                provider: spec.id.to_owned(),
+                cwd: cwd.display().to_string(),
+                agent_session_id: resume,
+                system: self.hub.session_is_system(session_id),
+                generation: String::new(),
+                fallback_for: None,
+                adopt_only: false,
+            });
+            return Ok(());
+        };
+        let mut senders = senders.lock();
         if senders.contains_key(session_id) {
             return Ok(()); // already live
         }
@@ -186,11 +237,52 @@ impl Supervisor {
     /// If the session is unknown to the Hub, its provider is no longer
     /// registered, or the agent thread cannot be spawned.
     pub fn send(&self, session_id: &str, cmd: AgentCommand) -> Result<(), String> {
+        if let Backend::Remote(runtime) = &self.backend {
+            if !self
+                .hub
+                .session_list()
+                .iter()
+                .any(|meta| meta.id == session_id)
+            {
+                return Err(format!("unknown session {session_id:?}"));
+            }
+            match cmd {
+                AgentCommand::Prompt(blocks, cmid, completion) => {
+                    if let Some(completion) = completion {
+                        let _ = completion.send(Err(
+                            "direct completion capture is unavailable through detached runtime"
+                                .to_owned(),
+                        ));
+                        return Err(
+                            "detached runtime does not support completion capture".to_owned()
+                        );
+                    }
+                    let content = blocks
+                        .into_iter()
+                        .map(|block| serde_json::to_value(block).unwrap_or(serde_json::Value::Null))
+                        .collect();
+                    runtime.ensure(self.start_session(session_id)?);
+                    runtime.prompt(session_id, content, cmid);
+                }
+                AgentCommand::Cancel => runtime.cancel(session_id),
+                AgentCommand::Permission {
+                    request_id,
+                    option_id,
+                } => runtime.permission(session_id, request_id, option_id),
+                AgentCommand::SetConfigOption { config_id, value } => {
+                    runtime.set_config_option(session_id, config_id, value);
+                }
+            }
+            return Ok(());
+        }
+        let Backend::Local(senders) = &self.backend else {
+            unreachable!();
+        };
         // A failed `send` means the receiver (agent thread) is gone: drop the
         // stale sender and fall through to revive, recovering the command from
         // the `SendError` so we needn't require `AgentCommand: Clone`.
         let cmd = {
-            let mut senders = self.senders.lock();
+            let mut senders = senders.lock();
             match senders.get(session_id) {
                 Some(tx) => match tx.send(cmd) {
                     Ok(()) => return Ok(()),
@@ -203,7 +295,10 @@ impl Supervisor {
             }
         };
         self.revive(session_id)?;
-        self.senders
+        let Backend::Local(senders) = &self.backend else {
+            unreachable!();
+        };
+        senders
             .lock()
             .get(session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?
@@ -229,8 +324,16 @@ impl Supervisor {
     /// If the session is unknown to the Hub, its provider is no longer
     /// registered, or the agent thread cannot be spawned.
     pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
-        if self.senders.lock().contains_key(session_id) {
-            return Ok(false);
+        match &self.backend {
+            Backend::Remote(runtime) => {
+                if runtime.has_worker(session_id) {
+                    return Ok(false);
+                }
+                runtime.ensure(self.start_session(session_id)?);
+                return Ok(true);
+            }
+            Backend::Local(senders) if senders.lock().contains_key(session_id) => return Ok(false),
+            Backend::Local(_) => {}
         }
         self.revive(session_id)?;
         Ok(true)
@@ -270,6 +373,25 @@ impl Supervisor {
         Ok(())
     }
 
+    fn start_session(&self, session_id: &str) -> Result<StartSession, String> {
+        let meta = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        Ok(StartSession {
+            session_id: meta.id,
+            provider: meta.provider,
+            cwd: meta.cwd,
+            agent_session_id: meta.agent_session_id,
+            system: meta.system,
+            generation: String::new(),
+            fallback_for: None,
+            adopt_only: false,
+        })
+    }
+
     /// Tear down a session's agent thread. Sends `Cancel` (best-effort, so an
     /// in-flight turn returns to its caller cleanly), then drops the tx so
     /// the agent's command loop terminates on next poll. Hub state is the
@@ -279,7 +401,15 @@ impl Supervisor {
     /// alive). Unknown / already-torn-down sessions are a no-op and return
     /// `false`.
     pub fn delete_session(&self, session_id: &str) -> bool {
-        let tx = self.senders.lock().remove(session_id);
+        if let Backend::Remote(runtime) = &self.backend {
+            let existed = runtime.has_worker(session_id);
+            runtime.stop(session_id);
+            return existed;
+        }
+        let Backend::Local(senders) = &self.backend else {
+            unreachable!();
+        };
+        let tx = senders.lock().remove(session_id);
         match tx {
             Some(tx) => {
                 let _ = tx.send(AgentCommand::Cancel);

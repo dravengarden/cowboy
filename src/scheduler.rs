@@ -19,11 +19,10 @@ use std::collections::HashMap;
 
 use tokio::sync::mpsc;
 
-use crate::core::Hub;
-
 /// Marks a fired-wakeup prompt's echo so the UI can render it as a "↻ scheduled
 /// wakeup" note rather than a user bubble (mirrors `AUTO_CONTINUE_PREFIX`).
-pub const WAKEUP_PREFIX: &str = "__wake__";
+pub use crate::agent_model::WAKEUP_PREFIX;
+use crate::core::Hub;
 
 /// `ScheduleWakeup` clamps `delaySeconds` to `[60, 3600]`; mirror it so a bad
 /// value can't busy-loop or schedule absurdly far out.

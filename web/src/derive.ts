@@ -17,7 +17,7 @@ export type ContentChunk =
 // every array index) doesn't re-mount/jump the visible rows; index keys can't.
 export type RenderItem = { key: string } & (
   | { kind: "message"; role: "assistant" | "user"; chunks: ContentChunk[]; autoResumed?: boolean }
-  | { kind: "thought"; text: string }
+  | { kind: "thought"; sections: string[] }
   | {
       kind: "tool";
       id: string;
@@ -100,6 +100,22 @@ function textOf(update: AcpUpdate): string {
   return ch?.type === "text" ? ch.text : "";
 }
 
+// Codex uses empty HTML comments as separators inside reasoning summaries. Turn
+// those provider-internal markers into structure before Markdown sees them, so
+// the transcript can render distinct thinking steps without exposing raw HTML.
+// Non-empty comments remain part of the text, as do comments in normal messages.
+function thoughtSectionsOf(text: string): string[] {
+  return text.split(/<!--\s*-->/g);
+}
+
+function pushThoughtText(item: { sections: string[] }, incoming: string): void {
+  // Reparse the unfinished tail together with the next chunk. ACP may split an
+  // HTML separator at any byte boundary (`<!--` then ` -->`), and parsing each
+  // notification independently would leak that partial marker into the UI.
+  const tail = item.sections.pop() ?? "";
+  item.sections.push(...thoughtSectionsOf(tail + incoming));
+}
+
 /// The upstream tool name lives under `_meta.<provider>.toolName` (e.g.
 /// `_meta.claudeCode.toolName = "Bash"`). The provider key varies, so scan the
 /// one-level `_meta` object for any `{ toolName }`. "" when absent.
@@ -164,9 +180,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             const text = textOf(u);
             const last = items[items.length - 1];
             if (cursor?.kind === "thought" && last?.kind === "thought") {
-              last.text += text;
+              pushThoughtText(last, text);
             } else {
-              items.push({ kind: "thought", text, key: String(env.seq) });
+              items.push({ kind: "thought", sections: thoughtSectionsOf(text), key: String(env.seq) });
               cursor = { kind: "thought", role: "assistant" };
             }
             break;
@@ -276,7 +292,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   // forever, even after the turn ended, because that render path isn't gated on
   // session status. The transient "thinking, no text yet" state is covered by
   // the trailing indicator instead, so an empty thought carries nothing.
-  const result = items.filter((it) => it.kind !== "thought" || it.text.trim() !== "");
+  const result = items.filter((it) =>
+    it.kind !== "thought" || it.sections.some((section) => section.trim() !== "")
+  );
   DERIVE_CACHE.set(timeline, result);
   return result;
 }

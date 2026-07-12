@@ -9,8 +9,8 @@ The compose surfaces (`src/Composer.tsx`, `src/ComposerEditor.tsx`,
 `src/FullscreenComposer.tsx`, `src/composerExtensions.ts`, the vendored
 `src/mdlive/*`) run a CM6 + Obsidian-style live-preview editor. On **iOS
 WebKit** its behaviours are **coupled** — IME composition, the caret, the
-native long-press paste/select menu, widget rendering, and cowboy's own
-`translateZ(0)` compositing hack all interact. A change that "fixes" one
+native long-press paste/select menu, widget rendering, and cowboy's historical
+compositing workarounds all interact. A change that "fixes" one
 routinely breaks another.
 
 **Hard rules (the user's standing instruction — do not deviate):**
@@ -49,7 +49,6 @@ routinely breaks another.
 3. Build picks up new npm deps via a deps-FOD; if you ADDED deps, capture the new
    `depsHash` with `nix build .#cowboy-web --option sandbox false` (DNS fails
    under the nix sandbox on hawk — see columbus memory `deno-vite-fod-dns-sandbox`).
-4. The full host deploy (merge → `nix flake update cowboy` → `nixos-rebuild`)
-   restarts the cowboy daemon you talk through, so the switch call looks
-   interrupted but COMPLETES — verify via `/run/current-system` basename +
-   `curl …/sw.js`, don't blindly re-run.
+4. A web-only host switch atomically retargets `/run/cowboy-web`; it does not
+   restart Cowboy, agentd, or session workers. Verify the new `/version` and
+   `sw.js`; the PWA foreground update check performs the reload.

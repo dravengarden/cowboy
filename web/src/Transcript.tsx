@@ -501,6 +501,64 @@ function ChunkView({
   return <Markdown text={chunk.text} invert={invert} />;
 }
 
+function ThoughtSteps({
+  sections,
+  streaming,
+}: {
+  sections: string[];
+  streaming: boolean;
+}): React.JSX.Element {
+  const visible = sections.filter((section) => section.trim() !== "");
+  return (
+    <Stack spacing={0} sx={{ flex: 1, minWidth: 0 }} aria-label="Thinking steps">
+      {visible.map((section, index) => {
+        const current = streaming && index === visible.length - 1;
+        const hasNext = index < visible.length - 1;
+        return (
+          <Box
+            // A thought section has no upstream id. Its index is stable because
+            // Codex only appends sections while streaming this item.
+            key={index}
+            sx={{ position: "relative", pl: 2, pb: hasNext ? 0.75 : 0 }}
+          >
+            <Box
+              aria-hidden="true"
+              sx={{
+                position: "absolute",
+                left: 2,
+                top: "0.62em",
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                bgcolor: current ? "primary.main" : "text.disabled",
+                animation: current ? `${pulse} 1.4s ease-in-out infinite` : "none",
+                "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+              }}
+            />
+            {hasNext && (
+              <Box
+                aria-hidden="true"
+                sx={{
+                  position: "absolute",
+                  left: 4,
+                  top: "calc(0.62em + 6px)",
+                  bottom: -2,
+                  width: "1px",
+                  bgcolor: "divider",
+                }}
+              />
+            )}
+            <Box sx={{ opacity: current || !streaming ? 1 : 0.68 }}>
+              <Markdown text={section} />
+              {current && <StreamingCaret />}
+            </Box>
+          </Box>
+        );
+      })}
+    </Stack>
+  );
+}
+
 // A user-message body that collapses when it's very tall — a pasted log / big
 // snippet shouldn't flood the transcript (the reported case). Community pattern
 // (Claude.ai / ChatGPT / Zed, OneReach's "show more" widget, the CSS-Tricks
@@ -1012,11 +1070,9 @@ const ItemView = memo(function ItemView({
           }}
         >
           <Psychology fontSize="medium" />
-          <Box sx={{ fontStyle: "italic", fontSize: "0.875rem", flex: 1 }}>
-            {/* `derive` drops empty thoughts, so a thought item always carries
-                text here — no perpetual-spinner fallback. */}
-            <Markdown text={item.text} />
-            {streaming && <StreamingCaret />}
+          <Box sx={{ fontStyle: "italic", fontSize: "0.875rem", flex: 1, minWidth: 0 }}>
+            {/* Empty Codex HTML separators become compact, connected steps. */}
+            <ThoughtSteps sections={item.sections} streaming={!!streaming} />
           </Box>
         </Stack>
       );

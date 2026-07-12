@@ -70,6 +70,35 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
     pub data_dir: PathBuf,
 
+    /// Built SPA directory. Static assets are loaded at request time instead
+    /// of being embedded in the Rust binary, so a frontend-only rollout does
+    /// not restart the API or any agent session.
+    #[arg(long, env = "COWBOY_WEB_ROOT", default_value = "web/dist")]
+    pub web_root: PathBuf,
+
+    /// Unix socket of the detached agent runtime broker. When omitted Cowboy
+    /// keeps the legacy in-process supervisor (useful for local development and
+    /// tests). Production sets this so API/Web redeploys do not own agent
+    /// process lifetime.
+    #[arg(long, env = "COWBOY_RUNTIME_SOCKET")]
+    pub runtime_socket: Option<PathBuf>,
+
+    /// Desired detached worker generation. Agentd uses this for new sessions;
+    /// workers already serving a turn remain on their current generation until
+    /// the rollout reaches a safe boundary.
+    #[arg(
+        long,
+        env = "COWBOY_WORKER_GENERATION",
+        default_value = env!("CARGO_PKG_VERSION")
+    )]
+    pub worker_generation: String,
+
+    /// Worker executable associated with `--worker-generation`. Production
+    /// supplies its immutable Nix store path so agentd can launch and roll back
+    /// exact generations; local development may use agentd's default.
+    #[arg(long, env = "COWBOY_RUNTIME_WORKER_COMMAND")]
+    pub runtime_worker_command: Option<PathBuf>,
+
     /// `PostgreSQL` connection URL for persistent sessions + events. When
     /// absent the daemon runs in pure in-memory mode (v0 fallback, no
     /// restart recovery). The hawk-provisioned cowboy-private cluster

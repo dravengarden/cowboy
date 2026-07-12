@@ -17,11 +17,11 @@ dev *ARGS:
 dev-web:
     cd web && deno task dev
 
-# Build the frontend bundle (embedded into the binary via rust-embed).
+# Build the independently deployed frontend bundle.
 build-web:
     cd web && deno task build
 
-# Build the release binary (embeds the current web/dist).
+# Build both release artifacts for local use.
 build: build-web
     cargo build --release
 

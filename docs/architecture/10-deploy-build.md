@@ -1,8 +1,8 @@
 # Build & deploy
 
-cowboy ships as a **single self-contained binary**: the React SPA is built and
-**embedded** into the Rust executable, so there is no static-asset directory to
-deploy alongside it. It runs as a NixOS systemd service on hawk (`:3333`).
+cowboy ships as three independent Nix artifacts: the HTTP/control-plane + worker
+package, a narrowly sourced stable agentd package, and the React SPA. This keeps
+frontend, broker, and session-runtime update frequency independent.
 
 ## The build graph
 
@@ -10,11 +10,13 @@ deploy alongside it. It runs as a NixOS systemd service on hawk (`:3333`).
 flowchart TB
     SRC["web/src + deno.lock"] --> DEPS["deps FOD<br/>(vendored npm cache)"]
     DEPS --> WEB["cowboy-web<br/>buildDenoViteApp → dist"]
-    WEB --> EMB["preBuild: cp dist →<br/>web/dist (embed dir)"]
-    EMB --> BIN["cowboy<br/>buildRustPackage<br/>(rust-embed)"]
+    RS["Rust source<br/>(web excluded)"] --> BIN["cowboy + worker<br/>buildRustPackage"]
+    ADS["agentd source subset"] --> AD["cowboy-agentd<br/>no-default-features"]
+    WEB --> LINK["atomic /run/cowboy-web symlink"]
 
     style WEB fill:#eef2ff,stroke:#6366f1
     style BIN fill:#dcfce7,stroke:#16a34a
+    style AD fill:#fef9c3,stroke:#ca8a04
 ```
 
 - **`cowboy-web`** uses the shared `buildDenoViteApp` builder from the
@@ -22,11 +24,17 @@ flowchart TB
   `depsHash`) plus a normal offline build. The builder also stages the
   `@shared-utils/ui` SDK into `web/src/_shell`. Refresh `depsHash` only when
   `web/deno.lock` or `web/package.json` change.
-- **`cowboy`** is a `buildRustPackage`. Its `preBuild` copies the web output into
-  `web/dist`, which the `#[folder = "web/dist"]` `rust-embed` macro embeds at
-  compile time. It pins crates via **`cargoHash` / `fetchCargoVendor`** (not
+- **`cowboy`** is a `buildRustPackage` whose source filter excludes frontend
+  files except the TypeScript protocol fixture used by Rust contract tests.
+  It pins crates via **`cargoHash` / `fetchCargoVendor`** (not
   `cargoLock`): crates.io now 403s the download endpoint for requests with no
   User-Agent, and the plain-fetchurl `cargoLock` path sends none.
+- **`cowboy-agentd`** uses a source fileset containing only the broker, runtime
+  wire contract, and entry point. It builds with `--no-default-features`, so an
+  ordinary Cowboy code change does not alter the broker's store path.
+- **`cowboy-web`** is switched by atomically replacing `/run/cowboy-web`; the
+  backend reads assets at request time and computes ETags/version IDs from their
+  bytes.
 
 ## Dev workflow
 
@@ -55,6 +63,10 @@ crane/cargo caching instead.
 | `--bind` | `127.0.0.1:3333` | listen address |
 | `--workspace-root` | `.` | root the session pickers scope to |
 | `--postgres-url` | — | enable persistence ([Storage](05-storage.md)); in-memory if absent |
+| `--web-root` | `web/dist` | separately deployed SPA directory |
+| `--runtime-socket` | — | enable detached production runtime; omit for local in-process mode |
+| `--worker-generation` | crate version | desired session-worker generation |
+| `--runtime-worker-command` | — | immutable executable associated with that generation |
 Other subcommands: `serve-acp` (the ACP server face for Zed), `try-agent`
 (one-shot provider smoke test).
 
@@ -95,10 +107,14 @@ idle.
 
 cowboy is consumed by the hawk config via a `git+file://` flake input from this
 repo. To ship a change: commit here, then on hawk `nix flake update cowboy` +
-`nixos-rebuild`. The unit runs **as the human SSH user** (so the agent and a
-Zed-over-SSH session share one identity and one view of the files), and points
-`--workspace-root` under that user's home. Agent-owned local state remains in
-the user's normal tool-managed home.
+`nixos-rebuild`. The system `cowboy.service` runs **as the human SSH user** (so
+the API and Zed-over-SSH share one identity). A lingered user manager owns
+`cowboy-agentd.socket`, `cowboy-agentd.service`, `cowboy-agents.slice`, and the
+transient per-session workers. Agent-owned local state remains in the user's
+normal tool-managed home.
+
+See [Zero-interruption rolling updates](12-rolling-updates.md) for ownership,
+drain, rollback, monitoring, and failure semantics.
 
 ## Safe activation from a cowboy session
 
@@ -121,4 +137,5 @@ just sys-activate ./result
 the system profile and runs that closure's `switch-to-configuration`. The unit is
 under `system.slice`, not `cowboy.service`, so a cowboy restart cannot kill it.
 Verify the unit journal and `/run/current-system`; never blindly re-run a switch.
-Web changes still require a `sw.js` VERSION bump so installed PWAs reload.
+Web changes still require a `sw.js` VERSION bump so installed PWAs reload, but
+they do not restart Cowboy or the detached runtime.

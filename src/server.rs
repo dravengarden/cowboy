@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
+use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -22,8 +23,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
 use futures::{SinkExt, StreamExt};
-use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -36,7 +37,9 @@ use crate::core::{
     RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::persistence::EventReducer;
+use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
+use crate::runtime_wire::StartSession;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
 use tokio::sync::{mpsc, watch};
@@ -49,6 +52,8 @@ struct AppState {
     persistence_health: Option<Arc<PersistenceHealth>>,
     shutdown: watch::Receiver<bool>,
     runtime_health: Arc<RuntimeHealth>,
+    remote_runtime: Option<Arc<RemoteRuntime>>,
+    web_root: PathBuf,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -57,7 +62,25 @@ const STORE_QUEUE_CAPACITY: usize = 8_192;
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     init_tracing();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // Persistence closes only after dispatcher/runtime quiescence. Using the
+    // HTTP shutdown signal directly would race a last-millisecond prompt
+    // requeue against the writer closing its receiver.
+    let (store_shutdown_tx, store_shutdown_rx) = watch::channel(false);
     let runtime_health = Arc::new(RuntimeHealth::default());
+    // Acquire the controller lease before restoring Hub state. Its worker
+    // snapshot is the authority for whether a persisted Busy turn actually
+    // survived this control-plane restart.
+    let mut runtime_bootstrap = match args.runtime_socket.clone() {
+        Some(socket) => Some(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                RemoteBootstrap::connect(socket),
+            )
+            .await
+            .context("timed out connecting detached agent runtime")??,
+        ),
+        None => None,
+    };
 
     // Phase 2: when --postgres-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
@@ -104,7 +127,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Ok(entries) => hub.load_settings(entries),
                 Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
             }
-            hub.restore(restored);
+            match runtime_bootstrap.as_ref() {
+                Some(runtime) => hub.restore_with_workers(restored, runtime.workers()),
+                None => hub.restore(restored),
+            }
             tracing::info!(
                 postgres = url,
                 restored = restored_count,
@@ -117,7 +143,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             let writer_health = Arc::clone(&runtime_health);
             let writer_store = store.clone();
             let writer_persistence_health = Arc::clone(&health);
-            let writer_shutdown = shutdown_rx.clone();
+            let writer_shutdown = store_shutdown_rx.clone();
             let writer_task = tokio::spawn(async move {
                 run_store_writer(writer_store, rx, writer_persistence_health, writer_shutdown)
                     .await;
@@ -145,11 +171,45 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --postgres-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
-    let supervisor = Arc::new(Supervisor::new(
-        hub.clone(),
-        args.workspace_root.clone(),
-        session_id_floor,
-    ));
+    let remote_runtime = runtime_bootstrap.as_ref().map(|bootstrap| {
+        RemoteRuntime::new(
+            hub.clone(),
+            bootstrap,
+            args.worker_generation.clone(),
+            args.runtime_worker_command
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        )
+    });
+    if let Some(runtime) = &remote_runtime {
+        // Re-declare every adopted worker's launch metadata. This is
+        // idempotent, and lets a newly restarted agentd reconstruct sessions
+        // even when an older compatible worker snapshot lacks the additive
+        // launch-spec field.
+        for meta in hub.session_list() {
+            if runtime.has_worker(&meta.id) {
+                runtime.adopt(StartSession {
+                    session_id: meta.id,
+                    provider: meta.provider,
+                    cwd: meta.cwd,
+                    agent_session_id: meta.agent_session_id,
+                    system: meta.system,
+                    generation: String::new(),
+                    fallback_for: None,
+                    adopt_only: true,
+                });
+            }
+        }
+    }
+    let supervisor = Arc::new(match &remote_runtime {
+        Some(runtime) => Supervisor::new_remote(
+            hub.clone(),
+            args.workspace_root.clone(),
+            session_id_floor,
+            Arc::clone(runtime),
+        ),
+        None => Supervisor::new(hub.clone(), args.workspace_root.clone(), session_id_floor),
+    });
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
     // call the Supervisor (which holds the Hub) — that cycle is why the queue
@@ -162,8 +222,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let dispatcher_health = Arc::clone(&runtime_health);
     let dispatcher_hub = hub.clone();
     let dispatcher_supervisor = Arc::clone(&supervisor);
-    let dispatcher_task = tokio::spawn(async move {
-        run_dispatcher(dispatcher_hub, dispatcher_supervisor, dispatch_rx).await;
+    let dispatcher_shutdown = shutdown_rx.clone();
+    let mut dispatcher_task = tokio::spawn(async move {
+        run_dispatcher(
+            dispatcher_hub,
+            dispatcher_supervisor,
+            dispatch_rx,
+            dispatcher_shutdown,
+        )
+        .await;
         dispatcher_health.set_dispatcher(false);
         tracing::error!("dispatcher exited unexpectedly");
     });
@@ -214,6 +281,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // now-restored in-memory sessions. An overdue one fires immediately (catch-up).
     hub.rearm_scheduled_drafts();
 
+    // Start replay only after scheduler/dispatcher sinks exist; otherwise a
+    // ScheduleWakeup event buffered during the deploy could be ACKed while its
+    // side effect was still unwired.
+    if let (Some(runtime), Some(bootstrap)) = (&remote_runtime, runtime_bootstrap.take()) {
+        runtime.start(bootstrap);
+    }
+
     // Headless auto-resume. A turn cut off by THIS restart had its continuation
     // enqueued + the session marked Interrupted during `hub.restore` above — but
     // that continuation only drains once the agent revives, which used to wait for
@@ -258,16 +332,31 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             persistence_health,
             shutdown: shutdown_rx,
             runtime_health,
+            remote_runtime: remote_runtime.clone(),
+            web_root: args.web_root,
         },
         shutdown_tx,
     )
     .await;
-    dispatcher_task.abort();
     judge_task.abort();
     scheduler_task.abort();
+    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut dispatcher_task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
+        Err(_) => {
+            tracing::error!("dispatcher did not drain within shutdown deadline");
+            dispatcher_task.abort();
+        }
+    }
+    if let Some(runtime) = &remote_runtime {
+        runtime
+            .graceful_shutdown(std::time::Duration::from_secs(10))
+            .await;
+    }
     if let Some(task) = purge_task {
         task.abort();
     }
+    let _ = store_shutdown_tx.send(true);
     if let Some(task) = writer_task {
         match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
             Ok(Ok(())) => {}
@@ -558,8 +647,20 @@ async fn run_dispatcher(
     hub: Hub,
     supervisor: Arc<Supervisor>,
     mut rx: mpsc::Receiver<DispatchReq>,
+    mut shutdown: watch::Receiver<bool>,
 ) {
-    while let Some(req) = rx.recv().await {
+    loop {
+        let req = tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    rx.close();
+                }
+                rx.recv().await
+            }
+            req = rx.recv() => req,
+        };
+        let Some(req) = req else { break };
         let DispatchReq {
             session_id,
             text,
@@ -637,8 +738,8 @@ async fn serve_axum(
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
         .route("/ws", any(ws_upgrade))
-        // Everything else: the embedded SPA, with index.html fallback for
-        // client-side routes.
+        // Everything else: the separately deployed SPA, with index.html
+        // fallback for client-side routes.
         .fallback(static_handler)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -701,6 +802,16 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Response {
         .is_some_and(|health| !health.is_healthy())
     {
         (StatusCode::SERVICE_UNAVAILABLE, "persistence degraded").into_response()
+    } else if state
+        .remote_runtime
+        .as_ref()
+        .is_some_and(|runtime| !runtime.connected())
+    {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent runtime disconnected",
+        )
+            .into_response()
     } else {
         "ok".into_response()
     }
@@ -712,27 +823,26 @@ struct VersionResponse {
     version: String,
 }
 
-/// A build identifier the SPA polls to detect a redeploy. We reuse the embedded
-/// `index.html`'s compile-time SHA256: it references the content-hashed JS/CSS
-/// bundles, so any change to the shipped UI changes this hash, while an
-/// unchanged build keeps it stable. The frontend captures it on first load and
-/// re-checks after each WS reconnect — a mismatch means the daemon was
-/// redeployed under a now-stale tab, which surfaces the "new version" banner.
-async fn version() -> Response {
-    match Assets::get("index.html") {
-        Some(f) => Json(VersionResponse {
-            version: content_hash_hex(&f.metadata.sha256_hash()),
+/// A build identifier the SPA polls to detect a frontend rollout. `index.html`
+/// references the content-hashed JS/CSS bundles, so hashing it keeps `/version`
+/// aligned with the files currently exposed through the stable web-root path.
+async fn version(State(state): State<Arc<AppState>>) -> Response {
+    match tokio::fs::read(state.web_root.join("index.html")).await {
+        Ok(bytes) => Json(VersionResponse {
+            version: content_hash(&bytes),
         })
         .into_response(),
-        None => (StatusCode::NOT_FOUND, "UI not built").into_response(),
+        Err(error) => {
+            tracing::warn!(%error, web_root = %state.web_root.display(), "reading web version failed");
+            (StatusCode::NOT_FOUND, "UI not built").into_response()
+        }
     }
 }
 
-/// Render rust-embed's compile-time SHA256 as a 32-hex-char string (first 16
-/// bytes — ample to avoid collisions across a handful of static files). Used
-/// both for the static-asset `ETag` and the `/version` build id so the two
-/// never drift.
-fn content_hash_hex(hash: &[u8; 32]) -> String {
+/// Render the first 16 bytes of SHA256 as a compact content identifier. Used
+/// by both static-asset ETags and `/version` so the two cannot drift.
+fn content_hash(content: &[u8]) -> String {
+    let hash: [u8; 32] = Sha256::digest(content).into();
     format!(
         "{:016x}{:016x}",
         u64::from_be_bytes(hash[0..8].try_into().expect("8 bytes")),
@@ -758,6 +868,12 @@ struct Metrics {
     persistence_dropped: u64,
     persistence_failed_batches: u64,
     persistence_last_error: Option<String>,
+    runtime_connected: bool,
+    runtime_workers: usize,
+    runtime_busy_workers: usize,
+    runtime_draining_workers: usize,
+    runtime_handoff_workers: usize,
+    runtime_pending_commands: usize,
 }
 
 /// Resident set size of THIS process (the daemon, not its agent children) from
@@ -779,6 +895,11 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         Some(s) => s.storage_metrics().await.unwrap_or((0, 0, 0)),
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
+    let runtime = state
+        .remote_runtime
+        .as_ref()
+        .map(|runtime| runtime.stats())
+        .unwrap_or_default();
     Json(Metrics {
         db_bytes,
         events_rows,
@@ -795,6 +916,15 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
             .persistence_health
             .as_ref()
             .and_then(|h| h.last_error()),
+        runtime_connected: state
+            .remote_runtime
+            .as_ref()
+            .is_none_or(|runtime| runtime.connected()),
+        runtime_workers: runtime.workers,
+        runtime_busy_workers: runtime.busy_workers,
+        runtime_draining_workers: runtime.draining_workers,
+        runtime_handoff_workers: runtime.handoff_workers,
+        runtime_pending_commands: runtime.pending_commands,
     })
     .into_response()
 }
@@ -806,14 +936,29 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
     let health = state.persistence_health.as_ref();
+    let runtime = state
+        .remote_runtime
+        .as_ref()
+        .map(|runtime| runtime.stats())
+        .unwrap_or_default();
+    let runtime_connected = state
+        .remote_runtime
+        .as_ref()
+        .is_none_or(|runtime| runtime.connected());
     let mut body = format!(
-        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n",
-        u8::from(state.runtime_health.is_healthy(state.store.is_some())),
+        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n# TYPE cowboy_runtime_connected gauge\ncowboy_runtime_connected {}\n# TYPE cowboy_runtime_workers gauge\ncowboy_runtime_workers {}\n# TYPE cowboy_runtime_busy_workers gauge\ncowboy_runtime_busy_workers {}\n# TYPE cowboy_runtime_draining_workers gauge\ncowboy_runtime_draining_workers {}\n# TYPE cowboy_runtime_handoff_workers gauge\ncowboy_runtime_handoff_workers {}\n# TYPE cowboy_runtime_pending_commands gauge\ncowboy_runtime_pending_commands {}\n",
+        u8::from(state.runtime_health.is_healthy(state.store.is_some()) && runtime_connected),
         daemon_rss_bytes(),
         health.map_or(0, |h| h.pending()),
         health.map_or(0, |h| h.dropped()),
         health.map_or(0, |h| h.failed_batches()),
         u8::from(health.is_none_or(|h| h.is_healthy())),
+        u8::from(runtime_connected),
+        runtime.workers,
+        runtime.busy_workers,
+        runtime.draining_workers,
+        runtime.handoff_workers,
+        runtime.pending_commands,
     );
     body.push_str("# TYPE cowboy_agent_memory_bytes gauge\n# TYPE cowboy_agent_pids gauge\n# TYPE cowboy_agent_cpu_seconds_total counter\n");
     for (session, stats) in state.supervisor.resource_stats() {
@@ -1136,17 +1281,11 @@ async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<Strin
     }
 }
 
-/// The built web UI (Vite output), embedded at compile time. The flake builds
-/// `web/dist` with deno before the cargo build so this folder exists.
-#[derive(RustEmbed)]
-#[folder = "web/dist"]
-struct Assets;
-
-/// Serve an embedded asset by path, falling back to `index.html` so the SPA
-/// owns client-side routing. Missing `index.html` (UI not built) → 404.
+/// Serve a separately deployed asset by path, falling back to `index.html` so
+/// the SPA owns client-side routing. Missing `index.html` (UI not built) → 404.
 ///
-/// Caching: rust-embed computes a per-file SHA256 at compile time, which we use
-/// as a content `ETag` (stable across rebuilds when the bytes are unchanged). The
+/// Caching: a per-file SHA256 is used as a content `ETag` (stable across
+/// rollouts when the bytes are unchanged). The
 /// cache policy is split by whether the filename is content-addressed:
 ///   - `/assets/*` — Vite emits content-hashed names, so the bytes behind a name
 ///     never change → `immutable` with a one-year max-age, never revalidated.
@@ -1155,7 +1294,11 @@ struct Assets;
 ///     every use, so a redeploy is picked up immediately while unchanged files
 ///     cost only a 304. This is what stops a redeployed favicon/icon from being
 ///     pinned to a stale copy in the browser's HTTP cache.
-async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
+async fn static_handler(
+    State(state): State<Arc<AppState>>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let requested = uri.path().trim_start_matches('/');
     let requested = if requested.is_empty() {
         "index.html"
@@ -1163,20 +1306,37 @@ async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
         requested
     };
 
+    // Never allow a URI to escape the configured asset root. Percent-encoded
+    // traversal remains a literal filename at this layer and is harmless.
+    if !FsPath::new(requested)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     // Serve the asset if it exists; otherwise fall back to index.html so the
     // SPA handles the route. The mime is keyed off the *served* name so the
     // fallback is delivered as text/html, not octet-stream.
-    let (name, file) = match Assets::get(requested) {
-        Some(f) => (requested, Some(f)),
-        None => ("index.html", Assets::get("index.html")),
-    };
-    let Some(content) = file else {
-        return (StatusCode::NOT_FOUND, "UI not built").into_response();
+    let requested_path = state.web_root.join(requested);
+    let (name, content) = match tokio::fs::read(&requested_path).await {
+        Ok(bytes) => (requested, bytes),
+        Err(request_error) => match tokio::fs::read(state.web_root.join("index.html")).await {
+            Ok(bytes) => ("index.html", bytes),
+            Err(index_error) => {
+                tracing::warn!(
+                    requested = %requested_path.display(),
+                    %request_error,
+                    %index_error,
+                    "reading web asset failed"
+                );
+                return (StatusCode::NOT_FOUND, "UI not built").into_response();
+            }
+        },
     };
 
-    // Content ETag from rust-embed's compile-time SHA256 (same hash the
-    // `/version` build id uses, so the two stay in lockstep).
-    let etag = format!("\"{}\"", content_hash_hex(&content.metadata.sha256_hash()));
+    // Content ETag uses the same hash function as `/version`.
+    let etag = format!("\"{}\"", content_hash(&content));
 
     // Conditional request: the browser echoes our ETag in If-None-Match; if it
     // still matches, skip the body. `contains` (not strict equality) tolerates a
@@ -1208,7 +1368,7 @@ async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
             (header::CACHE_CONTROL, cache_control),
             (header::ETAG, etag.as_str()),
         ],
-        Body::from(content.data),
+        Body::from(content),
     )
         .into_response()
 }

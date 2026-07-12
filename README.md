@@ -10,10 +10,10 @@ is a conduit and control plane, not a reduced reimplementation.
 
 ## Status
 
-**v1 — working multi-agent panel.** A single Rust daemon spawns claude-code /
-codex over ACP, normalizes their streams (messages, thinking, tool calls,
+**v1 — working multi-agent panel.** A Rust control plane coordinates detached
+per-session claude-code / codex workers over ACP, normalizes their streams (messages, thinking, tool calls,
 plan, permissions), and fans them out over one WebSocket to all clients
-equally; the React/MUI web UI (embedded in the binary, responsive for
+equally; the separately deployed React/MUI web UI (responsive for
 iPad/iPhone) lists sessions, shows a live transcript, sends prompts, and
 answers permission requests. See **[docs/architecture/](docs/architecture/)**
 for the implementation architecture; [design.md](design.md) records the
@@ -26,24 +26,27 @@ draft sync, and the CodeMirror composer are implemented. Code-editor / file-tree
 
 ## Shape (one-paragraph summary)
 
-A single Rust binary, run as a systemd daemon, that is itself the **ACP client**
-(via the official `agent-client-protocol` crate — no Zed fork). It spawns each
-agent over ACP/stdio, normalizes the stream into a provider-agnostic
+A Rust HTTP control plane plus a stable local broker and one detached systemd
+worker per session. Workers are the **ACP clients** (via the official
+`agent-client-protocol` crate — no Zed fork). They spawn each agent over
+ACP/stdio, normalize the stream into a provider-agnostic
 event/command model, persists it in Postgres, and fans it out over
 WebSocket to all connected web clients equally. The web UI (React/MUI/Vite,
-embedded in the binary, omega's frontend recipe) is one responsive app:
+served from an independently switched immutable output) is one responsive app:
 incrementally paged transcript, and a CodeMirror 6 composer with vim support.
 
 ## Stack
 
 - **Backend**: Rust — axum + tokio (WS/HTTP), `agent-client-protocol` (pinned),
-  sqlx/Postgres, clap, rust-embed.
+  sqlx/Postgres, clap, and a versioned local runtime protocol.
 - **Frontend**: React 19, MUI 7, Vite 7,
   TypeScript (strictest); built by Deno, linted by oxlint.
 - **Providers**: pluggable (trait + registry), all over ACP; Claude Code and
   Codex use maintained ACP adapters, while Gemini uses its native ACP mode.
 - **Storage**: service-private Postgres (sessions, canonical events, settings, secrets).
-- **Deploy**: systemd, `StateDirectory=cowboy` → `/var/lib/cowboy/`.
+- **Deploy**: NixOS systemd units: system `cowboy`, socket-activated user
+  `cowboy-agentd`, and transient per-session workers. See
+  [zero-interruption rolling updates](docs/architecture/12-rolling-updates.md).
 
 ## Two subcommands, one source of truth (design §13a)
 
@@ -70,7 +73,7 @@ sidebar.
 ## Quick start
 
 ```sh
-just build               # deno + cargo (embeds web/dist)
+just build               # deno + cargo
 ./target/release/cowboy serve            # the daemon on :3333 (systemd in prod)
 
 # Run cowboy's quality gates

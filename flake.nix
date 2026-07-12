@@ -16,6 +16,59 @@
       pkgs = import nixpkgs { inherit system; };
       shared = shared-utils.lib.${system};
 
+      # Backend and frontend are independent deployment artifacts. Excluding
+      # web/ here ensures a UI-only edit cannot change the Rust package's store
+      # path (and therefore cannot restart the API unit).
+      cowboy-src = pkgs.lib.cleanSourceWith {
+        src = ./.;
+        filter = path: type:
+          let rel = pkgs.lib.removePrefix "${toString ./.}/" (toString path);
+          in pkgs.lib.cleanSourceFilter path type
+             && (
+               !(pkgs.lib.hasPrefix "web" rel)
+               || builtins.elem rel [ "web" "web/src" "web/src/protocol.ts" ]
+             );
+      };
+
+      # Agentd has a deliberately tiny source closure and is packaged
+      # separately. Ordinary API, SPA, ACP, or worker edits therefore leave
+      # its ExecStart path unchanged.
+      agentd-src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./src/lib.rs
+          ./src/agentd.rs
+          ./src/runtime_wire.rs
+          ./src/bin/cowboy-agentd.rs
+        ];
+      };
+
+      # Only behavior that runs inside a detached session contributes to the
+      # pool generation. A control-plane-only change updates Cowboy without
+      # draining live ACP sessions.
+      worker-generation-files = [
+        ./Cargo.toml
+        ./Cargo.lock
+        ./worker-generation.txt
+        ./src/acp.rs
+        ./src/agent_model.rs
+        ./src/agent_sink.rs
+        ./src/cgroup.rs
+        ./src/provider/mod.rs
+        ./src/runtime_wire.rs
+        ./src/worker.rs
+        ./src/bin/cowboy-acp-worker.rs
+      ];
+      worker-generation = "worker-" + builtins.substring 0 20 (
+        builtins.hashString "sha256" (
+          pkgs.lib.concatMapStringsSep ":"
+            (path: builtins.hashFile "sha256" path)
+            worker-generation-files
+        )
+      );
+
       # The SPA, built through the shared, footgun-free builder: a deps-only FOD
       # (vendored npm cache, keyed by the lockfiles → depsHash below) + a normal
       # content-addressed offline build. Any source edit rebuilds automatically;
@@ -29,25 +82,35 @@
         depsHash = "sha256-48jLO1HPzxqCjKcqq0sJ6ToqX7sGj1HQsJxnbFStTP4=";
       };
 
-      # The Rust binary, embedding the built SPA via rust-embed
-      # (`#[folder = "web/dist"]`). `preBuild` drops the builder output where the
-      # embed macro expects it before the release cargo build runs.
+      # API/control plane + detached ACP worker. The SPA is served from a
+      # runtime path and is intentionally absent from this derivation.
       cowboy = pkgs.rustPlatform.buildRustPackage {
         pname = "cowboy";
         version = "0.1.0";
-        src = pkgs.lib.cleanSource ./.;
+        src = cowboy-src;
         # fetchCargoVendor (cargoHash) rather than cargoLock: it downloads
         # crates via python-requests, which sends a User-Agent. crates.io now
         # 403s the download endpoint without one, and the plain-fetchurl
         # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-ZV9fRgDs9h6R2PBzVXgY42ADXZht47RbU6vXLKED6BI=";
-        preBuild = ''
-          mkdir -p web/dist
-          cp -R ${cowboy-web}/. web/dist/
-        '';
+        cargoHash = "sha256-93G9GgFsRXuXDrcWip/BIox4JHOOFw9m77MQaynXktU=";
+        cargoBuildFlags = [ "--bin" "cowboy" "--bin" "cowboy-acp-worker" ];
+        passthru.workerGeneration = worker-generation;
         meta = {
           description = "Drive coding-agent CLIs from anywhere over ACP";
           mainProgram = "cowboy";
+        };
+      };
+
+      cowboy-agentd = pkgs.rustPlatform.buildRustPackage {
+        pname = "cowboy-agentd";
+        version = "0.1.0";
+        src = agentd-src;
+        cargoHash = "sha256-93G9GgFsRXuXDrcWip/BIox4JHOOFw9m77MQaynXktU=";
+        cargoBuildFlags = [ "--no-default-features" "--bin" "cowboy-agentd" ];
+        doCheck = false;
+        meta = {
+          description = "Stable local broker for detached Cowboy ACP workers";
+          mainProgram = "cowboy-agentd";
         };
       };
     in
@@ -55,6 +118,7 @@
       packages.${system} = {
         default = cowboy;
         cowboy = cowboy;
+        cowboy-agentd = cowboy-agentd;
         cowboy-web = cowboy-web;
       };
 
@@ -62,7 +126,7 @@
       # build runs TypeScript checking before Vite. Developer lint/test policy is
       # additionally enforced by `just check` in CI.
       checks.${system} = {
-        inherit cowboy cowboy-web;
+        inherit cowboy cowboy-agentd cowboy-web;
       };
 
       devShells.${system}.default = pkgs.mkShell {

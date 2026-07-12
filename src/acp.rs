@@ -45,8 +45,10 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
+use crate::agent_model::{Event, Status, AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX};
+use crate::agent_sink::{AgentSink, HubAgentSink};
 use crate::cgroup;
-use crate::core::{Event, Hub, Status};
+use crate::core::Hub;
 use crate::provider::LaunchSpec;
 
 /// How long the ACP handshake (`initialize` + optional `session/load` +
@@ -207,7 +209,7 @@ pub enum AgentCommand {
 /// command loop. All inhabit the crate's single executor, but the crate
 /// requires `Send`, so this is `Arc` + `Mutex`/atomics (not `Rc`/`RefCell`).
 struct ClientState {
-    hub: Hub,
+    sink: Arc<dyn AgentSink>,
     session_id: String,
     /// Pending permission requests awaiting a client answer, keyed by request
     /// id. The connection's permission handler inserts a sender; the command
@@ -239,8 +241,29 @@ pub fn run_agent(
     session_id: &str,
     cwd: PathBuf,
     resume: Option<String>,
-    mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
+) {
+    run_agent_with_sink(
+        spec,
+        session_id,
+        cwd,
+        resume,
+        cmd_rx,
+        Arc::new(HubAgentSink::new(hub.clone())),
+    );
+}
+
+/// Detached-worker entry point. The ACP connection and all pending request
+/// futures remain in this process; output crosses only the [`AgentSink`]
+/// boundary, which can survive a Cowboy control-plane restart.
+pub fn run_agent_with_sink(
+    spec: &LaunchSpec,
+    session_id: &str,
+    cwd: PathBuf,
+    resume: Option<String>,
+    mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    sink: Arc<dyn AgentSink>,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -248,7 +271,7 @@ pub fn run_agent(
     {
         Ok(rt) => rt,
         Err(e) => {
-            hub.set_status(session_id, Status::Crashed, Some(format!("runtime: {e}")));
+            sink.set_status(session_id, Status::Crashed, Some(format!("runtime: {e}")));
             return;
         }
     };
@@ -274,7 +297,7 @@ pub fn run_agent(
             cwd.clone(),
             resume.clone(),
             &mut cmd_rx,
-            hub,
+            Arc::clone(&sink),
         )
         .await;
         let stalled = result
@@ -288,17 +311,25 @@ pub fn run_agent(
             );
             // Stay in `Starting` (a spinner), not `Crashed`: this blip is
             // expected to self-heal, so don't flash an error for it.
-            hub.set_status(
+            sink.set_status(
                 session_id,
                 Status::Starting,
                 Some("agent slow to start — retrying…".to_owned()),
             );
-            result = agent_main(spec, session_id, cwd, resume, &mut cmd_rx, hub).await;
+            result = agent_main(
+                spec,
+                session_id,
+                cwd,
+                resume,
+                &mut cmd_rx,
+                Arc::clone(&sink),
+            )
+            .await;
         }
         result
     });
     match result {
-        Ok(()) => hub.set_status(session_id, Status::Exited, None),
+        Ok(()) => sink.set_status(session_id, Status::Exited, None),
         Err(e) => {
             tracing::error!(session = session_id, error = %e, "agent session ended with error");
             // Salvage un-consumed prompts. A cold-start / handshake failure returns
@@ -324,10 +355,10 @@ pub fn run_agent(
                         .filter_map(|v| v.get("text").and_then(serde_json::Value::as_str))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    hub.requeue_prompt(session_id, text, content, cmid);
+                    sink.requeue_prompt(session_id, text, content, cmid);
                 }
             }
-            hub.set_status(session_id, Status::Crashed, Some(e.to_string()));
+            sink.set_status(session_id, Status::Crashed, Some(e.to_string()));
         }
     }
 }
@@ -339,7 +370,7 @@ async fn agent_main(
     cwd: PathBuf,
     resume: Option<String>,
     cmd_rx: &mut mpsc::UnboundedReceiver<AgentCommand>,
-    hub: &Hub,
+    sink: Arc<dyn AgentSink>,
 ) -> Result<()> {
     let cwd =
         std::path::absolute(&cwd).with_context(|| format!("resolving cwd {}", cwd.display()))?;
@@ -390,7 +421,7 @@ async fn agent_main(
     let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
     let state = Arc::new(ClientState {
-        hub: hub.clone(),
+        sink,
         session_id: session_id.to_owned(),
         pending: Mutex::new(HashMap::new()),
         capture: Mutex::new(None),
@@ -432,7 +463,7 @@ async fn agent_main(
                 // its first MCP tool approval forever (the per-tool approval a
                 // provider like Codex requests just sits pending). The response
                 // is instant, so unlike the human path it needn't be deferred.
-                if perm_state.hub.session_is_system(&perm_state.session_id) {
+                if perm_state.sink.session_is_system(&perm_state.session_id) {
                     let allow = req.options.iter().find(|o| {
                         matches!(
                             o.kind,
@@ -462,7 +493,7 @@ async fn agent_main(
 
                 let (tx, rx) = oneshot::channel::<Option<String>>();
                 perm_state.pending.lock().insert(request_id.clone(), tx);
-                perm_state.hub.push(
+                perm_state.sink.push(
                     &perm_state.session_id,
                     Event::PermissionRequest {
                         request_id,
@@ -561,7 +592,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
         match serde_json::to_value(&update.config_options) {
-            Ok(opts) => state.hub.set_config_options(&state.session_id, opts),
+            Ok(opts) => state.sink.set_config_options(&state.session_id, opts),
             Err(e) => tracing::warn!(error = %e, "serializing config options"),
         }
         return;
@@ -593,7 +624,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
                         .unwrap_or(0)
                 };
                 state
-                    .hub
+                    .sink
                     .set_context_usage(&state.session_id, field("used"), field("size"));
                 return;
             }
@@ -601,7 +632,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
             // verbatim (timeline/UI unchanged); this just adds the side effect of
             // actually firing the wakeup, which the ACP runtime otherwise drops.
             maybe_arm_wakeup(state, &update);
-            state.hub.push(&state.session_id, Event::Update { update });
+            state.sink.push(&state.session_id, Event::Update { update });
         }
         Err(e) => tracing::warn!(error = %e, "serializing session update"),
     }
@@ -631,7 +662,7 @@ fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
         if !prompt.trim().is_empty() {
             tracing::info!(session = %state.session_id, delay_s = delay, "scheduler: arming ScheduleWakeup");
             state
-                .hub
+                .sink
                 .schedule_wakeup(&state.session_id, delay, prompt.to_owned());
         }
     }
@@ -701,14 +732,14 @@ async fn run_session(
         // Persist the agent's own id so a future revive can resume this exact
         // conversation rather than opening a blank one.
         state
-            .hub
+            .sink
             .set_agent_session_id(&session_id, session.session_id.0.to_string());
         tracing::info!(session = %session_id, acp_id = %session.session_id.0, "session created");
         modes = session.modes;
         config_options = session.config_options;
         session.session_id
     };
-    state.hub.set_status(&session_id, Status::Running, None);
+    state.sink.set_status(&session_id, Status::Running, None);
     // Handshake landed — disarm the spawn watchdog (see `agent_main`).
     handshake_done.store(true, Ordering::SeqCst);
 
@@ -730,7 +761,7 @@ async fn run_session(
         .await
         {
             tracing::info!(session = %session_id, "codex approval preset -> full access");
-            state.hub.set_config_options(&session_id, updated_options);
+            state.sink.set_config_options(&session_id, updated_options);
             config_options = None;
         }
     }
@@ -750,7 +781,7 @@ async fn run_session(
                     tracing::info!(session = %session_id, mode = want, "startup mode -> full access");
                     // Echo into the timeline so the UI mode chip is up to date
                     // without round-tripping through a session_update.
-                    state.hub.push(
+                    state.sink.push(
                         &session_id,
                         Event::Update {
                             update: serde_json::json!({
@@ -775,7 +806,7 @@ async fn run_session(
     // which codex implements (`set_session_config_option`).
     if let Some(opts) = config_options.filter(|o| !o.is_empty()) {
         match serde_json::to_value(&opts) {
-            Ok(v) => state.hub.set_config_options(&session_id, v),
+            Ok(v) => state.sink.set_config_options(&session_id, v),
             Err(e) => tracing::warn!(error = %e, "serializing session config_options"),
         }
     }
@@ -811,7 +842,7 @@ async fn run_session(
             options.clone(),
         );
         match serde_json::to_value([opt]) {
-            Ok(v) => state.hub.set_config_options(&session_id, v),
+            Ok(v) => state.sink.set_config_options(&session_id, v),
             Err(e) => tracing::warn!(error = %e, "serializing gemini mode chip"),
         }
     }
@@ -825,7 +856,7 @@ async fn run_session(
                 if completion.is_some() {
                     *state.capture.lock() = Some(String::new());
                 }
-                state.hub.set_status(&session_id, Status::Busy, None);
+                state.sink.set_status(&session_id, Status::Busy, None);
                 // Echo each user content block into the timeline so every
                 // client (Web UI, phone, native shell) sees it — the upstream
                 // agent may not stream a user_message_chunk back. One Hub event
@@ -839,9 +870,9 @@ async fn run_session(
                 // typed, so it must never look like a user bubble (e.g. a wakeup
                 // re-issues a self-check prompt the user never sent).
                 let auto_resumed = cmid.as_deref().is_some_and(|c| {
-                    c.starts_with(crate::core::AUTO_CONTINUE_PREFIX)
-                        || c.starts_with(crate::scheduler::WAKEUP_PREFIX)
-                        || c.starts_with(crate::core::SCHED_PREFIX)
+                    c.starts_with(AUTO_CONTINUE_PREFIX)
+                        || c.starts_with(WAKEUP_PREFIX)
+                        || c.starts_with(SCHED_PREFIX)
                 });
                 for (i, block) in blocks.iter().enumerate() {
                     let content = serde_json::to_value(block).unwrap_or(serde_json::Value::Null);
@@ -854,11 +885,11 @@ async fn run_session(
                         update["autoResumed"] = serde_json::Value::Bool(true);
                     }
                     state
-                        .hub
+                        .sink
                         .push_tagged(&session_id, Event::Update { update }, tag);
                 }
                 let cx = cx.clone();
-                let hub = state.hub.clone();
+                let sink = Arc::clone(&state.sink);
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 let state = Arc::clone(state);
@@ -876,13 +907,13 @@ async fn run_session(
                             // Turn completed — including a `Cancelled` from the user's manual
                             // Stop or a force-push (an Ok we WANT to drain). Going Running lets
                             // the auto-drain send the next queued prompt.
-                            hub.push(
+                            sink.push(
                                 &sid,
                                 Event::TurnEnd {
                                     stop_reason: format!("{:?}", r.stop_reason),
                                 },
                             );
-                            hub.set_status(&sid, Status::Running, None);
+                            sink.set_status(&sid, Status::Running, None);
                         }
                         Err(e) => {
                             if let Some(tx) = completion {
@@ -899,13 +930,13 @@ async fn run_session(
                             // reaches the same conclusion). The UI surfaces silence as a
                             // "waiting Xm" indicator and the user recovers MANUALLY via Stop
                             // (→ Cancel → the agent yields here as an Ok). No auto-kill.
-                            hub.push(
+                            sink.push(
                                 &sid,
                                 Event::TurnEnd {
                                     stop_reason: format!("error: {e}"),
                                 },
                             );
-                            hub.set_status(&sid, Status::Crashed, Some(e.to_string()));
+                            sink.set_status(&sid, Status::Crashed, Some(e.to_string()));
                         }
                     }
                     Ok(())
@@ -921,7 +952,7 @@ async fn run_session(
                 if let Some(tx) = state.pending.lock().remove(&request_id) {
                     let _ = tx.send(option_id.clone());
                 }
-                state.hub.push(
+                state.sink.push(
                     &session_id,
                     Event::PermissionResolved {
                         request_id,
@@ -940,7 +971,7 @@ async fn run_session(
                     continue;
                 };
                 let cx = cx.clone();
-                let hub = state.hub.clone();
+                let sink = Arc::clone(&state.sink);
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 let options = mode_select.clone().unwrap_or_default();
@@ -953,13 +984,13 @@ async fn run_session(
                             // explicit set).
                             let opt = SessionConfigOption::select("mode", "Mode", mode_id, options);
                             match serde_json::to_value([opt]) {
-                                Ok(v) => hub.set_config_options(&sid, v),
+                                Ok(v) => sink.set_config_options(&sid, v),
                                 Err(e) => {
                                     tracing::warn!(error = %e, "re-serializing gemini mode chip")
                                 }
                             }
                         }
-                        Err(e) => hub.broadcast_error(Some(sid.clone()), format!("set mode: {e}")),
+                        Err(e) => sink.broadcast_error(Some(sid.clone()), format!("set mode: {e}")),
                     }
                     Ok(())
                 })?;
@@ -972,7 +1003,7 @@ async fn run_session(
                 // when the upstream chose a different value than we asked for
                 // (e.g. `model=default` resets effort to its model's default).
                 let cx = cx.clone();
-                let hub = state.hub.clone();
+                let sink = Arc::clone(&state.sink);
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
                 cx.clone().spawn(async move {
@@ -984,7 +1015,7 @@ async fn run_session(
                     let params_raw = match serde_json::value::to_raw_value(&params) {
                         Ok(r) => Arc::from(r),
                         Err(e) => {
-                            hub.broadcast_error(
+                            sink.broadcast_error(
                                 Some(sid.clone()),
                                 format!("encoding setConfigOption params: {e}"),
                             );
@@ -999,11 +1030,14 @@ async fn run_session(
                         Ok(val) => {
                             // Response carries `{ configOptions: [...] }`.
                             if let Some(opts) = val.get("configOptions").cloned() {
-                                hub.set_config_options(&sid, opts);
+                                sink.set_config_options(&sid, opts);
                             }
                         }
                         Err(e) => {
-                            hub.broadcast_error(Some(sid.clone()), format!("set {config_id}: {e}"));
+                            sink.broadcast_error(
+                                Some(sid.clone()),
+                                format!("set {config_id}: {e}"),
+                            );
                         }
                     }
                     Ok(())

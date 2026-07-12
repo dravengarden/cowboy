@@ -22,6 +22,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::runtime_wire::{WorkerSnapshot, WorkerState};
+
 /// How many recent events a fresh client gets over WS (the live tail). Older
 /// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
 pub const SNAPSHOT_TAIL: usize = 200;
@@ -45,58 +47,8 @@ pub enum SessionOrigin {
     Web,
 }
 
-/// Provider/session status as shown in the session list.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    /// Agent subprocess spawning / ACP handshake in flight.
-    Starting,
-    /// Session established; idle, ready for a prompt.
-    Running,
-    /// A prompt turn is currently being processed.
-    Busy,
-    /// Agent exited cleanly (or was stopped).
-    Exited,
-    /// Agent crashed / the ACP connection failed.
-    Crashed,
-    /// A turn was in flight when the daemon went down (detected at restore from a
-    /// persisted `Busy`). The agent subprocess is gone — like `Exited`/`Crashed`
-    /// this is a settled, resumable-via-new-turn state — but it carries the extra
-    /// fact that the last turn never finished, so the UI can say so instead of
-    /// showing a plain "dormant". Only ever set by [`Hub::restore`].
-    Interrupted,
-}
-
-/// A normalized session event fanned out to clients.
-///
-/// `Update` is a pass-through of an ACP `SessionUpdate` (message/thought
-/// chunks, tool calls, plan, available commands, mode). The remaining variants
-/// are cowboy-specific control events the protocol doesn't model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Event {
-    /// A serialized ACP `SessionUpdate` (see module docs).
-    Update { update: serde_json::Value },
-    /// The agent is asking to proceed; carries the options for the UI to
-    /// render. `first response wins` (design §5): the first answer resolves it.
-    PermissionRequest {
-        request_id: String,
-        tool_call: serde_json::Value,
-        options: serde_json::Value,
-    },
-    /// A permission request was answered, so other clients clear their buttons.
-    PermissionResolved {
-        request_id: String,
-        option_id: Option<String>,
-    },
-    /// Process lifecycle transition (status + optional human detail).
-    Lifecycle {
-        status: Status,
-        detail: Option<String>,
-    },
-    /// A prompt turn finished (carries the ACP stop reason as a string).
-    TurnEnd { stop_reason: String },
-}
+pub use crate::agent_model::{Event, Status};
+use crate::agent_model::{AUTO_CONTINUE_PREFIX, SCHED_PREFIX};
 
 /// One event stamped with its session + monotonic `seq`. This is the unit
 /// stored in the log and streamed to clients.
@@ -113,23 +65,12 @@ pub struct Envelope {
     pub cmid: Option<String>,
 }
 
-// --- Auto-resume interrupted turns (tasks/active/session-auto-resume) ---------
+// --- Auto-resume interrupted turns (tasks/archive/2026/07/session-auto-resume) ---
 
 /// Settings key: the global default for auto-resuming interrupted turns (bool).
 const AUTO_RESUME_DEFAULT_KEY: &str = "session.autoResume.default";
 /// Settings key: the continuation-message template (string with `{{var}}` holes).
 const AUTO_RESUME_TEMPLATE_KEY: &str = "session.autoResume.template";
-/// cmid prefix tagging an auto-enqueued continuation, so it's deduped (never
-/// stacked) and recognizable. (The cmid isn't persisted across restart — it only
-/// guards stacking WITHIN the queue at enqueue time, which is where the pile-up
-/// risk is.) Also read in `acp.rs` to flag the echo as `autoResumed` so the UI
-/// renders it as a continuation note rather than a user bubble.
-pub(crate) const AUTO_CONTINUE_PREFIX: &str = "__cont__";
-/// cmid prefix tagging a fired SCHEDULED DRAFT's turn — a user parked a draft
-/// with a future fire time, and the scheduler auto-submitted it at that time.
-/// Recognized in `acp.rs` (alongside the wakeup/continue prefixes) so the echo
-/// renders as a "↻ scheduled" note rather than a fresh user bubble.
-pub(crate) const SCHED_PREFIX: &str = "__sched__";
 /// Built-in continuation template used when the operator hasn't customized one.
 /// `{{partial}}` is the assistant output cowboy captured before the cut-off — the
 /// one source of truth the revived agent's own store lacks. It MUST self-identify
@@ -323,7 +264,7 @@ pub struct SessionMeta {
     /// Per-session OVERRIDE of the global auto-resume-interrupted-turns default.
     /// `None` = inherit `settings['session.autoResume.default']`; `Some(true)` =
     /// always auto-continue an interrupted turn for this session; `Some(false)` =
-    /// never (explicit opt-out). See tasks/active/session-auto-resume.
+    /// never (explicit opt-out). See tasks/archive/2026/07/session-auto-resume.
     #[serde(default)]
     pub auto_resume: Option<bool>,
     /// True when the confirm-detect skill judged the agent's last turn as
@@ -624,7 +565,7 @@ pub enum Inbound {
     RenameSession { session_id: String, title: String },
     /// Set a session's auto-resume OVERRIDE (`value: null` = inherit the global
     /// default, `true`/`false` = force on/off). Persisted + re-broadcast on
-    /// `SessionMeta`. See tasks/active/session-auto-resume.
+    /// `SessionMeta`. See tasks/archive/2026/07/session-auto-resume.
     SetSessionAutoResume {
         session_id: String,
         #[serde(default)]
@@ -1380,6 +1321,19 @@ impl Hub {
     /// starting, so for any turn that ran more than an instant the bit is
     /// durable before a restart (store.rs accepts the sub-ms crash window).
     pub fn restore(&self, sessions: Vec<RestoredSession>) {
+        self.restore_with_workers(sessions, &[]);
+    }
+
+    /// Restore persisted sessions while reconciling detached runtime workers.
+    /// A persisted `Busy` row is interrupted only when no matching live worker
+    /// exists. This prevents a control-plane deploy from generating a false
+    /// interruption marker and duplicate auto-resume while the original ACP
+    /// prompt is still running in its detached worker.
+    pub fn restore_with_workers(&self, sessions: Vec<RestoredSession>, workers: &[WorkerSnapshot]) {
+        let live: HashMap<&str, &WorkerSnapshot> = workers
+            .iter()
+            .map(|worker| (worker.session_id.as_str(), worker))
+            .collect();
         // Seed the qid counter PAST every restored id. The counter (`next_qid`)
         // is in-memory and resets to 1 on each daemon restart, so without this a
         // draft/queued message created after a restart reuses q1, q2, … and
@@ -1429,17 +1383,35 @@ impl Hub {
                         healed = true;
                     }
                 }
-                let was_busy = meta.status == Status::Busy;
-                meta.status = match meta.status {
-                    // Mid-turn when we died → the work was cut off, unfinished.
-                    Status::Busy => Status::Interrupted,
-                    // Already a settled dead state (incl. a prior Interrupted that
-                    // was never resumed) → keep it as recorded.
-                    Status::Exited | Status::Crashed | Status::Interrupted => meta.status,
-                    // Alive but idle, or still spinning up → just dormant.
-                    Status::Running | Status::Starting => Status::Exited,
-                };
                 let id = meta.id.clone();
+                let runtime = live.get(id.as_str()).copied();
+                let was_busy = meta.status == Status::Busy && runtime.is_none();
+                meta.status = match runtime.map(|worker| worker.state) {
+                    Some(WorkerState::Starting) => Status::Starting,
+                    Some(WorkerState::Running) => Status::Running,
+                    Some(WorkerState::Busy) => Status::Busy,
+                    Some(WorkerState::Draining) => {
+                        if runtime.is_some_and(|worker| worker.current_turn_id.is_some()) {
+                            Status::Busy
+                        } else {
+                            Status::Running
+                        }
+                    }
+                    Some(WorkerState::Exited) => Status::Exited,
+                    Some(WorkerState::Crashed) => Status::Crashed,
+                    None => match meta.status {
+                        // No detached owner survived: preserve the original
+                        // restart-recovery behavior.
+                        Status::Busy => Status::Interrupted,
+                        Status::Exited | Status::Crashed | Status::Interrupted => meta.status,
+                        Status::Running | Status::Starting => Status::Exited,
+                    },
+                };
+                if let Some(agent_session_id) =
+                    runtime.and_then(|worker| worker.agent_session_id.clone())
+                {
+                    meta.agent_session_id = Some(agent_session_id);
+                }
                 if was_busy {
                     interrupted.push(id.clone());
                 }
@@ -1458,7 +1430,9 @@ impl Hub {
                         queue,
                         drafts,
                         editing: None,
-                        in_flight: false,
+                        in_flight: runtime.is_some_and(|worker| {
+                            worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
+                        }),
                         judge_seq: 0,
                         judge_runs,
                     },
