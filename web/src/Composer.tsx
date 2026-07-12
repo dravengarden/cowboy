@@ -43,6 +43,7 @@ import {
   AlternateEmail,
   AttachFile,
   CleaningServices,
+  Check,
   Bolt,
   ChevronRight,
   Close,
@@ -305,6 +306,8 @@ function ComposeBar(
     onExpand,
     onForcePush,
     onJumpFront,
+    submitLabel = "Send",
+    submitIcon,
   }: {
     readonly dead: boolean;
     readonly sendable: boolean;
@@ -327,6 +330,10 @@ function ComposeBar(
     /** "Jump to front of queue" (no interrupt) — provided only when there's a
      *  queue to jump ahead of. */
     readonly onJumpFront?: (() => void) | undefined;
+    /** Semantic label/icon for the primary commit action. Row editors are
+     *  live-saved, so their action is Done rather than Send. */
+    readonly submitLabel?: string;
+    readonly submitIcon?: React.ReactNode;
   },
 ): React.JSX.Element {
   // The ⚙ opens the config POPUP (the labeled Mode/Model/Effort dropdowns live in
@@ -498,16 +505,16 @@ function ComposeBar(
                 </IconButton>
               </Tooltip>
             ))}
-        <Tooltip title="Send">
+        <Tooltip title={submitLabel}>
           <span>
             <IconButton
               color="primary"
-              aria-label="send"
+              aria-label={submitLabel.toLowerCase()}
               disabled={!sendable}
               sx={TOOLBAR_ICON_BTN}
               onClick={onSend}
             >
-              <Send />
+              {submitIcon ?? <Send />}
             </IconButton>
           </span>
         </Tooltip>
@@ -3031,7 +3038,7 @@ function PendingRow({
     // Editing IS the composer surface now: the same editor (vim + completions), the
     // shared ComposeBar (attachments + triggers + ↗ expand), and live-persist (the
     // effect above) in place of Save. No Save/Cancel buttons — closing keeps the
-    // live-saved edit; ➤ / Esc just finish (a final commit + done, no revert).
+    // live-saved edit; ✓ / Esc just finish (a final commit + done, no revert).
     const editBar = (
       <ComposeBar
         dead={false}
@@ -3042,6 +3049,8 @@ function PendingRow({
         onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
         onAttach={(): void => editFileInputRef.current?.click()}
         onSend={save}
+        submitLabel="Done editing"
+        submitIcon={<Check />}
         onExpand={(): void => setOverlayOpen(true)}
       />
     );
@@ -3113,6 +3122,8 @@ function PendingRow({
             commands={commands}
             placeholder="Edit message…"
             sendable={!!draft.trim() || editAttachments.length > 0}
+            submitLabel="Done editing"
+            submitIcon={<Check />}
             attachmentsSlot={editAttachments.some((a) => !a.isImage)
               ? (
                 <AttachmentPreviews

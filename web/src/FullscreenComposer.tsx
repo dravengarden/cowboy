@@ -10,7 +10,7 @@ import {
   Tooltip,
   useTheme,
 } from "@mui/material";
-import { CloseFullscreen, Send, Tune } from "@mui/icons-material";
+import { Check, CloseFullscreen, Send, Tune } from "@mui/icons-material";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
@@ -40,6 +40,8 @@ export function FullscreenComposer({
   attachmentsSlot,
   editorRef,
   autoFocus = true,
+  submitLabel = "Send",
+  submitIcon,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -64,6 +66,10 @@ export function FullscreenComposer({
   // disarm the iOS long-press menu. The row-edit overlay (opened from an effect,
   // not directly in a tap) still relies on this.
   autoFocus?: boolean;
+  /** Row editors are live-saved; their primary action finishes editing rather
+   *  than sending the queued/draft item. */
+  submitLabel?: string;
+  submitIcon?: ReactNode;
 }): React.JSX.Element {
   const theme = useTheme();
 
@@ -167,15 +173,15 @@ export function FullscreenComposer({
             </IconButton>
           </Tooltip>
           <Box sx={{ flex: 1 }} />
-          <Tooltip title="Send">
+          <Tooltip title={submitLabel}>
             <span>
               <IconButton
-                aria-label="send"
+                aria-label={submitLabel.toLowerCase()}
                 color="primary"
                 disabled={!sendable}
                 onClick={act(onSubmit)}
               >
-                <Send />
+                {submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
               </IconButton>
             </span>
           </Tooltip>
