@@ -34,7 +34,7 @@ import {
   ExpandLess,
   ExpandMore,
   Folder,
-  PsychologyAltRounded,
+  LightbulbOutlined,
   Refresh,
   Search,
   Stop,
@@ -606,7 +606,7 @@ function ThoughtSteps({
                     "@media (prefers-reduced-motion: reduce)": { animation: "none" },
                   }}
                 >
-                  <PsychologyAltRounded sx={{ fontSize: 14 }} />
+                  <LightbulbOutlined sx={{ fontSize: 14 }} />
                 </Box>
               )
               : (
