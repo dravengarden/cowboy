@@ -87,6 +87,16 @@ function relativeTime(ms: number): string {
   return `Updated ${String(Math.round(seconds / 60))}m ago`;
 }
 
+function fullDateTime(epochSeconds: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(epochSeconds * 1000));
+}
+
 function resetText(epochSeconds: number | undefined): string | undefined {
   if (epochSeconds === undefined) return undefined;
   const date = new Date(epochSeconds * 1000);
@@ -97,7 +107,7 @@ function resetText(epochSeconds: number | undefined): string | undefined {
     : mins < 1440
     ? `${String(Math.floor(mins / 60))}h ${String(mins % 60)}m`
     : `${String(Math.floor(mins / 1440))}d ${String(Math.floor((mins % 1440) / 60))}h`;
-  return `Resets in ${relative} · ${date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
+  return `Resets in ${relative} · ${fullDateTime(epochSeconds)}`;
 }
 
 function windowLabel(minutes: number | undefined): string {
@@ -165,22 +175,38 @@ function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Eleme
           </Typography>
         </Stack>
         {limits.map((limit, index) => <LimitRow key={index} value={limit.value} prefix={limit.prefix} />)}
-        {availableCredits !== undefined && (
-          <InfoRow k="Full resets" v={`${String(availableCredits)} available`} />
+        {usage.provider === "codex" && credits.length > 0 && (
+          <Stack spacing={0} sx={{ pt: 0.5 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ pb: 0.75 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Usage limit resets</Typography>
+              {availableCredits !== undefined && (
+                <Typography variant="caption" color="text.secondary">
+                  {String(availableCredits)} available
+                </Typography>
+              )}
+            </Stack>
+            <Divider />
+            {credits.map((credit, index) => {
+              const expiresAt = num(credit.expiresAt);
+              return (
+                <Box
+                  key={str(credit.id) ?? index}
+                  sx={{ py: 1.1, borderBottom: index < credits.length - 1 ? 1 : 0, borderColor: "divider" }}
+                >
+                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="baseline">
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      {str(credit.title) ?? "Rate-limit reset"}
+                    </Typography>
+                    <Typography variant="caption" color="success.main">Available</Typography>
+                  </Stack>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+                    {expiresAt === undefined ? "No expiry reported" : `Expires ${fullDateTime(expiresAt)}`}
+                  </Typography>
+                </Box>
+              );
+            })}
+          </Stack>
         )}
-        {credits.map((credit, index) => {
-          const expiresAt = num(credit.expiresAt);
-          return (
-            <Box key={str(credit.id) ?? index} sx={{ pl: 1, borderLeft: 2, borderColor: "divider" }}>
-              <Typography variant="body2">{str(credit.title) ?? "Rate-limit reset"}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {expiresAt === undefined
-                  ? "No expiry reported"
-                  : `Expires ${new Date(expiresAt * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`}
-              </Typography>
-            </Box>
-          );
-        })}
         {summary && num(summary.lifetimeTokens) !== undefined && (
           <InfoRow k="Lifetime tokens" v={num(summary.lifetimeTokens)?.toLocaleString() ?? "—"} />
         )}
