@@ -165,11 +165,10 @@ function backspaceChain(view: EditorView): boolean {
     deleteTokenBackward(view);
 }
 
-// Desktop-only Vim. Loads `@replit/codemirror-vim` lazily, and ONLY when the
-// device has a precise pointer + hover (a real keyboard) — touch never imports
-// it, so it costs the mobile bundle nothing. (Plan Step 11 / REQ-2.) Also
-// publishes the module's `getCM` into `apiRef` so the Escape handler can read
-// the live vim mode without re-importing.
+// Desktop-only Vim. Loads the composition-aware runtime lazily, and ONLY when
+// the device has a precise pointer + hover (a real keyboard). Touch/Mobile never
+// imports it. The runtime keeps contenteditable stable and auto-enters Insert
+// when a real IME composition starts outside an editable Vim mode.
 function useVimExtension(
   enabled: boolean,
   apiRef: { current: VimApi | null },
@@ -184,11 +183,12 @@ function useVimExtension(
       return undefined;
     }
     let alive = true;
-    void import("@replit/codemirror-vim")
+    void import("./desktop/vim/imeAutoInsertVim")
       .then((m) => {
         if (alive) {
-          setExt(m.vim());
-          apiRef.current = { getCM: m.getCM as VimApi["getCM"] };
+          const runtime = m.createImeAutoInsertVim();
+          setExt(runtime.extension);
+          apiRef.current = { getCM: runtime.getCM as VimApi["getCM"] };
         }
       })
       .catch(() => {

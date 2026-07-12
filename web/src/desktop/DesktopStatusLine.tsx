@@ -69,6 +69,8 @@ export function DesktopStatusLine({
   const modeColor = focusedPane === "prompt" && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
+  const imeAutoInsert = focusedPane === "prompt" && vimEnabled &&
+    vimMode !== "insert" && vimMode !== "replace";
   const contextPercent = session?.context_size
     ? Math.round(((session.context_used ?? 0) / session.context_size) * 100)
     : null;
@@ -103,6 +105,14 @@ export function DesktopStatusLine({
           mono
         />
         <Segment label={focusedPane.toUpperCase()} tooltip="Focused workspace pane" mono />
+        {imeAutoInsert && (
+          <Segment
+            label="IME → INSERT AUTO"
+            color="info.main"
+            tooltip="Starting Chinese/Japanese/Korean composition automatically enters Insert"
+            mono
+          />
+        )}
         <Segment
           label={session?.provider ?? "NO PROVIDER"}
           tooltip={session?.title ?? "No active session"}

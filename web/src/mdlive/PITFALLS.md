@@ -217,6 +217,19 @@ here says otherwise.
     **NOT yet device-verified** — the full iOS caret/IME/paste-menu matrix can't be
     reproduced in emulated Chrome; confirm on the Simulator/device before landing.
 
+13. **Desktop Vim Normal mode must not toggle `contenteditable` to suppress the
+    system IME.** `@replit/codemirror-vim` reacts to composition in Normal mode by
+    force-ending it, including temporarily detaching the editable surface. An
+    attempted Cowboy guard that dynamically changed `EditorView.editable` made the
+    real macOS Chinese IME lose its caret and input context entirely. **Rule:** keep
+    the same `.cm-content` DOM node editable for the editor's whole lifetime. The
+    Desktop-only `desktop/vim/imeAutoInsertVim.ts` extension listens for a real
+    `compositionstart` at higher precedence and moves Vim to a clean Insert state
+    before the upstream Vim handler runs. English Normal-mode keys remain commands;
+    starting CJK composition means typing intent and auto-enters Insert. This module
+    is dynamically imported only by the Desktop composer; Mobile must neither load
+    it nor acquire Desktop Vim/IME behavior.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
@@ -237,3 +250,12 @@ fullscreen editor:
 
 Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove
 #1–#3 — those are iOS-only.
+
+Desktop Vim + IME checks:
+
+- [ ] In Normal and Visual/operator-pending mode, `compositionstart` enters Insert.
+- [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
+- [ ] Composition text is accepted with a visible, focused caret after the switch.
+- [ ] Escape returns to Normal and the status line shows `IME → INSERT AUTO`.
+- [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
+      editor behavior is unchanged.
