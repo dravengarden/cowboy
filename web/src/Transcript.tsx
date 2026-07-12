@@ -34,6 +34,7 @@ import {
   ExpandLess,
   ExpandMore,
   Folder,
+  PsychologyAltRounded,
   Refresh,
   Search,
   Stop,
@@ -588,10 +589,24 @@ function ThoughtSteps({
               bgcolor: codex && current ? "action.hover" : "transparent",
             }}
           >
-            {codex && current
+            {codex
               ? (
-                <Box sx={{ position: "absolute", left: 3, top: "0.48em" }}>
-                  <CodexWorkcell size={14} />
+                <Box
+                  aria-hidden="true"
+                  sx={{
+                    position: "absolute",
+                    left: 3,
+                    top: current ? "0.43em" : "0.08em",
+                    width: 15,
+                    height: 15,
+                    display: "grid",
+                    placeItems: "center",
+                    color: current ? "primary.main" : "text.disabled",
+                    animation: current ? `${pulse} 1.5s ease-in-out infinite` : "none",
+                    "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                  }}
+                >
+                  <PsychologyAltRounded sx={{ fontSize: 14 }} />
                 </Box>
               )
               : (
@@ -616,7 +631,7 @@ function ThoughtSteps({
                 sx={{
                   position: "absolute",
                   left: codex ? 9 : 4,
-                  top: codex && current ? "calc(0.48em + 15px)" : "calc(0.62em + 6px)",
+                  top: codex ? (current ? "calc(0.43em + 15px)" : "calc(0.08em + 15px)") : "calc(0.62em + 6px)",
                   bottom: -2,
                   width: "1px",
                   bgcolor: "divider",
