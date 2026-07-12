@@ -1723,6 +1723,7 @@ export function App({
                                 )}
                                 conversation={(
                                     <Transcript
+                                        desktopNavigation
                                         sessionId={active.id}
                                         timeline={activeTimeline ?? []}
                                         status={active.status}
@@ -1750,6 +1751,7 @@ export function App({
                             sx={{ position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }}
                         >
                             <Transcript
+                                desktopNavigation={surface === "desktop"}
                                 sessionId={active.id}
                                 timeline={activeTimeline ?? []}
                                 status={active.status}

@@ -186,7 +186,15 @@ export function DesktopCommandProvider(
           )
           : null;
         const items = [...(region?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
-          .filter((element) => element.offsetParent !== null);
+          .filter((element) => element.offsetParent !== null)
+          // DOM order is not always visual order: Transcript deliberately uses
+          // column-reverse for stable bottom anchoring. Sort by painted position
+          // so j always moves down and k always moves up on screen.
+          .sort((left, right) => {
+            const a = left.getBoundingClientRect();
+            const b = right.getBoundingClientRect();
+            return a.top - b.top || a.left - b.left;
+          });
         if (items.length > 0) {
           const active = document.activeElement instanceof HTMLElement
             ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)

@@ -891,6 +891,7 @@ function ToolCard({
       }}
     >
       <Stack
+        {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
         direction="row"
         spacing={1}
         alignItems="center"
@@ -1283,6 +1284,7 @@ export function Transcript({
   topInset,
   bottomInset,
   onScrollableChange,
+  desktopNavigation = false,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -1314,6 +1316,9 @@ export function Transcript({
    *  up-shadow only when something actually scrolls under it — an empty/short
    *  conversation shouldn't cast that shadow. Read-only: never writes scrollTop. */
   onScrollableChange?: ((scrollable: boolean) => void) | undefined;
+  /** Desktop-only item navigation. Mobile keeps its touch-first transcript and
+   * does not expose rows to the Desktop focus registry. */
+  desktopNavigation?: boolean;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -1810,6 +1815,12 @@ export function Transcript({
                 <Box
                   key={item.key}
                   data-key={item.key}
+                  {...(desktopNavigation
+                    ? {
+                      "data-desktop-item": item.key,
+                      tabIndex: -1,
+                    }
+                    : {})}
                   sx={{
                     py: 0.625,
                     display: "flex",

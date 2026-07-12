@@ -56,6 +56,17 @@ export function DesktopCommandHost({
     if (session) onPickSession(session.id);
   };
 
+  const clickFocusedItemAction = (action: "default" | "edit"): void => {
+    const item = document.activeElement instanceof HTMLElement
+      ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
+      : null;
+    item?.querySelector<HTMLElement>(
+      action === "default"
+        ? "[data-desktop-item-action='default']"
+        : "[data-desktop-item-action='edit'], button[aria-label='Edit']",
+    )?.click();
+  };
+
   const commands = useMemo<DesktopCommand[]>(() => [
     {
       id: "shortcuts.open",
@@ -201,6 +212,28 @@ export function DesktopCommandHost({
       contexts: ["conversation"],
       run: () => workspace.focusRegion("conversation.transcript"),
     },
+    {
+      id: "item.activate",
+      title: "Activate Focused Item",
+      description: "Run the primary action for the selected queue or draft row",
+      group: "Actions",
+      leader: "a",
+      regions: ["prompt.queued", "prompt.draft"],
+      when: () => document.activeElement?.closest("[data-desktop-item]") !== null,
+      disabledReason: "Focus a queue or draft item first",
+      run: () => clickFocusedItemAction("default"),
+    },
+    {
+      id: "item.edit",
+      title: "Edit Focused Item",
+      description: "Open the selected queue or draft row in the editor",
+      group: "Actions",
+      leader: "e",
+      regions: ["prompt.queued", "prompt.draft"],
+      when: () => document.activeElement?.closest("[data-desktop-item]") !== null,
+      disabledReason: "Focus a queue or draft item first",
+      run: () => clickFocusedItemAction("edit"),
+    },
   ], [
     activeId,
     onFocusComposer,
@@ -228,6 +261,8 @@ export function DesktopCommandHost({
   useDesktopCommand(commands[12] as DesktopCommand);
   useDesktopCommand(commands[13] as DesktopCommand);
   useDesktopCommand(commands[14] as DesktopCommand);
+  useDesktopCommand(commands[15] as DesktopCommand);
+  useDesktopCommand(commands[16] as DesktopCommand);
 
   const normalized = query.trim().toLowerCase();
   const available = registry.list().filter((command) =>
