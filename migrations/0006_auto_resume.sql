@@ -1,4 +1,4 @@
--- Auto-resume interrupted turns (design: tasks/archive/2026/07/session-auto-resume).
+-- Auto-resume interrupted turns (design: tasks/active/session-auto-resume).
 --
 -- `sessions.auto_resume`: per-session OVERRIDE of the global default.
 --   NULL  = inherit the global default (settings key 'session.autoResume.default')
