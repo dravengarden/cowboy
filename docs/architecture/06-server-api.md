@@ -14,7 +14,7 @@ the same binary is both frontend and backend.
 | `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
 | `GET /api/usage` | cached provider account limits plus latest live ACP session usage |
 | `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
-| `GET /api/workspaces` | selectable session roots — Columbus projects + `workspace_root` subdirs |
+| `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
 | `POST /api/sessions` | create a session, returns the cowboy `session_id` |

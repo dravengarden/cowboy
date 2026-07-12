@@ -1014,6 +1014,42 @@ struct Workspace {
     label: String,
     /// Secondary line — the resolved absolute path or a description.
     help: String,
+    /// Columbus registry id; absent for host-level roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    /// Durable central work items projected onto this project.
+    active_work_items: Vec<WorkspaceWorkItem>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct WorkspaceWorkItem {
+    id: String,
+    title: String,
+    #[serde(default)]
+    projects: Vec<String>,
+    #[serde(default)]
+    recipe: String,
+    #[serde(default)]
+    blocked: bool,
+}
+
+fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
+    let output = std::process::Command::new("harness-cli")
+        .args([
+            "--root",
+            &columbus.display().to_string(),
+            "work-item",
+            "list",
+            "--format=json",
+        ])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    serde_json::from_slice(&output.stdout).unwrap_or_default()
 }
 
 /// Resolve a registered project's session cwd from its on-disk layout:
@@ -1043,16 +1079,21 @@ fn project_worktree(columbus: &std::path::Path, name: &str) -> Option<std::path:
 /// this is unreachable.
 async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
     let columbus = state.supervisor.workspace_root().join("columbus");
+    let work_items = projected_work_items(&columbus);
     let mut out = vec![
         Workspace {
             value: "columbus".to_owned(),
             label: "columbus".to_owned(),
             help: columbus.display().to_string(),
+            project: None,
+            active_work_items: Vec::new(),
         },
         Workspace {
             value: "/etc/nixos".to_owned(),
             label: "/etc/nixos".to_owned(),
             help: "NixOS host config".to_owned(),
+            project: None,
+            active_work_items: Vec::new(),
         },
     ];
     if let Ok(entries) = std::fs::read_dir(columbus.join("project-defs")) {
@@ -1068,8 +1109,14 @@ async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
                 let path = dir.display().to_string();
                 out.push(Workspace {
                     value: path.clone(),
-                    label: name,
+                    label: name.clone(),
                     help: path,
+                    project: Some(name.clone()),
+                    active_work_items: work_items
+                        .iter()
+                        .filter(|item| item.projects.contains(&name))
+                        .cloned()
+                        .collect(),
                 });
             }
         }

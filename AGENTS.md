@@ -34,6 +34,9 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   `AGENTS.md`, docs, tests, hooks, and skills.
 - The New Session picker (`GET /api/workspaces`) opens sessions in a Columbus
   project's worktree so the correct project guidance and trusted config load.
+  It also projects matching central Columbus work items. Selecting one sends a
+  resume prompt into a native Codex task; Cowboy never stores item lifecycle or
+  binds it to the session.
 
 ## Frontend
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),

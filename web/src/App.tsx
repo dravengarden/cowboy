@@ -714,9 +714,25 @@ function SessionList({
 // `/home/draven`). To expose more roots later, either bump this list or
 // fetch a list from the daemon.
 const WORKING_DIRS = [
-    { value: "columbus", label: "columbus", help: "/home/draven/columbus" },
-    { value: "/etc/nixos", label: "/etc/nixos", help: "NixOS host config" },
+    { value: "columbus", label: "columbus", help: "/home/draven/columbus", active_work_items: [] },
+    { value: "/etc/nixos", label: "/etc/nixos", help: "NixOS host config", active_work_items: [] },
 ] as const;
+
+type WorkspaceWorkItem = {
+    id: string;
+    title: string;
+    projects: string[];
+    recipe: string;
+    blocked: boolean;
+};
+
+type WorkspaceChoice = {
+    value: string;
+    label: string;
+    help: string;
+    project?: string;
+    active_work_items: readonly WorkspaceWorkItem[];
+};
 
 function NewSessionDialog({
     open,
@@ -730,12 +746,17 @@ function NewSessionDialog({
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>(PROVIDERS[0]);
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
+    const [workItemId, setWorkItemId] = useState<string>("");
     // Working-dir choices: start from the hard-coded fallback, then replace with
     // the daemon's `/api/workspaces` (host roots + every columbus-managed
     // project) once the dialog opens. Falling back keeps the dialog usable if
     // the endpoint is unreachable (older daemon / fetch error).
     const [workspaces, setWorkspaces] =
-        useState<readonly { value: string; label: string; help: string }[]>(WORKING_DIRS);
+        useState<readonly WorkspaceChoice[]>(WORKING_DIRS);
+    const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
+    const selectedWorkItem = selectedWorkspace?.active_work_items.find(
+        (item) => item.id === workItemId,
+    );
     // Editable session title. Empty on Create → renameSession no-ops → the
     // daemon's default + first-prompt auto-title apply. RESET to a fresh default
     // on every open (below): the sheet stays mounted, so this state would
@@ -756,6 +777,7 @@ function NewSessionDialog({
     useEffect(() => {
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
+        setWorkItemId("");
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();
             titleRef.current?.select();
@@ -766,7 +788,7 @@ function NewSessionDialog({
         if (!open) return;
         void fetch("/api/workspaces")
             .then((r) => (r.ok ? r.json() : null))
-            .then((data: { value: string; label: string; help: string }[] | null) => {
+            .then((data: WorkspaceChoice[] | null) => {
                 if (Array.isArray(data) && data.length > 0) setWorkspaces(data);
             })
             .catch(() => {
@@ -795,6 +817,15 @@ function NewSessionDialog({
                     // daemon default + first-prompt auto-title.
                     renameSession(data.session_id, title);
                     onCreated(data.session_id);
+                    if (selectedWorkItem) {
+                        void fetch(`/api/sessions/${encodeURIComponent(data.session_id)}/prompt`, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({
+                                text: `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native Codex goal. Keep plan, progress, review, and session state in Codex.`,
+                            }),
+                        });
+                    }
                 }
             })
             .catch(() => {
@@ -867,7 +898,10 @@ function NewSessionDialog({
                     select
                     label="Working directory"
                     value={cwd}
-                    onChange={(e): void => setCwd(e.target.value)}
+                    onChange={(e): void => {
+                        setCwd(e.target.value);
+                        setWorkItemId("");
+                    }}
                     helperText={
                         workspaces.find((w) => w.value === cwd)?.help ?? ""
                     }
@@ -878,6 +912,22 @@ function NewSessionDialog({
                         </MenuItem>
                     ))}
                 </TextField>
+                {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
+                    <TextField
+                        select
+                        label="Durable work item"
+                        value={workItemId}
+                        onChange={(e): void => setWorkItemId(e.target.value)}
+                        helperText="Optional · resumes durable context in a native Codex task"
+                    >
+                        <MenuItem value="">New task</MenuItem>
+                        {selectedWorkspace.active_work_items.map((item) => (
+                            <MenuItem key={item.id} value={item.id}>
+                                {item.title}{item.blocked ? " · blocked" : ""}
+                            </MenuItem>
+                        ))}
+                    </TextField>
+                ) : null}
             </Stack>
         </Sheet>
     );
