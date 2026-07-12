@@ -14,13 +14,13 @@ use tokio::sync::mpsc;
 
 use crate::core::{Event, Hub, Status};
 use crate::runtime_wire::{
-    read_frame, write_frame, CoreCommand, Frame, PeerRole, RuntimeEvent, StartSession,
+    read_frame, write_frame, CoreCommand, Frame, FrameReader, PeerRole, RuntimeEvent, StartSession,
     WorkerSnapshot, WorkerState, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 
 pub struct RemoteBootstrap {
     socket: PathBuf,
-    reader: OwnedReadHalf,
+    reader: FrameReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
     workers: Vec<WorkerSnapshot>,
     buffered: Vec<Frame>,
@@ -366,7 +366,11 @@ fn seed_counter() -> u64 {
 
 async fn connect_once(
     socket: &Path,
-) -> Result<(OwnedReadHalf, OwnedWriteHalf, Vec<WorkerSnapshot>)> {
+) -> Result<(
+    FrameReader<OwnedReadHalf>,
+    OwnedWriteHalf,
+    Vec<WorkerSnapshot>,
+)> {
     let stream = UnixStream::connect(socket)
         .await
         .with_context(|| format!("connecting agentd socket {}", socket.display()))?;
@@ -387,7 +391,7 @@ async fn connect_once(
     )
     .await?;
     match read_frame(&mut reader).await? {
-        Some(Frame::Welcome { workers, .. }) => Ok((reader, writer, workers)),
+        Some(Frame::Welcome { workers, .. }) => Ok((FrameReader::new(reader), writer, workers)),
         Some(Frame::Reject { reason }) => anyhow::bail!("agentd rejected Cowboy: {reason}"),
         Some(other) => anyhow::bail!("unexpected agentd handshake frame: {other:?}"),
         None => anyhow::bail!("agentd closed during handshake"),
@@ -401,7 +405,7 @@ async fn connect_once(
 async fn connect_settled(
     socket: &Path,
 ) -> Result<(
-    OwnedReadHalf,
+    FrameReader<OwnedReadHalf>,
     OwnedWriteHalf,
     Vec<WorkerSnapshot>,
     Vec<Frame>,
@@ -417,7 +421,7 @@ async fn connect_settled(
             break;
         }
         let quiet = remaining.min(Duration::from_millis(250));
-        match tokio::time::timeout(quiet, read_frame(&mut reader)).await {
+        match tokio::time::timeout(quiet, reader.next()).await {
             Ok(Ok(Some(frame))) => {
                 if let Frame::Snapshot { worker } = &frame {
                     if let Some(existing) = workers
@@ -443,7 +447,7 @@ async fn connect_settled(
 async fn connection_manager(
     shared: Arc<Shared>,
     mut notify_rx: mpsc::UnboundedReceiver<()>,
-    mut initial: Option<(OwnedReadHalf, OwnedWriteHalf, Vec<Frame>)>,
+    mut initial: Option<(FrameReader<OwnedReadHalf>, OwnedWriteHalf, Vec<Frame>)>,
 ) {
     let mut backoff = Duration::from_millis(100);
     loop {
@@ -485,7 +489,7 @@ async fn connection_manager(
 
 async fn connected(
     shared: &Arc<Shared>,
-    mut reader: OwnedReadHalf,
+    mut reader: FrameReader<OwnedReadHalf>,
     mut writer: OwnedWriteHalf,
     buffered: Vec<Frame>,
     notify_rx: &mut mpsc::UnboundedReceiver<()>,
@@ -510,7 +514,7 @@ async fn connected(
     let mut last_broker_frame = tokio::time::Instant::now();
     loop {
         tokio::select! {
-            incoming = read_frame(&mut reader) => {
+            incoming = reader.next() => {
                 let Some(frame) = incoming? else { anyhow::bail!("agentd closed") };
                 last_broker_frame = tokio::time::Instant::now();
                 handle_frame(shared, frame, &mut writer).await?;
@@ -926,7 +930,7 @@ mod tests {
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
             socket: PathBuf::from("/tmp/unused-agentd.sock"),
-            reader,
+            reader: FrameReader::new(reader),
             writer,
             workers: vec![snapshot("s")],
             buffered: Vec::new(),
@@ -985,7 +989,7 @@ mod tests {
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
             socket: PathBuf::from("/tmp/unused-agentd.sock"),
-            reader,
+            reader: FrameReader::new(reader),
             writer,
             workers: Vec::new(),
             buffered: Vec::new(),
@@ -1020,7 +1024,7 @@ mod tests {
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
             socket: PathBuf::from("/tmp/unused-agentd.sock"),
-            reader,
+            reader: FrameReader::new(reader),
             writer,
             workers: Vec::new(),
             buffered: Vec::new(),

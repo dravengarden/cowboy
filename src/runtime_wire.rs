@@ -374,6 +374,84 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Opti
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
+/// Stateful frame decoder for reads that participate in `tokio::select!` or a
+/// timeout. `read_exact` is not cancellation-safe: dropping it after it consumed
+/// part of a frame loses that progress and makes the next header start inside the
+/// JSON payload. This decoder retains every completed partial read in the struct,
+/// so cancelling `next()` and polling it again resumes at the exact byte offset.
+pub struct FrameReader<R> {
+    reader: R,
+    header: [u8; 4],
+    header_read: usize,
+    payload: Vec<u8>,
+    payload_read: usize,
+}
+
+impl<R> FrameReader<R> {
+    #[must_use]
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader,
+            header: [0; 4],
+            header_read: 0,
+            payload: Vec::new(),
+            payload_read: 0,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> FrameReader<R> {
+    pub async fn next(&mut self) -> io::Result<Option<Frame>> {
+        while self.header_read < self.header.len() {
+            let read = self
+                .reader
+                .read(&mut self.header[self.header_read..])
+                .await?;
+            if read == 0 {
+                if self.header_read == 0 {
+                    return Ok(None);
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "runtime frame ended inside header",
+                ));
+            }
+            self.header_read += read;
+        }
+
+        if self.payload.is_empty() {
+            let len = u32::from_be_bytes(self.header) as usize;
+            if len > MAX_FRAME_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("runtime frame too large: {len} bytes"),
+                ));
+            }
+            self.payload.resize(len, 0);
+        }
+        while self.payload_read < self.payload.len() {
+            let read = self
+                .reader
+                .read(&mut self.payload[self.payload_read..])
+                .await?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "runtime frame ended inside payload",
+                ));
+            }
+            self.payload_read += read;
+        }
+
+        let payload = std::mem::take(&mut self.payload);
+        self.header_read = 0;
+        self.payload_read = 0;
+        serde_json::from_slice(&payload)
+            .map(Some)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +483,37 @@ mod tests {
         let received = read_frame(&mut right).await.expect("read frame");
         send.await.expect("writer task").expect("write frame");
         assert_eq!(received, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn stateful_reader_resumes_after_cancelled_partial_frame() {
+        let (mut writer, reader) = tokio::io::duplex(128);
+        let payload = serde_json::to_vec(&Frame::Heartbeat).expect("serialize heartbeat");
+        let len = u32::try_from(payload.len())
+            .expect("small frame")
+            .to_be_bytes();
+        writer.write_all(&len).await.expect("write header");
+        writer
+            .write_all(&payload[..2])
+            .await
+            .expect("write partial payload");
+
+        let mut reader = FrameReader::new(reader);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), reader.next())
+                .await
+                .is_err(),
+            "partial frame must still be waiting"
+        );
+
+        writer
+            .write_all(&payload[2..])
+            .await
+            .expect("finish payload");
+        assert!(matches!(
+            reader.next().await.expect("resume frame"),
+            Some(Frame::Heartbeat)
+        ));
     }
 
     #[test]

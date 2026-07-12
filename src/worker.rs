@@ -21,8 +21,8 @@ use crate::agent_model::{Event, Status};
 use crate::agent_sink::AgentSink;
 use crate::provider;
 use crate::runtime_wire::{
-    read_frame, write_frame, Frame, PeerRole, RuntimeEvent, WorkerCommand, WorkerSnapshot,
-    WorkerState, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    read_frame, write_frame, Frame, FrameReader, PeerRole, RuntimeEvent, WorkerCommand,
+    WorkerSnapshot, WorkerState, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 
 #[derive(Debug, Clone)]
@@ -426,12 +426,13 @@ async fn connected(
         },
     )
     .await?;
+    let mut reader = FrameReader::new(reader);
     let mut last_sent = 0;
     send_outbox(&shared, &mut writer, &mut last_sent).await?;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     loop {
         tokio::select! {
-            incoming = read_frame(&mut reader) => {
+            incoming = reader.next() => {
                 let Some(frame) = incoming? else {
                     return Ok(ConnectedExit::Disconnected);
                 };
