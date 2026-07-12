@@ -226,14 +226,18 @@ here says otherwise.
     Desktop-only `desktop/vim/imeAutoInsertVim.ts` extension listens for a real
     `compositionstart` at higher precedence and moves Vim to a clean Insert state
     before the upstream Vim handler runs. That alone is too late for a physical
-    Normal-mode key: macOS can already show a candidate window before composition
-    starts. Therefore the same extension consumes unmodified physical command keys
-    by `KeyboardEvent.code` while outside Insert, prevents their native text-input
-    default, and sends their Latin command directly to Vim. This makes `i`, motions,
-    operators, counts, and punctuation work while a CJK input source is active;
-    composition-triggered auto-Insert remains a fallback for input without a
-    physical command key. This module is dynamically imported only by the Desktop
-    composer; Mobile must neither load it nor acquire Desktop Vim/IME behavior.
+    Normal-mode key: macOS can already show a candidate window before JavaScript
+    receives a cancellable keydown. **The reliable web boundary is focus, not event
+    cancellation.** While Vim is outside Insert, focus lives on a visually hidden,
+    non-editable command sink inside the editor. It cannot host native composition;
+    physical keys are mapped by `KeyboardEvent.code` and sent directly to Vim. An
+    insert command focuses the unchanged `.cm-content`; Escape returns focus to the
+    sink. Clicking the editor in Normal also redirects focus to the sink. This makes
+    `i`, motions, operators, counts, and punctuation work with a CJK input source
+    active without a candidate window. Composition-triggered auto-Insert remains a
+    fallback if editable focus is reached by an unusual input path. This module is
+    dynamically imported only by the Desktop composer; Mobile must neither load it
+    nor acquire Desktop Vim/IME behavior.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
@@ -263,6 +267,6 @@ Desktop Vim + IME checks:
       candidate window; motions/operators remain Vim commands in Normal mode.
 - [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
 - [ ] Composition text is accepted with a visible, focused caret after the switch.
-- [ ] Escape returns to Normal and the status line shows `IME → INSERT AUTO`.
+- [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.

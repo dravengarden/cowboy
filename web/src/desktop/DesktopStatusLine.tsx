@@ -107,9 +107,9 @@ export function DesktopStatusLine({
         <Segment label={focusedPane.toUpperCase()} tooltip="Focused workspace pane" mono />
         {imeAutoInsert && (
           <Segment
-            label="IME → INSERT AUTO"
+            label="IME SAFE"
             color="info.main"
-            tooltip="Starting Chinese/Japanese/Korean composition automatically enters Insert"
+            tooltip="Normal commands use a non-editable focus target; CJK composition starts only in Insert"
             mono
           />
         )}

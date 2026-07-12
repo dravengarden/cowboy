@@ -1,5 +1,5 @@
 import { Prec, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 
 const CODE_KEYS: Readonly<Record<string, string>> = {
@@ -73,20 +73,6 @@ export function createImeAutoInsertVim(): {
   getCM: typeof getCM;
 } {
   const autoInsert = Prec.highest(EditorView.domEventHandlers({
-    keydown: (event, view): boolean => {
-      const cm = getCM(view);
-      const state = cm?.state?.vim;
-      if (!cm || !state || state.insertMode || event.isComposing) return false;
-      const key = normalModeKey(event);
-      if (!key) return false;
-
-      // Prevent the active system IME from turning a Vim command into marked
-      // text. `code` represents the physical Latin command key even when
-      // macOS reports `key=Process`/starts a CJK composition.
-      event.preventDefault();
-      Vim.handleKey(cm, key, "user");
-      return true;
-    },
     compositionstart: (_event, view): boolean => {
       const cm = getCM(view);
       const state = cm?.state?.vim;
@@ -99,5 +85,78 @@ export function createImeAutoInsertVim(): {
       return false; // Never cancel the native composition.
     },
   }));
-  return { extension: [autoInsert, vim()], getCM };
+
+  const commandSink = ViewPlugin.fromClass(class {
+    readonly sink: HTMLDivElement;
+    private cm: ReturnType<typeof getCM> = null;
+    private modeHandler: (() => void) | null = null;
+
+    constructor(readonly view: EditorView) {
+      this.sink = document.createElement("div");
+      this.sink.tabIndex = 0;
+      this.sink.setAttribute("role", "application");
+      this.sink.setAttribute("aria-label", "Vim Normal mode command input");
+      Object.assign(this.sink.style, {
+        height: "1px",
+        opacity: "0",
+        overflow: "hidden",
+        pointerEvents: "none",
+        position: "absolute",
+        width: "1px",
+      });
+      this.sink.addEventListener("keydown", this.onKeyDown);
+      view.dom.append(this.sink);
+      queueMicrotask(() => this.connect());
+    }
+
+    update(update: ViewUpdate): void {
+      if (!this.cm) this.connect();
+      if (update.focusChanged && update.view.hasFocus) this.focusSinkIfNormal();
+    }
+
+    destroy(): void {
+      if (this.cm && this.modeHandler) {
+        this.cm.off?.("vim-mode-change", this.modeHandler);
+      }
+      this.sink.removeEventListener("keydown", this.onKeyDown);
+      this.sink.remove();
+    }
+
+    private connect(): void {
+      if (this.cm) return;
+      this.cm = getCM(this.view);
+      if (!this.cm) return;
+      this.modeHandler = (): void => this.syncFocusToMode();
+      this.cm.on?.("vim-mode-change", this.modeHandler);
+      this.focusSinkIfNormal();
+    }
+
+    private syncFocusToMode(): void {
+      if (this.cm?.state?.vim?.insertMode) {
+        queueMicrotask(() => this.view.focus());
+      } else {
+        this.focusSinkIfNormal();
+      }
+    }
+
+    private focusSinkIfNormal(): void {
+      if (!this.cm?.state?.vim?.insertMode && document.activeElement !== this.sink) {
+        queueMicrotask(() => {
+          if (!this.cm?.state?.vim?.insertMode) this.sink.focus();
+        });
+      }
+    }
+
+    private readonly onKeyDown = (event: KeyboardEvent): void => {
+      if (!this.cm || this.cm.state?.vim?.insertMode || event.isComposing) return;
+      const key = normalModeKey(event);
+      if (!key) return;
+      event.preventDefault();
+      event.stopPropagation();
+      Vim.handleKey(this.cm, key, "user");
+      this.syncFocusToMode();
+    };
+  });
+
+  return { extension: [autoInsert, vim(), commandSink], getCM };
 }
