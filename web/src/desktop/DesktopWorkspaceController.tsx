@@ -128,6 +128,13 @@ export function DesktopWorkspaceProvider({
   }, []);
 
   useEffect(() => {
+    for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
+      if (element.dataset.desktopPane === focusedPane) {
+        element.dataset.desktopPaneFocused = "true";
+      } else {
+        delete element.dataset.desktopPaneFocused;
+      }
+    }
     for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
       if (element.dataset.desktopRegion === focusedRegion) {
         element.dataset.desktopFocused = "true";
@@ -135,7 +142,7 @@ export function DesktopWorkspaceProvider({
         delete element.dataset.desktopFocused;
       }
     }
-  }, [focusedRegion]);
+  }, [focusedPane, focusedRegion]);
 
   const value = useMemo<DesktopWorkspaceContextValue>(() => ({
     focusedPane,

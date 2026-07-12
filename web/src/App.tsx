@@ -105,7 +105,7 @@ import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
-import type { Mode as ThemeMode } from "./theme";
+import { desktopFocusBoundary, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
 const DesktopCommandHost = lazy(async () => {
@@ -1257,13 +1257,26 @@ export function App({
                     },
                     "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer'])": {
                         boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.58)}`,
+                            `inset 0 0 0 1px ${desktopFocusBoundary(t)}`,
+                    },
+                    "& [data-desktop-region='conversation.transcript'][data-desktop-focused='true'], & [data-desktop-region='sessions.list'][data-desktop-focused='true']": {
+                        boxShadow: "none",
                     },
                     // Regions with a real outlined surface recolor that existing
                     // 1px edge instead of stacking an inset boundary on top.
                     "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
-                        borderColor: (t) => alpha(t.palette.primary.main, 0.58),
+                        borderColor: desktopFocusBoundary,
                         boxShadow: "none",
+                    },
+                    "& [data-desktop-pane] > [data-desktop-pane-header]": {
+                        color: "text.secondary",
+                        bgcolor: (t) => alpha(t.palette.background.paper, 0.16),
+                        boxShadow: "none",
+                    },
+                    "& [data-desktop-pane][data-desktop-pane-focused='true'] > [data-desktop-pane-header]": {
+                        color: "primary.main",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
+                        boxShadow: "inset 0 2px 0 0 currentColor",
                     },
                     // Composer is already an unmistakable editing canvas with a
                     // native caret and its own outlined Paper. Re-applying the
@@ -1605,8 +1618,9 @@ export function App({
                         pr: navbarAtBottom ? "env(safe-area-inset-right, 0px)" : 0,
                     }}
                 >
-                    <Toolbar
-                        variant="dense"
+        <Toolbar
+            data-desktop-pane-header
+            variant="dense"
                         sx={{
                             // No border in either mode — the frosted slab behind the bar
                             // (top slab in desktop mode, bottom slab in mobile) owns the

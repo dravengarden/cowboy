@@ -1,5 +1,5 @@
 import { alpha, Box, Typography } from "@mui/material";
-import { useDesktopWorkspace, type DesktopPane } from "./DesktopWorkspaceController";
+import type { DesktopPane } from "./DesktopWorkspaceController";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -11,10 +11,10 @@ function PaneHeader({
   pane: DesktopPane;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const { focusedPane } = useDesktopWorkspace();
-  const active = focusedPane === pane;
   return (
     <Box
+      data-desktop-pane-header
+      data-pane={pane}
       sx={{
         minHeight: 36,
         px: 2,
@@ -23,12 +23,6 @@ function PaneHeader({
         borderBottom: 1,
         borderColor: "divider",
         flexShrink: 0,
-        bgcolor: (theme) => alpha(
-          active ? theme.palette.primary.main : theme.palette.background.paper,
-          active ? 0.08 : 0.16,
-        ),
-        boxShadow: active ? "inset 0 2px 0 0 currentColor" : "none",
-        color: active ? "primary.main" : "text.secondary",
       }}
     >
       <Typography

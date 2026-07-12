@@ -103,6 +103,7 @@ import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
+import { desktopFocusBoundary } from "./theme";
 import {
   type Attachment,
   filesToAttachments,
@@ -1192,7 +1193,7 @@ export function ComposerWorkspace({
             // focus so neither the editor nor its caret shifts by a pixel.
             transition: "border-color 120ms ease",
             "&:focus-within": {
-              borderColor: (t) => alpha(t.palette.primary.main, 0.58),
+              borderColor: desktopFocusBoundary,
             },
           }),
           bgcolor: column

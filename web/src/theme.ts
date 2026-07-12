@@ -17,6 +17,13 @@ import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
 // system/light/dark vocabulary as the shared hook.
 export type Mode = ThemeChoice;
 
+// Opaque by design: translucent focus colors look different over Composer
+// paper and Draft `action.selected` even when their alpha is identical.
+export function desktopFocusBoundary(theme: Theme): string {
+  const weight = theme.palette.mode === "dark" ? 58 : 48;
+  return `color-mix(in srgb, ${theme.palette.primary.main} ${String(weight)}%, ${theme.palette.background.default})`;
+}
+
 // Keep the iOS standalone status bar in lockstep with the navbar surface. The
 // AppBar is pinned to `background.default` (see App.tsx — `#15111d` dark /
 // `#f4ecf7` light), so the theme-color meta uses the SAME values: status bar →
