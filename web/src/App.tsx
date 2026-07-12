@@ -5,7 +5,6 @@ import {
     AppBar,
     Box,
     Button,
-    ButtonBase,
     Chip,
     CircularProgress,
     Divider,
@@ -48,11 +47,7 @@ import {
     Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { AutoScrollAndStop, SessionControls } from "./Composer";
-import { DesktopComposer } from "./desktop/DesktopComposer";
-import { DesktopWorkspace } from "./desktop/DesktopWorkspace";
 import { MobileComposer } from "./mobile/MobileComposer";
-import { useTouchComposer } from "./ComposerTextarea";
-import { useVimMode, VIM_MODE_COLOR } from "./vimModeStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { Transcript } from "./Transcript";
 import {
@@ -117,6 +112,18 @@ const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
     return { default: module.DesktopCommandHost };
 });
+const DesktopStatusLine = lazy(async () => {
+    const module = await import("./desktop/DesktopStatusLine");
+    return { default: module.DesktopStatusLine };
+});
+const DesktopComposer = lazy(async () => {
+    const module = await import("./desktop/DesktopComposer");
+    return { default: module.DesktopComposer };
+});
+const DesktopWorkspace = lazy(async () => {
+    const module = await import("./desktop/DesktopWorkspace");
+    return { default: module.DesktopWorkspace };
+});
 
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
@@ -127,125 +134,6 @@ const DesktopCommandHost = lazy(async () => {
 // has no divider — so neither bound nor handle applies there.
 // App-wide bottom status bar (Zed / VSCode style): a thin strip at the very
 // bottom of the window. DESKTOP ONLY + only when vim is on (its sole status today
-// is the vim mode); a flex row so line:col / language / diagnostics can join it
-// later. Reads the live mode from vimModeStore, which ComposerEditor writes. Lives
-// inside the composer's measured wrapper so the transcript's `--composer-h`
-// reservation includes it automatically.
-// One segment of the status bar (VSCode-style). A plain colored label by default;
-// pass `onClick` to make it an interactive segment — a ButtonBase, so it gets the
-// material hover/ripple AND is picked up by the global haptic delegation for free.
-// `icon` slots a small leading glyph. This is the reusable unit the bar is built
-// from as more states land.
-function StatusItem({
-    label,
-    color,
-    icon,
-    tooltip,
-    onClick,
-    mono = false,
-}: {
-    label: string;
-    color?: string;
-    icon?: React.ReactNode;
-    tooltip?: string;
-    onClick?: () => void;
-    mono?: boolean;
-}): React.JSX.Element {
-    const sx: SxProps<Theme> = {
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 0.5,
-        px: 1,
-        height: "100%",
-        fontSize: "0.6875rem",
-        fontWeight: 600,
-        letterSpacing: "0.04em",
-        lineHeight: 1,
-        whiteSpace: "nowrap",
-        color: color ?? "text.secondary",
-        ...(mono && { fontFamily: "monospace" }),
-        ...(onClick && {
-            transition: "background-color .12s, color .12s",
-            "&:hover": { bgcolor: "action.hover", color: "text.primary" },
-        }),
-    };
-    const inner = (
-        <>
-            {icon}
-            <Box component="span">{label}</Box>
-        </>
-    );
-    const el = onClick
-        ? (
-            <ButtonBase sx={sx} onClick={onClick}>
-                {inner}
-            </ButtonBase>
-        )
-        : <Box sx={sx}>{inner}</Box>;
-    return tooltip ? <Tooltip title={tooltip}>{el}</Tooltip> : el;
-}
-
-// The app's bottom status bar (Zed/VSCode-style). A full-width strip with a LEFT
-// and a RIGHT item group and a flexible spacer between — built from StatusItems so
-// new states (session/agent status, token counts, connection, cwd, …) drop into
-// `left`/`right` with no layout work. Desktop-only (inside the composer's measured
-// wrapper, so the transcript's --composer-h reservation includes it). Renders
-// nothing until at least one item exists.
-function AppStatusBar({
-    sessionId: _sessionId,
-    status: _status,
-}: {
-    sessionId?: string;
-    status?: Status;
-}): React.JSX.Element | null {
-    const vim = useVimSetting();
-    const vimMode = useVimMode();
-    const touchInput = useTouchComposer();
-    // Desktop-only (mobile has the navbar at the bottom; this footer is a
-    // Zed/VSCode-style status strip). On desktop it always renders — the session's
-    // live controls (auto-scroll + Stop) live here now, so it's never empty.
-    if (touchInput) return null;
-
-    const left: React.ReactNode[] = [];
-    if (vim) {
-        left.push(
-            <StatusItem
-                key="vim"
-                label={vimMode.toUpperCase()}
-                color={VIM_MODE_COLOR[vimMode] ?? "text.secondary"}
-                tooltip={`Vim — ${vimMode} mode`}
-                mono
-            />,
-        );
-    }
-    // Live controls belong with the other session actions in the top toolbar.
-    // Avoid a full-width fourth strip when there is no actual status content.
-    if (left.length === 0) return null;
-
-    return (
-        <Box
-            sx={{
-                display: "flex",
-                alignItems: "center",
-                minHeight: 34,
-                px: 0.25,
-                borderTop: 1,
-                borderColor: "divider",
-                // A whisper of fill so the bar reads as its own surface (material)
-                // without fighting the frosted slab the composer floats on.
-                bgcolor: (t) => alpha(t.palette.text.primary, 0.025),
-                color: "text.secondary",
-                userSelect: "none",
-            }}
-        >
-            <Stack direction="row" alignItems="center">
-                {left}
-            </Stack>
-            <Box sx={{ flex: 1 }} />
-        </Box>
-    );
-}
-
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 const SIDEBAR_DEFAULT = 288;
@@ -1399,6 +1287,7 @@ export function App({
                 </DetentSheet>
             ) : (
                 <Stack
+                    data-desktop-pane="sessions"
                     sx={{
                         width: sidebarWidth,
                         flexShrink: 0,
@@ -1781,7 +1670,7 @@ export function App({
                         // overlay — so it reserves no --composer-h and the composer no longer
                         // floats over it. The AppStatusBar is a full-width footer (order 2).
                         <>
-                            <DesktopWorkspace
+                            <Suspense fallback={null}><DesktopWorkspace
                                 promptWidth={colWidth}
                                 resizing={colResizing}
                                 onResizeStart={startColResize}
@@ -1790,12 +1679,12 @@ export function App({
                                         View-only system session — managed by cowboy
                                     </Box>
                                 ) : (
-                                    <DesktopComposer
+                                    <Suspense fallback={null}><DesktopComposer
                                         key={active.id}
                                         sessionId={active.id}
                                         status={active.status}
                                         variant="column"
-                                    />
+                                    /></Suspense>
                                 )}
                                 conversation={(
                                     <Transcript
@@ -1810,11 +1699,10 @@ export function App({
                                         bottomInset="0px"
                                     />
                                 )}
-                            />
-                            {/* Full-width status-bar footer spanning both columns. */}
-                            <Box sx={{ order: 2, position: "relative", zIndex: 2 }}>
-                                <AppStatusBar sessionId={active.id} status={active.status} />
-                            </Box>
+                            /></Suspense>
+                            <Suspense fallback={null}>
+                                <DesktopStatusLine sessionId={active.id} status={active.status} />
+                            </Suspense>
                         </>
                     ) : (
                     <>
@@ -1882,7 +1770,7 @@ export function App({
                                     View-only system session — managed by cowboy
                                 </Box>
                             ) : surface === "desktop" ? (
-                                    <DesktopComposer
+                                    <Suspense fallback={null}><DesktopComposer
                                         // Remount per session: each session owns its draft
                                         // (seeded from the per-session draft store) and a
                                         // fresh CodeMirror editor, so one session's
@@ -1890,7 +1778,7 @@ export function App({
                                         key={active.id}
                                         sessionId={active.id}
                                         status={active.status}
-                                    />
+                                    /></Suspense>
                                 ) : (
                                     <MobileComposer
                                         key={active.id}
@@ -1898,10 +1786,11 @@ export function App({
                                         status={active.status}
                                     />
                                 )}
-                            {/* Zed/VSCode-style status bar at the very bottom of
-                                the window; inside this measured wrapper so the
-                                transcript reserves it via --composer-h. */}
-                            <AppStatusBar sessionId={active.id} status={active.status} />
+                            {surface === "desktop" && (
+                                <Suspense fallback={null}>
+                                    <DesktopStatusLine sessionId={active.id} status={active.status} />
+                                </Suspense>
+                            )}
                         </Box>
                     </>
                     )
