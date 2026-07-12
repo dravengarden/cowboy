@@ -1377,20 +1377,76 @@ export function ComposerWorkspace({
 
             <Box sx={{ flex: 1 }} />
 
-            <Tooltip title="More delivery options">
-              <span>
-                <IconButton
-                  ref={desktopMoreButtonRef}
-                  size="small"
-                  aria-label="more delivery options"
-                  aria-controls={desktopMoreAnchor ? "desktop-composer-more" : undefined}
-                  aria-expanded={desktopMoreAnchor ? "true" : undefined}
-                  onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
-                >
-                  <MoreVert fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
+            {!column && (
+              <>
+                <Tooltip title="Save as draft">
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="save as draft"
+                      disabled={!sendable}
+                      onClick={saveDraft}
+                    >
+                      <EditNoteOutlined fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Schedule send">
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="schedule send"
+                      disabled={!sendable}
+                      onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
+                    >
+                      <Schedule fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Jump to front of queue">
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="jump to front of queue"
+                      disabled={!sendable || queue.length === 0}
+                      onClick={jumpToFront}
+                    >
+                      <VerticalAlignTop fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Force push">
+                  <span>
+                    <IconButton
+                      size="small"
+                      color="warning"
+                      aria-label="force push"
+                      disabled={!sendable || !(busy || starting || paused)}
+                      onClick={(e): void => setForceAnchor(e.currentTarget)}
+                    >
+                      <Bolt fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </>
+            )}
+
+            {(column || clearAction) && (
+              <Tooltip title={column ? "More delivery options" : "More actions"}>
+                <span>
+                  <IconButton
+                    ref={desktopMoreButtonRef}
+                    size="small"
+                    aria-label={column ? "more delivery options" : "more actions"}
+                    aria-controls={desktopMoreAnchor ? "desktop-composer-more" : undefined}
+                    aria-expanded={desktopMoreAnchor ? "true" : undefined}
+                    onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
+                  >
+                    <MoreVert fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Menu
               id="desktop-composer-more"
               anchorEl={desktopMoreAnchor}
@@ -1399,7 +1455,7 @@ export function ComposerWorkspace({
               anchorOrigin={{ vertical: "top", horizontal: "right" }}
               transformOrigin={{ vertical: "bottom", horizontal: "right" }}
             >
-              <MenuItem
+              {column && <MenuItem
                 disabled={!sendable}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1408,8 +1464,8 @@ export function ComposerWorkspace({
               >
                 <EditNoteOutlined fontSize="small" sx={{ mr: 1.25 }} />
                 Save as draft
-              </MenuItem>
-              <MenuItem
+              </MenuItem>}
+              {column && <MenuItem
                 disabled={!sendable}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1418,9 +1474,9 @@ export function ComposerWorkspace({
               >
                 <Schedule fontSize="small" sx={{ mr: 1.25 }} />
                 Schedule send
-              </MenuItem>
-              <Divider />
-              <MenuItem
+              </MenuItem>}
+              {column && <Divider />}
+              {column && <MenuItem
                 disabled={!sendable || queue.length === 0}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1429,8 +1485,8 @@ export function ComposerWorkspace({
               >
                 <VerticalAlignTop fontSize="small" sx={{ mr: 1.25 }} />
                 Jump to front of queue
-              </MenuItem>
-              <MenuItem
+              </MenuItem>}
+              {column && <MenuItem
                 disabled={!sendable || !(busy || starting || paused)}
                 onClick={(): void => {
                   setDesktopMoreAnchor(null);
@@ -1439,8 +1495,8 @@ export function ComposerWorkspace({
               >
                 <Bolt fontSize="small" color="warning" sx={{ mr: 1.25 }} />
                 Force push…
-              </MenuItem>
-              {clearAction && <Divider />}
+              </MenuItem>}
+              {column && clearAction && <Divider />}
               {clearAction && (
                 <MenuItem
                   disabled={dead}
