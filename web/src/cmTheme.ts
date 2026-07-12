@@ -104,6 +104,20 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         background: "none !important",
         outline: `solid 1px ${accent}`,
       },
+      // Vim Normal keeps keyboard focus on a non-editable command sink so a
+      // CJK input source cannot start composition. That is still an ACTIVE
+      // editor state, not a visually unfocused editor: keep the block solid.
+      "&.cm-vim-command-focused:not(.cm-focused) .cm-fat-cursor": {
+        background: `${accent} !important`,
+        color: `${theme.palette.primary.contrastText} !important`,
+        outline: "none !important",
+      },
+      // On an empty document the Vim block occupies the first character cell.
+      // Give the placeholder one cell of breathing room instead of drawing the
+      // block over the M in “Message the agent…”.
+      "&.cm-vim-command-focused .cm-line:has(> .cm-placeholder) .cm-placeholder": {
+        marginLeft: "1.15ch",
+      },
       // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
       // blinks via a JS-set CSS animation on `.cm-vimCursorLayer`; cancel it.
       ".cm-cursorLayer.cm-vimCursorLayer": { animation: "none !important" },

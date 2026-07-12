@@ -107,6 +107,8 @@ export function createImeAutoInsertVim(): {
         position: "absolute",
         width: "1px",
       });
+      this.sink.addEventListener("focus", this.onSinkFocus);
+      this.sink.addEventListener("blur", this.onSinkBlur);
       this.sink.addEventListener("keydown", this.onKeyDown);
       view.dom.append(this.sink);
       queueMicrotask(() => this.connect());
@@ -122,7 +124,10 @@ export function createImeAutoInsertVim(): {
         this.cm.off?.("vim-mode-change", this.modeHandler);
       }
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
+      this.sink.removeEventListener("focus", this.onSinkFocus);
+      this.sink.removeEventListener("blur", this.onSinkBlur);
       this.sink.removeEventListener("keydown", this.onKeyDown);
+      this.view.dom.classList.remove("cm-vim-command-focused");
       this.sink.remove();
     }
 
@@ -144,6 +149,7 @@ export function createImeAutoInsertVim(): {
     }
 
     private focusEditorCaret(): void {
+      this.view.dom.classList.remove("cm-vim-command-focused");
       this.view.focus();
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
       this.focusFrame = requestAnimationFrame(() => {
@@ -165,7 +171,10 @@ export function createImeAutoInsertVim(): {
     private focusSinkIfNormal(): void {
       if (!this.cm?.state?.vim?.insertMode && document.activeElement !== this.sink) {
         queueMicrotask(() => {
-          if (!this.cm?.state?.vim?.insertMode) this.sink.focus();
+          if (!this.cm?.state?.vim?.insertMode) {
+            this.sink.focus();
+            this.view.dom.classList.add("cm-vim-command-focused");
+          }
         });
       }
     }
@@ -186,6 +195,14 @@ export function createImeAutoInsertVim(): {
       if (DIRECT_INSERT_KEYS.has(key) || changing) this.view.focus();
       Vim.handleKey(this.cm, key, "user");
       this.syncFocusToMode();
+    };
+
+    private readonly onSinkFocus = (): void => {
+      this.view.dom.classList.add("cm-vim-command-focused");
+    };
+
+    private readonly onSinkBlur = (): void => {
+      this.view.dom.classList.remove("cm-vim-command-focused");
     };
   });
 

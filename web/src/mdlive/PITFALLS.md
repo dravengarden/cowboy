@@ -243,6 +243,10 @@ here says otherwise.
     animation frame and collapse the native Selection at `view.domAtPos(head)`; in
     particular `o/O` otherwise leave the browser selection on the content root
     instead of the new `<div class="cm-line"><br></div>`, making the caret invisible.
+    The sink is keyboard focus within the editor, so it adds
+    `.cm-vim-command-focused`: Normal uses the solid theme-accent block and an
+    empty-document placeholder leaves one character cell for it. Do not show the
+    upstream pink/hollow "unfocused" cursor while the command sink is active.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
