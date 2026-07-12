@@ -121,12 +121,17 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         opacity: "0 !important",
         outline: "none !important",
       },
-      // On an empty document the Vim block occupies the first character cell.
-      // Give the placeholder one cell of breathing room instead of drawing the
-      // block over the M in “Message the agent…”.
-      "&:focus-within .cm-line:has(> .cm-placeholder) .cm-placeholder, &.cm-vim-command-focused .cm-line:has(> .cm-placeholder) .cm-placeholder": {
-        marginLeft: "1.15ch",
-      },
+      // In Vim the first character cell belongs to the cursor. Reserve it in
+      // every mode so Normal/Insert/blur only change cursor shape, never the
+      // placeholder's x-position. Non-Vim and Mobile themes keep native MUI
+      // placeholder alignment.
+      ...(mono
+        ? {
+          ".cm-line:has(> .cm-placeholder) .cm-placeholder": {
+            marginLeft: "1.15ch",
+          },
+        }
+        : {}),
       // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
       // blinks via a JS-set CSS animation on `.cm-vimCursorLayer`; cancel it.
       ".cm-cursorLayer.cm-vimCursorLayer": { animation: "none !important" },

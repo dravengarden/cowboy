@@ -245,8 +245,10 @@ here says otherwise.
     instead of the new `<div class="cm-line"><br></div>`, making the caret invisible.
     The sink is keyboard focus within the editor, so it adds
     `.cm-vim-command-focused`: Normal uses the solid theme-accent block and an
-    empty-document placeholder leaves one character cell for it. Do not show the
-    upstream pink/hollow "unfocused" cursor while the command sink is active.
+    empty-document placeholder always leaves one character cell whenever the Vim
+    theme is loaded. Never gate that margin on focus/mode: doing so makes
+    `Message the agent…` jump horizontally across Normal, Insert, and blur. Do not
+    show the upstream pink/hollow "unfocused" cursor while the command sink is active.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
