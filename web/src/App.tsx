@@ -1648,6 +1648,7 @@ export function App({
             {...(surface === "desktop"
                 ? {
                     "data-desktop-region": "topbar.controls",
+                    "data-desktop-axis": "horizontal",
                     tabIndex: -1,
                 }
                 : {})}
@@ -1767,6 +1768,8 @@ export function App({
                         )}
                         <Box sx={{ display: "inline-flex", alignItems: "center" }}>
                             <IconButton
+                                data-desktop-item="topbar-settings"
+                                data-desktop-topbar-action="settings"
                                 onClick={(): void => openSettings("settings")}
                                 aria-label="settings"
                                 title="Settings"

@@ -44,6 +44,47 @@ function Segment({
   return tooltip ? <Tooltip title={tooltip}>{body}</Tooltip> : body;
 }
 
+interface RegionHint {
+  keys: string;
+  label: string;
+}
+
+function regionHints(region: string | null): RegionHint[] {
+  switch (region) {
+    case "topbar.controls":
+      return [
+        { keys: "H/L", label: "Move" },
+        { keys: "Enter", label: "Open" },
+      ];
+    case "sessions.list":
+      return [
+        { keys: "J/K", label: "Session" },
+        { keys: "GG/G", label: "First/last" },
+        { keys: "Enter", label: "Open" },
+      ];
+    case "prompt.plan":
+      return [
+        { keys: "J/K", label: "Step" },
+        { keys: "GG/G", label: "First/last" },
+      ];
+    case "prompt.queued":
+    case "prompt.draft":
+      return [
+        { keys: "J/K", label: "Message" },
+        { keys: "Enter", label: "Run" },
+        { keys: "I", label: "Edit" },
+      ];
+    case "conversation.transcript":
+      return [
+        { keys: "J/K", label: "Event" },
+        { keys: "GG/G", label: "First/last" },
+        { keys: "Enter", label: "Toggle" },
+      ];
+    default:
+      return [];
+  }
+}
+
 export function DesktopStatusLine({
   status,
 }: {
@@ -66,6 +107,7 @@ export function DesktopStatusLine({
     : ime.phase === "committed"
     ? "IME · COMMITTED"
     : null;
+  const hints = regionHints(focusedRegion);
 
   return (
     <Box
@@ -117,6 +159,35 @@ export function DesktopStatusLine({
           />
         )}
       </Stack>
+      <Box sx={{ flex: 1 }} />
+      {hints.length > 0 && (
+        <Stack
+          direction="row"
+          spacing={1.25}
+          alignItems="center"
+          aria-label="Focused region shortcuts"
+          sx={{
+            mx: 1,
+            minWidth: 0,
+            color: "text.disabled",
+            "@media (max-width: 1180px)": { display: "none" },
+          }}
+        >
+          {hints.map((hint) => (
+            <Stack
+              key={`${hint.keys}-${hint.label}`}
+              direction="row"
+              spacing={0.5}
+              alignItems="center"
+            >
+              <DesktopKeycap keyLabel={hint.keys} quiet />
+              <Box component="span" sx={{ fontSize: "0.625rem", whiteSpace: "nowrap" }}>
+                {hint.label}
+              </Box>
+            </Stack>
+          ))}
+        </Stack>
+      )}
       <Box sx={{ flex: 1 }} />
       <Stack direction="row" alignItems="center" divider={<Divider orientation="vertical" flexItem />}>
         <Segment label={status.toUpperCase()} tooltip="Session status" mono />

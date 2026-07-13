@@ -1,62 +1,8 @@
-import { Box } from "@mui/material";
 import { useMemo, useRef } from "react";
-import { ShortcutKeycap } from "../../ShortcutKeycap";
 import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./DesktopCommandProvider";
-
-export function DesktopContextShortcut({
-  badge,
-  shortcut,
-  children,
-}: {
-  badge: string;
-  shortcut: string;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <Box
-      component="span"
-      title={shortcut}
-      sx={{
-        position: "relative",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        height: 40,
-        flexShrink: 0,
-        "&:hover .cowboy-context-shortcut, &:focus-within .cowboy-context-shortcut":
-          {
-            opacity: 1,
-            transform: "translate(-50%, 0) scale(1)",
-          },
-        "[data-desktop-focused='true'] & .cowboy-context-shortcut": {
-          opacity: 0.82,
-          transform: "translate(-50%, 0) scale(1)",
-        },
-      }}
-    >
-      {children}
-      <Box
-        className="cowboy-context-shortcut"
-        sx={{
-          position: "absolute",
-          zIndex: 2,
-          bottom: -5,
-          left: "50%",
-          display: "inline-flex",
-          opacity: 0,
-          transform: "translate(-50%, 2px) scale(.94)",
-          transition: "opacity 120ms ease, transform 120ms ease",
-          pointerEvents: "none",
-        }}
-      >
-        <ShortcutKeycap keyLabel={badge} variant="context" />
-      </Box>
-    </Box>
-  );
-}
 
 export function DesktopComposerCommandBindings({
   sendable,

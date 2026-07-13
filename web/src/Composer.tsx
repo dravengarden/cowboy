@@ -171,7 +171,7 @@ import {
 } from "./_store/mod.ts";
 
 const DesktopContextShortcut = lazy(async () => {
-  const module = await import("./desktop/commands/DesktopComposerShortcuts");
+  const module = await import("./desktop/commands/DesktopContextShortcut");
   return { default: module.DesktopContextShortcut };
 });
 const DesktopComposerCommandBindings = lazy(async () => {
@@ -3663,39 +3663,59 @@ export function AutoScrollAndStop({
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
   if (presentation === "desktop-toolbar") {
+    const followButton = (
+      <Tooltip title={sticky ? "Pause automatic transcript following" : "Jump to and follow the latest output"}>
+        <Button
+          data-desktop-item="topbar-follow"
+          data-desktop-topbar-action="follow"
+          size="small"
+          color={sticky ? "primary" : "inherit"}
+          variant="text"
+          startIcon={<South fontSize="small" />}
+          onClick={(): void => {
+            haptic();
+            if (sticky) setSticky(sessionId, false);
+            else requestStickToBottom(sessionId);
+          }}
+          sx={{
+            textTransform: "none",
+            whiteSpace: "nowrap",
+            ...(sticky && { bgcolor: "action.selected" }),
+          }}
+        >
+          {sticky ? "Following" : "Follow"}
+        </Button>
+      </Tooltip>
+    );
+    const stopButton = busy
+      ? (
+        <Button
+          data-desktop-item="topbar-stop"
+          data-desktop-topbar-action="stop"
+          size="small"
+          color="error"
+          variant="text"
+          startIcon={<Stop fontSize="small" />}
+          onClick={(): void => setCancelOpen(true)}
+          sx={{ textTransform: "none", whiteSpace: "nowrap" }}
+        >
+          Stop
+        </Button>
+      )
+      : null;
     return (
       <>
-        <Tooltip title={sticky ? "Pause automatic transcript following" : "Jump to and follow the latest output"}>
-          <Button
-            size="small"
-            color={sticky ? "primary" : "inherit"}
-            variant="text"
-            startIcon={<South fontSize="small" />}
-            onClick={(): void => {
-              haptic();
-              if (sticky) setSticky(sessionId, false);
-              else requestStickToBottom(sessionId);
-            }}
-            sx={{
-              textTransform: "none",
-              whiteSpace: "nowrap",
-              ...(sticky && { bgcolor: "action.selected" }),
-            }}
-          >
-            {sticky ? "Following" : "Follow"}
-          </Button>
-        </Tooltip>
-        {busy && (
-          <Button
-            size="small"
-            color="error"
-            variant="text"
-            startIcon={<Stop fontSize="small" />}
-            onClick={(): void => setCancelOpen(true)}
-            sx={{ textTransform: "none", whiteSpace: "nowrap" }}
-          >
-            Stop
-          </Button>
+        <Suspense fallback={followButton}>
+          <DesktopContextShortcut badge="F" shortcut="F · Toggle following">
+            {followButton}
+          </DesktopContextShortcut>
+        </Suspense>
+        {stopButton && (
+          <Suspense fallback={stopButton}>
+            <DesktopContextShortcut badge="S" shortcut="S · Stop current turn">
+              {stopButton}
+            </DesktopContextShortcut>
+          </Suspense>
         )}
         <StopConfirmDialog
           open={cancelOpen}

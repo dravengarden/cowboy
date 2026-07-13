@@ -46,6 +46,11 @@ import {
   usageLimits,
   type UsageSnapshot,
 } from "../usageLimits";
+import { DesktopContextShortcut } from "./commands/DesktopContextShortcut";
+import {
+  type DesktopCommand,
+  useDesktopCommand,
+} from "./commands/DesktopCommandProvider";
 
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
@@ -441,6 +446,74 @@ export function DesktopTopBarControls({
   const contextPercent = contextSize > 0
     ? Math.round(Math.min(100, (contextUsed / contextSize) * 100))
     : null;
+  const topbarCommands = useMemo<DesktopCommand[]>(() => [
+    {
+      id: "topbar.runConfiguration",
+      title: "Open Run Configuration",
+      group: "Top Bar",
+      shortcut: "R",
+      regions: ["topbar.controls"],
+      when: () =>
+        document.querySelector("[data-desktop-topbar-action='config']:not(:disabled)") !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='config']",
+        )?.click(),
+    },
+    {
+      id: "topbar.usage",
+      title: "Open Usage Limits",
+      group: "Top Bar",
+      shortcut: "U",
+      regions: ["topbar.controls"],
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='usage']",
+        )?.click(),
+    },
+    {
+      id: "topbar.compact",
+      title: "Compact Conversation",
+      group: "Top Bar",
+      shortcut: "C",
+      regions: ["topbar.controls"],
+      when: () =>
+        document.querySelector("[data-desktop-topbar-action='compact']:not(:disabled)") !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='compact']",
+        )?.click(),
+    },
+    {
+      id: "topbar.follow",
+      title: "Toggle Transcript Following",
+      group: "Top Bar",
+      shortcut: "F",
+      regions: ["topbar.controls"],
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='follow']",
+        )?.click(),
+    },
+    {
+      id: "topbar.stop",
+      title: "Stop Current Turn",
+      group: "Top Bar",
+      shortcut: "S",
+      regions: ["topbar.controls"],
+      when: () =>
+        document.querySelector("[data-desktop-topbar-action='stop']") !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='stop']",
+        )?.click(),
+    },
+  ], []);
+  useDesktopCommand(topbarCommands[0] as DesktopCommand);
+  useDesktopCommand(topbarCommands[1] as DesktopCommand);
+  useDesktopCommand(topbarCommands[2] as DesktopCommand);
+  useDesktopCommand(topbarCommands[3] as DesktopCommand);
+  useDesktopCommand(topbarCommands[4] as DesktopCommand);
 
   return (
     <Stack
@@ -454,58 +527,62 @@ export function DesktopTopBarControls({
           (status === "starting" || status === "running")
         ? <Skeleton variant="rounded" width={300} height={34} />
         : (
-          <Tooltip title={configSummary || "Run configuration"}>
-            <Button
-              data-desktop-run-config
-              size="small"
-              color="inherit"
-              variant="outlined"
-              startIcon={<Tune fontSize="small" />}
-              endIcon={<ExpandMore fontSize="small" />}
-              disabled={dead || options.length === 0}
-              onClick={(event): void => setConfigAnchor(event.currentTarget)}
-              sx={{
-                width: "clamp(190px, 18vw, 260px)",
-                height: 34,
-                px: 1.15,
-                justifyContent: "flex-start",
-                textTransform: "none",
-                flexShrink: 1,
-                minWidth: 170,
-                borderRadius: 1.5,
-                color: "text.primary",
-                borderColor: (theme) =>
-                  alpha(theme.palette.primary.main, configAnchor ? 0.68 : 0.3),
-                bgcolor: (theme) =>
-                  alpha(
-                    theme.palette.background.paper,
-                    configAnchor
-                      ? (theme.palette.mode === "dark" ? 0.78 : 0.82)
-                      : 0.46,
-                  ),
-                boxShadow: configAnchor
-                  ? (theme) =>
-                    `0 0 0 2px ${alpha(theme.palette.primary.main, 0.1)}`
-                  : "none",
-                "&:hover": {
+          <DesktopContextShortcut badge="R" shortcut="R · Run configuration">
+            <Tooltip title={configSummary || "Run configuration"}>
+              <Button
+                data-desktop-item="topbar-config"
+                data-desktop-topbar-action="config"
+                data-desktop-run-config
+                size="small"
+                color="inherit"
+                variant="outlined"
+                startIcon={<Tune fontSize="small" />}
+                endIcon={<ExpandMore fontSize="small" />}
+                disabled={dead || options.length === 0}
+                onClick={(event): void => setConfigAnchor(event.currentTarget)}
+                sx={{
+                  width: "clamp(190px, 18vw, 260px)",
+                  height: 34,
+                  px: 1.15,
+                  justifyContent: "flex-start",
+                  textTransform: "none",
+                  flexShrink: 1,
+                  minWidth: 170,
+                  borderRadius: 1.5,
+                  color: "text.primary",
                   borderColor: (theme) =>
-                    alpha(theme.palette.primary.main, 0.52),
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
-                },
-                "&.Mui-focusVisible": {
-                  borderColor: "primary.main",
-                  boxShadow: (theme) =>
-                    `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
-                },
-                "& .MuiButton-startIcon": { mr: 0.8 },
-                "& .MuiButton-endIcon": { ml: "auto" },
-              }}
-            >
-              <Typography variant="caption" fontWeight={650} noWrap>
-                {configSummary || "Run configuration"}
-              </Typography>
-            </Button>
-          </Tooltip>
+                    alpha(theme.palette.primary.main, configAnchor ? 0.68 : 0.3),
+                  bgcolor: (theme) =>
+                    alpha(
+                      theme.palette.background.paper,
+                      configAnchor
+                        ? (theme.palette.mode === "dark" ? 0.78 : 0.82)
+                        : 0.46,
+                    ),
+                  boxShadow: configAnchor
+                    ? (theme) =>
+                      `0 0 0 2px ${alpha(theme.palette.primary.main, 0.1)}`
+                    : "none",
+                  "&:hover": {
+                    borderColor: (theme) =>
+                      alpha(theme.palette.primary.main, 0.52),
+                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
+                  },
+                  "&.Mui-focusVisible": {
+                    borderColor: "primary.main",
+                    boxShadow: (theme) =>
+                      `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
+                  },
+                  "& .MuiButton-startIcon": { mr: 0.8 },
+                  "& .MuiButton-endIcon": { ml: "auto" },
+                }}
+              >
+                <Typography variant="caption" fontWeight={650} noWrap>
+                  {configSummary || "Run configuration"}
+                </Typography>
+              </Button>
+            </Tooltip>
+          </DesktopContextShortcut>
         )}
 
       <Popover
@@ -613,18 +690,21 @@ export function DesktopTopBarControls({
         </Box>
       </Popover>
 
-      <ButtonBase
-        data-desktop-quota
-        onClick={(event): void => setUsageAnchor(event.currentTarget)}
-        sx={{
-          height: 38,
-          px: 0.75,
-          borderRadius: 1.25,
-          flexShrink: 0,
-          "&:hover": { bgcolor: "action.hover" },
-        }}
-      >
-        {visibleLimits.length > 0
+      <DesktopContextShortcut badge="U" shortcut="U · Usage limits">
+        <ButtonBase
+          data-desktop-item="topbar-usage"
+          data-desktop-topbar-action="usage"
+          data-desktop-quota
+          onClick={(event): void => setUsageAnchor(event.currentTarget)}
+          sx={{
+            height: 38,
+            px: 0.75,
+            borderRadius: 1.25,
+            flexShrink: 0,
+            "&:hover": { bgcolor: "action.hover" },
+          }}
+        >
+          {visibleLimits.length > 0
           ? (
             <Stack direction="row" spacing={0.4} alignItems="stretch">
               {visibleLimits.map((limit) => (
@@ -694,7 +774,8 @@ export function DesktopTopBarControls({
               {snapshot ? "Usage unavailable" : "Loading usage…"}
             </Typography>
           )}
-      </ButtonBase>
+        </ButtonBase>
+      </DesktopContextShortcut>
 
       <Popover
         open={usageAnchor !== null}
@@ -778,52 +859,56 @@ export function DesktopTopBarControls({
       </Popover>
 
       {compactAction && (
-        <Tooltip
-          title={compacting
-            ? "Compacting…"
-            : compactTooltip(contextUsed, contextSize)}
-        >
-          <span>
-            <Button
-              data-desktop-compact
-              size="small"
-              color="inherit"
-              variant="outlined"
-              startIcon={
-                <CompactIcon
-                  used={contextUsed}
-                  size={contextSize}
-                  active={compacting}
-                />
-              }
-              disabled={dead || compacting}
-              onClick={(): void => setCompactConfirm(true)}
-              sx={{
-                height: 36,
-                px: 1.1,
-                flexShrink: 0,
-                textTransform: "none",
-                borderColor: "divider",
-                "& .MuiButton-startIcon": { mr: 0.75 },
-              }}
-            >
-              <Stack direction="row" spacing={0.65} alignItems="baseline">
-                <Typography variant="caption" fontWeight={750}>
-                  Compact
-                </Typography>
-                {contextPercent !== null && (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    fontWeight={650}
-                  >
-                    {contextPercent}%
+        <DesktopContextShortcut badge="C" shortcut="C · Compact conversation">
+          <Tooltip
+            title={compacting
+              ? "Compacting…"
+              : compactTooltip(contextUsed, contextSize)}
+          >
+            <span>
+              <Button
+                data-desktop-item="topbar-compact"
+                data-desktop-topbar-action="compact"
+                data-desktop-compact
+                size="small"
+                color="inherit"
+                variant="outlined"
+                startIcon={
+                  <CompactIcon
+                    used={contextUsed}
+                    size={contextSize}
+                    active={compacting}
+                  />
+                }
+                disabled={dead || compacting}
+                onClick={(): void => setCompactConfirm(true)}
+                sx={{
+                  height: 36,
+                  px: 1.1,
+                  flexShrink: 0,
+                  textTransform: "none",
+                  borderColor: "divider",
+                  "& .MuiButton-startIcon": { mr: 0.75 },
+                }}
+              >
+                <Stack direction="row" spacing={0.65} alignItems="baseline">
+                  <Typography variant="caption" fontWeight={750}>
+                    Compact
                   </Typography>
-                )}
-              </Stack>
-            </Button>
-          </span>
-        </Tooltip>
+                  {contextPercent !== null && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      fontWeight={650}
+                    >
+                      {contextPercent}%
+                    </Typography>
+                  )}
+                </Stack>
+              </Button>
+            </span>
+          </Tooltip>
+        </DesktopContextShortcut>
       )}
 
       <Dialog

@@ -156,7 +156,7 @@ export function DesktopShortcutsDialog({
           : ["SPC", ...(command.leader?.split(/\s+/) ?? [])],
         title: command.title,
         ...(command.description ? { description: command.description } : {}),
-      })), [registry.commands, workspace.focusedPane]);
+      })), [registry.commands, workspace.focusedPane, workspace.focusedRegion]);
 
   return (
     <Dialog

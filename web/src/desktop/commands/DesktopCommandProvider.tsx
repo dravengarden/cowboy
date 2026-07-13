@@ -203,6 +203,7 @@ export function DesktopCommandProvider(
             `[data-desktop-region="${CSS.escape(workspace.focusedRegion)}"]`,
           )
           : null;
+        const horizontal = region?.dataset.desktopAxis === "horizontal";
         const items = [...(region?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
           .filter((element) => element.offsetParent !== null)
           // DOM order is not always visual order: Transcript deliberately uses
@@ -211,7 +212,9 @@ export function DesktopCommandProvider(
           .sort((left, right) => {
             const a = left.getBoundingClientRect();
             const b = right.getBoundingClientRect();
-            return a.top - b.top || a.left - b.left;
+            return horizontal
+              ? a.left - b.left || a.top - b.top
+              : a.top - b.top || a.left - b.left;
           });
         if (items.length > 0) {
           const active = document.activeElement instanceof HTMLElement
@@ -231,6 +234,11 @@ export function DesktopCommandProvider(
           }
           if (key === "j") next = Math.min(items.length - 1, Math.max(0, active + 1));
           else if (key === "k") next = Math.max(0, active < 0 ? items.length - 1 : active - 1);
+          else if (horizontal && key === "l") {
+            next = Math.min(items.length - 1, Math.max(0, active + 1));
+          } else if (horizontal && key === "h") {
+            next = Math.max(0, active < 0 ? items.length - 1 : active - 1);
+          }
           else if (key === "G") next = items.length - 1;
           if (next >= 0) {
             event.preventDefault();
