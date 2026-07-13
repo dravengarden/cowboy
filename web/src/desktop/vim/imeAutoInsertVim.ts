@@ -1,5 +1,11 @@
 import { Prec, type Extension } from "@codemirror/state";
-import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+} from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import {
   clearImeStatus,
@@ -69,6 +75,32 @@ function normalModeKey(event: KeyboardEvent): string | null {
     ".": ">",
     "/": "?",
   }[key] ?? key;
+}
+
+function visualSelectionDecorations(
+  view: EditorView,
+  visual: boolean,
+  linewise: boolean,
+): DecorationSet {
+  if (!visual) return Decoration.none;
+  const ranges = view.state.selection.ranges.flatMap((range) => {
+    if (range.empty) return [];
+    if (!linewise) {
+      return [
+        Decoration.mark({ class: "cm-vim-visual-selection" }).range(range.from, range.to),
+      ];
+    }
+    const lines = [];
+    let line = view.state.doc.lineAt(range.from);
+    const last = view.state.doc.lineAt(Math.max(range.from, range.to - 1));
+    while (line.number <= last.number) {
+      lines.push(Decoration.line({ class: "cm-vim-visual-line" }).range(line.from));
+      if (line.number === last.number) break;
+      line = view.state.doc.line(line.number + 1);
+    }
+    return lines;
+  });
+  return Decoration.set(ranges, true);
 }
 
 /**
@@ -306,5 +338,67 @@ export function createImeAutoInsertVim(): {
     };
   });
 
-  return { extension: [autoInsert, vim(), commandSink], getCM };
+  // Normal/Visual intentionally focus the non-editable command sink so the OS
+  // input method cannot open a candidate window. Native browser selection is
+  // not painted while that sink owns focus, which made v/V change Vim state but
+  // look inert. Paint only the Visual range as a Desktop decoration. Do not use
+  // CM6 drawSelection(): it hides the native Insert caret and breaks IME marked
+  // text, the reason this runtime has a command sink in the first place.
+  const visualSelection = ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
+    private cm: ReturnType<typeof getCM> = null;
+    private visual = false;
+    private linewise = false;
+    private modeHandler: ((event: { mode?: string }) => void) | null = null;
+
+    constructor(readonly view: EditorView) {
+      this.decorations = Decoration.none;
+      queueMicrotask(() => this.connect());
+    }
+
+    update(update: ViewUpdate): void {
+      if (!this.cm) this.connect();
+      if (update.selectionSet || update.docChanged) {
+        this.linewise = !!this.cm?.state?.vim?.visualLine;
+        this.decorations = visualSelectionDecorations(
+          update.view,
+          this.visual,
+          this.linewise,
+        );
+      }
+    }
+
+    destroy(): void {
+      if (this.cm && this.modeHandler) this.cm.off?.("vim-mode-change", this.modeHandler);
+    }
+
+    private connect(): void {
+      if (this.cm) return;
+      this.cm = getCM(this.view);
+      if (!this.cm) return;
+      this.visual = !!this.cm.state?.vim?.visualMode;
+      this.linewise = !!this.cm.state?.vim?.visualLine;
+      this.decorations = visualSelectionDecorations(this.view, this.visual, this.linewise);
+      this.modeHandler = (event): void => {
+        this.visual = event.mode === "visual";
+        this.linewise = !!this.cm?.state?.vim?.visualLine;
+        this.decorations = visualSelectionDecorations(
+          this.view,
+          this.visual,
+          this.linewise,
+        );
+        // The mode can change without a document/selection transaction (plain
+        // `v` at a caret). An empty dispatch asks CM6 to read the new plugin
+        // decorations without moving focus or native Selection.
+        queueMicrotask(() => {
+          if (this.view.dom.isConnected) this.view.dispatch({});
+        });
+      };
+      this.cm.on?.("vim-mode-change", this.modeHandler);
+    }
+  }, {
+    decorations: (plugin) => plugin.decorations,
+  });
+
+  return { extension: [autoInsert, vim(), commandSink, visualSelection], getCM };
 }

@@ -135,6 +135,17 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // unfocused states so it matches a real input.
       "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
         { backgroundColor: theme.palette.action.selected },
+      // Desktop Vim Visual mode keeps focus on its IME-safe command sink, so
+      // native ::selection is not painted. Its Desktop-only decoration uses the
+      // same semantic selection colour, with enough opacity to remain legible
+      // on both light and dark themes.
+      ".cm-vim-visual-selection": {
+        backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.3 : 0.2),
+        borderRadius: "2px",
+      },
+      ".cm-vim-visual-line": {
+        backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.24 : 0.14),
+      },
       // Autocomplete popup → MUI Paper.
       ".cm-tooltip": {
         backgroundColor: theme.palette.background.paper,

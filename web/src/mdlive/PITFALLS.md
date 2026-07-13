@@ -293,6 +293,11 @@ here says otherwise.
     beforeinput, or compositionstart invalidates every pending RAF/measure/write.
     Never let a Vim-command callback call focus/dispatch/Selection.collapse after
     native input has begun, even when `EditorView.composing` is not true yet.
+    The same command-sink focus means browsers do not paint native selection in
+    Visual mode. Desktop therefore owns a small `cm-vim-visual-selection`
+    decoration driven by Vim mode plus CM selection. Do not replace it with
+    `drawSelection()`: that facet hides the native Insert caret and revives the
+    frozen IME marked-text failure described above.
 
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns

@@ -19,7 +19,7 @@ export function DesktopSessionShortcut({
         className="cowboy-session-shortcut"
         sx={{
           display: "inline-flex",
-          opacity: active ? 0.72 : 0.46,
+          opacity: active ? 0.84 : 0.62,
           transition: "opacity 120ms ease",
         }}
       >

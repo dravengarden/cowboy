@@ -424,7 +424,7 @@ function SessionList({
                                 py: 0.25,
                             },
                             "&:hover .cowboy-session-shortcut, &:focus-visible .cowboy-session-shortcut, &.Mui-selected .cowboy-session-shortcut": {
-                                opacity: 0.82,
+                                opacity: 0.94,
                             },
                         }}
                     >

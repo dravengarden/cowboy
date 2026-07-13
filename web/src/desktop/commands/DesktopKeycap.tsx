@@ -34,12 +34,16 @@ export function DesktopKeycap({
         borderRadius: 0.7,
         border: 1,
         borderColor: quiet
-          ? "transparent"
+          ? (theme) => accent
+            ? alpha(theme.palette.primary.main, 0.28)
+            : alpha(theme.palette.divider, 0.52)
           : (theme) => accent
           ? alpha(theme.palette.primary.main, 0.4)
           : alpha(theme.palette.divider, 0.72),
         bgcolor: quiet
-          ? "transparent"
+          ? (theme) => accent
+            ? alpha(theme.palette.primary.main, 0.055)
+            : alpha(theme.palette.background.paper, 0.24)
           : (theme) => accent
           ? alpha(theme.palette.primary.main, 0.1)
           : alpha(theme.palette.background.paper, 0.66),
