@@ -227,7 +227,10 @@
         window.__cowboyDesktopBootReady = () => {
           try { sessionStorage.removeItem(KEY); } catch {}
           const url = new URL(location.href);
-          if (url.searchParams.delete(PARAM)) history.replaceState(null, "", url.toString());
+          if (url.searchParams.has(PARAM)) {
+            url.searchParams.delete(PARAM);
+            history.replaceState(null, "", url.toString());
+          }
         };
       })();
     </script>
