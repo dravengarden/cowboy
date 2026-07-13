@@ -27,6 +27,28 @@ response. The supervisor reads that at runtime and decides whether to
 `session/load` on revive. This keeps the registry honest: capability follows the
 adapter, not a hardcoded table.
 
+## Deferred: ephemeral side conversations (`/side`, `/btw`)
+
+Codex itself supports an ephemeral side conversation, but the published
+`@agentclientprotocol/codex-acp` adapter does not currently advertise or expose
+that operation over ACP. Cowboy intentionally does **not** approximate it with a
+normal prompt, the main-session queue, or a visible forked session: all three
+would violate the feature's contract by disturbing the active task, polluting
+its transcript, or leaving persistent session state.
+
+TODO: add the Desktop and Mobile BTW affordances when the adapter exposes a
+structured, capability-negotiated ACP operation with these semantics:
+
+- the active turn continues without interruption;
+- the side exchange is isolated from the main transcript and model context;
+- the side exchange is ephemeral unless the user explicitly promotes it;
+- unsupported providers omit the affordance rather than simulating it;
+- capability detection, not a provider/version string, controls availability.
+
+Until then `/side` and `/btw` must not be added to Cowboy's fallback command
+list. A future implementation should consume the adapter-advertised capability
+and keep the shared domain operation separate from the Desktop and Mobile UI.
+
 ## Per-provider quirks the core absorbs
 
 ```mermaid

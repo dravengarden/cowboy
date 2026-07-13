@@ -437,6 +437,7 @@ function SessionList({
                     <ListItemButton
                         key={s.id}
                         data-desktop-item={s.id}
+                        data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}

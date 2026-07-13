@@ -37,6 +37,13 @@ const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
 // runtime from its `initialize` response (`agent_capabilities.load_session` —
 // see `crate::acp::agent_main`), which is authoritative, so it isn't duplicated
 // as a static flag here.
+//
+// TODO(acp-side-conversation): expose Codex `/side` / `/btw` only after the
+// official codex-acp adapter advertises a structured side-conversation
+// capability over ACP. Do not send the TUI-only slash command as a normal
+// prompt and do not emulate it with Cowboy's queue or a visible session: those
+// alternatives either disturb the active task or change the feature's
+// ephemeral, transcript-isolated semantics. See docs/architecture/04-providers.md.
 
 /// Built-in providers. claude-code and codex first (design build order).
 ///

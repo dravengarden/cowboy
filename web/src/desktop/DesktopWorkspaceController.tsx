@@ -48,6 +48,9 @@ function focusElement(element: HTMLElement | null): void {
     return;
   }
   const preferred = element.querySelector<HTMLElement>("[data-desktop-focus-default]");
+  const currentItem = element.querySelector<HTMLElement>(
+    "[data-desktop-item][data-desktop-current='true']",
+  );
   const firstItem = element.querySelector<HTMLElement>("[data-desktop-item]");
   const composer = element.dataset.desktopRegion === "prompt.composer"
     ? element.querySelector<HTMLElement>(".cm-content[contenteditable='true']")
@@ -57,7 +60,13 @@ function focusElement(element: HTMLElement | null): void {
       "button[aria-label='Expand plan'], button[aria-label='Collapse plan']",
     )
     : null;
-  (composer ?? firstItem ?? planToggle ?? preferred ?? element).focus({ preventScroll: true });
+  // Entering Sessions must anchor navigation on the session already open in
+  // the workspace. Falling back to row one made the first J/K jump unrelated
+  // to what the user was looking at. Other list regions retain their first-row
+  // default, while explicit focus targets still beat that generic fallback.
+  (composer ?? currentItem ?? preferred ?? firstItem ?? planToggle ?? element).focus({
+    preventScroll: true,
+  });
   element.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 

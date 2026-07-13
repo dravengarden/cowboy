@@ -284,14 +284,23 @@ export function DesktopCommandProvider(
             items[next]?.scrollIntoView({ block: "nearest" });
             return;
           }
-          if (key === "Enter" && active >= 0) {
+          const opensSession = region?.dataset.desktopRegion === "sessions.list" &&
+            (key === "Enter" || key.toLowerCase() === "l");
+          if ((key === "Enter" || opensSession) && active >= 0) {
             const item = items[active];
             const action = item?.matches("button,[role='button']")
               ? item
               : item?.querySelector<HTMLElement>("[data-desktop-item-action='default']");
             if (action) {
               event.preventDefault();
+              event.stopPropagation();
               action.click();
+              if (opensSession) {
+                // Let the selected session propagate first, then hand keyboard
+                // focus to its Prompt editor. This mirrors Vim's `l`/Enter
+                // open semantics instead of leaving focus behind in the rail.
+                requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+              }
               return;
             }
           }

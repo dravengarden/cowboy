@@ -64,7 +64,7 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
       return [
         { keys: "J/K", label: "Session" },
         { keys: "GG/G", label: "First/last" },
-        { keys: "Enter", label: "Open" },
+        { keys: "L/Enter", label: "Open prompt" },
       ];
     case "prompt.plan":
       return [

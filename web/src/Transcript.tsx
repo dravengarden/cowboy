@@ -662,6 +662,43 @@ function ThoughtSteps({
   const visible = sections.filter((section) => section.trim() !== "");
   return (
     <Stack spacing={0} sx={{ flex: 1, minWidth: 0 }} aria-label="Thinking steps">
+      {codex && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.75}
+          sx={{ minHeight: 22, mb: 0.25, color: "text.secondary" }}
+          aria-label={streaming ? "Codex is thinking" : "Codex reasoning"}
+        >
+          <CodexWorkcell size={14} />
+          <Typography
+            variant="caption"
+            sx={{
+              fontWeight: 650,
+              letterSpacing: "0.025em",
+              ...(streaming && {
+                backgroundImage: (theme) => {
+                  const quiet = theme.palette.text.secondary;
+                  const primary = theme.palette.primary.main;
+                  return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 35%, ${primary} 50%, ${quiet} 65%, ${quiet} 100%)`;
+                },
+                backgroundSize: "220% 100%",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+                color: "transparent",
+                animation: `${thoughtTextShimmer} 3.1s linear infinite`,
+                "@media (prefers-reduced-motion: reduce)": {
+                  animation: "none",
+                  backgroundImage: "none",
+                  color: "text.secondary",
+                },
+              }),
+            }}
+          >
+            {streaming ? "Thinking" : "Reasoning"}
+          </Typography>
+        </Stack>
+      )}
       {visible.map((section, index) => {
         const current = streaming && index === visible.length - 1;
         const hasNext = index < visible.length - 1;
