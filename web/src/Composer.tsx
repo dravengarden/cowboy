@@ -93,7 +93,12 @@ import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
-import { isCompactingTail, latestPendingPermission, latestPlan } from "./derive";
+import {
+  isCompactingTail,
+  latestCompactionCompletionSeq,
+  latestPendingPermission,
+  latestPlan,
+} from "./derive";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -892,6 +897,7 @@ export function ComposerWorkspace({
     status,
     serverUsed: session?.context_used ?? 0,
     serverSize: session?.context_size ?? 0,
+    completionSeq: latestCompactionCompletionSeq(timeline ?? []),
   });
   function runSessionAction(a: SessionAction): void {
     haptic();

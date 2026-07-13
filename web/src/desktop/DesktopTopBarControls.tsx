@@ -31,7 +31,7 @@ import {
   latestAvailableCommands,
   resolveSessionAction,
 } from "../agentCommands";
-import { isCompactingTail } from "../derive";
+import { isCompactingTail, latestCompactionCompletionSeq } from "../derive";
 import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
@@ -441,6 +441,7 @@ export function DesktopTopBarControls({
     status,
     serverUsed: serverContextUsed,
     serverSize: serverContextSize,
+    completionSeq: latestCompactionCompletionSeq(timeline),
   });
   const contextUsed = compactContext.used;
   const contextSize = compactContext.size;

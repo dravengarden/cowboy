@@ -12,6 +12,7 @@ interface ContextOverride extends ContextValue {
 
 interface CompactRequest {
   baseline: ContextValue;
+  completionSeq: number;
   sawBusy: boolean;
   startedAt: number;
 }
@@ -27,11 +28,13 @@ export function useCompactionContext({
   status,
   serverUsed,
   serverSize,
+  completionSeq,
 }: {
   sessionId: string;
   status: Status;
   serverUsed: number;
   serverSize: number;
+  completionSeq: number;
 }): {
   used: number;
   size: number;
@@ -45,10 +48,11 @@ export function useCompactionContext({
     setOverride(null);
     setRequest({
       baseline: { used: serverUsed, size: serverSize },
+      completionSeq,
       sawBusy: false,
       startedAt: Date.now(),
     });
-  }, [serverSize, serverUsed]);
+  }, [completionSeq, serverSize, serverUsed]);
 
   useEffect(() => {
     if (request && status === "busy" && !request.sawBusy) {
@@ -64,6 +68,21 @@ export function useCompactionContext({
       setOverride(null);
     }
   }, [override, serverSize, serverUsed]);
+
+  useEffect(() => {
+    if (!request || completionSeq <= request.completionSeq) return;
+    const { baseline } = request;
+    if (serverUsed !== baseline.used || serverSize !== baseline.size) {
+      setOverride(null);
+    } else {
+      // Codex app-server emits `thread/compacted` but no fresh token-usage frame
+      // until the next model turn. Keeping the pre-compact number is definitely
+      // wrong, so show an empty provisional ring until that canonical frame
+      // arrives. The server change effect above replaces it automatically.
+      setOverride({ used: 0, size: serverSize, serverUsed, serverSize });
+    }
+    setRequest(null);
+  }, [completionSeq, request, serverSize, serverUsed]);
 
   useEffect(() => {
     if (!request) return;

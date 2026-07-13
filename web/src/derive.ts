@@ -454,6 +454,52 @@ export function latestPendingPermission(timeline: Envelope[]): PendingPermission
 /// the turn under a fresh message. Shared with the Transcript's CompactingWidget.
 export const COMPACTING_NOTICE = "Compacting...";
 
+const COMPACTION_COMPLETION_NOTICES = new Set([
+  "context compacted.",
+  "context compacted to fit the model's context window.",
+]);
+
+function messageText(item: Extract<RenderItem, { kind: "message" }>): string | null {
+  if (item.chunks.length === 0 || item.chunks.some((chunk) => chunk.type !== "text")) {
+    return null;
+  }
+  return item.chunks
+    .map((chunk) => chunk.type === "text" ? chunk.text : "")
+    .join("")
+    .trim();
+}
+
+export function isCompactionCommandText(text: string): boolean {
+  const command = text.trim().toLowerCase();
+  return command === "/compact" || command === "/compress" || command === "/summarize";
+}
+
+export function isCompactionCompletionText(text: string): boolean {
+  // Codex ACP currently wraps this notification in Markdown emphasis. Older
+  // replayed sessions and other providers can send the same notice as plain
+  // text, so compare the semantic content rather than the decoration.
+  const normalized = text.trim().replace(/^\*+|\*+$/g, "").trim().toLowerCase();
+  return COMPACTION_COMPLETION_NOTICES.has(normalized);
+}
+
+export function latestCompactionCompletionSeq(timeline: Envelope[]): number {
+  const items = derive(timeline);
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind !== "message" || item.role !== "assistant") continue;
+    const text = messageText(item);
+    if (text && isCompactionCompletionText(text)) return Number(item.key);
+  }
+  return 0;
+}
+
+export function isCompactionCompletionTail(timeline: Envelope[]): boolean {
+  const last = derive(timeline).at(-1);
+  if (last?.kind !== "message" || last.role !== "assistant") return false;
+  const text = messageText(last);
+  return text !== null && isCompactionCompletionText(text);
+}
+
 /// True while a compaction is running RIGHT NOW — the `COMPACTING_NOTICE` message
 /// is the live tail of the turn. Once the agent continues (a new item follows) or
 /// the turn ends, the tail changes and this goes false. The composer uses it to
@@ -464,13 +510,12 @@ export const COMPACTING_NOTICE = "Compacting...";
 export function isCompactingTail(timeline: Envelope[]): boolean {
   const items = derive(timeline);
   const last = items[items.length - 1];
-  if (last?.kind !== "message" || last.role !== "assistant") return false;
-  let text = "";
-  for (const c of last.chunks) {
-    if (c.type !== "text") return false;
-    text += c.text;
-  }
-  return text.trim() === COMPACTING_NOTICE;
+  if (last?.kind !== "message") return false;
+  const text = messageText(last);
+  if (text === null) return false;
+  return last.role === "assistant"
+    ? text === COMPACTING_NOTICE
+    : isCompactionCommandText(text);
 }
 
 function titleOfToolCall(tc: unknown): string {

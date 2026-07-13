@@ -46,7 +46,16 @@ import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { inlineTokensToMarkdown } from "./inlineImages";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { COMPACTING_NOTICE, derive, type ContentChunk, type RenderItem } from "./derive";
+import {
+  COMPACTING_NOTICE,
+  derive,
+  isCompactionCommandText,
+  isCompactionCompletionTail,
+  isCompactionCompletionText,
+  isCompactingTail,
+  type ContentChunk,
+  type RenderItem,
+} from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
   discardMessage,
@@ -470,7 +479,13 @@ function isCompactingMessage(chunks: ContentChunk[]): boolean {
 function isCompactionCommand(chunks: ContentChunk[]): boolean {
   if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) return false;
   const command = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "").join("").trim();
-  return command === "/compact" || command === "/compress" || command === "/summarize";
+  return isCompactionCommandText(command);
+}
+
+function isCompactionCompletion(chunks: ContentChunk[]): boolean {
+  if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) return false;
+  const text = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "").join("");
+  return isCompactionCompletionText(text);
 }
 
 // The fold icon's gentle vertical squeeze — "condensing" made literal. Compositor
@@ -486,11 +501,10 @@ const fold = keyframes`
 //     terracotta shimmer + a squeezing fold icon = "condensing right now".
 //   • done   (anything followed it / the turn is idle): a calm, static muted
 //     "Context compacted" note — no infinite shimmer implying it's still going.
-function CompactingWidget({ active }: { active: boolean }): React.JSX.Element {
+function CompactingWidget({ active, provider }: { active: boolean; provider: string }): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  // Claude Code brand terracotta — this is a CC operation, matching ClaudeThinking.
-  const accent = "#D97757";
+  const accent = provider === "claude-code" ? "#D97757" : theme.palette.primary.main;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
@@ -999,7 +1013,7 @@ function MessageBubble({
   chunks,
   streaming,
   autoResumed,
-  desktop,
+  provider,
 }: {
   role: "assistant" | "user";
   chunks: ContentChunk[];
@@ -1011,16 +1025,19 @@ function MessageBubble({
    *  (an empty-result continuation re-issues the prompt verbatim, which would
    *  otherwise read as a duplicate). */
   autoResumed?: boolean;
-  desktop: boolean;
+  provider: string;
 }): React.JSX.Element {
   const mine = role === "user";
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
   // busy) means it's condensing right now; otherwise it's a finished record.
   if (!mine && isCompactingMessage(chunks)) {
-    return <CompactingWidget active={!!streaming} />;
+    return <CompactingWidget active={!!streaming} provider={provider} />;
   }
-  if (desktop && mine && isCompactionCommand(chunks)) {
+  if (!mine && isCompactionCompletion(chunks)) {
+    return <CompactingWidget active={false} provider={provider} />;
+  }
+  if (mine && isCompactionCommand(chunks)) {
     return <CompactionRequestWidget />;
   }
   const lastChunkIdx = chunks.length - 1;
@@ -1351,7 +1368,7 @@ const ItemView = memo(function ItemView({
           chunks={item.chunks}
           streaming={!!streaming && item.role === "assistant"}
           autoResumed={item.autoResumed === true}
-          desktop={desktop}
+          provider={provider}
         />
       );
     case "thought":
@@ -1693,11 +1710,13 @@ export function Transcript({
     !!lastItem &&
     ((lastItem.kind === "message" && lastItem.role === "assistant") ||
       lastItem.kind === "thought");
+  const compacting = working && isCompactingTail(timeline);
+  const compactedAtTail = isCompactionCompletionTail(timeline);
   // Show the trailing "dots" row when working AND we're NOT already showing
   // a caret-tipped streaming assistant bubble at the bottom (i.e. between
   // sending a prompt and the first chunk landing, or after a tool call
   // completes while waiting for the model to start text again).
-  const showTrailingDots = working && !lastIsStreamingAssistant;
+  const showTrailingDots = working && !lastIsStreamingAssistant && !compacting && !compactedAtTail;
   const parentRef = useRef<HTMLDivElement>(null);
   // Report scroll-overflow (content taller than the viewport) to the parent so
   // the composer slab can gate its up-shadow on real scrollable content. Kept in
@@ -2232,6 +2251,11 @@ export function Transcript({
             {showTrailingDots && (
               <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
                 <ThinkingIndicator provider={provider} />
+              </Box>
+            )}
+            {compacting && (
+              <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
+                <CompactingWidget active provider={provider} />
               </Box>
             )}
             {/* Optimistic chat bubbles: newest-first in the DOM (column-reverse →

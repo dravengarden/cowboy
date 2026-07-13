@@ -1,4 +1,10 @@
-import { derive, linkTimeline } from "./derive";
+import {
+  derive,
+  isCompactionCompletionTail,
+  isCompactingTail,
+  latestCompactionCompletionSeq,
+  linkTimeline,
+} from "./derive";
 import type { Envelope } from "./protocol";
 
 Deno.test("derive coalesces text and memoizes immutable timelines", () => {
@@ -24,6 +30,39 @@ Deno.test("derive coalesces text and memoizes immutable timelines", () => {
     throw new Error("expected one message");
   }
   if (message.chunks[0].text !== "hello") throw new Error("chunks were not coalesced");
+});
+
+Deno.test("Codex compact command and completion drive the compact state", () => {
+  const requested: Envelope[] = [{
+    session_id: "s1",
+    seq: 10,
+    kind: "update",
+    update: {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "/compact" },
+    },
+  }];
+  if (!isCompactingTail(requested)) throw new Error("compact request should be active");
+
+  const completed: Envelope[] = [...requested, {
+    session_id: "s1",
+    seq: 11,
+    kind: "update",
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: "*Context compacted to fit the model's context window.*\n\n",
+      },
+    },
+  }];
+  if (isCompactingTail(completed)) throw new Error("completed compact should not stay active");
+  if (!isCompactionCompletionTail(completed)) {
+    throw new Error("Codex completion notice should be recognized");
+  }
+  if (latestCompactionCompletionSeq(completed) !== 11) {
+    throw new Error("completion sequence should identify the fresh compact result");
+  }
 });
 
 Deno.test("derive preserves unchanged row identities across timeline successors", () => {
