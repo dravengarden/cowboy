@@ -34,11 +34,15 @@ same controller state.
   The composer keeps native Vim `p/q/d/e`; these region jumps are available
   only while a non-editor Prompt region owns focus.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
+  In Sessions this switches the active session immediately while retaining
+  focus in the rail, so the next `j/k` continues from the selected row.
 - `Mod-j/k`: reorder the focused item when its region is reorderable.
 
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
 owns focus.
+Workspace Vim letters are resolved from physical `Key*` codes so a non-Latin
+macOS input source cannot turn `j/k`, `gg/G`, `l`, or `i` into marked text.
 
 ## Conversation reader
 

@@ -16,6 +16,7 @@ import {
   parseShortcut,
 } from "./shortcut";
 import { isImeComposing } from "../vim/imeStatusStore";
+import { workspaceCommandKey } from "./workspaceCommandKey";
 
 export interface DesktopCommand {
   id: string;
@@ -159,7 +160,7 @@ export function DesktopCommandProvider(
         !isTextEditingTarget(event.target) && !event.metaKey && !event.altKey
       ) {
         let action: string | null = null;
-        const key = event.key;
+        const key = workspaceCommandKey(event);
         if (event.ctrlKey) {
           action = ({
             d: "half-page-down",
@@ -219,6 +220,20 @@ export function DesktopCommandProvider(
             event.stopPropagation();
             item.focus({ preventScroll: true });
             item.scrollIntoView({ block: "nearest", inline: "nearest" });
+            if (region?.dataset.desktopRegion === "sessions.list") {
+              // Session number chords mean SWITCH, not merely move a hidden DOM
+              // focus ring. Keep focus in the rail so the next j/k continues
+              // from the newly selected session.
+              item.click();
+              const id = item.dataset.desktopItem;
+              if (id) {
+                requestAnimationFrame(() =>
+                  region.querySelector<HTMLElement>(
+                    `[data-desktop-item="${CSS.escape(id)}"]`,
+                  )?.focus({ preventScroll: true })
+                );
+              }
+            }
             return;
           }
         }
@@ -248,7 +263,7 @@ export function DesktopCommandProvider(
         workspace.mode === "normal" && !isTextEditingTarget(event.target) &&
         !event.ctrlKey && !event.metaKey && !event.altKey
       ) {
-        const key = event.key;
+        const key = workspaceCommandKey(event);
         const horizontal = region?.dataset.desktopAxis === "horizontal";
         if (!scrollNavigation && items.length > 0) {
           const active = document.activeElement instanceof HTMLElement
