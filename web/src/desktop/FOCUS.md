@@ -58,6 +58,11 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Ctrl-f/b` scroll down/up by one page;
 - `gg/G` jump to the oldest/latest output;
 - `f` toggles automatic following.
+- `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
+- `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
+  selection these keys target the widget nearest the viewport centre;
+- `a/r` allows/rejects a pending tool permission. Cowboy chooses the least
+  persistent matching provider option, preferring `once` over `always`.
 
 Any navigation away from the latest output pauses following. `G`, or enabling
 Following again, returns to the latest output. The status line exposes this

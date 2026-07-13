@@ -87,6 +87,9 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
         { keys: "Ctrl+F/B", label: "Page" },
         { keys: "GG/G", label: "Oldest/latest" },
         { keys: "F", label: "Following" },
+        { keys: "Tab/Shift+Tab", label: "Widget" },
+        { keys: "H/L", label: "Close/open" },
+        { keys: "Enter", label: "Toggle" },
       ];
     case "prompt.composer":
       return [
@@ -147,6 +150,14 @@ export function DesktopStatusLine({
     ...(itemCount > 0 ? [{ keys: "Mod+1…0", label: "Jump" }] : []),
     ...(regionElement?.dataset.desktopReorderable === "true"
       ? [{ keys: "Mod+J/K", label: "Reorder" }]
+      : []),
+    ...(focusedRegion === "conversation.transcript" &&
+        document.querySelector("[data-desktop-permission-action='approve']")
+      ? [{ keys: "A", label: "Allow" }]
+      : []),
+    ...(focusedRegion === "conversation.transcript" &&
+        document.querySelector("[data-desktop-permission-action='reject']")
+      ? [{ keys: "R", label: "Reject" }]
       : []),
   ];
   const paneLabel = focusedRegion === "topbar.controls" ? "topbar" : focusedPane;

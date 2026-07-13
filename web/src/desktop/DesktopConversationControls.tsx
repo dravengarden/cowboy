@@ -9,6 +9,8 @@ const READER_HINTS = [
   { shortcut: "Ctrl+D/U", label: "Half page" },
   { shortcut: "Ctrl+F/B", label: "Page" },
   { shortcut: "GG/G", label: "Oldest/latest" },
+  { shortcut: "Tab", label: "Widget" },
+  { shortcut: "H/L", label: "Close/open" },
 ] as const;
 
 export function DesktopConversationControls(

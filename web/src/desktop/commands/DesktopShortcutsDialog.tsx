@@ -55,6 +55,14 @@ const CONVERSATION: ShortcutRow[] = [
   { keys: ["G", "G"], title: "Jump to the oldest loaded message" },
   { keys: ["Shift+G"], title: "Jump to latest and enable Following" },
   { keys: ["F"], title: "Toggle automatic Following" },
+  { keys: ["Tab / Shift+Tab"], title: "Select the next / previous expandable widget" },
+  { keys: ["H/L"], title: "Close / open the selected widget" },
+  { keys: ["Enter"], title: "Toggle the selected widget" },
+  {
+    keys: ["A/R"],
+    title: "Allow / reject a pending permission",
+    description: "Uses the least persistent matching option, preferring once",
+  },
 ];
 
 function KeySequence({ keys }: { keys: string[] }): React.JSX.Element {

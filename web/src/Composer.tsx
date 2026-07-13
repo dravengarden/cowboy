@@ -1140,6 +1140,19 @@ export function ComposerWorkspace({
           item={pendingPermission}
           sessionId={sessionId}
           inline={column}
+          {...(desktop
+            ? {
+              shortcutForAction: (action: "approve" | "reject") => (
+                <Suspense fallback={null}>
+                  <DesktopRegionShortcut
+                    shortcut={action === "approve" ? "A" : "R"}
+                    title={action === "approve" ? "Allow once" : "Reject once"}
+                    showWhenPane="conversation"
+                  />
+                </Suspense>
+              ),
+            }
+            : {})}
         />
       ) : !column ? (
         <TurnStatusOverlay

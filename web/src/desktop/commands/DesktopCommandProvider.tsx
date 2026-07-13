@@ -57,6 +57,33 @@ function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
     });
 }
 
+function conversationWidgets(region: HTMLElement | null): HTMLElement[] {
+  return [...(region?.querySelectorAll<HTMLElement>("[data-desktop-widget-toggle]") ?? [])]
+    .filter((element) => element.offsetParent !== null)
+    .sort((left, right) => {
+      const a = left.getBoundingClientRect();
+      const b = right.getBoundingClientRect();
+      return a.top - b.top || a.left - b.left;
+    });
+}
+
+function nearestConversationWidget(
+  region: HTMLElement,
+  widgets: HTMLElement[],
+): HTMLElement | null {
+  if (widgets.length === 0) return null;
+  const scroller = region.querySelector<HTMLElement>("[data-desktop-transcript-scroller]");
+  const bounds = scroller?.getBoundingClientRect() ?? region.getBoundingClientRect();
+  const center = bounds.top + bounds.height / 2;
+  return widgets.reduce((nearest, candidate) => {
+    const candidateRect = candidate.getBoundingClientRect();
+    const nearestRect = nearest.getBoundingClientRect();
+    const candidateDistance = Math.abs(candidateRect.top + candidateRect.height / 2 - center);
+    const nearestDistance = Math.abs(nearestRect.top + nearestRect.height / 2 - center);
+    return candidateDistance < nearestDistance ? candidate : nearest;
+  });
+}
+
 export function DesktopCommandProvider(
   { children }: { children: React.ReactNode },
 ): React.JSX.Element {
@@ -151,16 +178,56 @@ export function DesktopCommandProvider(
       const mod = isMac
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
+      const widgets = scrollNavigation ? conversationWidgets(region) : [];
+      const activeWidget = document.activeElement instanceof HTMLElement
+        ? document.activeElement.closest<HTMLElement>("[data-desktop-widget-toggle]")
+        : null;
+      if (
+        workspace.mode === "normal" && scrollNavigation && region &&
+        event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey
+      ) {
+        const current = activeWidget ? widgets.indexOf(activeWidget) : -1;
+        const nearest = nearestConversationWidget(region, widgets);
+        const nearestIndex = nearest ? widgets.indexOf(nearest) : -1;
+        const next = current >= 0
+          ? (current + (event.shiftKey ? -1 : 1) + widgets.length) % widgets.length
+          : nearestIndex;
+        const widget = widgets[next];
+        if (widget) {
+          event.preventDefault();
+          event.stopPropagation();
+          widget.focus({ preventScroll: true });
+          widget.scrollIntoView({ block: "nearest", inline: "nearest" });
+          return;
+        }
+      }
       // Conversation is a reader, not a selectable event list. Once its region
-      // owns focus, standard Vim reading motions scroll the viewport and F owns
-      // the explicit Following state. Dispatch onto the transcript scroller so
-      // its existing bottom-anchor engine remains the single scroll authority.
+      // owns focus, standard Vim reading motions scroll the viewport. Expandable
+      // widgets add the usual tree semantics: H closes, L opens and Enter toggles
+      // the focused (or viewport-nearest) widget. Dispatch scroll movement onto
+      // the transcript scroller so its bottom-anchor engine remains authoritative.
       if (
         workspace.mode === "normal" && scrollNavigation &&
         !isTextEditingTarget(event.target) && !event.metaKey && !event.altKey
       ) {
         let action: string | null = null;
         const key = workspaceCommandKey(event);
+        if (!event.ctrlKey && (key === "h" || key === "l" || key === "Enter")) {
+          const widget = activeWidget ?? (region
+            ? nearestConversationWidget(region, widgets)
+            : null);
+          if (widget) {
+            event.preventDefault();
+            event.stopPropagation();
+            const expanded = widget.getAttribute("aria-expanded") === "true";
+            const toggle = key === "Enter" || (key === "h" && expanded) ||
+              (key === "l" && !expanded);
+            if (toggle) widget.click();
+            widget.focus({ preventScroll: true });
+            widget.scrollIntoView({ block: "nearest", inline: "nearest" });
+            return;
+          }
+        }
         if (event.ctrlKey) {
           action = ({
             d: "half-page-down",

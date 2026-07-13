@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useMemo, useRef } from "react";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import type { PendingPermission } from "./derive";
@@ -27,16 +27,31 @@ export function PermissionOverlay({
   item,
   sessionId,
   inline = false,
+  shortcutForAction,
 }: {
   item: PendingPermission;
   sessionId: string;
   inline?: boolean;
+  shortcutForAction?: (action: "approve" | "reject") => ReactNode;
 }): React.JSX.Element {
   // `useSticky` is the existing "is the transcript pinned to the bottom" signal,
   // toggled the instant the user wheels/touches away — so it's exactly the
   // auto-collapse trigger (no new scroll listener on the fragile scroll model).
   const expanded = useSticky(sessionId);
   const measureRef = useRef<HTMLDivElement | null>(null);
+  const preferredActions = useMemo(() => {
+    const find = (prefix: "allow" | "reject"): number => {
+      const once = item.options.findIndex((option) =>
+        option.kind.toLowerCase() === `${prefix}_once`
+      );
+      return once >= 0
+        ? once
+        : item.options.findIndex((option) => option.kind.toLowerCase().startsWith(prefix));
+    };
+    const approve = find("allow");
+    const reject = find("reject");
+    return { approve, reject };
+  }, [item.options]);
 
   useEffect(() => {
     const el = measureRef.current;
@@ -54,6 +69,16 @@ export function PermissionOverlay({
       document.documentElement.style.setProperty("--awaiting-h", "0px");
     };
   }, [expanded]);
+
+  const respond = (optionId: string): void => {
+    haptic();
+    send({
+      type: "permission",
+      session_id: sessionId,
+      request_id: item.requestId,
+      option_id: optionId,
+    });
+  };
 
   return (
     <Box
@@ -78,6 +103,26 @@ export function PermissionOverlay({
         },
       }}
     >
+      {shortcutForAction && preferredActions.approve >= 0 && (
+        <button
+          hidden
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          data-desktop-permission-action="approve"
+          onClick={(): void => respond(item.options[preferredActions.approve]!.optionId)}
+        />
+      )}
+      {shortcutForAction && preferredActions.reject >= 0 && (
+        <button
+          hidden
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          data-desktop-permission-action="reject"
+          onClick={(): void => respond(item.options[preferredActions.reject]!.optionId)}
+        />
+      )}
       {expanded ? (
         <Box
           sx={(t) => ({
@@ -125,24 +170,23 @@ export function PermissionOverlay({
             {item.title}
           </Box>
           <Stack spacing={1}>
-            {item.options.map((opt) => {
+            {item.options.map((opt, index) => {
               const reject = opt.kind.startsWith("reject");
+              const action = index === preferredActions.approve
+                ? "approve"
+                : index === preferredActions.reject
+                ? "reject"
+                : null;
               return (
                 <Button
                   key={opt.optionId}
+                  data-desktop-permission-action={action ?? undefined}
                   fullWidth
                   disableElevation
                   variant={reject ? "outlined" : "contained"}
                   color={reject ? "error" : "primary"}
-                  onClick={(): void => {
-                    haptic();
-                    send({
-                      type: "permission",
-                      session_id: sessionId,
-                      request_id: item.requestId,
-                      option_id: opt.optionId,
-                    });
-                  }}
+                  endIcon={action ? shortcutForAction?.(action) : undefined}
+                  onClick={(): void => respond(opt.optionId)}
                   sx={{
                     minHeight: { xs: 48, sm: 40 },
                     py: 0.75,

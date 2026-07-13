@@ -49,6 +49,11 @@ export function DesktopCommandHost({
         : "[data-desktop-item-action='edit'], button[aria-label='Edit']",
     )?.click();
   };
+  const resolvePermission = (action: "approve" | "reject"): void => {
+    document.querySelector<HTMLElement>(
+      `[data-desktop-permission-action="${action}"]`,
+    )?.click();
+  };
 
   const commands = useMemo<DesktopCommand[]>(() => [
     {
@@ -188,6 +193,30 @@ export function DesktopCommandHost({
       shortcut: "C",
       contexts: ["conversation"],
       run: () => workspace.focusRegion("conversation.transcript"),
+    },
+    {
+      id: "conversation.permissionApprove",
+      title: "Allow Pending Permission",
+      description: "Choose the least persistent available allow option",
+      group: "Conversation",
+      shortcut: "A",
+      regions: ["conversation.transcript"],
+      when: () =>
+        document.querySelector("[data-desktop-permission-action='approve']") !== null,
+      disabledReason: "No permission is awaiting approval",
+      run: () => resolvePermission("approve"),
+    },
+    {
+      id: "conversation.permissionReject",
+      title: "Reject Pending Permission",
+      description: "Choose the least persistent available reject option",
+      group: "Conversation",
+      shortcut: "R",
+      regions: ["conversation.transcript"],
+      when: () =>
+        document.querySelector("[data-desktop-permission-action='reject']") !== null,
+      disabledReason: "No permission is awaiting rejection",
+      run: () => resolvePermission("reject"),
     },
     {
       id: "item.activate",

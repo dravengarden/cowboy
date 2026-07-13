@@ -1096,8 +1096,10 @@ function MessageBubble({
 
 function ToolCard({
   item,
+  desktop,
 }: {
   item: Extract<RenderItem, { kind: "tool" }>;
+  desktop: boolean;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   // Raw escape hatch: any card can flip to the verbatim input/output JSON,
@@ -1159,6 +1161,13 @@ function ToolCard({
     >
       <Stack
         {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
+        {...(desktop && hasDetail
+          ? {
+            "data-desktop-widget-toggle": "tool",
+            "aria-expanded": open,
+            tabIndex: -1,
+          }
+          : {})}
         direction="row"
         spacing={1}
         alignItems="center"
@@ -1166,6 +1175,14 @@ function ToolCard({
           p: 1,
           cursor: hasDetail ? "pointer" : "default",
           "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
+          ...(desktop && hasDetail && {
+            outline: "none",
+            "&:focus-visible": {
+              bgcolor: "action.focus",
+              boxShadow: (theme) =>
+                `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
+            },
+          }),
         }}
         onClick={(): void => {
           if (hasDetail) setOpen((o) => !o);
@@ -1352,7 +1369,7 @@ const ItemView = memo(function ItemView({
         </Box>
       );
     case "tool":
-      return <ToolCard item={item} />;
+      return <ToolCard item={item} desktop={desktop} />;
     case "permission":
       return <PermissionCard item={item} />;
     case "lifecycle": {
