@@ -29,6 +29,8 @@ same controller state.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Mod-b/e/t/u`: jump directly to Sessions, Prompt, Conversation or Top Bar.
 - `p/q/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
+  Inside the composer these are Normal-mode commands only; Insert and IME input
+  never expose or capture them.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
 - `Mod-j/k`: reorder the focused item when its region is reorderable.
 

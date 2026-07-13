@@ -131,7 +131,8 @@ export function DesktopStatusLine({
     : 0;
   const promptRegions = focusedPane === "prompt" &&
       focusedRegion?.startsWith("prompt.") === true &&
-      focusedRegion !== "prompt.composer"
+      (focusedRegion !== "prompt.composer" ||
+        (vimEnabled && effectiveMode === "normal"))
     ? [
       { keys: "P", label: "Plan" },
       { keys: "Q", label: "Queue" },

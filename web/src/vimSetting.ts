@@ -15,6 +15,10 @@ export function useVimSetting(): boolean {
   return useStore(vim);
 }
 
+export function getVimSetting(): boolean {
+  return vim.get();
+}
+
 export function setVimSetting(on: boolean): void {
   vim.set(on);
 }

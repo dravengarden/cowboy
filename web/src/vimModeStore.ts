@@ -16,6 +16,10 @@ export function setVimMode(next: string): void {
   for (const l of listeners) l();
 }
 
+export function getVimMode(): string {
+  return mode;
+}
+
 export function useVimMode(): string {
   return useSyncExternalStore(
     (cb) => {

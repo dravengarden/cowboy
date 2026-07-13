@@ -25,7 +25,11 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Mod+E"], title: "Focus Prompt" },
   { keys: ["Mod+T"], title: "Focus Conversation" },
   { keys: ["Mod+U"], title: "Focus Top Bar" },
-  { keys: ["P/Q/D/E"], title: "Plan / Queue / Drafts / Editor inside Prompt" },
+  {
+    keys: ["P/Q/D/E"],
+    title: "Plan / Queue / Drafts / Editor inside Prompt",
+    description: "Available from lists or the composer in Vim Normal mode",
+  },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
