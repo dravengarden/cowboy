@@ -77,9 +77,11 @@ export function useCompactionContext({
     } else {
       // Codex app-server emits `thread/compacted` but no fresh token-usage frame
       // until the next model turn. Keeping the pre-compact number is definitely
-      // wrong, so show an empty provisional ring until that canonical frame
-      // arrives. The server change effect above replaces it automatically.
-      setOverride({ used: 0, size: serverSize, serverUsed, serverSize });
+      // wrong. The post-compact total is unknown (not zero), so hide the
+      // determinate ring until that canonical frame arrives instead of
+      // presenting either the stale percentage or a misleading 0%. The server
+      // change effect above replaces it automatically.
+      setOverride({ used: 0, size: 0, serverUsed, serverSize });
     }
     setRequest(null);
   }, [completionSeq, request, serverSize, serverUsed]);
@@ -148,7 +150,10 @@ export function useCompactionContext({
   return {
     used: override?.used ?? serverUsed,
     size: override?.size ?? serverSize,
-    refreshing: request !== null,
+    // An override with no size is the honest "awaiting the provider's next
+    // usage frame" state after Codex compaction. Keep the tooltip explicit
+    // until a subsequent model turn supplies canonical token usage.
+    refreshing: request !== null || (override !== null && override.size === 0),
     beginRefresh,
   };
 }
