@@ -21,7 +21,9 @@ same controller state.
 - `Ctrl-w h/l`: adjacent pane.
 - `Ctrl-w j/k`: adjacent region in the current pane.
 - `Ctrl-w w`: cycle every visible region.
-- `j/k`, `gg`, `G`: item navigation outside text-editing controls.
+- `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
+  is a reader rather than an item list, so the same keys scroll by line or jump
+  to the oldest/latest output there.
 - `Enter`: default item action.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
@@ -33,6 +35,31 @@ same controller state.
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
 owns focus.
+
+## Conversation reader
+
+The Conversation header owns the visible `Following`/`Follow` control. It is
+session state, not a global top-bar action. While Conversation is focused:
+
+- `j/k` scroll down/up by one reading line;
+- `Ctrl-d/u` scroll down/up by half a page;
+- `Ctrl-f/b` scroll down/up by one page;
+- `gg/G` jump to the oldest/latest output;
+- `f` toggles automatic following.
+
+Any navigation away from the latest output pauses following. `G`, or enabling
+Following again, returns to the latest output. The status line exposes this
+complete map while the reader owns focus, so the bindings remain discoverable
+without permanent badges in the transcript header.
+
+## Desktop bundle recovery
+
+Desktop installs a small pre-module recovery guard in `index.html`. It exists
+before React so an obsolete hashed entry or lazy chunk can recover after the
+server atomically switches bundles. On a module-load failure it waits for
+`/version`, asks the Service Worker to update, then reloads with a cache-busting
+query. Three failures within one minute stop automatic retries and present a
+manual retry action. Mobile retains its separate PWA recovery path.
 
 ## Prompt workspace sizing
 

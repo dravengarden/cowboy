@@ -484,17 +484,6 @@ export function DesktopTopBarControls({
         )?.click(),
     },
     {
-      id: "topbar.follow",
-      title: "Toggle Transcript Following",
-      group: "Top Bar",
-      shortcut: "F",
-      regions: ["topbar.controls"],
-      run: () =>
-        document.querySelector<HTMLButtonElement>(
-          "[data-desktop-topbar-action='follow']",
-        )?.click(),
-    },
-    {
       id: "topbar.stop",
       title: "Stop Current Turn",
       group: "Top Bar",
@@ -512,7 +501,6 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[1] as DesktopCommand);
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
-  useDesktopCommand(topbarCommands[4] as DesktopCommand);
 
   return (
     <Stack

@@ -29,7 +29,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
-  { keys: ["J/K"], title: "Move through items in the focused region" },
+  { keys: ["J/K"], title: "Move through items in list regions" },
   { keys: ["Mod+1…0"], title: "Jump to a visible item in the focused region" },
   { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["G", "G"], title: "First item" },
@@ -42,6 +42,15 @@ const NAVIGATION: ShortcutRow[] = [
 const DISCOVERY: ShortcutRow[] = [
   { keys: ["Mod+/"], title: "Open this shortcut guide from anywhere" },
   { keys: ["Mod+K"], title: "Open Command Palette" },
+];
+
+const CONVERSATION: ShortcutRow[] = [
+  { keys: ["J/K"], title: "Scroll down / up by one reading line" },
+  { keys: ["Ctrl+D/U"], title: "Scroll down / up by half a page" },
+  { keys: ["Ctrl+F/B"], title: "Scroll down / up by a page" },
+  { keys: ["G", "G"], title: "Jump to the oldest loaded message" },
+  { keys: ["Shift+G"], title: "Jump to latest and enable Following" },
+  { keys: ["F"], title: "Toggle automatic Following" },
 ];
 
 function KeySequence({ keys }: { keys: string[] }): React.JSX.Element {
@@ -186,6 +195,9 @@ export function DesktopShortcutsDialog({
         >
           <ShortcutSection title="Workspace navigation" rows={NAVIGATION} active />
           <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
+          {workspace.focusedRegion === "conversation.transcript" && (
+            <ShortcutSection title="Conversation reading" rows={CONVERSATION} active />
+          )}
           {paneCommands.length > 0 && (
             <ShortcutSection
               title={`${workspace.focusedRegion ?? workspace.focusedPane} commands`}

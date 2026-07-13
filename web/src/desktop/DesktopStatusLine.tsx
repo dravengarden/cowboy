@@ -58,7 +58,6 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
         { keys: "R", label: "Config" },
         { keys: "U", label: "Usage" },
         { keys: "C", label: "Compact" },
-        { keys: "F", label: "Follow" },
         ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),
       ];
     case "sessions.list":
@@ -82,9 +81,11 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
       ];
     case "conversation.transcript":
       return [
-        { keys: "J/K", label: "Event" },
-        { keys: "GG/G", label: "First/last" },
-        { keys: "Enter", label: "Toggle" },
+        { keys: "J/K", label: "Scroll" },
+        { keys: "Ctrl+D/U", label: "Half page" },
+        { keys: "Ctrl+F/B", label: "Page" },
+        { keys: "GG/G", label: "Oldest/latest" },
+        { keys: "F", label: "Following" },
       ];
     case "prompt.composer":
       return [
@@ -124,7 +125,7 @@ export function DesktopStatusLine({
       `[data-desktop-region="${CSS.escape(focusedRegion)}"]`,
     )
     : null;
-  const itemCount = regionElement
+  const itemCount = regionElement && regionElement.dataset.desktopNavigation !== "scroll"
     ? [...regionElement.querySelectorAll<HTMLElement>("[data-desktop-item]")]
       .filter((element) => element.offsetParent !== null).length
     : 0;

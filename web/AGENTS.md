@@ -77,3 +77,7 @@ routinely breaks another.
 4. A web-only host switch atomically retargets `/run/cowboy-web`; it does not
    restart Cowboy, agentd, or session workers. Verify the new `/version` and
    `sw.js`; the PWA foreground update check performs the reload.
+5. Desktop also has a pre-module recovery guard in `index.html`. Keep it before
+   `/src/main.tsx`: it is the only layer that can recover an installed Desktop
+   window when an old hashed entry or lazy chunk fails before React mounts.
+   This guard must stay Desktop-only; Mobile owns its established PWA path.

@@ -64,7 +64,6 @@ import {
   Refresh,
   Schedule,
   Send,
-  South,
   Stop,
   SwapVert,
   Tune,
@@ -3672,10 +3671,9 @@ function StopConfirmDialog({
   );
 }
 
-// The auto-scroll-follow + Stop pair — the session's "live" controls. Extracted so
-// it rides BOTH the mobile navbar (alongside the config ⊟) AND the desktop bottom
-// status bar (Zed/VSCode style), without duplicating the stop-confirm wiring.
-// `dense` shrinks the buttons to fit the thin status strip.
+// Mobile keeps the combined auto-scroll + Stop controls. Desktop moves Following
+// into the Conversation header, where the state belongs; this branch retains only
+// Stop so a destructive turn action stays globally visible in the top toolbar.
 export function AutoScrollAndStop({
   sessionId,
   status,
@@ -3692,30 +3690,6 @@ export function AutoScrollAndStop({
   const busy = status === "busy";
   const size = dense ? "small" : "medium";
   if (presentation === "desktop-toolbar") {
-    const followButton = (
-      <Tooltip title={sticky ? "Pause automatic transcript following" : "Jump to and follow the latest output"}>
-        <Button
-          data-desktop-item="topbar-follow"
-          data-desktop-topbar-action="follow"
-          size="small"
-          color={sticky ? "primary" : "inherit"}
-          variant="text"
-          startIcon={<South fontSize="small" />}
-          onClick={(): void => {
-            haptic();
-            if (sticky) setSticky(sessionId, false);
-            else requestStickToBottom(sessionId);
-          }}
-          sx={{
-            textTransform: "none",
-            whiteSpace: "nowrap",
-            ...(sticky && { bgcolor: "action.selected" }),
-          }}
-        >
-          {sticky ? "Following" : "Follow"}
-        </Button>
-      </Tooltip>
-    );
     const stopButton = busy
       ? (
         <Button
@@ -3734,15 +3708,6 @@ export function AutoScrollAndStop({
       : null;
     return (
       <>
-        <Suspense fallback={followButton}>
-          <DesktopContextShortcut
-            badge="F"
-            shortcut="F · Toggle following"
-            showBadge={false}
-          >
-            {followButton}
-          </DesktopContextShortcut>
-        </Suspense>
         {stopButton && (
           <Suspense fallback={stopButton}>
             <DesktopContextShortcut

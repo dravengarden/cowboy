@@ -26,6 +26,13 @@ const MODULE_RECOVERY_KEY = "cowboy.module-recovery-at";
 const MODULE_RECOVERY_COOLDOWN_MS = 30_000;
 
 async function recoverLatestBundle(force = false): Promise<void> {
+  const desktopRecovery = (globalThis as typeof globalThis & {
+    __cowboyRecoverLatestBundle?: (force?: boolean) => Promise<void>;
+  }).__cowboyRecoverLatestBundle;
+  if (desktopRecovery) {
+    await desktopRecovery(force);
+    return;
+  }
   const now = Date.now();
   let previous = 0;
   try {

@@ -1,6 +1,7 @@
 import { alpha, Box, Typography } from "@mui/material";
 import type { DesktopPane } from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
+import { DesktopConversationControls } from "./DesktopConversationControls";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -8,10 +9,12 @@ const CONVERSATION_MIN = 520;
 function PaneHeader({
   pane,
   shortcut,
+  actions,
   children,
 }: {
   pane: DesktopPane;
   shortcut: { value: string; title: string };
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -36,6 +39,7 @@ function PaneHeader({
         {children}
       </Typography>
       <Box sx={{ flex: 1 }} />
+      {actions}
       <DesktopRegionShortcut shortcut={shortcut.value} title={shortcut.title} />
     </Box>
   );
@@ -47,12 +51,14 @@ export function DesktopWorkspace({
   onResizeStart,
   prompt,
   conversation,
+  sessionId,
 }: {
   promptWidth: number;
   resizing: boolean;
   onResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   prompt: React.ReactNode;
   conversation: React.ReactNode;
+  sessionId: string;
 }): React.JSX.Element {
   return (
     <Box
@@ -135,11 +141,13 @@ export function DesktopWorkspace({
         <PaneHeader
           pane="conversation"
           shortcut={{ value: "Mod+T", title: "Focus Conversation" }}
+          actions={<DesktopConversationControls sessionId={sessionId} />}
         >
           Conversation
         </PaneHeader>
         <Box
           data-desktop-region="conversation.transcript"
+          data-desktop-navigation="scroll"
           data-desktop-focus-default
           tabIndex={-1}
           sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}

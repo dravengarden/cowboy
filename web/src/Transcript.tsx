@@ -59,6 +59,7 @@ import {
 import { haptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
 import {
+  requestStickToBottom,
   resetSticky,
   setSticky,
   useScrollNonce,
@@ -1818,11 +1819,67 @@ export function Transcript({
       }
       reportScrollableRef.current();
     };
+    const awayDirection = (): 1 | -1 => {
+      if (el.scrollTop > 0.5) return 1;
+      if (el.scrollTop < -0.5) return -1;
+      // column-reverse uses opposite scrollTop signs across engines. Probe one
+      // pixel from the bottom once instead of UA-sniffing Chrome vs WebKit.
+      el.scrollBy({ top: -1, behavior: "auto" });
+      if (el.scrollTop < -0.5) return -1;
+      el.scrollBy({ top: 1, behavior: "auto" });
+      return el.scrollTop > 0.5 ? 1 : -1;
+    };
+    const scrollAway = (distance: number): void => {
+      detach();
+      const direction = awayDirection();
+      el.scrollBy({ top: direction * distance, behavior: "auto" });
+    };
+    const scrollTowardLatest = (distance: number): void => {
+      const fromBottom = Math.abs(el.scrollTop);
+      if (fromBottom <= distance) {
+        el.scrollTop = 0;
+        stick.current = true;
+        setSticky(sessionIdRef.current, true);
+        freezeRef.current.key = null;
+        return;
+      }
+      const direction = el.scrollTop > 0 ? -1 : 1;
+      el.scrollBy({ top: direction * distance, behavior: "auto" });
+    };
+    const followLatest = (): void => {
+      stick.current = true;
+      freezeRef.current.key = null;
+      requestStickToBottom(sessionIdRef.current);
+    };
+    const onDesktopNavigation = (rawEvent: Event): void => {
+      const action = (rawEvent as CustomEvent<{ action?: string }>).detail?.action;
+      const line = Math.max(
+        32,
+        Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24,
+      );
+      const halfPage = Math.max(line, el.clientHeight * 0.5);
+      const page = Math.max(line, el.clientHeight * 0.9);
+      if (action === "line-up") scrollAway(line);
+      else if (action === "line-down") scrollTowardLatest(line);
+      else if (action === "half-page-up") scrollAway(halfPage);
+      else if (action === "half-page-down") scrollTowardLatest(halfPage);
+      else if (action === "page-up") scrollAway(page);
+      else if (action === "page-down") scrollTowardLatest(page);
+      else if (action === "oldest") {
+        detach();
+        el.scrollTo({ top: awayDirection() * el.scrollHeight, behavior: "auto" });
+      } else if (action === "latest") followLatest();
+      else if (action === "toggle-following") {
+        if (stick.current) detach();
+        else followLatest();
+      }
+    };
     el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
     el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
     el.addEventListener("keydown", onKeyDown);
@@ -1868,6 +1925,7 @@ export function Transcript({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
@@ -1965,6 +2023,7 @@ export function Transcript({
     >
       <Box
         ref={parentRef}
+        data-desktop-transcript-scroller={desktopNavigation ? "true" : undefined}
         tabIndex={0}
         sx={{
           flex: 1,

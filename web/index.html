@@ -101,6 +101,16 @@
         letter-spacing: 0.06em;
         opacity: 0.75;
       }
+      #cowboy-recovery-retry {
+        min-height: 36px;
+        padding: 0 16px;
+        border: 1px solid currentColor;
+        border-radius: 10px;
+        color: inherit;
+        background: transparent;
+        font: 600 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        cursor: pointer;
+      }
       @keyframes app-splash-spin {
         to {
           transform: rotate(360deg);
@@ -112,6 +122,115 @@
         }
       }
     </style>
+    <script>
+      // Desktop boot recovery must exist BEFORE the first module executes. A
+      // stale installed window can request an old hashed entry/lazy chunk after
+      // an atomic web-root switch; if that first import fails, React and its
+      // ErrorBoundary do not reliably exist yet. Mobile keeps its established
+      // PWA recovery path — this guard is intentionally Desktop-only.
+      (() => {
+        const nav = navigator;
+        const platform = nav.platform || "";
+        const desktopHost = window.__TAURI_INTERNALS__ !== undefined ||
+          (/Mac|Win|Linux/i.test(platform) && !(/Mac/i.test(platform) && nav.maxTouchPoints > 1));
+        const desktopInput = matchMedia("(pointer: fine) and (hover: hover)").matches;
+        if (!desktopHost || !desktopInput) return;
+
+        const KEY = "cowboy:desktop-module-recovery";
+        const PARAM = "cowboy-recover";
+        const PATTERN = /(?:importing a module script failed|failed to fetch dynamically imported module|error loading dynamically imported module|chunkloaderror|loading chunk \S+ failed|unable to preload css)/i;
+        let recovering = false;
+
+        const readState = () => {
+          try {
+            const parsed = JSON.parse(sessionStorage.getItem(KEY) || "null");
+            if (parsed && Number.isFinite(parsed.attempts) && Number.isFinite(parsed.startedAt)) {
+              return parsed;
+            }
+          } catch {}
+          return { attempts: 0, startedAt: Date.now() };
+        };
+        const writeState = (state) => {
+          try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+        };
+        const showRecovery = (manual) => {
+          const render = () => {
+            const root = document.getElementById("root");
+            if (!root) return;
+            root.innerHTML = `
+              <div id="app-splash" aria-label="Recovering Cowboy" role="status">
+                <div class="app-splash-spinner"></div>
+                <div class="app-splash-title">${manual ? "Cowboy needs a fresh reload" : "Updating Cowboy…"}</div>
+                ${manual ? '<button id="cowboy-recovery-retry" type="button">Retry update</button>' : ""}
+              </div>`;
+            const retry = document.getElementById("cowboy-recovery-retry");
+            if (retry) retry.addEventListener("click", () => void recover(true));
+          };
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", render, { once: true });
+          } else render();
+        };
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const recover = async (force = false) => {
+          if (recovering) return;
+          recovering = true;
+          const now = Date.now();
+          let state = readState();
+          if (force || now - state.startedAt > 60_000) {
+            state = { attempts: 0, startedAt: now };
+          }
+          if (state.attempts >= 3 && !force) {
+            recovering = false;
+            showRecovery(true);
+            return;
+          }
+          state.attempts += 1;
+          writeState(state);
+          showRecovery(false);
+
+          // A full host activation can briefly restart the HTTP server. Wait
+          // for a network response so navigation does not fall back to the same
+          // stale cached shell and immediately fail again.
+          for (let attempt = 0; attempt < 16; attempt += 1) {
+            try {
+              const response = await fetch(`/version?recover=${Date.now()}`, { cache: "no-store" });
+              if (response.ok) break;
+            } catch {}
+            await wait(500);
+          }
+          try {
+            const registration = await navigator.serviceWorker?.getRegistration();
+            await registration?.update();
+          } catch {}
+          await wait(200);
+          const url = new URL(location.href);
+          url.searchParams.set(PARAM, String(Date.now()));
+          location.replace(url.toString());
+        };
+        const messageFrom = (value) => {
+          if (value instanceof Error) return `${value.name} ${value.message}`;
+          return String(value || "");
+        };
+        addEventListener("error", (event) => {
+          const moduleTarget = event.target instanceof HTMLScriptElement && event.target.type === "module";
+          if (moduleTarget || PATTERN.test(messageFrom(event.error) + " " + event.message)) {
+            event.preventDefault();
+            void recover();
+          }
+        }, true);
+        addEventListener("unhandledrejection", (event) => {
+          if (!PATTERN.test(messageFrom(event.reason))) return;
+          event.preventDefault();
+          void recover();
+        });
+        window.__cowboyRecoverLatestBundle = recover;
+        window.__cowboyDesktopBootReady = () => {
+          try { sessionStorage.removeItem(KEY); } catch {}
+          const url = new URL(location.href);
+          if (url.searchParams.delete(PARAM)) history.replaceState(null, "", url.toString());
+        };
+      })();
+    </script>
   </head>
   <body>
     <div id="root">

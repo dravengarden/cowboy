@@ -1802,6 +1802,7 @@ export function App({
                                 promptWidth={colWidth}
                                 resizing={colResizing}
                                 onResizeStart={startColResize}
+                                sessionId={active.id}
                                 prompt={active.system ? (
                                     <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                         View-only system session — managed by cowboy

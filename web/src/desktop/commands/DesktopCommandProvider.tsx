@@ -146,9 +146,61 @@ export function DesktopCommandProvider(
         )
         : null;
       const items = visibleRegionItems(region);
+      const scrollNavigation = region?.dataset.desktopNavigation === "scroll";
       const mod = isMac
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
+      // Conversation is a reader, not a selectable event list. Once its region
+      // owns focus, standard Vim reading motions scroll the viewport and F owns
+      // the explicit Following state. Dispatch onto the transcript scroller so
+      // its existing bottom-anchor engine remains the single scroll authority.
+      if (
+        workspace.mode === "normal" && scrollNavigation &&
+        !isTextEditingTarget(event.target) && !event.metaKey && !event.altKey
+      ) {
+        let action: string | null = null;
+        const key = event.key;
+        if (event.ctrlKey) {
+          action = ({
+            d: "half-page-down",
+            u: "half-page-up",
+            f: "page-down",
+            b: "page-up",
+          } as Record<string, string>)[key.toLowerCase()] ?? null;
+        } else if (!event.shiftKey || key === "G") {
+          if (itemChord.current !== null) {
+            globalThis.clearTimeout(itemChord.current);
+            itemChord.current = null;
+            if (key === "g") action = "oldest";
+          } else if (key === "g") {
+            event.preventDefault();
+            itemChord.current = globalThis.setTimeout(() => {
+              itemChord.current = null;
+            }, 900);
+            return;
+          } else {
+            action = ({
+              j: "line-down",
+              k: "line-up",
+              G: "latest",
+              f: "toggle-following",
+            } as Record<string, string>)[key] ?? null;
+          }
+        }
+        if (action) {
+          const scroller = region.querySelector<HTMLElement>(
+            "[data-desktop-transcript-scroller]",
+          );
+          if (scroller) {
+            event.preventDefault();
+            event.stopPropagation();
+            scroller.dispatchEvent(new CustomEvent("cowboy:desktop-transcript-nav", {
+              detail: { action },
+            }));
+            return;
+          }
+        }
+      }
       // Item slots are contextual, never global. Once a list region owns focus,
       // Mod+1…0 jumps to its first ten painted rows. This keeps the global key
       // map small while giving every Sessions/Plan/Queue/Drafts/Transcript list
@@ -198,7 +250,7 @@ export function DesktopCommandProvider(
       ) {
         const key = event.key;
         const horizontal = region?.dataset.desktopAxis === "horizontal";
-        if (items.length > 0) {
+        if (!scrollNavigation && items.length > 0) {
           const active = document.activeElement instanceof HTMLElement
             ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)
             : -1;

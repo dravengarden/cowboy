@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { App } from "../App";
 import type { Mode as ThemeMode } from "../theme";
 import { DesktopCommandProvider } from "./commands/DesktopCommandProvider";
@@ -10,6 +11,11 @@ export function DesktopApp({
   themeMode: ThemeMode;
   onSetThemeMode: (mode: ThemeMode) => void;
 }): React.JSX.Element {
+  useEffect(() => {
+    (globalThis as typeof globalThis & {
+      __cowboyDesktopBootReady?: () => void;
+    }).__cowboyDesktopBootReady?.();
+  }, []);
   return (
     <DesktopWorkspaceProvider>
       <DesktopCommandProvider>
