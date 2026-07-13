@@ -63,6 +63,7 @@ import {
   setSticky,
   useScrollNonce,
 } from "./stickyStore";
+import { keyLeavesLatest, wheelLeavesLatest } from "./transcriptFollowIntent";
 import { ImageLightbox } from "./_shell";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
@@ -1616,10 +1617,11 @@ export function Transcript({
   // stick=true → user wheels up → next chunk → snap-back. Unkillable.
   //
   // New model:
-  // - Treat user intent as a separate signal: a wheel / touchstart / arrow
-  //   key on the container means "I am leaving the bottom" — set stick=false
-  //   *immediately*, before any subsequent programmatic scroll can confuse
-  //   us.
+  // - Treat user intent as a separate signal: a wheel / arrow key moving AWAY
+  //   from the bottom, or a touchstart, means "I am leaving the bottom" — set
+  //   stick=false *immediately*, before any subsequent programmatic scroll can
+  //   confuse us. Bottom-bound wheel/key repeat is ignored so its tail can't
+  //   undo the scroll listener's automatic re-enable at the boundary.
   // - scroll-event only re-enables stick when the resulting position is
   //   actually at the bottom (the user manually scrolled all the way back).
   // - Auto-snap on new items uses the **`stick` value at the time of the
@@ -1694,6 +1696,20 @@ export function Transcript({
     const onTouchEnd = (): void => {
       touching = false;
     };
+    const onWheel = (event: WheelEvent): void => {
+      // A wheel/trackpad gesture that continues toward the bottom can still
+      // emit events after `scroll` has re-enabled Following. Detaching for
+      // every wheel event therefore produced an on -> off flicker at the
+      // boundary. Only an upward (away-from-latest) gesture expresses intent
+      // to pause following.
+      if (wheelLeavesLatest(event.deltaY)) detach();
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      // Same boundary rule for keyboard repeat: ArrowDown/PageDown/End/Space
+      // may continue firing after reaching the bottom and must not undo the
+      // `scroll` handler's automatic re-enable.
+      if (keyLeavesLatest(event)) detach();
+    };
     const onScroll = (): void => {
       // Our own anchor-restoring scrollTop write re-enters here; swallow it so it
       // neither re-captures (would chase its own correction) nor re-sticks.
@@ -1725,14 +1741,14 @@ export function Transcript({
       }
       reportScrollableRef.current();
     };
-    el.addEventListener("wheel", detach, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
     el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
-    el.addEventListener("keydown", detach);
+    el.addEventListener("keydown", onKeyDown);
     // Keep pinned when the container resizes UNDER us — the on-screen keyboard
     // opening lifts the composer (via --kb-inset) and the drafts/queue panel
     // expanding shrinks this pane, neither with a doc/selection change to trip
@@ -1770,12 +1786,12 @@ export function Transcript({
     ro.observe(el);
     reportScrollableRef.current(); // initial measure once the container exists
     return () => {
-      el.removeEventListener("wheel", detach);
+      el.removeEventListener("wheel", onWheel);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("keydown", detach);
+      el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
     };
