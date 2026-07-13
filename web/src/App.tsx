@@ -1306,16 +1306,10 @@ export function App({
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
                         boxShadow: "inset 0 2px 0 0 currentColor",
                     },
-                    // A full-height writing canvas cannot wear the same complete
-                    // focus ring as a compact Draft card: the giant rectangle
-                    // overwhelms the workspace. Keep the quiet fill and mark only
-                    // its leading edge with the shared focus colour.
-                    "& [data-desktop-region='prompt.composer'][data-desktop-focused='true']": {
-                        borderColor: "divider",
-                        bgcolor: desktopFocusFill,
-                        boxShadow: (t) =>
-                            `inset 3px 0 0 ${desktopFocusBoundary(t)}`,
-                    },
+                    // The full-height Composer expresses focus through its live
+                    // caret, the Prompt header and the Desktop status line. Do
+                    // not tint or ring the entire writing canvas: that treatment
+                    // belongs to bounded cards such as Plan, Queue and Draft.
                     "& [data-desktop-region='prompt.composer']:focus-visible": {
                         outline: "none",
                         boxShadow: "none",
