@@ -666,7 +666,13 @@ function ThoughtSteps({
   const visible = sections.filter((section) => section.trim() !== "");
   return (
     <Stack spacing={0} sx={{ flex: 1, minWidth: 0 }} aria-label="Thinking steps">
-      {codex && (
+      {/* ACP starts a fresh thought item whenever reasoning resumes after a
+          tool call.  That boundary is useful to the renderer, but it is not a
+          user-facing section: labelling every completed item "Reasoning"
+          produces a wall of duplicate headings in tool-heavy turns.  Keep the
+          status label only on the one live thought; completed thoughts already
+          have their lightbulb + meaningful step text. */}
+      {codex && streaming && (
         <Stack
           direction="row"
           alignItems="center"
@@ -699,7 +705,7 @@ function ThoughtSteps({
               }),
             }}
           >
-            {streaming ? "Thinking" : "Reasoning"}
+            Thinking
           </Typography>
         </Stack>
       )}
