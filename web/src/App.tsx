@@ -99,7 +99,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl, useAnyDetentSheetOpen } from "./_shell";
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
-import { ENTER_LABEL } from "./platform";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
@@ -375,6 +375,7 @@ function SessionList({
                     onClick={onNew}
                 >
                     New session
+                    {desktop && <Kbd keys={`${MOD_LABEL}N`} />}
                 </Button>
             </Box>
             <List
@@ -1726,16 +1727,19 @@ export function App({
                         {surface === "desktop" && (
                             <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                         )}
-                        <IconButton
-                            onClick={(): void => openSettings("settings")}
-                            aria-label="settings"
-                            title="Settings"
-                            // Unified 44px box + 24px glyph (global MuiIconButton),
-                            // so the gear stays aligned with the action row's
-                            // send/stop button at any font scale.
-                        >
-                            <SettingsIcon />
-                        </IconButton>
+                        <Box sx={{ position: "relative", display: "inline-flex" }}>
+                            <IconButton
+                                onClick={(): void => openSettings("settings")}
+                                aria-label="settings"
+                                title="Settings"
+                                // Unified 44px box + 24px glyph (global MuiIconButton),
+                                // so the gear stays aligned with the action row's
+                                // send/stop button at any font scale.
+                            >
+                                <SettingsIcon />
+                            </IconButton>
+                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL},`} floating />}
+                        </Box>
                     </Toolbar>
                 </AppBar>
 
@@ -1906,6 +1910,7 @@ export function App({
                                             onClick={(): void => setDialogOpen(true)}
                                         >
                                             New session
+                                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL}N`} />}
                                         </Button>
                                     </>
                                 )
@@ -2211,9 +2216,12 @@ function SettingsShell({
                     options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
                 />
                 <Box sx={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                    <IconButton aria-label="close settings" onClick={onClose} sx={{ width: 36, height: 36 }}>
-                        <CloseIcon fontSize="small" />
-                    </IconButton>
+                    <Box sx={{ position: "relative", display: "inline-flex" }}>
+                        <IconButton aria-label="close settings" onClick={onClose} sx={{ width: 36, height: 36 }}>
+                            <CloseIcon fontSize="small" />
+                        </IconButton>
+                        <Kbd keys="Esc" floating />
+                    </Box>
                 </Box>
             </Box>
             {tab === "info" ? <InfoContent /> : (

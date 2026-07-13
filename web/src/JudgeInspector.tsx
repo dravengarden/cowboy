@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   alpha,
   Box,
@@ -16,6 +16,7 @@ import type { JudgeRun } from "./protocol";
 import { clearJudgeRuns, removeJudgeRun, useJudgeRuns } from "./store";
 import { Sheet } from "./Sheet";
 import { Kbd } from "./Kbd";
+import { MOD_LABEL } from "./platform";
 
 // The judge-run inspector: long-press the turn-status pill opens this. It lists
 // the confirm-detect judge runs for a session (server-authoritative history,
@@ -189,6 +190,23 @@ function JudgeInspector({
   const runs = useJudgeRuns(sessionId);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!open || runs.length === 0) return undefined;
+    const onKey = (event: KeyboardEvent): void => {
+      if (
+        event.key !== "Backspace" ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.repeat ||
+        event.isComposing
+      ) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearJudgeRuns(sessionId);
+    };
+    globalThis.addEventListener("keydown", onKey, true);
+    return (): void => globalThis.removeEventListener("keydown", onKey, true);
+  }, [open, runs.length, sessionId]);
+
   return (
     <Sheet
       forceSheet={forceSheet}
@@ -204,6 +222,7 @@ function JudgeInspector({
               sx={{ mr: "auto" }}
             >
               Clear all
+              <Kbd keys={`${MOD_LABEL}⌫`} />
             </Button>
           )}
           <Button onClick={onClose} color="inherit">

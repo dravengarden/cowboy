@@ -1,39 +1,26 @@
-import { Box } from "@mui/material";
 import type React from "react";
 import { useEffect, useRef } from "react";
+import { ShortcutKeycap } from "./ShortcutKeycap";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 // A keyboard-shortcut keycap (Linear / Raycast style) shown after a modal
-// button's label. Desktop-ONLY: hidden unless the device has a fine pointer +
-// hover (a real mouse/trackpad, which implies a physical keyboard). A phone or
-// touch tablet — where there's no key to press — never shows it, so the hint is
-// never a lie. `aria-hidden` because the button's own label already names it.
-export function Kbd({ keys }: { keys: string }): React.JSX.Element {
+// button's label. Desktop-ONLY: use the canonical product surface instead of a
+// pointer media query. An iPad with a trackpad remains the touch product, so it
+// must not inherit Desktop keyboard promises. `aria-hidden` because the
+// button's own label already names it.
+export function Kbd(
+  { keys, floating = false }: { keys: string; floating?: boolean },
+): React.JSX.Element {
+  const surface = useSurfaceProfile();
+  if (surface.kind !== "desktop") return <></>;
   return (
-    <Box
-      component="span"
-      aria-hidden
-      sx={{
-        display: "none",
-        "@media (hover: hover) and (pointer: fine)": { display: "inline-flex" },
-        alignItems: "center",
-        justifyContent: "center",
-        ml: 0.75,
-        px: 0.5,
-        minWidth: 17,
-        height: 17,
-        borderRadius: 0.75,
-        border: 1,
-        borderColor: "divider",
-        bgcolor: "action.hover",
-        color: "text.secondary",
-        fontSize: 11,
-        fontWeight: 600,
-        lineHeight: 1,
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      }}
-    >
-      {keys}
-    </Box>
+    <ShortcutKeycap
+      keyLabel={keys}
+      variant="modal"
+      sx={floating
+        ? { position: "absolute", top: 0, right: -5, zIndex: 1 }
+        : { ml: 0.75 }}
+    />
   );
 }
 

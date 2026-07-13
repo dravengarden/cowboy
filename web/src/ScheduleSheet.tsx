@@ -3,6 +3,8 @@ import { Box, Button, Stack, TextField, Typography } from "@mui/material";
 import { Sheet } from "./Sheet";
 import { SegmentedPill } from "./SegmentedPill";
 import { haptic } from "./haptic";
+import { Kbd } from "./Kbd";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import type { Delivery, DraftSchedule } from "./protocol";
 import { fireLabel, fireRel, parseDtLocal, toDtLocal } from "./scheduleTime";
 
@@ -49,12 +51,38 @@ export function ScheduleSheet({
     onCommit(fireAt, delivery);
     onClose();
   };
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const mod = navigator.platform.toLowerCase().includes("mac")
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey;
+      if (!mod || event.repeat || event.isComposing) return;
+      if (event.key === "Enter" && valid) {
+        event.preventDefault();
+        event.stopPropagation();
+        commit();
+        return;
+      }
+      if (!editing || event.key !== "Backspace") return;
+      event.preventDefault();
+      event.stopPropagation();
+      haptic(24);
+      onUnschedule();
+      onClose();
+    };
+    globalThis.addEventListener("keydown", onKeyDown, true);
+    return (): void =>
+      globalThis.removeEventListener("keydown", onKeyDown, true);
+  }, [delivery, editing, fireAt, onClose, onCommit, onUnschedule, open, valid]);
 
   return (
     <Sheet open={open} onClose={onClose} title="定时发送">
       <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
-        {/* Caption label ABOVE the field, not a floating notch label — a shrunk
-            CJK label clips against the outlined notch on a datetime-local input. */}
+        {
+          /* Caption label ABOVE the field, not a floating notch label — a shrunk
+            CJK label clips against the outlined notch on a datetime-local input. */
+        }
         <Box>
           <Typography
             variant="caption"
@@ -98,10 +126,16 @@ export function ScheduleSheet({
         {/* Live confirm line */}
         <Typography
           variant="body2"
-          sx={{ color: valid ? "info.main" : "text.disabled", fontWeight: 600, minHeight: 22 }}
+          sx={{
+            color: valid ? "info.main" : "text.disabled",
+            fontWeight: 600,
+            minHeight: 22,
+          }}
         >
           {valid && fireAt !== null
-            ? `${fireLabel(fireAt)} · ${delivery === "front" ? "队首" : "队尾"} · ${fireRel(fireAt)}`
+            ? `${fireLabel(fireAt)} · ${
+              delivery === "front" ? "队首" : "队尾"
+            } · ${fireRel(fireAt)}`
             : "选一个未来的时间"}
         </Typography>
 
@@ -119,6 +153,7 @@ export function ScheduleSheet({
               sx={{ textTransform: "none", borderRadius: 2 }}
             >
               取消定时
+              <Kbd keys={`${MOD_LABEL}⌫`} />
             </Button>
           )}
           <Box sx={{ flex: 1 }} />
@@ -129,6 +164,7 @@ export function ScheduleSheet({
             sx={{ textTransform: "none", borderRadius: 2, minWidth: 96 }}
           >
             {editing ? "更新" : "定时发送"}
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
         </Stack>
       </Stack>

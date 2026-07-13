@@ -12,8 +12,7 @@ export function cmTheme(theme: Theme, mono = false): Extension {
   const accent = theme.palette.primary.main;
   // Match the MUI theme's own typography so the editor text is indistinguishable
   // from a real MUI input.
-  const fontStack =
-    theme.typography.fontFamily ??
+  const fontStack = theme.typography.fontFamily ??
     'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   // Zed-style monospace buffer font, used when `mono` is on (vim mode). CJK has
   // no glyphs in these faces, so Chinese falls back to the system CJK font —
@@ -107,20 +106,22 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // Vim Normal keeps keyboard focus on a non-editable command sink so a
       // CJK input source cannot start composition. That is still an ACTIVE
       // editor state, not a visually unfocused editor: keep the block solid.
-      "&:focus-within:not(.cm-focused) .cm-fat-cursor, &.cm-vim-command-focused:not(.cm-focused) .cm-fat-cursor": {
-        background: `${accent} !important`,
-        color: `${theme.palette.primary.contrastText} !important`,
-        outline: "none !important",
-        opacity: "1 !important",
-      },
+      "&:focus-within:not(.cm-focused) .cm-fat-cursor, &.cm-vim-command-focused:not(.cm-focused) .cm-fat-cursor":
+        {
+          background: `${accent} !important`,
+          color: `${theme.palette.primary.contrastText} !important`,
+          outline: "none !important",
+          opacity: "1 !important",
+        },
       // A genuinely unfocused editor should not retain the upstream pink
       // hollow block (it reads as a stray bracket on an empty document).
-      "&:not(.cm-focused):not(:focus-within):not(.cm-vim-command-focused) .cm-fat-cursor": {
-        background: "transparent !important",
-        color: "transparent !important",
-        opacity: "0 !important",
-        outline: "none !important",
-      },
+      "&:not(.cm-focused):not(:focus-within):not(.cm-vim-command-focused) .cm-fat-cursor":
+        {
+          background: "transparent !important",
+          color: "transparent !important",
+          opacity: "0 !important",
+          outline: "none !important",
+        },
       // The placeholder and the first document character must share the exact
       // same inline origin. Vim's block cursor is paint, not layout: reserving a
       // character cell only for `.cm-placeholder` made the prompt jump left by
@@ -129,6 +130,15 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // Don't blink the block cursor (Zed keeps it solid). The vim cursor layer
       // blinks via a JS-set CSS animation on `.cm-vimCursorLayer`; cancel it.
       ".cm-cursorLayer.cm-vimCursorLayer": { animation: "none !important" },
+      // Insert mode owns a real native caret (required by macOS/iOS IME). The
+      // Vim package can leave its previous painted cursor layer alive for one
+      // update after focus returns to `.cm-content`, producing two adjacent
+      // carets. Once CM has editable focus, native paint is authoritative and
+      // the Vim layer must be hidden; Normal/Visual keep focus on the command
+      // sink and therefore retain the solid block / visual decorations above.
+      "&.cm-focused .cm-cursorLayer.cm-vimCursorLayer": {
+        display: "none !important",
+      },
       ".cm-placeholder": { color: theme.palette.text.disabled },
       "&.cm-focused": { outline: "none" },
       // Selection — use the MUI selection token in both the focused and
@@ -140,11 +150,17 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // same semantic selection colour, with enough opacity to remain legible
       // on both light and dark themes.
       ".cm-vim-visual-selection": {
-        backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.3 : 0.2),
+        backgroundColor: alpha(
+          theme.palette.primary.main,
+          theme.palette.mode === "dark" ? 0.3 : 0.2,
+        ),
         borderRadius: "2px",
       },
       ".cm-vim-visual-line": {
-        backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.24 : 0.14),
+        backgroundColor: alpha(
+          theme.palette.primary.main,
+          theme.palette.mode === "dark" ? 0.24 : 0.14,
+        ),
       },
       // Autocomplete popup → MUI Paper.
       ".cm-tooltip": {
@@ -183,7 +199,7 @@ export function cmTheme(theme: Theme, mono = false): Extension {
         borderRadius: "6px",
         backgroundColor: theme.palette.action.selected,
         color: theme.palette.text.primary,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: "0.9em",
         lineHeight: "1.5",
         whiteSpace: "nowrap",
@@ -236,7 +252,9 @@ export function cmTheme(theme: Theme, mono = false): Extension {
       // (inherited light text stays legible). box-decoration-break so a wrapped
       // highlight keeps its rounding on each line fragment.
       ".cm-atomic-highlight": {
-        backgroundColor: dark ? "rgba(255, 213, 79, 0.26)" : "rgba(255, 235, 130, 0.9)",
+        backgroundColor: dark
+          ? "rgba(255, 213, 79, 0.26)"
+          : "rgba(255, 235, 130, 0.9)",
         color: dark ? "inherit" : "#000",
         borderRadius: "3px",
         padding: "0 1px",

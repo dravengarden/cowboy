@@ -227,6 +227,13 @@ export function createImeAutoInsertVim(): {
       // macOS marked text from its input context. The editable is already the
       // native composition host, so let the browser own it until commit.
       if (composing || this.view.composing) return;
+      // Direct Insert commands focus CodeMirror before Vim mutates its logical
+      // selection. The mode-change callback and the explicit post-command sync
+      // both arrive afterward; focusing the same contenteditable again is not
+      // harmless on macOS because the first IME key can land between those
+      // calls. Once the native editable already owns focus, it is the sole
+      // focus/Selection owner until the user leaves Insert.
+      if (document.activeElement === this.view.contentDOM) return;
       this.view.contentDOM.focus({ preventScroll: true });
     }
 

@@ -1,5 +1,5 @@
 import { alpha, Box, ButtonBase, Modal, Paper, Stack, Typography } from "@mui/material";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { useDesktopCommands, type DesktopCommand } from "./DesktopCommandProvider";
 import { DesktopKeycap } from "./DesktopKeycap";
@@ -29,6 +29,9 @@ interface LeaderEntry {
 export function DesktopLeaderBoard(): React.JSX.Element | null {
   const registry = useDesktopCommands();
   const workspace = useDesktopWorkspace();
+  const returnFocusRef = useRef(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
   const prefix = workspace.leaderPrefix.join("");
   const entries = useMemo<LeaderEntry[]>(() => {
     const byKey = new Map<string, LeaderEntry>();
@@ -63,10 +66,11 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
           : entry.command.disabledReason ?? "Command is unavailable in the current context");
         return;
       }
-      registry.execute(entry.command.id);
+      const commandId = entry.command.id;
       workspace.setLeaderPrefix([]);
       workspace.setLeaderMessage(null);
       workspace.setMode("normal");
+      requestAnimationFrame(() => registry.execute(commandId));
       return;
     }
     workspace.setLeaderPrefix([...workspace.leaderPrefix, entry.key]);
@@ -77,11 +81,13 @@ export function DesktopLeaderBoard(): React.JSX.Element | null {
     workspace.setLeaderPrefix([]);
     workspace.setLeaderMessage(null);
     workspace.setMode("normal");
+    requestAnimationFrame(() => returnFocusRef.current?.focus({ preventScroll: true }));
   };
 
   return (
     <Modal
       open
+      disableRestoreFocus
       onClose={close}
       aria-label="Desktop command board"
       slotProps={{

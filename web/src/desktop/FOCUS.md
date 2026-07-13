@@ -8,7 +8,7 @@ controller, command registry, leader board, or shortcut guide.
 Keyboard focus has three levels:
 
 1. pane: Sessions, Prompt, Conversation;
-2. region: list/editor/transcript or Prompt's Queue, Drafts and Composer;
+2. region: Top Bar, list/editor/transcript or Prompt's Plan, Queue, Drafts and Composer;
 3. item: a session, queued prompt, draft, or transcript entry.
 
 DOM integration uses `data-desktop-pane`, `data-desktop-region`, and
@@ -25,6 +25,9 @@ same controller state.
 - `Enter`: default item action.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
+- `SPC w t/s/e/c`: jump directly to Top Bar, Sessions, Prompt or Conversation.
+- `SPC p l/q/d/e`: jump directly to Plan, Queue, Drafts or the Composer.
+- `SPC c c`: jump directly to the Conversation transcript.
 
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
@@ -38,6 +41,20 @@ Palette searches every registered command.
 
 The Desktop-only shortcut dialog opens from the status-line `? Shortcuts`
 entry, `Mod+/`, or `SPC h k`. `SPC ?` remains the all-command entry.
+
+Shortcut hints follow one shared keycap grammar and three visibility levels:
+
+1. global shortcuts are always visible but quiet (`Mod+1…0`, `Mod+N`,
+   `Mod+,`) because they work without first focusing a region;
+2. contextual shortcuts float over their action only while the owning region is
+   focused (Composer direct input and `SPC p …` actions), so they add no layout
+   width and disappear when attention moves elsewhere;
+3. modal actions show their real confirmation/dismissal chord next to the label.
+
+Never invent a hint for an action that is not wired. Avoid browser-owned common
+chords such as `Mod+D` and `Mod+Shift+S`; put Cowboy-specific actions under the
+discoverable leader tree instead. Shared modal shells may use the same visual
+primitive, but must hide it on the touch product.
 
 ## Visual hierarchy
 

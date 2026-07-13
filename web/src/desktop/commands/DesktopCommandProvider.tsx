@@ -15,6 +15,7 @@ import {
   matchesShortcut,
   parseShortcut,
 } from "./shortcut";
+import { isImeComposing } from "../vim/imeStatusStore";
 
 export interface DesktopCommand {
   id: string;
@@ -89,6 +90,21 @@ export function DesktopCommandProvider(
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      // Composition is an exclusive native-input transaction. `isComposing`
+      // is not reliable for every macOS keydown (the first and final events can
+      // straddle compositionstart/end), so consult the shared lifecycle too.
+      // Never let a stale Ctrl-W / gg chord move focus while marked text exists.
+      if (event.isComposing || isImeComposing() || event.keyCode === 229) {
+        if (windowChord.current !== null) {
+          globalThis.clearTimeout(windowChord.current);
+          windowChord.current = null;
+        }
+        if (itemChord.current !== null) {
+          globalThis.clearTimeout(itemChord.current);
+          itemChord.current = null;
+        }
+        return;
+      }
       // Standard Vim window navigation. The first Ctrl-W arms a short chord;
       // the following h/l moves panes, j/k moves vertical regions in the current
       // pane, and w cycles every visible region. Capture-phase handling keeps the
@@ -110,7 +126,7 @@ export function DesktopCommandProvider(
       }
       if (
         event.ctrlKey && !event.metaKey && !event.altKey &&
-        event.key.toLowerCase() === "w" && !event.isComposing
+        event.key.toLowerCase() === "w"
       ) {
         event.preventDefault();
         event.stopPropagation();
@@ -121,13 +137,11 @@ export function DesktopCommandProvider(
       }
       if (workspace.mode === "leader") {
         if (event.key === "Escape") {
-          event.preventDefault();
-          workspace.setLeaderPrefix([]);
-          workspace.setLeaderMessage(null);
-          workspace.setMode("normal");
+          // Let the MUI Modal own dismissal so its close path can restore the
+          // pre-Leader focus. Exact commands deliberately keep their new focus.
           return;
         }
-        if (event.defaultPrevented || event.isComposing || event.repeat) return;
+        if (event.defaultPrevented || event.repeat) return;
         if (event.key === "Backspace") {
           event.preventDefault();
           workspace.setLeaderPrefix(workspace.leaderPrefix.slice(0, -1));
@@ -157,10 +171,14 @@ export function DesktopCommandProvider(
               : exact.disabledReason ?? "Command is unavailable in the current context");
             return;
           }
-          exact.run();
           workspace.setLeaderPrefix([]);
           workspace.setLeaderMessage(null);
           workspace.setMode("normal");
+          // MUI's focus trap is still mounted during this capture handler. Run
+          // the command after Leader unmounts so a focus-jump or newly opened
+          // dialog becomes the final owner instead of being pulled back into
+          // the command board.
+          requestAnimationFrame(() => exact.run());
           return;
         }
         if (branch) {
@@ -243,7 +261,7 @@ export function DesktopCommandProvider(
           }
         }
       }
-      if (event.defaultPrevented || event.isComposing || event.repeat) return;
+      if (event.defaultPrevented || event.repeat) return;
       if (
         event.key === " " && !event.ctrlKey && !event.metaKey && !event.altKey &&
         !isTextEditingTarget(event.target) && !ownsSpaceKey(event.target)

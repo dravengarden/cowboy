@@ -21,6 +21,15 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
+  {
+    keys: ["SPC", "W", "T/S/E/C"],
+    title: "Jump to Top Bar, Sessions, Prompt or Conversation",
+  },
+  {
+    keys: ["SPC", "P", "L/Q/D/E"],
+    title: "Jump to Plan, Queue, Drafts or Composer",
+  },
+  { keys: ["SPC", "C", "C"], title: "Jump to Conversation transcript" },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },

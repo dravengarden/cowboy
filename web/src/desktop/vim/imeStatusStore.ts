@@ -42,6 +42,10 @@ export function clearImeStatus(): void {
   publish(IDLE);
 }
 
+export function isImeComposing(): boolean {
+  return status.phase === "composing";
+}
+
 export function useImeStatus(): ImeStatus {
   return useSyncExternalStore(
     (listener) => {

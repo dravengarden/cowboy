@@ -11,11 +11,11 @@ import {
   DialogTitle,
   Divider,
   FormControl,
-  MenuItem,
   LinearProgress,
+  MenuItem,
   Popover,
-  Skeleton,
   Select,
+  Skeleton,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
@@ -25,7 +25,12 @@ import {
 import { ExpandMore, Refresh, Tune } from "@mui/icons-material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
-import { latestAvailableCommands, resolveSessionAction } from "../agentCommands";
+import { Kbd, useConfirmEnter } from "../Kbd";
+import { ENTER_LABEL } from "../platform";
+import {
+  latestAvailableCommands,
+  resolveSessionAction,
+} from "../agentCommands";
 import { isCompactingTail } from "../derive";
 import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
@@ -34,8 +39,8 @@ import {
   providerUsage,
   relativeUpdateTime,
   shortResetTime,
-  type UsageSnapshot,
   usageLimits,
+  type UsageSnapshot,
 } from "../usageLimits";
 
 const OPTION_RANK: Record<string, number> = {
@@ -56,13 +61,17 @@ function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();
   if (option.id === "mode") return "Agent mode";
   if (option.id === "model") return "Model";
-  if (name.includes("reasoning") && name.includes("effort")) return "Reasoning effort";
+  if (name.includes("reasoning") && name.includes("effort")) {
+    return "Reasoning effort";
+  }
   if (name.includes("fast")) return "Fast mode";
   return option.name;
 }
 
 function currentOptionName(option: ConfigOption): string {
-  return option.options.find((candidate) => String(candidate.value) === String(option.currentValue))?.name ??
+  return option.options.find((candidate) =>
+    String(candidate.value) === String(option.currentValue)
+  )?.name ??
     String(option.currentValue);
 }
 
@@ -85,7 +94,9 @@ function ConfigOptionControl({
 }): React.JSX.Element {
   const label = optionLabel(option);
   const setValue = (value: string): void => {
-    const selected = option.options.find((candidate) => String(candidate.value) === value);
+    const selected = option.options.find((candidate) =>
+      String(candidate.value) === value
+    );
     if (!selected) return;
     send({
       type: "set_config_option",
@@ -111,91 +122,102 @@ function ConfigOptionControl({
           {label}
         </Typography>
       </Tooltip>
-      {label === "Model" ? (
-        <FormControl fullWidth size="small">
-          <Select
+      {label === "Model"
+        ? (
+          <FormControl fullWidth size="small">
+            <Select
+              value={String(option.currentValue)}
+              onChange={(event): void => setValue(String(event.target.value))}
+              aria-label="Model"
+              sx={{
+                height: 34,
+                borderRadius: 1.25,
+                fontSize: "0.75rem",
+                fontWeight: 650,
+                "& .MuiSelect-select": { px: 1.2, py: 0.75 },
+                bgcolor: (theme) =>
+                  alpha(theme.palette.background.default, 0.42),
+                "& .MuiOutlinedInput-notchedOutline": {
+                  borderColor: (theme) => alpha(theme.palette.divider, 0.78),
+                },
+                "&:hover .MuiOutlinedInput-notchedOutline": {
+                  borderColor: (theme) =>
+                    alpha(theme.palette.primary.main, 0.42),
+                },
+                "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
+                  borderWidth: 1,
+                  borderColor: "primary.main",
+                },
+              }}
+            >
+              {option.options.map((candidate) => (
+                <MenuItem
+                  key={String(candidate.value)}
+                  value={String(candidate.value)}
+                  dense
+                >
+                  {candidate.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )
+        : (
+          <ToggleButtonGroup
+            exclusive
+            size="small"
             value={String(option.currentValue)}
-            onChange={(event): void => setValue(String(event.target.value))}
-            aria-label="Model"
+            onChange={(_event, value: string | null): void => {
+              if (value !== null) setValue(value);
+            }}
             sx={{
-              height: 34,
-              borderRadius: 1.25,
-              fontSize: "0.75rem",
-              fontWeight: 650,
-              "& .MuiSelect-select": { px: 1.2, py: 0.75 },
-              bgcolor: (theme) => alpha(theme.palette.background.default, 0.42),
-              "& .MuiOutlinedInput-notchedOutline": {
-                borderColor: (theme) => alpha(theme.palette.divider, 0.78),
-              },
-              "&:hover .MuiOutlinedInput-notchedOutline": {
-                borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
-              },
-              "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
-                borderWidth: 1,
-                borderColor: "primary.main",
+              display: "flex",
+              flexWrap: "nowrap",
+              gap: 0.5,
+              p: 0.5,
+              borderRadius: 1.5,
+              bgcolor: (theme) => alpha(theme.palette.background.default, 0.48),
+              border: 1,
+              borderColor: (theme) => alpha(theme.palette.divider, 0.62),
+              "& .MuiToggleButtonGroup-grouped": {
+                borderRadius: 1.1,
+                border: 0,
+                color: "text.secondary",
+                "&.Mui-selected": {
+                  color: "primary.main",
+                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.14),
+                  boxShadow: (theme) =>
+                    `inset 0 0 0 1px ${
+                      alpha(theme.palette.primary.main, 0.28)
+                    }`,
+                },
+                "&.Mui-selected:hover": {
+                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.18),
+                },
               },
             }}
           >
             {option.options.map((candidate) => (
-              <MenuItem key={String(candidate.value)} value={String(candidate.value)} dense>
+              <ToggleButton
+                key={String(candidate.value)}
+                value={String(candidate.value)}
+                sx={{
+                  minHeight: 28,
+                  minWidth: 0,
+                  px: compact ? 1 : 1.25,
+                  py: 0.2,
+                  flex: compact ? "1 1 0" : "0 1 auto",
+                  fontSize: "0.6875rem",
+                  lineHeight: 1.15,
+                  textTransform: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {candidate.name}
-              </MenuItem>
+              </ToggleButton>
             ))}
-          </Select>
-        </FormControl>
-      ) : (
-        <ToggleButtonGroup
-          exclusive
-          size="small"
-          value={String(option.currentValue)}
-          onChange={(_event, value: string | null): void => {
-            if (value !== null) setValue(value);
-          }}
-          sx={{
-            display: "flex",
-            flexWrap: "nowrap",
-            gap: 0.5,
-            p: 0.5,
-            borderRadius: 1.5,
-            bgcolor: (theme) => alpha(theme.palette.background.default, 0.48),
-            border: 1,
-            borderColor: (theme) => alpha(theme.palette.divider, 0.62),
-            "& .MuiToggleButtonGroup-grouped": {
-              borderRadius: 1.1,
-              border: 0,
-              color: "text.secondary",
-              "&.Mui-selected": {
-                color: "primary.main",
-                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.14),
-                boxShadow: (theme) => `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.28)}`,
-              },
-              "&.Mui-selected:hover": {
-                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.18),
-              },
-            },
-          }}
-        >
-          {option.options.map((candidate) => (
-            <ToggleButton
-              key={String(candidate.value)}
-              value={String(candidate.value)}
-              sx={{
-                minHeight: 28,
-                minWidth: 0,
-                px: compact ? 1 : 1.25,
-                py: 0.2,
-                flex: compact ? "1 1 0" : "0 1 auto",
-                fontSize: "0.6875rem",
-                lineHeight: 1.15,
-                textTransform: "none",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {candidate.name}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      )}
+          </ToggleButtonGroup>
+        )}
     </Box>
   );
 }
@@ -207,7 +229,9 @@ export function DesktopTopBarControls({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
-  const optionsBySession = useStoreSelector((snapshot) => snapshot.configOptions);
+  const optionsBySession = useStoreSelector((snapshot) =>
+    snapshot.configOptions
+  );
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
@@ -220,7 +244,8 @@ export function DesktopTopBarControls({
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [compactConfirm, setCompactConfirm] = useState(false);
-  const dead = status === "exited" || status === "crashed" || status === "interrupted";
+  const dead = status === "exited" || status === "crashed" ||
+    status === "interrupted";
   const options = useMemo(() => {
     const raw = optionsBySession.get(sessionId) ?? [];
     return [...raw].sort((left, right) => {
@@ -235,18 +260,24 @@ export function DesktopTopBarControls({
     const label = optionLabel(option);
     return label === "Agent mode" || label === "Model";
   });
-  const compactOptions = options.filter((option) => !wideOptions.includes(option));
+  const compactOptions = options.filter((option) =>
+    !wideOptions.includes(option)
+  );
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      const response = await fetch("/api/usage", { method: manual ? "POST" : "GET" });
+      const response = await fetch("/api/usage", {
+        method: manual ? "POST" : "GET",
+      });
       if (response.ok) setSnapshot(await response.json() as UsageSnapshot);
     } finally {
       setRefreshing(false);
     }
   }, [refreshing]);
-  useEffect(() => { void loadUsage(false); }, []);
+  useEffect(() => {
+    void loadUsage(false);
+  }, []);
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => window.clearInterval(timer);
@@ -254,13 +285,28 @@ export function DesktopTopBarControls({
   const usage = providerUsage(snapshot, session?.provider);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const accountLimits = limits.filter((limit) => !limit.label.includes(" · "));
-  const visibleLimits = (accountLimits.length >= 2 ? accountLimits : limits).slice(0, 2);
+  const visibleLimits = (accountLimits.length >= 2 ? accountLimits : limits)
+    .slice(0, 2);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
-  const availableCommands = useMemo(() => latestAvailableCommands(timeline), [timeline]);
+  const availableCommands = useMemo(() => latestAvailableCommands(timeline), [
+    timeline,
+  ]);
   const compactAction = useMemo(
-    () => resolveSessionAction("compact", session?.provider ?? "", availableCommands),
+    () =>
+      resolveSessionAction(
+        "compact",
+        session?.provider ?? "",
+        availableCommands,
+      ),
     [availableCommands, session?.provider],
   );
+  const confirmCompact = useCallback((): void => {
+    setCompactConfirm(false);
+    if (compactAction?.command) {
+      submitPrompt(sessionId, compactAction.command, []);
+    }
+  }, [compactAction?.command, sessionId]);
+  useConfirmEnter(compactConfirm, confirmCompact);
   const compacting = status === "busy" && isCompactingTail(timeline);
   const contextUsed = session?.context_used ?? 0;
   const contextSize = session?.context_size ?? 0;
@@ -271,12 +317,15 @@ export function DesktopTopBarControls({
   return (
     <Stack
       data-desktop-topbar-controls
+      data-desktop-region="topbar.controls"
+      tabIndex={-1}
       direction="row"
       alignItems="center"
       spacing={0.75}
       sx={{ flex: 1, minWidth: 0, ml: 2, overflow: "hidden" }}
     >
-      {options.length === 0 && !dead && (status === "starting" || status === "running")
+      {options.length === 0 && !dead &&
+          (status === "starting" || status === "running")
         ? <Skeleton variant="rounded" width={300} height={34} />
         : (
           <Tooltip title={configSummary || "Run configuration"}>
@@ -299,21 +348,28 @@ export function DesktopTopBarControls({
                 minWidth: 170,
                 borderRadius: 1.5,
                 color: "text.primary",
-                borderColor: (theme) => alpha(theme.palette.primary.main, configAnchor ? 0.68 : 0.3),
-                bgcolor: (theme) => alpha(
-                  theme.palette.background.paper,
-                  configAnchor ? (theme.palette.mode === "dark" ? 0.78 : 0.82) : 0.46,
-                ),
+                borderColor: (theme) =>
+                  alpha(theme.palette.primary.main, configAnchor ? 0.68 : 0.3),
+                bgcolor: (theme) =>
+                  alpha(
+                    theme.palette.background.paper,
+                    configAnchor
+                      ? (theme.palette.mode === "dark" ? 0.78 : 0.82)
+                      : 0.46,
+                  ),
                 boxShadow: configAnchor
-                  ? (theme) => `0 0 0 2px ${alpha(theme.palette.primary.main, 0.1)}`
+                  ? (theme) =>
+                    `0 0 0 2px ${alpha(theme.palette.primary.main, 0.1)}`
                   : "none",
                 "&:hover": {
-                  borderColor: (theme) => alpha(theme.palette.primary.main, 0.52),
+                  borderColor: (theme) =>
+                    alpha(theme.palette.primary.main, 0.52),
                   bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
                 },
                 "&.Mui-focusVisible": {
                   borderColor: "primary.main",
-                  boxShadow: (theme) => `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
+                  boxShadow: (theme) =>
+                    `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
                 },
                 "& .MuiButton-startIcon": { mr: 0.8 },
                 "& .MuiButton-endIcon": { ml: "auto" },
@@ -342,16 +398,36 @@ export function DesktopTopBarControls({
               borderRadius: 2.5,
               border: 1,
               borderColor: (theme) => alpha(theme.palette.primary.main, 0.18),
-              bgcolor: (theme) => alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.97 : 0.92),
+              bgcolor: (theme) =>
+                alpha(
+                  theme.palette.background.paper,
+                  theme.palette.mode === "dark" ? 0.97 : 0.92,
+                ),
               backgroundImage: (theme) =>
-                `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.035 : 0.48)}, transparent 52%)`,
+                `linear-gradient(145deg, ${
+                  alpha(
+                    theme.palette.common.white,
+                    theme.palette.mode === "dark" ? 0.035 : 0.48,
+                  )
+                }, transparent 52%)`,
               backdropFilter: "blur(28px) saturate(145%)",
               WebkitBackdropFilter: "blur(28px) saturate(145%)",
-              boxShadow: (theme) => [
-                `0 18px 48px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.42 : 0.16)}`,
-                `0 3px 12px ${alpha(theme.palette.primary.main, 0.1)}`,
-                `inset 0 1px 0 ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.06 : 0.7)}`,
-              ].join(", "),
+              boxShadow: (theme) =>
+                [
+                  `0 18px 48px ${
+                    alpha(
+                      theme.palette.common.black,
+                      theme.palette.mode === "dark" ? 0.42 : 0.16,
+                    )
+                  }`,
+                  `0 3px 12px ${alpha(theme.palette.primary.main, 0.1)}`,
+                  `inset 0 1px 0 ${
+                    alpha(
+                      theme.palette.common.white,
+                      theme.palette.mode === "dark" ? 0.06 : 0.7,
+                    )
+                  }`,
+                ].join(", "),
             },
           },
         }}
@@ -360,17 +436,31 @@ export function DesktopTopBarControls({
           <Box sx={{ px: 1.5, pt: 1.4, pb: 1.15 }}>
             <Stack direction="row" spacing={0.8} alignItems="center">
               <Tune sx={{ fontSize: 17, color: "primary.main" }} />
-              <Typography variant="subtitle2" fontWeight={780}>Run configuration</Typography>
+              <Typography variant="subtitle2" fontWeight={780}>
+                Run configuration
+              </Typography>
             </Stack>
             <Typography variant="caption" color="text.secondary">
               Changes apply immediately to this session.
             </Typography>
           </Box>
-          <Divider sx={{ borderColor: (theme) => alpha(theme.palette.divider, 0.72) }} />
+          <Divider
+            sx={{ borderColor: (theme) => alpha(theme.palette.divider, 0.72) }}
+          />
           <Stack spacing={1.2} sx={{ px: 1.5, pt: 1.2, pb: 1.5 }}>
-            <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)", gap: 1.2 }}>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)",
+                gap: 1.2,
+              }}
+            >
               {wideOptions.map((option) => (
-                <ConfigOptionControl key={option.id} option={option} sessionId={sessionId} />
+                <ConfigOptionControl
+                  key={option.id}
+                  option={option}
+                  sessionId={sessionId}
+                />
               ))}
             </Box>
             {compactOptions.length > 0 && (
@@ -408,52 +498,76 @@ export function DesktopTopBarControls({
           "&:hover": { bgcolor: "action.hover" },
         }}
       >
-        {visibleLimits.length > 0 ? (
-          <Stack direction="row" spacing={0.4} alignItems="stretch">
-            {visibleLimits.map((limit) => (
+        {visibleLimits.length > 0
+          ? (
+            <Stack direction="row" spacing={0.4} alignItems="stretch">
+              {visibleLimits.map((limit) => (
+                <Box
+                  key={limit.id}
+                  sx={{
+                    width: 98,
+                    px: 0.65,
+                    py: 0.25,
+                    textAlign: "left",
+                    borderRadius: 1,
+                    bgcolor: "action.hover",
+                  }}
+                >
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    spacing={0.75}
+                  >
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                      {limit.label}
+                    </Typography>
+                    <Typography variant="caption" fontWeight={800} noWrap>
+                      {limit.remaining}%
+                    </Typography>
+                  </Stack>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ display: "block", fontSize: "0.625rem" }}
+                  >
+                    {shortResetTime(limit.resetsAt)}
+                  </Typography>
+                </Box>
+              ))}
               <Box
-                key={limit.id}
                 sx={{
-                  width: 98,
-                  px: 0.65,
+                  width: 58,
+                  px: 0.5,
                   py: 0.25,
-                  textAlign: "left",
                   borderRadius: 1,
                   bgcolor: "action.hover",
+                  textAlign: "left",
                 }}
               >
-                <Stack direction="row" justifyContent="space-between" spacing={0.75}>
-                  <Typography variant="caption" color="text.secondary" noWrap>{limit.label}</Typography>
-                  <Typography variant="caption" fontWeight={800} noWrap>{limit.remaining}%</Typography>
-                </Stack>
-                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
-                  {shortResetTime(limit.resetsAt)}
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", fontSize: "0.5625rem" }}
+                >
+                  Updated
+                </Typography>
+                <Typography
+                  variant="caption"
+                  fontWeight={750}
+                  noWrap
+                  sx={{ display: "block", fontSize: "0.625rem" }}
+                >
+                  {updatedAgo}
                 </Typography>
               </Box>
-            ))}
-            <Box
-              sx={{
-                width: 58,
-                px: 0.5,
-                py: 0.25,
-                borderRadius: 1,
-                bgcolor: "action.hover",
-                textAlign: "left",
-              }}
-            >
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: "0.5625rem" }}>
-                Updated
-              </Typography>
-              <Typography variant="caption" fontWeight={750} noWrap sx={{ display: "block", fontSize: "0.625rem" }}>
-                {updatedAgo}
-              </Typography>
-            </Box>
-          </Stack>
-        ) : (
-          <Typography variant="caption" color="text.secondary">
-            {snapshot ? "Usage unavailable" : "Loading usage…"}
-          </Typography>
-        )}
+            </Stack>
+          )
+          : (
+            <Typography variant="caption" color="text.secondary">
+              {snapshot ? "Usage unavailable" : "Loading usage…"}
+            </Typography>
+          )}
       </ButtonBase>
 
       <Popover
@@ -462,21 +576,34 @@ export function DesktopTopBarControls({
         onClose={(): void => setUsageAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { sx: { width: 390, mt: 0.75, p: 1.5, borderRadius: 2.5 } } }}
+        slotProps={{
+          paper: { sx: { width: 390, mt: 0.75, p: 1.5, borderRadius: 2.5 } },
+        }}
       >
         <Stack spacing={1.25}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+          >
             <Box>
-              <Typography variant="subtitle2" fontWeight={750}>Usage limits</Typography>
+              <Typography variant="subtitle2" fontWeight={750}>
+                Usage limits
+              </Typography>
               <Typography variant="caption" color="text.secondary">
-                {session?.provider ?? "Provider"} · {usage?.status ?? "unavailable"} · Updated {updatedAgo}
+                {session?.provider ?? "Provider"} ·{" "}
+                {usage?.status ?? "unavailable"} · Updated {updatedAgo}
               </Typography>
             </Box>
             <Button
               size="small"
-              startIcon={refreshing ? <CircularProgress size={14} /> : <Refresh fontSize="small" />}
+              startIcon={refreshing
+                ? <CircularProgress size={14} />
+                : <Refresh fontSize="small" />}
               disabled={refreshing}
-              onClick={(): void => { void loadUsage(true); }}
+              onClick={(): void => {
+                void loadUsage(true);
+              }}
               sx={{ textTransform: "none" }}
             >
               Refresh
@@ -487,12 +614,18 @@ export function DesktopTopBarControls({
             <Stack key={limit.id} spacing={0.5}>
               <Stack direction="row" justifyContent="space-between">
                 <Typography variant="body2">{limit.label}</Typography>
-                <Typography variant="body2" fontWeight={750}>{limit.remaining}% remaining</Typography>
+                <Typography variant="body2" fontWeight={750}>
+                  {limit.remaining}% remaining
+                </Typography>
               </Stack>
               <LinearProgress
                 variant="determinate"
                 value={limit.remaining}
-                sx={{ height: 6, borderRadius: 99, "& .MuiLinearProgress-bar": { borderRadius: 99 } }}
+                sx={{
+                  height: 6,
+                  borderRadius: 99,
+                  "& .MuiLinearProgress-bar": { borderRadius: 99 },
+                }}
               />
               <Typography variant="caption" color="text.secondary">
                 Resets {fullResetTime(limit.resetsAt)}
@@ -508,14 +641,24 @@ export function DesktopTopBarControls({
       </Popover>
 
       {compactAction && (
-        <Tooltip title={compacting ? "Compacting…" : compactTooltip(contextUsed, contextSize)}>
+        <Tooltip
+          title={compacting
+            ? "Compacting…"
+            : compactTooltip(contextUsed, contextSize)}
+        >
           <span>
             <Button
               data-desktop-compact
               size="small"
               color="inherit"
               variant="outlined"
-              startIcon={<CompactIcon used={contextUsed} size={contextSize} active={compacting} />}
+              startIcon={
+                <CompactIcon
+                  used={contextUsed}
+                  size={contextSize}
+                  active={compacting}
+                />
+              }
               disabled={dead || compacting}
               onClick={(): void => setCompactConfirm(true)}
               sx={{
@@ -528,9 +671,15 @@ export function DesktopTopBarControls({
               }}
             >
               <Stack direction="row" spacing={0.65} alignItems="baseline">
-                <Typography variant="caption" fontWeight={750}>Compact</Typography>
+                <Typography variant="caption" fontWeight={750}>
+                  Compact
+                </Typography>
                 {contextPercent !== null && (
-                  <Typography variant="caption" color="text.secondary" fontWeight={650}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    fontWeight={650}
+                  >
                     {contextPercent}%
                   </Typography>
                 )}
@@ -551,26 +700,41 @@ export function DesktopTopBarControls({
           <DialogContentText>{compactAction?.detail}</DialogContentText>
           {compactAction?.command && (
             <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
-              Sends <Box component="code" sx={{ px: 0.5, py: 0.125, borderRadius: 0.75, bgcolor: "action.hover" }}>
+              Sends{" "}
+              <Box
+                component="code"
+                sx={{
+                  px: 0.5,
+                  py: 0.125,
+                  borderRadius: 0.75,
+                  bgcolor: "action.hover",
+                }}
+              >
                 {compactAction.command}
-              </Box> to {session?.provider ?? "the agent"}
-              {status === "busy" || status === "starting" ? " (queued after the current turn)" : ""}.
+              </Box>{" "}
+              to {session?.provider ?? "the agent"}
+              {status === "busy" || status === "starting"
+                ? " (queued after the current turn)"
+                : ""}.
             </DialogContentText>
           )}
         </DialogContent>
         <DialogActions>
-          <Button color="inherit" onClick={(): void => setCompactConfirm(false)} sx={{ textTransform: "none" }}>
+          <Button
+            color="inherit"
+            onClick={(): void => setCompactConfirm(false)}
+            sx={{ textTransform: "none" }}
+          >
             Cancel
+            <Kbd keys="Esc" />
           </Button>
           <Button
             variant="contained"
-            onClick={(): void => {
-              setCompactConfirm(false);
-              if (compactAction?.command) submitPrompt(sessionId, compactAction.command, []);
-            }}
+            onClick={confirmCompact}
             sx={{ textTransform: "none" }}
           >
             Compact
+            <Kbd keys={ENTER_LABEL} />
           </Button>
         </DialogActions>
       </Dialog>

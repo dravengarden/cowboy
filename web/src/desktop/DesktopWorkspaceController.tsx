@@ -44,7 +44,15 @@ function regionFromTarget(target: EventTarget | null): string | null {
 function focusElement(element: HTMLElement | null): void {
   if (!element) return;
   const preferred = element.querySelector<HTMLElement>("[data-desktop-focus-default]");
-  (preferred ?? element).focus({ preventScroll: true });
+  const composer = element.dataset.desktopRegion === "prompt.composer"
+    ? element.querySelector<HTMLElement>(".cm-content[contenteditable='true']")
+    : null;
+  const planToggle = element.dataset.desktopRegion === "prompt.plan"
+    ? element.querySelector<HTMLElement>(
+      "button[aria-label='Expand plan'], button[aria-label='Collapse plan']",
+    )
+    : null;
+  (composer ?? planToggle ?? preferred ?? element).focus({ preventScroll: true });
   element.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 

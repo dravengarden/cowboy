@@ -23,6 +23,7 @@ import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { useVimMode } from "../../vimModeStore";
 import { isMac } from "../../platform";
 import { isTextEditingTarget } from "./shortcut";
+import { isImeComposing } from "../vim/imeStatusStore";
 
 export function DesktopCommandHost({
   sessions,
@@ -72,6 +73,7 @@ export function DesktopCommandHost({
         : event.ctrlKey && !event.metaKey;
       if (
         !mod || event.shiftKey || event.altKey || event.repeat || event.isComposing ||
+        isImeComposing() || event.keyCode === 229 ||
         isTextEditingTarget(event.target)
       ) return;
       const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
@@ -224,6 +226,15 @@ export function DesktopCommandHost({
       run: onOpenSettings,
     },
     {
+      id: "workspace.focusTopbar",
+      title: "Focus Top Bar",
+      description: "Move keyboard focus to session controls and usage",
+      group: "Workspace",
+      leader: "w t",
+      when: () => document.querySelector("[data-desktop-region='topbar.controls']") !== null,
+      run: () => workspace.focusRegion("topbar.controls"),
+    },
+    {
       id: "workspace.focusSessions",
       title: "Focus Sessions",
       group: "Workspace",
@@ -245,12 +256,21 @@ export function DesktopCommandHost({
       run: () => workspace.focusPane("conversation"),
     },
     {
+      id: "prompt.focusPlan",
+      title: "Focus Plan",
+      description: "Move keyboard focus to the current task plan",
+      group: "Prompt",
+      leader: "p l",
+      when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
+      disabledReason: "The agent has not published a plan",
+      run: () => workspace.focusRegion("prompt.plan"),
+    },
+    {
       id: "prompt.focusQueue",
       title: "Focus Queue",
       description: "Move keyboard focus to queued prompts",
       group: "Prompt",
       leader: "p q",
-      contexts: ["prompt"],
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
       run: () => workspace.focusRegion("prompt.queued"),
@@ -261,7 +281,6 @@ export function DesktopCommandHost({
       description: "Move keyboard focus to parked drafts",
       group: "Prompt",
       leader: "p d",
-      contexts: ["prompt"],
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
       run: () => workspace.focusRegion("prompt.draft"),
@@ -271,7 +290,6 @@ export function DesktopCommandHost({
       title: "Focus Prompt Editor",
       group: "Prompt",
       leader: "p e",
-      contexts: ["prompt"],
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {
@@ -279,7 +297,6 @@ export function DesktopCommandHost({
       title: "Focus Transcript",
       group: "Conversation",
       leader: "c c",
-      contexts: ["conversation"],
       run: () => workspace.focusRegion("conversation.transcript"),
     },
     {
@@ -333,6 +350,8 @@ export function DesktopCommandHost({
   useDesktopCommand(commands[14] as DesktopCommand);
   useDesktopCommand(commands[15] as DesktopCommand);
   useDesktopCommand(commands[16] as DesktopCommand);
+  useDesktopCommand(commands[17] as DesktopCommand);
+  useDesktopCommand(commands[18] as DesktopCommand);
 
   const normalized = query.trim().toLowerCase();
   const available = registry.list().filter((command) =>

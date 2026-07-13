@@ -1,6 +1,9 @@
 import {
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -116,6 +119,7 @@ import {
   seedInlineAttachments,
   setImageTapHandler,
 } from "./inlineImages";
+
 import {
   activateAllDrafts,
   activateDraft,
@@ -165,6 +169,15 @@ import {
   type Store,
   useStore as usePrefStore,
 } from "./_store/mod.ts";
+
+const DesktopContextShortcut = lazy(async () => {
+  const module = await import("./desktop/commands/DesktopComposerShortcuts");
+  return { default: module.DesktopContextShortcut };
+});
+const DesktopComposerCommandBindings = lazy(async () => {
+  const module = await import("./desktop/commands/DesktopComposerShortcuts");
+  return { default: module.DesktopComposerCommandBindings };
+});
 
 // Per-panel-kind collapse pref (app-level, per-device, never synced). One
 // persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
@@ -622,6 +635,19 @@ export function ComposerWorkspace({
   // handle) off and turns the root into a fill-height flex column instead.
   const column = variant === "column";
   const desktop = surface === "desktop";
+  const desktopShortcut = (
+    child: ReactNode,
+    badge: string,
+    shortcut: string,
+  ): ReactNode => desktop
+    ? (
+      <Suspense fallback={child}>
+        <DesktopContextShortcut badge={badge} shortcut={shortcut}>
+          {child}
+        </DesktopContextShortcut>
+      </Suspense>
+    )
+    : child;
   const editorRef = useRef<ComposerEditorHandle>(null);
   const {
     text,
@@ -1030,10 +1056,19 @@ export function ComposerWorkspace({
           superseded by a new turn (see showPlan). */
       }
       {showPlan && plan && (
-        <PlanDock
-          entries={plan.entries}
-          onDismiss={(): void => setDismissedPlanKey(plan.key)}
-        />
+        <Box
+          {...(desktop
+            ? {
+              "data-desktop-region": "prompt.plan",
+              tabIndex: -1,
+            }
+            : {})}
+        >
+          <PlanDock
+            entries={plan.entries}
+            onDismiss={(): void => setDismissedPlanKey(plan.key)}
+          />
+        </Box>
       )}
       {
         /* The floating slot above the composer. A pending tool-permission OUTRANKS
@@ -1371,7 +1406,25 @@ export function ComposerWorkspace({
             one cohesive card. `px`/`pb` (not the nav gutters) inset the row to the
             card's own edges. */}
         {desktop ? (
-          <Stack
+          <>
+            <Suspense fallback={null}>
+              <DesktopComposerCommandBindings
+                sendable={sendable}
+                canAttach={!dead}
+                canJumpFront={queue.length > 0}
+                canForce={busy || starting || paused}
+                canMore={!desktopActionsExpanded || clearAction !== null}
+                onAttach={(): void => fileInputRef.current?.click()}
+                onSaveDraft={saveDraft}
+                onSchedule={(): void => setScheduleTarget({ id: undefined, initial: null })}
+                onJumpFront={jumpToFront}
+                onForce={(): void => {
+                  if (queueBtnRef.current) setForceAnchor(queueBtnRef.current);
+                }}
+                onMore={(): void => setDesktopMoreAnchor(desktopMoreButtonRef.current)}
+              />
+            </Suspense>
+            <Stack
             ref={desktopToolbarRef}
             direction="row"
             alignItems="center"
@@ -1380,38 +1433,38 @@ export function ComposerWorkspace({
           >
             <Tooltip title="Slash command / skill">
               <span>
-                <IconButton
+                {desktopShortcut(<IconButton
                   size="small"
                   aria-label="slash command"
                   disabled={dead}
                   onClick={(): void => editorRef.current?.insertTrigger("/")}
                 >
                   <Box component="span" sx={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1 }}>/</Box>
-                </IconButton>
+                </IconButton>, "/", "Type / · slash command")}
               </span>
             </Tooltip>
             <Tooltip title="Reference a file (@)">
               <span>
-                <IconButton
+                {desktopShortcut(<IconButton
                   size="small"
                   aria-label="reference a file"
                   disabled={dead}
                   onClick={(): void => editorRef.current?.insertTrigger("@")}
                 >
                   <AlternateEmail fontSize="small" />
-                </IconButton>
+                </IconButton>, "@", "Type @ · reference a file")}
               </span>
             </Tooltip>
             <Tooltip title="Attach image or file">
               <span>
-                <IconButton
+                {desktopShortcut(<IconButton
                   size="small"
                   aria-label="attach image or file"
                   disabled={dead}
                   onClick={(): void => fileInputRef.current?.click()}
                 >
                   <AttachFile fontSize="small" />
-                </IconButton>
+                </IconButton>, "A", "Normal · SPC P A · attach file")}
               </span>
             </Tooltip>
             <Box sx={{ flex: 1 }} />
@@ -1420,43 +1473,43 @@ export function ComposerWorkspace({
               <>
                 <Tooltip title="Save as draft">
                   <span>
-                    <IconButton
+                    {desktopShortcut(<IconButton
                       size="small"
                       aria-label="save as draft"
                       disabled={!sendable}
                       onClick={saveDraft}
                     >
                       <EditNoteOutlined fontSize="small" />
-                    </IconButton>
+                    </IconButton>, "S", "Normal · SPC P S · save as draft")}
                   </span>
                 </Tooltip>
                 <Tooltip title="Schedule send">
                   <span>
-                    <IconButton
+                    {desktopShortcut(<IconButton
                       size="small"
                       aria-label="schedule send"
                       disabled={!sendable}
                       onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
                     >
                       <Schedule fontSize="small" />
-                    </IconButton>
+                    </IconButton>, "T", "Normal · SPC P T · schedule prompt")}
                   </span>
                 </Tooltip>
                 <Tooltip title="Jump to front of queue">
                   <span>
-                    <IconButton
+                    {desktopShortcut(<IconButton
                       size="small"
                       aria-label="jump to front of queue"
                       disabled={!sendable || queue.length === 0}
                       onClick={jumpToFront}
                     >
                       <VerticalAlignTop fontSize="small" />
-                    </IconButton>
+                    </IconButton>, "J", "Normal · SPC P J · jump to front")}
                   </span>
                 </Tooltip>
                 <Tooltip title="Force push">
                   <span>
-                    <IconButton
+                    {desktopShortcut(<IconButton
                       size="small"
                       color="warning"
                       aria-label="force push"
@@ -1464,7 +1517,7 @@ export function ComposerWorkspace({
                       onClick={(e): void => setForceAnchor(e.currentTarget)}
                     >
                       <Bolt fontSize="small" />
-                    </IconButton>
+                    </IconButton>, "F", "Normal · SPC P F · force push")}
                   </span>
                 </Tooltip>
               </>
@@ -1473,7 +1526,7 @@ export function ComposerWorkspace({
             {(!desktopActionsExpanded || clearAction) && (
               <Tooltip title={!desktopActionsExpanded ? "More delivery options" : "More actions"}>
                 <span>
-                  <IconButton
+                  {desktopShortcut(<IconButton
                     ref={desktopMoreButtonRef}
                     size="small"
                     aria-label={!desktopActionsExpanded ? "more delivery options" : "more actions"}
@@ -1482,7 +1535,7 @@ export function ComposerWorkspace({
                     onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
                   >
                     <MoreVert fontSize="small" />
-                  </IconButton>
+                  </IconButton>, "M", "Normal · SPC P M · more prompt actions")}
                 </span>
               </Tooltip>
             )}
@@ -1550,7 +1603,7 @@ export function ComposerWorkspace({
               )}
             </Menu>
 
-            <Button
+            {desktopShortcut(<Button
               ref={queueBtnRef}
               variant="contained"
               size="small"
@@ -1568,8 +1621,9 @@ export function ComposerWorkspace({
               }}
             >
               {busy || starting ? "Queue" : "Send"}
-            </Button>
-          </Stack>
+            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`)}
+            </Stack>
+          </>
         ) : (
         <Stack
           direction="row"
@@ -3744,9 +3798,12 @@ function ComposerSheet({
           <Typography variant="h6" component="span" sx={{ fontWeight: 700 }}>
             Session settings
           </Typography>
-          <IconButton aria-label="close session settings" onClick={onClose} size="small">
-            <Close fontSize="small" />
-          </IconButton>
+          <Box sx={{ position: "relative", display: "inline-flex" }}>
+            <IconButton aria-label="close session settings" onClick={onClose} size="small">
+              <Close fontSize="small" />
+            </IconButton>
+            <Kbd keys="Esc" floating />
+          </Box>
         </Stack>
       )}
     >
