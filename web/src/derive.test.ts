@@ -1,4 +1,4 @@
-import { derive } from "./derive";
+import { derive, linkTimeline } from "./derive";
 import type { Envelope } from "./protocol";
 
 Deno.test("derive coalesces text and memoizes immutable timelines", () => {
@@ -24,6 +24,44 @@ Deno.test("derive coalesces text and memoizes immutable timelines", () => {
     throw new Error("expected one message");
   }
   if (message.chunks[0].text !== "hello") throw new Error("chunks were not coalesced");
+});
+
+Deno.test("derive preserves unchanged row identities across timeline successors", () => {
+  const firstTimeline: Envelope[] = [
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "stable" } },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-1",
+        title: "Running",
+        status: "pending",
+        content: { type: "text", text: "large result placeholder" },
+      },
+    },
+  ];
+  const first = derive(firstTimeline);
+  const successor = linkTimeline([
+    ...firstTimeline,
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "update",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "new" } },
+    },
+  ], firstTimeline);
+  const second = derive(successor);
+  if (first[0] !== second[0] || first[1] !== second[1]) {
+    throw new Error("unchanged transcript rows should retain object identity");
+  }
+  if (second[2]?.kind !== "message") throw new Error("new row should still be derived");
 });
 
 Deno.test("derive turns empty Codex HTML separators into thought sections only", () => {

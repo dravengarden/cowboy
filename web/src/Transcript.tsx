@@ -726,20 +726,25 @@ function CollapsibleUserBody({
     if (!el) return undefined;
     // Only collapse when there's a meaningful amount to hide (a hair over the
     // cap isn't worth a toggle) — natural height must clear the cap + a buffer.
-    const measure = (): void => setOverflowing(el.offsetHeight > COLLAPSED_BUBBLE_PX + 80);
-    measure();
-    const ro = new ResizeObserver(measure);
+    // ResizeObserver supplies the natural content box after layout. Reading
+    // offsetHeight synchronously for every transcript row forced a style/layout
+    // flush during startup, especially on slower Mobile devices.
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setOverflowing(entry.contentRect.height > COLLAPSED_BUBBLE_PX + 80);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const clamp = overflowing && !expanded;
+  // Cap from the first frame: short content is unaffected, while a long message
+  // cannot flash fully expanded before the observer's initial delivery.
+  const clamp = !expanded;
   return (
     <>
       <Box sx={{ position: "relative" }}>
         <Box sx={{ maxHeight: clamp ? COLLAPSED_BUBBLE_PX : "none", overflow: "hidden" }}>
           <Box ref={ref}>{children}</Box>
         </Box>
-        {clamp && (
+        {overflowing && clamp && (
           <Box
             aria-hidden
             sx={{
@@ -1403,6 +1408,29 @@ function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
  *  the badge makes the silence visible and the user recovers manually via Stop. */
 const QUIET_BADGE_MIN = 5;
 
+/** Activity signature without serializing tool payloads. A screenshot-bearing
+ * tool result can be tens of megabytes; JSON.stringify here used to block the
+ * main thread again on every unrelated Transcript render. */
+function itemProgressSignature(item: RenderItem | undefined, count: number): string {
+  if (!item) return "";
+  switch (item.kind) {
+    case "message":
+      return `${count}:${item.key}:m:${item.chunks.map((chunk) =>
+        chunk.type === "text" ? chunk.text.length : chunk.src.length
+      ).join(",")}`;
+    case "thought":
+      return `${count}:${item.key}:t:${item.sections.map((section) => section.length).join(",")}`;
+    case "tool":
+      return `${count}:${item.key}:tool:${item.status}:${item.title}`;
+    case "permission":
+      return `${count}:${item.key}:permission:${item.resolved}:${item.chosen ?? ""}`;
+    case "lifecycle":
+      return `${count}:${item.key}:lifecycle:${item.status}`;
+    case "cleared":
+      return `${count}:${item.key}:cleared:${item.at}`;
+  }
+}
+
 /** Whole minutes since `signature` (last-item size + count) last changed — i.e.
  *  since the last streamed activity. Refs are updated during render (derived from
  *  the prop) so there's no frame lag; a coarse 30s tick re-reads the clock. This
@@ -1512,7 +1540,7 @@ export function Transcript({
   // Signature that changes whenever the last item grows (more chunks / text) or a
   // new item is appended — drives the caret idle-cap (Layer 5). Cheap: serializes
   // only the last item.
-  const lastSig = lastItem ? `${items.length}:${JSON.stringify(lastItem).length}` : "";
+  const lastSig = itemProgressSignature(lastItem, items.length);
   const quietMin = useQuietMinutes(lastSig);
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls

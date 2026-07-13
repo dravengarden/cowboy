@@ -31,6 +31,7 @@ pub const SNAPSHOT_TAIL: usize = 200;
 /// Postgres and are fetched by `/api/history`.
 pub const HOT_TAIL: usize = 1_000;
 const HOT_TAIL_TRIM_BATCH: usize = 200;
+const BROADCAST_CAPACITY: usize = 1_024;
 /// Fixed history page size (events) for the cursor-based HTTP history route.
 pub const HISTORY_PAGE: usize = 200;
 
@@ -1160,9 +1161,13 @@ impl Hub {
         // LAGS and the broadcast drops its missed events (the server then closes
         // it to force a resync — see server.rs). One long autonomous turn (a book
         // chapter) can emit hundreds of chunks, so a roomy buffer keeps a briefly
-        // slow mobile client from lagging on a normal blip. It's a SINGLE shared
-        // ring of small events, so the memory cost is negligible.
-        let (tx, _) = broadcast::channel(4096);
+        // slow mobile client from lagging on a normal blip. It is a single shared
+        // ring, but tool and image events are not guaranteed to be small.
+        // A slow/backgrounded client is closed and resnapshotted on lag, so
+        // retaining thousands of potentially multi-megabyte tool/image events
+        // only pins heap without improving correctness. 1,024 still absorbs a
+        // long burst while bounding the shared ring's retained payload.
+        let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),

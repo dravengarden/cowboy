@@ -9,10 +9,12 @@ import {
 export function DesktopContextShortcut({
   badge,
   shortcut,
+  placement = "top-end",
   children,
 }: {
   badge: string;
   shortcut: string;
+  placement?: "top-end" | "bottom-end";
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -40,7 +42,7 @@ export function DesktopContextShortcut({
         sx={{
           position: "absolute",
           zIndex: 2,
-          top: -6,
+          ...(placement === "top-end" ? { top: -6 } : { bottom: -13 }),
           right: -5,
           display: "inline-flex",
           opacity: 0,
@@ -113,6 +115,8 @@ export function DesktopComposerCommandBindings({
       description: "Pick an image or file for the current prompt",
       group: "Prompt actions",
       leader: "p a",
+      shortcut: "Mod+Shift+A",
+      allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.canAttach,
@@ -124,6 +128,8 @@ export function DesktopComposerCommandBindings({
       title: "Save prompt as draft",
       group: "Prompt actions",
       leader: "p s",
+      shortcut: "Mod+S",
+      allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.sendable,
@@ -135,6 +141,8 @@ export function DesktopComposerCommandBindings({
       title: "Schedule prompt",
       group: "Prompt actions",
       leader: "p t",
+      shortcut: "Mod+Shift+S",
+      allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.sendable,
@@ -146,6 +154,8 @@ export function DesktopComposerCommandBindings({
       title: "Jump prompt to front of queue",
       group: "Prompt actions",
       leader: "p j",
+      shortcut: "Mod+J",
+      allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.sendable && state.current.canJumpFront,
@@ -158,6 +168,8 @@ export function DesktopComposerCommandBindings({
       description: "Interrupt the current turn and run this prompt now",
       group: "Prompt actions",
       leader: "p f",
+      shortcut: "Mod+Shift+Enter",
+      allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.sendable && state.current.canForce,
@@ -169,6 +181,8 @@ export function DesktopComposerCommandBindings({
       title: "Open prompt actions",
       group: "Prompt actions",
       leader: "p m",
+      shortcut: "Mod+.",
+      allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
       when: () => state.current.canMore,

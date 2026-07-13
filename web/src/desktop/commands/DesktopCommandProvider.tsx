@@ -274,6 +274,14 @@ export function DesktopCommandProvider(
       }
       for (const command of commands.current.values()) {
         if (!command.shortcut || command.when?.() === false) continue;
+        if (
+          command.contexts && !command.contexts.includes(workspace.focusedPane)
+        ) continue;
+        if (
+          command.regions &&
+          (!workspace.focusedRegion ||
+            !command.regions.includes(workspace.focusedRegion))
+        ) continue;
         if (!command.allowInEditor && isTextEditingTarget(event.target)) {
           continue;
         }

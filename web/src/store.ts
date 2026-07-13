@@ -20,6 +20,7 @@ import {
 import { idbListKeys, idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { pruneDrafts } from "./draftStore";
+import { linkTimeline } from "./derive";
 import { notifyHaptic } from "./haptic";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import type {
@@ -229,7 +230,26 @@ if (typeof document !== "undefined") {
 }
 
 function emit(): void {
-  for (const l of listeners) l();
+  scheduleNotify();
+}
+
+// WebSocket chunks can arrive much faster than the display can paint. State is
+// still reduced synchronously (no event is lost), but subscribers render at
+// most once per animation frame. In a background tab rAF may be suspended, so a
+// coarse timer keeps its state observers progressing without burning CPU.
+let notifyScheduled = false;
+function flushNotify(): void {
+  notifyScheduled = false;
+  for (const listener of listeners) listener();
+}
+function scheduleNotify(): void {
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  if (typeof document !== "undefined" && document.visibilityState === "visible") {
+    requestAnimationFrame(flushNotify);
+  } else {
+    setTimeout(flushNotify, 50);
+  }
 }
 
 function setState(next: State): void {
@@ -277,7 +297,25 @@ function absorbed(previous: Envelope, replacement: Envelope, seq: number): Envel
 }
 
 function containsSeq(events: Envelope[], seq: number): boolean {
+  const last = events[events.length - 1];
+  if (last && absorbedSeqs.get(last)?.has(seq) === true) return true;
+  // Live traffic is monotonic. Avoid scanning the whole visible history for
+  // the overwhelmingly common append case; reconnect/history overlap falls
+  // through to the full check below.
+  if (last && seq > last.seq) return false;
   return events.some((event) => event.seq === seq || absorbedSeqs.get(event)?.has(seq) === true);
+}
+
+function findLatestTool(events: Envelope[], toolId: string): number {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const candidate = events[index];
+    if (
+      candidate?.kind === "update" &&
+      candidate.update.sessionUpdate === "tool_call" &&
+      candidate.update.toolCallId === toolId
+    ) return index;
+  }
+  return -1;
 }
 
 function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<string, Envelope[]> {
@@ -322,17 +360,14 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
             },
           },
         };
-        merged = [...existing.slice(0, -1), absorbed(last, replacement, env.seq)];
+        merged = linkTimeline(
+          [...existing.slice(0, -1), absorbed(last, replacement, env.seq)],
+          existing,
+        );
       }
     } else if (updateKind === "tool_call_update") {
       const toolId = env.update.toolCallId;
-      const index = toolId
-        ? existing.findIndex((candidate) =>
-          candidate.kind === "update" &&
-          candidate.update.sessionUpdate === "tool_call" &&
-          candidate.update.toolCallId === toolId
-        )
-        : -1;
+      const index = toolId ? findLatestTool(existing, toolId) : -1;
       const initial = index >= 0 ? existing[index] : undefined;
       if (initial?.kind === "update") {
         const replacement: Envelope = {
@@ -343,13 +378,18 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
             sessionUpdate: "tool_call",
           },
         };
-        merged = [...existing];
+        merged = linkTimeline([...existing], existing);
         merged[index] = absorbed(initial, replacement, env.seq);
       }
     }
   }
 
-  merged ??= [...existing, env].sort((a, b) => a.seq - b.seq);
+  merged ??= linkTimeline(
+    existing.length === 0 || env.seq > (existing[existing.length - 1]?.seq ?? 0)
+      ? [...existing, env]
+      : [...existing, env].sort((a, b) => a.seq - b.seq),
+    existing,
+  );
   const next = new Map(timelines);
   next.set(env.session_id, merged);
   return next;
@@ -368,7 +408,10 @@ function mergeEvents(
   const existing = next.get(sessionId) ?? [];
   const fresh = events.filter((event) => !containsSeq(existing, event.seq));
   if (fresh.length === 0 && existing.length > 0) return next;
-  const merged = [...existing, ...fresh].sort((a, b) => a.seq - b.seq);
+  const merged = linkTimeline(
+    [...existing, ...fresh].sort((a, b) => a.seq - b.seq),
+    existing,
+  );
   next.set(sessionId, merged);
   return next;
 }
@@ -425,6 +468,8 @@ const INACTIVE_HISTORY_TAIL = 800;
 export function releaseInactiveHistory(sessionId: string): void {
   const timeline = state.timelines.get(sessionId);
   if (!timeline || timeline.length <= INACTIVE_HISTORY_TAIL) return;
+  // Deliberately do not link this smaller tail back to the full timeline: the
+  // point of releasing an inactive session is to make deep history collectible.
   const retained = timeline.slice(-INACTIVE_HISTORY_TAIL);
   const timelines = new Map(state.timelines);
   timelines.set(sessionId, retained);

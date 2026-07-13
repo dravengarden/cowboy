@@ -639,10 +639,11 @@ export function ComposerWorkspace({
     child: ReactNode,
     badge: string,
     shortcut: string,
+    placement: "top-end" | "bottom-end" = "top-end",
   ): ReactNode => desktop
     ? (
       <Suspense fallback={child}>
-        <DesktopContextShortcut badge={badge} shortcut={shortcut}>
+        <DesktopContextShortcut badge={badge} shortcut={shortcut} placement={placement}>
           {child}
         </DesktopContextShortcut>
       </Suspense>
@@ -1464,7 +1465,7 @@ export function ComposerWorkspace({
                   onClick={(): void => fileInputRef.current?.click()}
                 >
                   <AttachFile fontSize="small" />
-                </IconButton>, "A", "Normal · SPC P A · attach file")}
+                </IconButton>, `${MOD_LABEL}⇧A`, `${MOD_LABEL}Shift+A · attach file`)}
               </span>
             </Tooltip>
             <Box sx={{ flex: 1 }} />
@@ -1480,7 +1481,7 @@ export function ComposerWorkspace({
                       onClick={saveDraft}
                     >
                       <EditNoteOutlined fontSize="small" />
-                    </IconButton>, "S", "Normal · SPC P S · save as draft")}
+                    </IconButton>, `${MOD_LABEL}S`, `${MOD_LABEL}S · save as draft`)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Schedule send">
@@ -1492,7 +1493,7 @@ export function ComposerWorkspace({
                       onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
                     >
                       <Schedule fontSize="small" />
-                    </IconButton>, "T", "Normal · SPC P T · schedule prompt")}
+                    </IconButton>, `${MOD_LABEL}⇧S`, `${MOD_LABEL}Shift+S · schedule prompt`)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Jump to front of queue">
@@ -1504,7 +1505,7 @@ export function ComposerWorkspace({
                       onClick={jumpToFront}
                     >
                       <VerticalAlignTop fontSize="small" />
-                    </IconButton>, "J", "Normal · SPC P J · jump to front")}
+                    </IconButton>, `${MOD_LABEL}J`, `${MOD_LABEL}J · jump to front`)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Force push">
@@ -1517,7 +1518,7 @@ export function ComposerWorkspace({
                       onClick={(e): void => setForceAnchor(e.currentTarget)}
                     >
                       <Bolt fontSize="small" />
-                    </IconButton>, "F", "Normal · SPC P F · force push")}
+                    </IconButton>, `${MOD_LABEL}⇧↵`, `${MOD_LABEL}Shift+Enter · force push`)}
                   </span>
                 </Tooltip>
               </>
@@ -1535,7 +1536,7 @@ export function ComposerWorkspace({
                     onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
                   >
                     <MoreVert fontSize="small" />
-                  </IconButton>, "M", "Normal · SPC P M · more prompt actions")}
+                  </IconButton>, `${MOD_LABEL}.`, `${MOD_LABEL}. · more prompt actions`)}
                 </span>
               </Tooltip>
             )}
@@ -1621,7 +1622,7 @@ export function ComposerWorkspace({
               }}
             >
               {busy || starting ? "Queue" : "Send"}
-            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`)}
+            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`, "bottom-end")}
             </Stack>
           </>
         ) : (

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { DEFAULT_FONT_ID, getFontPreset } from "./fonts";
 import { persisted, useStore } from "./_store/mod.ts";
 
@@ -128,7 +128,10 @@ export function setFontVariant(id: string): void {
  */
 export function useGlobalFontScale(): void {
   const { fontScale, lineHeight } = useReadingSettings();
-  useEffect(() => {
+  // This controls the geometry of the entire app. Apply it before paint so the
+  // first visible frame does not render at 100% and then jump to the persisted
+  // scale (a sizeable CLS on both Desktop and Mobile).
+  useLayoutEffect(() => {
     const root = globalThis.document?.documentElement;
     if (!root) return;
     root.style.fontSize = `${String(fontScale * 100)}%`;

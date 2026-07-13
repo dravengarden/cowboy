@@ -50,6 +50,83 @@ export type RenderItem = { key: string } & (
 // Store timelines are immutable arrays. Transcript and Composer often derive
 // the same array in one render, so share the fold by identity.
 const DERIVE_CACHE = new WeakMap<Envelope[], RenderItem[]>();
+const TIMELINE_PARENT = new WeakMap<Envelope[], Envelope[]>();
+
+/** Record immutable timeline ancestry so a new derivation can preserve the
+ * identity of unchanged render rows. The store calls this whenever it creates
+ * a successor array; WeakMap keys keep released history collectible. */
+export function linkTimeline(next: Envelope[], previous: Envelope[]): Envelope[] {
+  if (next !== previous) {
+    // Point straight at the latest derivable ancestor instead of chaining every
+    // per-token array. Subscriber notifications are frame-batched, so several
+    // intermediate arrays may never render; a chain would retain all of them.
+    const ancestor = DERIVE_CACHE.has(previous)
+      ? previous
+      : TIMELINE_PARENT.get(previous);
+    if (ancestor) TIMELINE_PARENT.set(next, ancestor);
+  }
+  return next;
+}
+
+function sameChunks(a: ContentChunk[], b: ContentChunk[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((chunk, index) => {
+    const other = b[index];
+    if (!other || chunk.type !== other.type) return false;
+    return chunk.type === "text"
+      ? other.type === "text" && chunk.text === other.text
+      : other.type === "image" && chunk.src === other.src && chunk.alt === other.alt;
+  });
+}
+
+function sameStrings(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+/** Cheap semantic equality for structural sharing. Large tool payloads stay
+ * reference-compared: unchanged envelopes retain their nested object identity,
+ * while an actual tool update supplies a new object and must re-render. */
+function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
+  if (a.kind !== b.kind || a.key !== b.key) return false;
+  switch (a.kind) {
+    case "message":
+      return b.kind === "message" && a.role === b.role &&
+        a.autoResumed === b.autoResumed && sameChunks(a.chunks, b.chunks);
+    case "thought":
+      return b.kind === "thought" && sameStrings(a.sections, b.sections);
+    case "tool":
+      return b.kind === "tool" && a.id === b.id && a.title === b.title &&
+        a.toolKind === b.toolKind && a.toolName === b.toolName &&
+        a.status === b.status && Object.is(a.rawInput, b.rawInput) &&
+        Object.is(a.content, b.content);
+    case "permission":
+      return b.kind === "permission" && a.requestId === b.requestId &&
+        a.title === b.title && a.resolved === b.resolved &&
+        a.chosen === b.chosen && Object.is(a.options, b.options);
+    case "lifecycle":
+      return b.kind === "lifecycle" && a.status === b.status && a.detail === b.detail;
+    case "cleared":
+      return b.kind === "cleared" && a.at === b.at;
+  }
+}
+
+function shareUnchangedRows(timeline: Envelope[], items: RenderItem[]): RenderItem[] {
+  const parent = TIMELINE_PARENT.get(timeline);
+  TIMELINE_PARENT.delete(timeline);
+  const previous = parent ? DERIVE_CACHE.get(parent) : undefined;
+  if (!previous?.length || !items.length) return items;
+  const byKey = new Map(previous.map((item) => [item.key, item]));
+  let changed = false;
+  const shared = items.map((item) => {
+    const prior = byKey.get(item.key);
+    if (prior && sameRenderItem(prior, item)) {
+      changed = true;
+      return prior;
+    }
+    return item;
+  });
+  return changed ? shared : items;
+}
 
 /// Convert an ACP content block into a renderable chunk (or null if we don't
 /// support that type yet).
@@ -292,9 +369,10 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   // forever, even after the turn ended, because that render path isn't gated on
   // session status. The transient "thinking, no text yet" state is covered by
   // the trailing indicator instead, so an empty thought carries nothing.
-  const result = items.filter((it) =>
+  const filtered = items.filter((it) =>
     it.kind !== "thought" || it.sections.some((section) => section.trim() !== "")
   );
+  const result = shareUnchangedRows(timeline, filtered);
   DERIVE_CACHE.set(timeline, result);
   return result;
 }

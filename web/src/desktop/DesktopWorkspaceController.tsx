@@ -123,9 +123,30 @@ export function DesktopWorkspaceProvider({
   useEffect(() => {
     const syncPane = (event: Event): void => {
       const pane = paneFromTarget(event.target);
-      if (pane) setFocusedPane(pane);
+      if (pane) {
+        setFocusedPane(pane);
+        for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
+          if (element.dataset.desktopPane === pane) {
+            element.dataset.desktopPaneFocused = "true";
+          } else {
+            delete element.dataset.desktopPaneFocused;
+          }
+        }
+      }
       const region = regionFromTarget(event.target);
-      if (region) setFocusedRegion(region);
+      if (region) {
+        setFocusedRegion(region);
+        // The default region state can be established before its lazy Desktop
+        // subtree mounts. Update the marker in the input event as well as the
+        // state effect so the very first focus reveals contextual keycaps.
+        for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
+          if (element.dataset.desktopRegion === region) {
+            element.dataset.desktopFocused = "true";
+          } else {
+            delete element.dataset.desktopFocused;
+          }
+        }
+      }
     };
     document.addEventListener("pointerdown", syncPane, true);
     document.addEventListener("focusin", syncPane, true);

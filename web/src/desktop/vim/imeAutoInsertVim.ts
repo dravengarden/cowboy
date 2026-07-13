@@ -12,70 +12,14 @@ import {
   setImeCommitted,
   setImeComposing,
 } from "./imeStatusStore";
-
-const CODE_KEYS: Readonly<Record<string, string>> = {
-  Backquote: "`",
-  Backslash: "\\",
-  BracketLeft: "[",
-  BracketRight: "]",
-  Comma: ",",
-  Digit0: "0",
-  Digit1: "1",
-  Digit2: "2",
-  Digit3: "3",
-  Digit4: "4",
-  Digit5: "5",
-  Digit6: "6",
-  Digit7: "7",
-  Digit8: "8",
-  Digit9: "9",
-  Equal: "=",
-  Minus: "-",
-  Period: ".",
-  Quote: "'",
-  Semicolon: ";",
-  Slash: "/",
-};
+import { vimCommandKey } from "./vimCommandKey";
 
 const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
 // These commands can replace/create an empty line whose DOM is not available
 // until the next layout cycle. Plain i/I/a/A/R only move the logical caret and
 // must not schedule a later Selection rewrite that can race fast IME startup.
 const STRUCTURAL_INSERT_KEYS = new Set(["o", "O", "s", "S", "C"]);
-
-function normalModeKey(event: KeyboardEvent): string | null {
-  if (event.metaKey || event.ctrlKey || event.altKey) return null;
-  if (/^Key[A-Z]$/.test(event.code)) {
-    const letter = event.code.slice(3).toLowerCase();
-    return event.shiftKey ? letter.toUpperCase() : letter;
-  }
-  const key = CODE_KEYS[event.code];
-  if (!key) return null;
-  if (!event.shiftKey) return key;
-  return {
-    "`": "~",
-    "1": "!",
-    "2": "@",
-    "3": "#",
-    "4": "$",
-    "5": "%",
-    "6": "^",
-    "7": "&",
-    "8": "*",
-    "9": "(",
-    "0": ")",
-    "-": "_",
-    "=": "+",
-    "[": "{",
-    "]": "}",
-    "\\": "|",
-    ";": ":",
-    "'": '"',
-    ",": "<",
-    ".": ">",
-    "/": "?",
-  }[key] ?? key;
-}
+const VISUAL_INSERT_KEYS = new Set(["A", "c", "C", "I", "s", "S", "R"]);
 
 function visualSelectionDecorations(
   view: EditorView,
@@ -309,7 +253,7 @@ export function createImeAutoInsertVim(): {
 
     private readonly onKeyDown = (event: KeyboardEvent): void => {
       if (!this.cm || this.cm.state?.vim?.insertMode || event.isComposing) return;
-      const key = normalModeKey(event);
+      const key = vimCommandKey(event);
       if (!key) return;
       event.preventDefault();
       event.stopPropagation();
@@ -319,11 +263,19 @@ export function createImeAutoInsertVim(): {
       // synchronize the native DOM selection/caret. The triggering keydown is
       // already consumed by the non-editable sink, so focusing here cannot
       // start an IME composition for this command.
+      const wasVisual = !!this.cm.state?.vim?.visualMode;
       const changing = this.cm.state?.vim?.inputState?.operator === "change";
-      if (DIRECT_INSERT_KEYS.has(key) || changing) this.view.focus();
+      // o/O are motions in Visual mode (swap the active end), not Insert
+      // commands. Conversely c/s/S/C/I/A/R replace a Visual selection and must
+      // hand focus to the native editable before codemirror-vim mutates it.
+      const directInsert = wasVisual
+        ? VISUAL_INSERT_KEYS.has(key)
+        : DIRECT_INSERT_KEYS.has(key);
+      if (directInsert || changing) this.view.focus();
       Vim.handleKey(this.cm, key, "user");
+      const enteredInsert = !!this.cm.state?.vim?.insertMode;
       this.syncFocusToMode();
-      if (STRUCTURAL_INSERT_KEYS.has(key) || changing) {
+      if (enteredInsert && (STRUCTURAL_INSERT_KEYS.has(key) || wasVisual || changing)) {
         this.scheduleNativeCaretStabilization();
       }
     };
