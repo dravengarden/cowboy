@@ -57,6 +57,7 @@ export function PlanDock({
 
   return (
     <Box
+      data-desktop-plan-surface={desktop ? "true" : undefined}
       sx={{
         border: 1,
         borderColor: "divider",
@@ -64,6 +65,9 @@ export function PlanDock({
         mb: 1,
         bgcolor: "background.default",
         overflow: "hidden",
+        ...(desktop && {
+          transition: "background-color 120ms ease, border-color 120ms ease",
+        }),
       }}
     >
       {/* Header — a standard ripple ButtonBase (the toggle) beside a separate X

@@ -445,8 +445,6 @@ export function DesktopTopBarControls({
   return (
     <Stack
       data-desktop-topbar-controls
-      data-desktop-region="topbar.controls"
-      tabIndex={-1}
       direction="row"
       alignItems="center"
       spacing={0.75}

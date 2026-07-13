@@ -106,7 +106,7 @@ import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
-import { desktopFocusBoundary } from "./theme";
+import { desktopFocusBoundary, desktopFocusFill } from "./theme";
 import {
   type Attachment,
   filesToAttachments,
@@ -1289,6 +1289,7 @@ export function ComposerWorkspace({
             transition: "border-color 120ms ease",
             "&:focus-within": {
               borderColor: desktopFocusBoundary,
+              bgcolor: desktopFocusFill,
             },
           }),
           bgcolor: column

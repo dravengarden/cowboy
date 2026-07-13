@@ -105,7 +105,7 @@ import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
-import { desktopFocusBoundary, type Mode as ThemeMode } from "./theme";
+import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 
 const DesktopCommandHost = lazy(async () => {
@@ -1257,9 +1257,10 @@ export function App({
                     "& [data-desktop-region]": {
                         position: "relative",
                         outline: "none",
-                        transition: "background-color 120ms ease, box-shadow 120ms ease",
+                        transition: "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
                     },
-                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.composer']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
+                    "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.plan']):not([data-desktop-region='prompt.queued']):not([data-desktop-region='prompt.draft']):not([data-desktop-region='prompt.composer']):not([data-desktop-region='topbar.controls']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
+                        bgcolor: desktopFocusFill,
                         boxShadow: (t) =>
                             `inset 0 0 0 1px ${desktopFocusBoundary(t)}`,
                     },
@@ -1267,7 +1268,24 @@ export function App({
                     // 1px edge instead of stacking an inset boundary on top.
                     "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
                         borderColor: desktopFocusBoundary,
+                        bgcolor: desktopFocusFill,
                         boxShadow: "none",
+                    },
+                    // Plan's region wrapper has no visual geometry of its own.
+                    // Recolor the real rounded PlanDock surface, exactly like
+                    // Queue/Draft, instead of drawing a square ring around its
+                    // margin box.
+                    "& [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {
+                        borderColor: desktopFocusBoundary,
+                        bgcolor: desktopFocusFill,
+                    },
+                    // Topbar focus belongs to the whole Toolbar, not the inner
+                    // controls Stack. Use the same header language as Prompt,
+                    // Conversation and Sessions: quiet tint + a 2px accent rail.
+                    "& [data-desktop-region='topbar.controls'][data-desktop-focused='true']": {
+                        color: "primary.main",
+                        bgcolor: desktopFocusFill,
+                        boxShadow: "inset 0 2px 0 0 currentColor",
                     },
                     "& [data-desktop-pane] > [data-desktop-pane-header]": {
                         color: "text.secondary",
@@ -1279,14 +1297,12 @@ export function App({
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
                         boxShadow: "inset 0 2px 0 0 currentColor",
                     },
-                    // Composer is already an unmistakable editing canvas with a
-                    // native caret and its own outlined Paper. Re-applying the
-                    // generic region tint/rail made the whole full-height card a
-                    // heavy purple box. Its active region is communicated by the
-                    // Prompt header + the Paper's own focus-within border instead;
-                    // never stack another focus treatment around the editor.
+                    // Composer uses the same quiet fill + existing 1px boundary
+                    // as Plan/Queue/Draft. Never add the generic inset ring: on a
+                    // full-height writing canvas it becomes a heavy double frame.
                     "& [data-desktop-region='prompt.composer'][data-desktop-focused='true']": {
-                        bgcolor: "transparent",
+                        borderColor: desktopFocusBoundary,
+                        bgcolor: desktopFocusFill,
                         boxShadow: "none",
                     },
                     "& [data-desktop-region='prompt.composer']:focus-visible": {
@@ -1620,6 +1636,12 @@ export function App({
                     }}
                 >
         <Toolbar
+            {...(surface === "desktop"
+                ? {
+                    "data-desktop-region": "topbar.controls",
+                    tabIndex: -1,
+                }
+                : {})}
             variant="dense"
                         sx={{
                             // No border in either mode — the frosted slab behind the bar

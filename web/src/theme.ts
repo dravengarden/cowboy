@@ -9,7 +9,7 @@
 // is a deep purple-black that still reads as purple rather than black.
 
 import { useEffect, useMemo } from "react";
-import { createTheme, type Theme } from "@mui/material";
+import { alpha, createTheme, type Theme } from "@mui/material";
 
 import { type ThemeChoice, useThemeMode as useSharedThemeMode } from "./_shell";
 
@@ -22,6 +22,13 @@ export type Mode = ThemeChoice;
 export function desktopFocusBoundary(theme: Theme): string {
   const weight = theme.palette.mode === "dark" ? 58 : 48;
   return `color-mix(in srgb, ${theme.palette.primary.main} ${String(weight)}%, ${theme.palette.background.default})`;
+}
+
+// One quiet fill for every Desktop workspace target. The boundary carries the
+// focus information; this tint only groups the active surface, so it stays
+// deliberately subtle even on the full-height Composer canvas.
+export function desktopFocusFill(theme: Theme): string {
+  return alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.075 : 0.045);
 }
 
 // Keep the iOS standalone status bar in lockstep with the navbar surface. The
