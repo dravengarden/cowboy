@@ -378,6 +378,20 @@ export function DesktopTopBarControls({
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [compactConfirm, setCompactConfirm] = useState(false);
+  const [compactContextBaseline, setCompactContextBaseline] = useState<
+    {
+      used: number;
+      size: number;
+    } | null
+  >(null);
+  const [contextOverride, setContextOverride] = useState<
+    {
+      used: number;
+      size: number;
+      serverUsed: number;
+      serverSize: number;
+    } | null
+  >(null);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const options = useMemo(() => {
@@ -435,13 +449,98 @@ export function DesktopTopBarControls({
   const confirmCompact = useCallback((): void => {
     setCompactConfirm(false);
     if (compactAction?.command) {
+      setCompactContextBaseline({
+        used: session?.context_used ?? 0,
+        size: session?.context_size ?? 0,
+      });
+      setContextOverride(null);
       submitPrompt(sessionId, compactAction.command, []);
     }
-  }, [compactAction?.command, sessionId]);
+  }, [
+    compactAction?.command,
+    session?.context_size,
+    session?.context_used,
+    sessionId,
+  ]);
   useConfirmEnter(compactConfirm, confirmCompact);
   const compacting = status === "busy" && isCompactingTail(timeline);
-  const contextUsed = session?.context_used ?? 0;
-  const contextSize = session?.context_size ?? 0;
+  const serverContextUsed = session?.context_used ?? 0;
+  const serverContextSize = session?.context_size ?? 0;
+  const contextUsed = contextOverride?.used ?? serverContextUsed;
+  const contextSize = contextOverride?.size ?? serverContextSize;
+  const contextRefreshing = compactContextBaseline !== null;
+  useEffect(() => {
+    if (
+      contextOverride &&
+      (serverContextUsed !== contextOverride.serverUsed ||
+        serverContextSize !== contextOverride.serverSize)
+    ) {
+      // The WebSocket caught up (or a newer turn reported usage). Return to the
+      // canonical live session value instead of pinning the HTTP bridge value.
+      setContextOverride(null);
+    }
+  }, [contextOverride, serverContextSize, serverContextUsed]);
+  useEffect(() => {
+    const baseline = compactContextBaseline;
+    if (!baseline) return;
+    if (
+      serverContextUsed !== baseline.used || serverContextSize !== baseline.size
+    ) {
+      setContextOverride(null);
+      setCompactContextBaseline(null);
+      return;
+    }
+    if (compacting) return;
+    let cancelled = false;
+    let attempts = 0;
+    const refresh = async (): Promise<void> => {
+      attempts += 1;
+      try {
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/info`,
+          {
+            cache: "no-store",
+          },
+        );
+        if (response.ok) {
+          const info = await response.json() as {
+            meta?: { context_used?: number; context_size?: number };
+          };
+          const used = info.meta?.context_used ?? 0;
+          const size = info.meta?.context_size ?? 0;
+          if (used !== baseline.used || size !== baseline.size) {
+            if (!cancelled) {
+              setContextOverride({
+                used,
+                size,
+                serverUsed: serverContextUsed,
+                serverSize: serverContextSize,
+              });
+              setCompactContextBaseline(null);
+            }
+            return;
+          }
+        }
+      } catch {
+        // The live sessions broadcast remains authoritative. A transient HTTP
+        // miss must never turn a successful compaction into a UI failure.
+      }
+      if (!cancelled && attempts < 40) {
+        window.setTimeout(() => void refresh(), 500);
+      }
+    };
+    const timer = window.setTimeout(() => void refresh(), 150);
+    return (): void => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    compactContextBaseline,
+    compacting,
+    serverContextSize,
+    serverContextUsed,
+    sessionId,
+  ]);
   const contextPercent = contextSize > 0
     ? Math.round(Math.min(100, (contextUsed / contextSize) * 100))
     : null;
@@ -453,7 +552,9 @@ export function DesktopTopBarControls({
       shortcut: "R",
       regions: ["topbar.controls"],
       when: () =>
-        document.querySelector("[data-desktop-topbar-action='config']:not(:disabled)") !== null,
+        document.querySelector(
+          "[data-desktop-topbar-action='config']:not(:disabled)",
+        ) !== null,
       run: () =>
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='config']",
@@ -477,7 +578,9 @@ export function DesktopTopBarControls({
       shortcut: "C",
       regions: ["topbar.controls"],
       when: () =>
-        document.querySelector("[data-desktop-topbar-action='compact']:not(:disabled)") !== null,
+        document.querySelector(
+          "[data-desktop-topbar-action='compact']:not(:disabled)",
+        ) !== null,
       run: () =>
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='compact']",
@@ -542,7 +645,10 @@ export function DesktopTopBarControls({
                   borderRadius: 1.5,
                   color: "text.primary",
                   borderColor: (theme) =>
-                    alpha(theme.palette.primary.main, configAnchor ? 0.68 : 0.3),
+                    alpha(
+                      theme.palette.primary.main,
+                      configAnchor ? 0.68 : 0.3,
+                    ),
                   bgcolor: (theme) =>
                     alpha(
                       theme.palette.background.paper,
@@ -681,7 +787,11 @@ export function DesktopTopBarControls({
         </Box>
       </Popover>
 
-      <DesktopContextShortcut badge="U" shortcut="U · Usage limits" showBadge={false}>
+      <DesktopContextShortcut
+        badge="U"
+        shortcut="U · Usage limits"
+        showBadge={false}
+      >
         <ButtonBase
           data-desktop-item="topbar-usage"
           data-desktop-topbar-action="usage"
@@ -696,86 +806,89 @@ export function DesktopTopBarControls({
           }}
         >
           {visibleLimits.length > 0
-          ? (
-            <Stack direction="row" spacing={0.4} alignItems="stretch">
-              {visibleLimits.map((limit) => (
-                <Box
-                  key={limit.id}
-                  sx={{
-                    width: 104,
-                    minWidth: 104,
-                    px: 0.65,
-                    py: 0.25,
-                    textAlign: "left",
-                    borderRadius: 1,
-                    bgcolor: "action.hover",
-                  }}
-                >
-                  <Stack
-                    direction="row"
-                    justifyContent="space-between"
-                    spacing={0.75}
+            ? (
+              <Stack direction="row" spacing={0.4} alignItems="stretch">
+                {visibleLimits.map((limit) => (
+                  <Box
+                    key={limit.id}
+                    sx={{
+                      width: 104,
+                      minWidth: 104,
+                      px: 0.65,
+                      py: 0.25,
+                      textAlign: "left",
+                      borderRadius: 1,
+                      bgcolor: "action.hover",
+                    }}
                   >
+                    <Stack
+                      direction="row"
+                      justifyContent="space-between"
+                      spacing={0.75}
+                    >
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        noWrap
+                        sx={{ flex: 1, minWidth: 0 }}
+                      >
+                        {limit.label}
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        fontWeight={800}
+                        noWrap
+                        sx={{
+                          flexShrink: 0,
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {limit.remaining}%
+                      </Typography>
+                    </Stack>
                     <Typography
                       variant="caption"
                       color="text.secondary"
                       noWrap
-                      sx={{ flex: 1, minWidth: 0 }}
+                      sx={{ display: "block", fontSize: "0.625rem" }}
                     >
-                      {limit.label}
+                      {shortResetTime(limit.resetsAt)}
                     </Typography>
-                    <Typography
-                      variant="caption"
-                      fontWeight={800}
-                      noWrap
-                      sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
-                    >
-                      {limit.remaining}%
-                    </Typography>
-                  </Stack>
+                  </Box>
+                ))}
+                <Box
+                  sx={{
+                    width: 58,
+                    px: 0.5,
+                    py: 0.25,
+                    borderRadius: 1,
+                    bgcolor: "action.hover",
+                    textAlign: "left",
+                  }}
+                >
                   <Typography
                     variant="caption"
                     color="text.secondary"
+                    sx={{ display: "block", fontSize: "0.5625rem" }}
+                  >
+                    Updated
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    fontWeight={750}
                     noWrap
                     sx={{ display: "block", fontSize: "0.625rem" }}
                   >
-                    {shortResetTime(limit.resetsAt)}
+                    {updatedAgo}
                   </Typography>
                 </Box>
-              ))}
-              <Box
-                sx={{
-                  width: 58,
-                  px: 0.5,
-                  py: 0.25,
-                  borderRadius: 1,
-                  bgcolor: "action.hover",
-                  textAlign: "left",
-                }}
-              >
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ display: "block", fontSize: "0.5625rem" }}
-                >
-                  Updated
-                </Typography>
-                <Typography
-                  variant="caption"
-                  fontWeight={750}
-                  noWrap
-                  sx={{ display: "block", fontSize: "0.625rem" }}
-                >
-                  {updatedAgo}
-                </Typography>
-              </Box>
-            </Stack>
-          )
-          : (
-            <Typography variant="caption" color="text.secondary">
-              {snapshot ? "Usage unavailable" : "Loading usage…"}
-            </Typography>
-          )}
+              </Stack>
+            )
+            : (
+              <Typography variant="caption" color="text.secondary">
+                {snapshot ? "Usage unavailable" : "Loading usage…"}
+              </Typography>
+            )}
         </ButtonBase>
       </DesktopContextShortcut>
 
@@ -901,15 +1014,25 @@ export function DesktopTopBarControls({
                   <Typography variant="caption" fontWeight={750}>
                     Compact
                   </Typography>
-                  {contextPercent !== null && (
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      fontWeight={650}
-                    >
-                      {contextPercent}%
-                    </Typography>
-                  )}
+                  {contextRefreshing
+                    ? (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        fontWeight={650}
+                      >
+                        Updating…
+                      </Typography>
+                    )
+                    : contextPercent !== null && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        fontWeight={650}
+                      >
+                        {contextPercent}%
+                      </Typography>
+                    )}
                 </Stack>
               </Button>
             </span>
