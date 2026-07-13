@@ -78,8 +78,6 @@ import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSettin
 import {
     clampComposerColWidth,
     composerColWidthStore,
-    setDesktopLayout,
-    useDesktopLayout,
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
 import {
@@ -371,6 +369,33 @@ function SessionList({
         onReorder: reorderSessions,
         scrollContainer: () => listRef.current,
     });
+    useEffect(() => {
+        const list = listRef.current;
+        if (!list) return undefined;
+        const onKeyboardReorder = (event: Event): void => {
+            const detail = (event as CustomEvent<{ delta?: number }>).detail;
+            const item = event.target instanceof Element
+                ? event.target.closest<HTMLElement>("[data-desktop-item]")
+                : null;
+            const id = item?.dataset.desktopItem;
+            const delta = detail?.delta;
+            if (!id || (delta !== -1 && delta !== 1)) return;
+            const current = sortable.order.indexOf(id);
+            const next = Math.max(0, Math.min(sortable.order.length - 1, current + delta));
+            if (current < 0 || current === next) return;
+            const order = [...sortable.order];
+            order.splice(current, 1);
+            order.splice(next, 0, id);
+            reorderSessions(order);
+            requestAnimationFrame(() =>
+                list.querySelector<HTMLElement>(
+                    `[data-desktop-item="${CSS.escape(id)}"]`,
+                )?.focus({ preventScroll: true })
+            );
+        };
+        list.addEventListener("cowboy:desktop-reorder", onKeyboardReorder);
+        return () => list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
+    }, [sortable.order]);
     return (
         <Stack sx={{ height: "100%" }}>
             <Box sx={{ p: 1 }}>
@@ -1009,8 +1034,7 @@ export function App({
     // remains split even when the rail collapses: a narrower desktop is still a
     // keyboard-first production surface, not Mobile. Mobile never reads this
     // preference and always owns its separate overlay composer path.
-    const splitLayout = useDesktopLayout();
-    const splitActive = splitLayout === "split" && surface === "desktop";
+    const splitActive = surface === "desktop";
     // Composer-column width + live-drag, mirroring the sidebar splitter: a local
     // value during the drag (persisted on release, not per-pixel) backed by the
     // global composer-col-width store. `colResizing` drives the body drag cursor.
@@ -1242,16 +1266,9 @@ export function App({
             <Box sx={{ flex: 1 }} />
             {surface === "desktop" && (
                 <Suspense fallback={null}>
-                    <DesktopRegionShortcut shortcutKey="S" title="Focus sessions" />
+                    <DesktopRegionShortcut shortcut="Mod+B" title="Focus Sessions" />
                 </Suspense>
             )}
-            <Typography
-                variant="caption"
-                color="text.disabled"
-                sx={{ fontVariantNumeric: "tabular-nums", WebkitAppRegion: "no-drag" }}
-            >
-                {sessions.length}
-            </Typography>
         </Toolbar>
     );
 
@@ -1339,16 +1356,7 @@ export function App({
             {surface === "desktop" && (
                 <Suspense fallback={null}>
                     <DesktopCommandHost
-                        sessions={sessions}
-                        activeId={active?.id ?? null}
-                        onPickSession={pick}
                         onNewSession={(): void => setDialogOpen(true)}
-                        onFocusComposer={(): void => {
-                            const editor = document.querySelector<HTMLElement>(".cm-content[contenteditable='true']");
-                            editor?.focus();
-                        }}
-                        onTogglePromptPane={(): void =>
-                            setDesktopLayout(splitLayout === "split" ? "overlay" : "split")}
                         onOpenSettings={(): void => openSettings("settings")}
                     />
                 </Suspense>
@@ -1382,6 +1390,7 @@ export function App({
                 <Stack
                     data-desktop-pane="sessions"
                     data-desktop-region="sessions.list"
+                    data-desktop-reorderable="true"
                     data-desktop-focus-default
                     tabIndex={-1}
                     sx={{
@@ -1756,7 +1765,7 @@ export function App({
                         ) : null}
                         {surface === "desktop" && (
                             <Suspense fallback={null}>
-                                <DesktopRegionShortcut shortcutKey="T" title="Focus top bar" />
+                                <DesktopRegionShortcut shortcut="Mod+U" title="Focus Top Bar" />
                             </Suspense>
                         )}
                         {surface === "desktop" && (
@@ -1835,7 +1844,7 @@ export function App({
                             sx={{ position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }}
                         >
                             <Transcript
-                                desktopNavigation={surface === "desktop"}
+                                desktopNavigation={false}
                                 sessionId={active.id}
                                 timeline={activeTimeline ?? []}
                                 status={active.status}
@@ -1890,28 +1899,13 @@ export function App({
                                 <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                     View-only system session — managed by cowboy
                                 </Box>
-                            ) : surface === "desktop" ? (
-                                    <Suspense fallback={null}><DesktopComposer
-                                        // Remount per session: each session owns its draft
-                                        // (seeded from the per-session draft store) and a
-                                        // fresh CodeMirror editor, so one session's
-                                        // in-progress text never bleeds into another.
-                                        key={active.id}
-                                        sessionId={active.id}
-                                        status={active.status}
-                                    /></Suspense>
-                                ) : (
+                            ) : (
                                     <MobileComposer
                                         key={active.id}
                                         sessionId={active.id}
                                         status={active.status}
                                     />
                                 )}
-                            {surface === "desktop" && (
-                                <Suspense fallback={null}>
-                                    <DesktopStatusLine sessionId={active.id} status={active.status} />
-                                </Suspense>
-                            )}
                         </Box>
                     </>
                     )
@@ -2197,7 +2191,6 @@ function SettingsShell({
     const vim = useVimSetting();
     const notify = useNotifySetting();
     const vibrate = useVibrateSetting();
-    const desktopLayout = useDesktopLayout();
     const reading = useReadingSettings();
     // Font picker is collapsed by default (the 7 preview cards otherwise fill the
     // screen); the collapsed summary still shows the current face. Resets to
@@ -2529,35 +2522,6 @@ function SettingsShell({
                                     setVimSetting(e.target.checked)
                                 }
                                 inputProps={{ "aria-label": "Vim keybindings" }}
-                            />
-                        </Stack>
-                        <Stack
-                            direction="row"
-                            alignItems="center"
-                            justifyContent="space-between"
-                            spacing={2}
-                        >
-                            <Stack>
-                                <Typography variant="body2">
-                                    Two-column layout
-                                </Typography>
-                                <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                >
-                                    Composer beside the chat (Zed-style); wide
-                                    screens only
-                                </Typography>
-                            </Stack>
-                            <Switch
-                                checked={desktopLayout === "split"}
-                                onChange={(e): void =>
-                                    setDesktopLayout(
-                                        e.target.checked ? "split" : "overlay",
-                                    )}
-                                inputProps={{
-                                    "aria-label": "Two-column layout",
-                                }}
                             />
                         </Stack>
                     </>

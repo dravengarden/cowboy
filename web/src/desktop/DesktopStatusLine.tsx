@@ -4,7 +4,7 @@ import { useStoreSelector } from "../store";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
-import { DesktopKeycap } from "./commands/DesktopKeycap";
+import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
 import { useImeStatus } from "./vim/imeStatusStore";
 
@@ -104,13 +104,14 @@ export function DesktopStatusLine({
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const commands = useDesktopCommands();
-  const { focusedPane, focusedRegion, leaderPrefix, mode } = workspace;
+  const { focusedPane, focusedRegion, mode } = workspace;
   const vimEnabled = useVimSetting();
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const connected = useStoreSelector((snapshot) => snapshot.connected);
-  const effectiveMode = focusedPane === "prompt" && vimEnabled ? vimMode : mode;
-  const modeColor = focusedPane === "prompt" && vimEnabled
+  const promptEditorContext = focusedRegion?.startsWith("prompt.") === true;
+  const effectiveMode = promptEditorContext && vimEnabled ? vimMode : mode;
+  const modeColor = promptEditorContext && vimEnabled
     ? (VIM_MODE_COLOR[vimMode] ?? "primary.main")
     : "primary.main";
   const imeLabel = ime.phase === "composing"
@@ -118,7 +119,34 @@ export function DesktopStatusLine({
     : ime.phase === "committed"
     ? "IME · COMMITTED"
     : null;
-  const hints = regionHints(focusedRegion, status);
+  const regionElement = focusedRegion
+    ? document.querySelector<HTMLElement>(
+      `[data-desktop-region="${CSS.escape(focusedRegion)}"]`,
+    )
+    : null;
+  const itemCount = regionElement
+    ? [...regionElement.querySelectorAll<HTMLElement>("[data-desktop-item]")]
+      .filter((element) => element.offsetParent !== null).length
+    : 0;
+  const promptRegions = focusedPane === "prompt" &&
+      focusedRegion?.startsWith("prompt.") === true &&
+      focusedRegion !== "prompt.composer"
+    ? [
+      { keys: "P", label: "Plan" },
+      { keys: "Q", label: "Queue" },
+      { keys: "D", label: "Drafts" },
+      { keys: "E", label: "Editor" },
+    ]
+    : [];
+  const hints = [
+    ...promptRegions,
+    ...regionHints(focusedRegion, status),
+    ...(itemCount > 0 ? [{ keys: "Mod+1…0", label: "Jump" }] : []),
+    ...(regionElement?.dataset.desktopReorderable === "true"
+      ? [{ keys: "Mod+J/K", label: "Reorder" }]
+      : []),
+  ];
+  const paneLabel = focusedRegion === "topbar.controls" ? "topbar" : focusedPane;
 
   return (
     <Box
@@ -144,12 +172,12 @@ export function DesktopStatusLine({
         <Segment
           label={effectiveMode.toUpperCase()}
           color={modeColor}
-          tooltip={focusedPane === "prompt" && vimEnabled
+          tooltip={promptEditorContext && vimEnabled
             ? `Editor Vim mode: ${vimMode}`
             : `Workspace mode: ${mode}`}
           mono
         />
-        <Segment label={focusedPane.toUpperCase()} tooltip="Focused workspace pane" mono />
+        <Segment label={paneLabel.toUpperCase()} tooltip="Focused workspace pane" mono />
         {focusedRegion && (
           <Segment
             label={(focusedRegion.split(".").at(-1) ?? focusedRegion).toUpperCase()}
@@ -191,7 +219,9 @@ export function DesktopStatusLine({
               spacing={0.5}
               alignItems="center"
             >
-              <DesktopKeycap keyLabel={hint.keys} quiet />
+              {hint.keys.includes("Mod+")
+                ? <DesktopShortcut shortcut={hint.keys} quiet />
+                : <DesktopKeycap keyLabel={hint.keys} quiet />}
               <Box component="span" sx={{ fontSize: "0.625rem", whiteSpace: "nowrap" }}>
                 {hint.label}
               </Box>
@@ -211,25 +241,20 @@ export function DesktopStatusLine({
         <Segment
           label={
             <Stack direction="row" spacing={0.55} alignItems="center">
-              <DesktopKeycap keyLabel="SPC" accent={mode === "leader"} />
-              {leaderPrefix.map((key, index) => (
-                <DesktopKeycap key={`${key}-${String(index)}`} keyLabel={key} accent />
-              ))}
-              {mode !== "leader" && <Box component="span">Commands</Box>}
+              <DesktopShortcut shortcut="Mod+K" quiet />
+              <Box component="span">Commands</Box>
             </Stack>
           }
-          tooltip="Open the discoverable Desktop command board"
+          tooltip="Open the Desktop command palette"
           mono
           onClick={(): void => {
-            workspace.setLeaderPrefix([]);
-            workspace.setLeaderMessage(null);
-            workspace.setMode("leader");
+            commands.execute("commandPalette.open");
           }}
         />
         <Segment
           label={
             <Stack direction="row" spacing={0.55} alignItems="center">
-              <DesktopKeycap keyLabel="?" />
+              <DesktopShortcut shortcut="Mod+/" quiet />
               <Box component="span">Shortcuts</Box>
             </Stack>
           }

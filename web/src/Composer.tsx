@@ -1097,7 +1097,7 @@ export function ComposerWorkspace({
             shortcut={desktop
               ? (
                 <Suspense fallback={null}>
-                  <DesktopRegionShortcut shortcutKey="P" title="Focus plan" />
+                  <DesktopRegionShortcut shortcut="P" title="Focus Plan" />
                 </Suspense>
               )
               : undefined}
@@ -2765,12 +2765,41 @@ function PendingPanel({
       ? (): void => setQueueEditing(sessionId, null)
       : undefined,
   });
+  useEffect(() => {
+    const list = scrollRef.current;
+    if (!desktop || !list) return undefined;
+    const onKeyboardReorder = (event: Event): void => {
+      const detail = (event as CustomEvent<{ delta?: number }>).detail;
+      const item = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-desktop-item]")
+        : null;
+      const id = item?.dataset.desktopItem;
+      const delta = detail?.delta;
+      if (!id || (delta !== -1 && delta !== 1)) return;
+      const current = sortable.order.indexOf(id);
+      const next = Math.max(0, Math.min(sortable.order.length - 1, current + delta));
+      if (current < 0 || current === next) return;
+      const order = [...sortable.order];
+      order.splice(current, 1);
+      order.splice(next, 0, id);
+      if (kind === "queued") reorderQueue(sessionId, order);
+      else reorderDrafts(sessionId, order);
+      requestAnimationFrame(() =>
+        list.querySelector<HTMLElement>(
+          `[data-desktop-item="${CSS.escape(id)}"]`,
+        )?.focus({ preventScroll: true })
+      );
+    };
+    list.addEventListener("cowboy:desktop-reorder", onKeyboardReorder);
+    return () => list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
+  }, [desktop, kind, sessionId, sortable.order]);
   const noun = kind === "queued" ? "Queued Message" : "Draft";
   return (
     <Box
       {...(desktop
         ? {
           "data-desktop-region": `prompt.${kind}`,
+          "data-desktop-reorderable": "true",
           "data-desktop-focus-default": true,
           tabIndex: -1,
         }
@@ -2853,7 +2882,7 @@ function PendingPanel({
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
-              shortcutKey={kind === "queued" ? "Q" : "D"}
+              shortcut={kind === "queued" ? "Q" : "D"}
               title={kind === "queued" ? "Focus queue" : "Focus drafts"}
             />
           </Suspense>

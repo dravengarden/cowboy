@@ -1,6 +1,7 @@
 import { Box, Tooltip } from "@mui/material";
 import { isMac } from "../platform";
 import { DesktopKeycap } from "./commands/DesktopKeycap";
+import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 
 export function DesktopSessionShortcut({
   digit,
@@ -11,6 +12,7 @@ export function DesktopSessionShortcut({
   active: boolean;
   title: string;
 }): React.JSX.Element {
+  const workspace = useDesktopWorkspace();
   const modifier = isMac ? "⌘" : "Ctrl+";
   return (
     <Tooltip title={`Switch to ${title} · ${modifier}${digit}`} enterDelay={450}>
@@ -19,7 +21,9 @@ export function DesktopSessionShortcut({
         className="cowboy-session-shortcut"
         sx={{
           display: "inline-flex",
-          opacity: active ? 0.84 : 0.62,
+          opacity: workspace.focusedRegion === "sessions.list"
+            ? (active ? 0.84 : 0.62)
+            : 0,
           transition: "opacity 120ms ease",
         }}
       >

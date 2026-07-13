@@ -20,7 +20,7 @@ export function DesktopKeycap({
 }
 
 export function DesktopShortcut(
-  { shortcut }: { shortcut: string },
+  { shortcut, quiet = false }: { shortcut: string; quiet?: boolean },
 ): React.JSX.Element {
   const keys = shortcut.split("+").filter(Boolean);
   return (
@@ -31,7 +31,7 @@ export function DesktopShortcut(
       aria-label={shortcut}
     >
       {keys.map((key, index) => (
-        <DesktopKeycap key={`${key}-${String(index)}`} keyLabel={key} />
+        <DesktopKeycap key={`${key}-${String(index)}`} keyLabel={key} quiet={quiet} />
       ))}
     </Stack>
   );

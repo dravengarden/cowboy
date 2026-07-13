@@ -1,7 +1,7 @@
 # Desktop focus and keyboard contract
 
 Desktop is a Vim-first productivity surface. Mobile does not load this focus
-controller, command registry, leader board, or shortcut guide.
+controller, command registry, or shortcut guide.
 
 ## Hierarchy
 
@@ -25,9 +25,10 @@ same controller state.
 - `Enter`: default item action.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
-- `SPC w t/s/e/c`: jump directly to Top Bar, Sessions, Prompt or Conversation.
-- `SPC p l/q/d/e`: jump directly to Plan, Queue, Drafts or the Composer.
-- `SPC c c`: jump directly to the Conversation transcript.
+- `Mod-b/e/t/u`: jump directly to Sessions, Prompt, Conversation or Top Bar.
+- `p/q/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
+- `Mod-1…0`: jump to one of the first ten visible items in the focused region.
+- `Mod-j/k`: reorder the focused item when its region is reorderable.
 
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
@@ -49,27 +50,27 @@ must not load or emulate this focus-driven sizing contract.
 
 ## Commands and help
 
-Commands may declare pane `contexts` and exact `regions`. The leader board
-filters contextual commands but always keeps global commands. The Command
-Palette searches every registered command.
+Commands may declare pane `contexts` and exact `regions`. The Command Palette
+searches every registered command; the status line lists only actions available
+in the current region.
 
 The Desktop-only shortcut dialog opens from the status-line `? Shortcuts`
-entry, `Mod+/`, or `SPC h k`. `SPC ?` remains the all-command entry.
+entry or `Mod+/`. `Mod+k` opens the all-command palette.
 
 Shortcut hints follow one shared keycap grammar and three visibility levels:
 
-1. global shortcuts are always visible but quiet (`Mod+1…0`, `Mod+N`,
+1. global shortcuts are always visible but quiet (`Mod+B/E/T/U`, `Mod+N`,
    `Mod+,`) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
-   focused (Composer direct input and `SPC p …` actions), so they add no layout
+   focused (Prompt subregions and list item actions), so they add no layout
    width and disappear when attention moves elsewhere;
 3. modal actions show their real confirmation/dismissal chord next to the label.
 
 Never invent a hint for an action that is not wired. Contextual hints anchor to
 the bottom-right of their target. Prefer one modifier plus one physical key
 (`Mod+S`, `Alt+A`) so commands stay fast and work across input sources; avoid
-browser-owned chords such as `Mod+D`. Put secondary Cowboy-specific actions
-under the discoverable leader tree. Shared modal shells may use the same visual
+browser-owned chords such as `Mod+D`. Put secondary Cowboy-specific actions in
+the searchable command palette. Shared modal shells may use the same visual
 primitive, but must hide it on the touch product.
 
 ## Visual hierarchy

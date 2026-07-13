@@ -43,6 +43,7 @@ import {
   record,
   relativeUpdateTime,
   shortResetTime,
+  topBarUsageLimits,
   usageLimits,
   type UsageSnapshot,
 } from "../usageLimits";
@@ -417,9 +418,7 @@ export function DesktopTopBarControls({
   }, []);
   const usage = providerUsage(snapshot, session?.provider);
   const limits = useMemo(() => usageLimits(usage), [usage]);
-  const accountLimits = limits.filter((limit) => !limit.label.includes(" · "));
-  const visibleLimits = (accountLimits.length >= 2 ? accountLimits : limits)
-    .slice(0, 2);
+  const visibleLimits = useMemo(() => topBarUsageLimits(usage), [usage]);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
   const availableCommands = useMemo(() => latestAvailableCommands(timeline), [
     timeline,

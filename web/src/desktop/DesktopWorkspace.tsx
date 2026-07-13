@@ -11,7 +11,7 @@ function PaneHeader({
   children,
 }: {
   pane: DesktopPane;
-  shortcut: { key: string; title: string };
+  shortcut: { value: string; title: string };
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -36,7 +36,7 @@ function PaneHeader({
         {children}
       </Typography>
       <Box sx={{ flex: 1 }} />
-      <DesktopRegionShortcut shortcutKey={shortcut.key} title={shortcut.title} />
+      <DesktopRegionShortcut shortcut={shortcut.value} title={shortcut.title} />
     </Box>
   );
 }
@@ -86,7 +86,7 @@ export function DesktopWorkspace({
           bgcolor: (theme) => alpha(theme.palette.background.paper, 0.24),
         }}
       >
-        <PaneHeader pane="prompt" shortcut={{ key: "E", title: "Focus prompt editor" }}>
+        <PaneHeader pane="prompt" shortcut={{ value: "Mod+E", title: "Focus Prompt" }}>
           Prompt
         </PaneHeader>
         {prompt}
@@ -134,7 +134,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="conversation"
-          shortcut={{ key: "C", title: "Focus conversation" }}
+          shortcut={{ value: "Mod+T", title: "Focus Conversation" }}
         >
           Conversation
         </PaneHeader>

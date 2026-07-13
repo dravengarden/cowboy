@@ -22,7 +22,6 @@ export interface DesktopCommand {
   title: string;
   description?: string;
   group: string;
-  leader?: string;
   shortcut?: string;
   contexts?: DesktopPane[];
   regions?: string[];
@@ -44,11 +43,17 @@ const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
   null,
 );
 
-function ownsSpaceKey(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  return target.closest(
-    "button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='menuitem'], [role='option']",
-  ) !== null;
+function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
+  const horizontal = region?.dataset.desktopAxis === "horizontal";
+  return [...(region?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
+    .filter((element) => element.offsetParent !== null)
+    .sort((left, right) => {
+      const a = left.getBoundingClientRect();
+      const b = right.getBoundingClientRect();
+      return horizontal
+        ? a.left - b.left || a.top - b.top
+        : a.top - b.top || a.left - b.left;
+    });
 }
 
 export function DesktopCommandProvider(
@@ -135,59 +140,53 @@ export function DesktopCommandProvider(
         }, 1200);
         return;
       }
-      if (workspace.mode === "leader") {
-        if (event.key === "Escape") {
-          // Let the MUI Modal own dismissal so its close path can restore the
-          // pre-Leader focus. Exact commands deliberately keep their new focus.
-          return;
-        }
-        if (event.defaultPrevented || event.repeat) return;
-        if (event.key === "Backspace") {
-          event.preventDefault();
-          workspace.setLeaderPrefix(workspace.leaderPrefix.slice(0, -1));
-          workspace.setLeaderMessage(null);
-          return;
-        }
-        if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
-        event.preventDefault();
-        const next = [...workspace.leaderPrefix, event.key.toLowerCase()];
-        const exact = [...commands.current.values()].find((command) =>
-          command.leader?.split(/\s+/).join("") === next.join("") &&
-          (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
-          (!command.regions ||
-            (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion)))
-        );
-        const branch = [...commands.current.values()].some((command) =>
-          command.leader?.split(/\s+/).join("").startsWith(next.join("")) &&
-          (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
-          (!command.regions ||
-            (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion)))
-        );
-        if (exact) {
-          if (exact.when?.() === false) {
-            workspace.setLeaderPrefix(next);
-            workspace.setLeaderMessage(typeof exact.disabledReason === "function"
-              ? exact.disabledReason()
-              : exact.disabledReason ?? "Command is unavailable in the current context");
+      const region = workspace.focusedRegion
+        ? document.querySelector<HTMLElement>(
+          `[data-desktop-region="${CSS.escape(workspace.focusedRegion)}"]`,
+        )
+        : null;
+      const items = visibleRegionItems(region);
+      const mod = isMac
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey;
+      // Item slots are contextual, never global. Once a list region owns focus,
+      // Mod+1…0 jumps to its first ten painted rows. This keeps the global key
+      // map small while giving every Sessions/Plan/Queue/Drafts/Transcript list
+      // the same positional access contract.
+      if (
+        workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
+        !isTextEditingTarget(event.target) &&
+        document.querySelector("[role='dialog'], [role='menu']") === null
+      ) {
+        const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
+        if (match?.[1]) {
+          const digit = Number(match[1]);
+          const item = items[digit === 0 ? 9 : digit - 1];
+          if (item) {
+            event.preventDefault();
+            event.stopPropagation();
+            item.focus({ preventScroll: true });
+            item.scrollIntoView({ block: "nearest", inline: "nearest" });
             return;
           }
-          workspace.setLeaderPrefix([]);
-          workspace.setLeaderMessage(null);
-          workspace.setMode("normal");
-          // MUI's focus trap is still mounted during this capture handler. Run
-          // the command after Leader unmounts so a focus-jump or newly opened
-          // dialog becomes the final owner instead of being pulled back into
-          // the command board.
-          requestAnimationFrame(() => exact.run());
-          return;
         }
-        if (branch) {
-          workspace.setLeaderPrefix(next);
-          workspace.setLeaderMessage(null);
-        } else {
-          workspace.setLeaderMessage(`No command for SPC ${next.join(" ")}`);
+        if (
+          region?.dataset.desktopReorderable === "true" &&
+          (event.key.toLowerCase() === "j" || event.key.toLowerCase() === "k")
+        ) {
+          const active = document.activeElement instanceof HTMLElement
+            ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
+            : null;
+          if (active && items.includes(active)) {
+            event.preventDefault();
+            event.stopPropagation();
+            active.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
+              bubbles: true,
+              detail: { delta: event.key.toLowerCase() === "j" ? 1 : -1 },
+            }));
+            return;
+          }
         }
-        return;
       }
       // Region-local Vim list navigation. It is intentionally inactive inside
       // text editors and native controls; those surfaces keep their own j/k,
@@ -198,24 +197,7 @@ export function DesktopCommandProvider(
         !event.ctrlKey && !event.metaKey && !event.altKey
       ) {
         const key = event.key;
-        const region = workspace.focusedRegion
-          ? document.querySelector<HTMLElement>(
-            `[data-desktop-region="${CSS.escape(workspace.focusedRegion)}"]`,
-          )
-          : null;
         const horizontal = region?.dataset.desktopAxis === "horizontal";
-        const items = [...(region?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
-          .filter((element) => element.offsetParent !== null)
-          // DOM order is not always visual order: Transcript deliberately uses
-          // column-reverse for stable bottom anchoring. Sort by painted position
-          // so j always moves down and k always moves up on screen.
-          .sort((left, right) => {
-            const a = left.getBoundingClientRect();
-            const b = right.getBoundingClientRect();
-            return horizontal
-              ? a.left - b.left || a.top - b.top
-              : a.top - b.top || a.left - b.left;
-          });
         if (items.length > 0) {
           const active = document.activeElement instanceof HTMLElement
             ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)
@@ -270,16 +252,6 @@ export function DesktopCommandProvider(
         }
       }
       if (event.defaultPrevented || event.repeat) return;
-      if (
-        event.key === " " && !event.ctrlKey && !event.metaKey && !event.altKey &&
-        !isTextEditingTarget(event.target) && !ownsSpaceKey(event.target)
-      ) {
-        event.preventDefault();
-        workspace.setLeaderPrefix([]);
-        workspace.setLeaderMessage(null);
-        workspace.setMode("leader");
-        return;
-      }
       for (const command of commands.current.values()) {
         if (!command.shortcut || command.when?.() === false) continue;
         if (

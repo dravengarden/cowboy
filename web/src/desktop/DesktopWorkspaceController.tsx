@@ -8,7 +8,7 @@ import {
 } from "react";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
-export type WorkspaceMode = "normal" | "leader" | "hint" | "search" | "command";
+export type WorkspaceMode = "normal" | "hint" | "search" | "command";
 
 interface DesktopWorkspaceContextValue {
   focusedPane: DesktopPane;
@@ -20,10 +20,6 @@ interface DesktopWorkspaceContextValue {
   cycleRegion: () => void;
   mode: WorkspaceMode;
   setMode: (mode: WorkspaceMode) => void;
-  leaderPrefix: string[];
-  setLeaderPrefix: (prefix: string[]) => void;
-  leaderMessage: string | null;
-  setLeaderMessage: (message: string | null) => void;
 }
 
 const DesktopWorkspaceContext = createContext<DesktopWorkspaceContextValue | null>(null);
@@ -73,8 +69,6 @@ export function DesktopWorkspaceProvider({
   const [focusedPane, setFocusedPane] = useState<DesktopPane>("prompt");
   const [focusedRegion, setFocusedRegion] = useState<string | null>("prompt.composer");
   const [mode, setMode] = useState<WorkspaceMode>("normal");
-  const [leaderPrefix, setLeaderPrefix] = useState<string[]>([]);
-  const [leaderMessage, setLeaderMessage] = useState<string | null>(null);
   const focusRegion = useCallback((region: string): void => {
     const element = document.querySelector<HTMLElement>(
       `[data-desktop-region="${CSS.escape(region)}"]`,
@@ -192,10 +186,6 @@ export function DesktopWorkspaceProvider({
     cycleRegion,
     mode,
     setMode,
-    leaderPrefix,
-    setLeaderPrefix,
-    leaderMessage,
-    setLeaderMessage,
   }), [
     cycleRegion,
     focusAdjacentPane,
@@ -204,8 +194,6 @@ export function DesktopWorkspaceProvider({
     focusRegion,
     focusedPane,
     focusedRegion,
-    leaderMessage,
-    leaderPrefix,
     mode,
   ]);
 

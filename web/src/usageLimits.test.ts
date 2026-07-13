@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { usageLimits } from "./usageLimits.ts";
+import { topBarUsageLimits, usageLimits } from "./usageLimits.ts";
 
 Deno.test("usage limits preserve provider buckets and sort by window", () => {
   const limits = usageLimits({
@@ -30,4 +30,45 @@ Deno.test("usage limits preserve provider buckets and sort by window", () => {
     { label: "Spark · 5h", remaining: 100, resetsAt: 30 },
     { label: "Weekly", remaining: 76, resetsAt: 20 },
   ]);
+});
+
+Deno.test("desktop summary excludes model buckets and keeps provider account order", () => {
+  const usage = {
+    provider: "codex",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimitsByLimitId: {
+        spark: {
+          limitName: "GPT-5.3-Codex-Spark",
+          primary: { usedPercent: 1, windowDurationMins: 300 },
+          secondary: { usedPercent: 2, windowDurationMins: 10080 },
+        },
+        general: {
+          primary: { usedPercent: 44, windowDurationMins: 300 },
+          secondary: { usedPercent: 24, windowDurationMins: 10080 },
+        },
+      },
+    },
+  };
+  assertEquals(
+    topBarUsageLimits(usage).map((limit) => [limit.label, limit.remaining]),
+    [["5h", 56], ["Weekly", 76]],
+  );
+});
+
+Deno.test("desktop summary tolerates a missing Codex 5h bucket", () => {
+  const usage = {
+    provider: "codex",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimits: {
+        secondary: { usedPercent: 24, windowDurationMins: 10080 },
+      },
+    },
+  };
+  assertEquals(topBarUsageLimits(usage).map((limit) => limit.label), ["Weekly"]);
 });

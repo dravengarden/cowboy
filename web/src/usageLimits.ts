@@ -74,6 +74,26 @@ export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
   );
 }
 
+/** Compact account summary for the Desktop top bar.
+ *
+ * Provider/model buckets remain available in the detailed Usage sheet, but the
+ * persistent bar only shows stable account windows. Codex currently exposes a
+ * 5-hour and a weekly account bucket; either may be absent, and a schema change
+ * must degrade to fewer cards rather than guessing from model-specific limits.
+ */
+export function topBarUsageLimits(
+  usage: ProviderUsage | undefined,
+): UsageLimit[] {
+  const account = usageLimits(usage).filter((limit) => !limit.label.includes(" · "));
+  if (usage?.provider === "codex") {
+    return [300, 10080].flatMap((windowMinutes) => {
+      const limit = account.find((candidate) => candidate.windowMinutes === windowMinutes);
+      return limit ? [limit] : [];
+    });
+  }
+  return account.slice(0, 2);
+}
+
 export function fullResetTime(epochSeconds: number | undefined): string {
   if (epochSeconds === undefined) return "Reset not reported";
   const date = new Date(epochSeconds * 1000);

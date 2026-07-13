@@ -13,7 +13,6 @@ import { useMemo } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopCommands } from "./DesktopCommandProvider";
-import { desktopRegionShortcut } from "../DesktopRegionShortcut";
 
 interface ShortcutRow {
   keys: string[];
@@ -22,26 +21,17 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
-  { keys: [desktopRegionShortcut("P")], title: "Focus Plan" },
-  { keys: [desktopRegionShortcut("Q")], title: "Focus Queue" },
-  { keys: [desktopRegionShortcut("D")], title: "Focus Drafts" },
-  { keys: [desktopRegionShortcut("E")], title: "Focus Prompt editor" },
-  { keys: [desktopRegionShortcut("C")], title: "Focus Conversation" },
-  { keys: [desktopRegionShortcut("S")], title: "Focus Sessions" },
-  { keys: [desktopRegionShortcut("T")], title: "Focus Top Bar" },
-  {
-    keys: ["SPC", "W", "T/S/E/C"],
-    title: "Leader navigation for workspace panes",
-  },
-  {
-    keys: ["SPC", "P", "L/Q/D/E"],
-    title: "Leader navigation for Prompt regions",
-  },
-  { keys: ["SPC", "C", "C"], title: "Jump to Conversation transcript" },
+  { keys: ["Mod+B"], title: "Focus Sessions" },
+  { keys: ["Mod+E"], title: "Focus Prompt" },
+  { keys: ["Mod+T"], title: "Focus Conversation" },
+  { keys: ["Mod+U"], title: "Focus Top Bar" },
+  { keys: ["P/Q/D/E"], title: "Plan / Queue / Drafts / Editor inside Prompt" },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
   { keys: ["J/K"], title: "Move through items in the focused region" },
+  { keys: ["Mod+1…0"], title: "Jump to a visible item in the focused region" },
+  { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },
   { keys: ["Enter"], title: "Open or activate the focused item" },
@@ -50,9 +40,6 @@ const NAVIGATION: ShortcutRow[] = [
 ];
 
 const DISCOVERY: ShortcutRow[] = [
-  { keys: ["SPC"], title: "Open contextual leader commands" },
-  { keys: ["SPC", "?"], title: "Search every command" },
-  { keys: ["SPC", "H", "K"], title: "Open this shortcut guide" },
   { keys: ["Mod+/"], title: "Open this shortcut guide from anywhere" },
   { keys: ["Mod+K"], title: "Open Command Palette" },
 ];
@@ -148,12 +135,10 @@ export function DesktopShortcutsDialog({
         (!command.contexts || command.contexts.includes(workspace.focusedPane)) &&
         (!command.regions ||
           (!!workspace.focusedRegion && command.regions.includes(workspace.focusedRegion))) &&
-        (command.shortcut || command.leader)
+        command.shortcut
       )
       .map((command) => ({
-        keys: command.shortcut
-          ? [command.shortcut]
-          : ["SPC", ...(command.leader?.split(/\s+/) ?? [])],
+        keys: [command.shortcut as string],
         title: command.title,
         ...(command.description ? { description: command.description } : {}),
       })), [registry.commands, workspace.focusedPane, workspace.focusedRegion]);

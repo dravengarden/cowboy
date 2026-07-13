@@ -190,6 +190,13 @@ async fn collect_codex(command: &str) -> Result<ProviderUsage> {
         .request("account/read", json!({ "refreshToken": false }))
         .await?;
     let rate_limits = server.request("account/rateLimits/read", json!({})).await?;
+    if !has_supported_rate_limit_shape(&rate_limits) {
+        tracing::warn!(
+            provider = "codex",
+            source = "codex-app-server",
+            "usage collector received an unknown rate-limit schema; exposing an empty summary"
+        );
+    }
     // Usage activity is newer than rateLimits and may be unavailable for API-key
     // or Bedrock auth. Keep limits useful even when this optional call fails.
     let activity = server.request("account/usage/read", json!({})).await.ok();
@@ -203,6 +210,13 @@ async fn collect_codex(command: &str) -> Result<ProviderUsage> {
         activity,
         error: None,
     })
+}
+
+fn has_supported_rate_limit_shape(value: &Value) -> bool {
+    value.get("rateLimits").is_some_and(Value::is_object)
+        || value
+            .get("rateLimitsByLimitId")
+            .is_some_and(Value::is_object)
 }
 
 struct JsonRpcProcess {
@@ -303,5 +317,14 @@ mod tests {
         assert!(providers
             .iter()
             .all(|p| p.status == "unavailable" && p.error.is_some()));
+    }
+
+    #[test]
+    fn unknown_rate_limit_schema_degrades_without_panicking() {
+        assert!(!has_supported_rate_limit_shape(&json!({ "future": [] })));
+        assert!(has_supported_rate_limit_shape(&json!({ "rateLimits": {} })));
+        assert!(has_supported_rate_limit_shape(
+            &json!({ "rateLimitsByLimitId": {} })
+        ));
     }
 }
