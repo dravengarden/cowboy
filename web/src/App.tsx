@@ -1242,7 +1242,7 @@ export function App({
             <Box sx={{ flex: 1 }} />
             {surface === "desktop" && (
                 <Suspense fallback={null}>
-                    <DesktopRegionShortcut digit="6" title="Focus sessions" />
+                    <DesktopRegionShortcut shortcutKey="S" title="Focus sessions" />
                 </Suspense>
             )}
             <Typography
@@ -1759,7 +1759,7 @@ export function App({
                         ) : null}
                         {surface === "desktop" && (
                             <Suspense fallback={null}>
-                                <DesktopRegionShortcut digit="7" title="Focus top bar" />
+                                <DesktopRegionShortcut shortcutKey="T" title="Focus top bar" />
                             </Suspense>
                         )}
                         {surface === "desktop" && (

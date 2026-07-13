@@ -91,6 +91,14 @@ Deno.test("numbered session shortcuts preserve digit identity", () => {
 });
 
 Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
+  assert(matchesShortcut(parseShortcut("Alt+2"), {
+    key: "™",
+    code: "Digit2",
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: true,
+  }, true));
   assert(matchesShortcut(parseShortcut("Alt+A"), {
     key: "å",
     code: "KeyA",
@@ -99,6 +107,24 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
     shiftKey: false,
     altKey: true,
   }, true));
+  for (const [shortcut, key, code] of [
+    ["Alt+P", "π", "KeyP"],
+    ["Alt+Q", "œ", "KeyQ"],
+    ["Alt+D", "∂", "KeyD"],
+    ["Alt+E", "Dead", "KeyE"],
+    ["Alt+C", "ç", "KeyC"],
+    ["Alt+S", "ß", "KeyS"],
+    ["Alt+T", "†", "KeyT"],
+  ] as const) {
+    assert(matchesShortcut(parseShortcut(shortcut), {
+      key,
+      code,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: true,
+    }, true));
+  }
   assert(matchesShortcut(parseShortcut("Alt+/"), {
     key: "÷",
     code: "Slash",

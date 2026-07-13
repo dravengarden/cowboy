@@ -1097,7 +1097,7 @@ export function ComposerWorkspace({
             shortcut={desktop
               ? (
                 <Suspense fallback={null}>
-                  <DesktopRegionShortcut digit="1" title="Focus plan" />
+                  <DesktopRegionShortcut shortcutKey="P" title="Focus plan" />
                 </Suspense>
               )
               : undefined}
@@ -2853,7 +2853,7 @@ function PendingPanel({
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
-              digit={kind === "queued" ? "2" : "3"}
+              shortcutKey={kind === "queued" ? "Q" : "D"}
               title={kind === "queued" ? "Focus queue" : "Focus drafts"}
             />
           </Suspense>
