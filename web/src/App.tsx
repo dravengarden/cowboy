@@ -1306,13 +1306,15 @@ export function App({
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
                         boxShadow: "inset 0 2px 0 0 currentColor",
                     },
-                    // Composer uses the same quiet fill + existing 1px boundary
-                    // as Plan/Queue/Draft. Never add the generic inset ring: on a
-                    // full-height writing canvas it becomes a heavy double frame.
+                    // A full-height writing canvas cannot wear the same complete
+                    // focus ring as a compact Draft card: the giant rectangle
+                    // overwhelms the workspace. Keep the quiet fill and mark only
+                    // its leading edge with the shared focus colour.
                     "& [data-desktop-region='prompt.composer'][data-desktop-focused='true']": {
-                        borderColor: desktopFocusBoundary,
+                        borderColor: "divider",
                         bgcolor: desktopFocusFill,
-                        boxShadow: "none",
+                        boxShadow: (t) =>
+                            `inset 3px 0 0 ${desktopFocusBoundary(t)}`,
                     },
                     "& [data-desktop-region='prompt.composer']:focus-visible": {
                         outline: "none",

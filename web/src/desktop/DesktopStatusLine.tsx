@@ -71,6 +71,7 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
       return [
         { keys: "J/K", label: "Step" },
         { keys: "GG/G", label: "First/last" },
+        { keys: "Enter", label: "Toggle" },
       ];
     case "prompt.queued":
     case "prompt.draft":
@@ -84,6 +85,11 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
         { keys: "J/K", label: "Event" },
         { keys: "GG/G", label: "First/last" },
         { keys: "Enter", label: "Toggle" },
+      ];
+    case "prompt.composer":
+      return [
+        { keys: "Esc", label: "Normal" },
+        { keys: "Cmd+Enter", label: status === "busy" ? "Queue" : "Send" },
       ];
     default:
       return [];
@@ -164,7 +170,6 @@ export function DesktopStatusLine({
           />
         )}
       </Stack>
-      <Box sx={{ flex: 1 }} />
       {hints.length > 0 && (
         <Stack
           direction="row"
@@ -172,7 +177,8 @@ export function DesktopStatusLine({
           alignItems="center"
           aria-label="Focused region shortcuts"
           sx={{
-            mx: 1,
+            ml: 0.75,
+            mr: 1,
             minWidth: 0,
             color: "text.disabled",
             "@media (max-width: 1180px)": { display: "none" },

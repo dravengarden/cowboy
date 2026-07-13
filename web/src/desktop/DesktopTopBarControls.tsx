@@ -715,7 +715,8 @@ export function DesktopTopBarControls({
                 <Box
                   key={limit.id}
                   sx={{
-                    width: 98,
+                    width: 104,
+                    minWidth: 104,
                     px: 0.65,
                     py: 0.25,
                     textAlign: "left",
@@ -728,10 +729,20 @@ export function DesktopTopBarControls({
                     justifyContent="space-between"
                     spacing={0.75}
                   >
-                    <Typography variant="caption" color="text.secondary" noWrap>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      noWrap
+                      sx={{ flex: 1, minWidth: 0 }}
+                    >
                       {limit.label}
                     </Typography>
-                    <Typography variant="caption" fontWeight={800} noWrap>
+                    <Typography
+                      variant="caption"
+                      fontWeight={800}
+                      noWrap
+                      sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+                    >
                       {limit.remaining}%
                     </Typography>
                   </Stack>

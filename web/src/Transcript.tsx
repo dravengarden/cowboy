@@ -462,6 +462,12 @@ function isCompactingMessage(chunks: ContentChunk[]): boolean {
   return text.trim() === COMPACTING_NOTICE;
 }
 
+function isCompactionCommand(chunks: ContentChunk[]): boolean {
+  if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) return false;
+  const command = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "").join("").trim();
+  return command === "/compact" || command === "/compress" || command === "/summarize";
+}
+
 // The fold icon's gentle vertical squeeze — "condensing" made literal. Compositor
 // transform only (cheap on mobile); frozen under prefers-reduced-motion.
 const fold = keyframes`
@@ -537,6 +543,32 @@ function CompactingWidget({ active }: { active: boolean }): React.JSX.Element {
           Context compacted
         </Typography>
       )}
+    </Stack>
+  );
+}
+
+function CompactionRequestWidget(): React.JSX.Element {
+  return (
+    <Stack
+      direction="row"
+      spacing={0.65}
+      alignItems="center"
+      sx={{
+        alignSelf: "flex-end",
+        my: 0.25,
+        px: 1,
+        py: 0.4,
+        borderRadius: 1.5,
+        border: 1,
+        borderColor: "divider",
+        bgcolor: "action.hover",
+        color: "text.secondary",
+      }}
+    >
+      <UnfoldLess aria-hidden sx={{ fontSize: 16, color: "primary.main" }} />
+      <Typography variant="caption" sx={{ fontWeight: 550 }}>
+        Context compaction requested
+      </Typography>
     </Stack>
   );
 }
@@ -919,6 +951,7 @@ function MessageBubble({
   chunks,
   streaming,
   autoResumed,
+  desktop,
 }: {
   role: "assistant" | "user";
   chunks: ContentChunk[];
@@ -930,6 +963,7 @@ function MessageBubble({
    *  (an empty-result continuation re-issues the prompt verbatim, which would
    *  otherwise read as a duplicate). */
   autoResumed?: boolean;
+  desktop: boolean;
 }): React.JSX.Element {
   const mine = role === "user";
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
@@ -937,6 +971,9 @@ function MessageBubble({
   // busy) means it's condensing right now; otherwise it's a finished record.
   if (!mine && isCompactingMessage(chunks)) {
     return <CompactingWidget active={!!streaming} />;
+  }
+  if (desktop && mine && isCompactionCommand(chunks)) {
+    return <CompactionRequestWidget />;
   }
   const lastChunkIdx = chunks.length - 1;
   const body = chunks.map((c, i) => (
@@ -1232,12 +1269,14 @@ const ItemView = memo(function ItemView({
   item,
   streaming,
   provider,
+  desktop,
 }: {
   item: RenderItem;
   /** True when this item is the last assistant chunk-bearing item and the
    *  session is still busy. Adds a blinking caret / dots accordingly. */
   streaming?: boolean;
   provider: string;
+  desktop: boolean;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message":
@@ -1247,6 +1286,7 @@ const ItemView = memo(function ItemView({
           chunks={item.chunks}
           streaming={!!streaming && item.role === "assistant"}
           autoResumed={item.autoResumed === true}
+          desktop={desktop}
         />
       );
     case "thought":
@@ -2062,11 +2102,12 @@ export function Transcript({
                     // than avoiding paint for off-screen Markdown rows.
                   }}
                 >
-                  <ItemView
-                    item={item}
-                    streaming={working && i === lastIdx}
-                    provider={provider}
-                  />
+                    <ItemView
+                      item={item}
+                      streaming={working && i === lastIdx}
+                      provider={provider}
+                      desktop={desktopNavigation}
+                    />
                 </Box>
               ))}
           </>
