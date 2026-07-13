@@ -7,6 +7,17 @@ export function wheelLeavesLatest(deltaY: number): boolean {
   return deltaY < 0;
 }
 
+/** A detached Desktop reader owns scrollTop while a native scroll gesture is
+ * active. Replaying the streaming-content anchor during that window competes
+ * with wheel inertia / scrollbar dragging and makes the viewport oscillate.
+ * Mobile keeps its existing touch anchoring path. */
+export function shouldRestoreDetachedAnchor(
+  desktopNavigation: boolean,
+  desktopScrollActive: boolean,
+): boolean {
+  return !desktopNavigation || !desktopScrollActive;
+}
+
 /** Keyboard scroll commands that move away from the latest (bottom) edge.
  * Down/End/Space are deliberately excluded: their inertial/key-repeat tail may
  * continue after the viewport reaches the bottom and must not turn Following

@@ -64,7 +64,11 @@ import {
   setSticky,
   useScrollNonce,
 } from "./stickyStore";
-import { keyLeavesLatest, wheelLeavesLatest } from "./transcriptFollowIntent";
+import {
+  keyLeavesLatest,
+  shouldRestoreDetachedAnchor,
+  wheelLeavesLatest,
+} from "./transcriptFollowIntent";
 import { ImageLightbox } from "./_shell";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
@@ -1691,6 +1695,11 @@ export function Transcript({
   // Shared FREEZE-WHILE-DETACHED anchor (captured by the scroll listener,
   // restored by the per-chunk timeline effect). See the scroll effect below.
   const freezeRef = useRef<FreezeAnchor>({ key: null, top: 0, self: false });
+  // Desktop native scrolling temporarily owns scrollTop. Streaming chunks must
+  // not replay the detached anchor while wheel inertia, keyboard scrolling, or
+  // a scrollbar drag is still moving the viewport; doing so makes the two
+  // writers alternate and presents as a stuck / vibrating scrollbar.
+  const desktopScrollActiveRef = useRef(false);
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
   const paging = useStoreSelector((snapshot) => snapshot.pagination.get(sessionId));
@@ -1783,6 +1792,7 @@ export function Transcript({
     // the toggle stuck "active" all the way up (the reported bug). Gate the
     // re-stick on this so it only fires once the gesture SETTLES at the bottom.
     let touching = false;
+    let desktopScrollSettleTimer: number | undefined;
     const detach = (): void => {
       if (stick.current) {
         stick.current = false;
@@ -1804,6 +1814,23 @@ export function Transcript({
     // fire on content growth) plus this RO for container resizes (keyboard).
     const captureAnchor = (): void => captureFreezeAnchor(el, freezeRef.current);
     const restoreAnchor = (): void => restoreFreezeAnchor(el, freezeRef.current);
+    const markDesktopScrollActive = (): void => {
+      if (!desktopNavigation) return;
+      desktopScrollActiveRef.current = true;
+      // A pending corrective scroll event must never swallow the reader's next
+      // real movement. From this point the native gesture is authoritative.
+      freezeRef.current.self = false;
+      if (desktopScrollSettleTimer !== undefined) {
+        globalThis.clearTimeout(desktopScrollSettleTimer);
+      }
+      desktopScrollSettleTimer = globalThis.setTimeout(() => {
+        // Capture first, then hand ownership back to chunk/resize anchoring.
+        // The next stream update therefore preserves the exact settled view.
+        if (!stick.current) captureAnchor();
+        desktopScrollActiveRef.current = false;
+        desktopScrollSettleTimer = undefined;
+      }, 180);
+    };
     const onTouchStart = (): void => {
       touching = true;
       detach();
@@ -1817,6 +1844,7 @@ export function Transcript({
       // every wheel event therefore produced an on -> off flicker at the
       // boundary. Only an upward (away-from-latest) gesture expresses intent
       // to pause following.
+      markDesktopScrollActive();
       if (wheelLeavesLatest(event.deltaY)) detach();
     };
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -1832,6 +1860,9 @@ export function Transcript({
         freezeRef.current.self = false;
         return;
       }
+      // Covers scrollbar drags and keyboard/native scrolling as well as wheel
+      // gestures. Debouncing here keeps inertia authoritative between events.
+      markDesktopScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
       if (fromBottom < 24 && !stick.current && !touching) {
@@ -1948,7 +1979,12 @@ export function Transcript({
       if (!stick.current) {
         // Detached: don't follow the bottom — hold the reader's view against the
         // streaming bottom bubble's upward growth (see FREEZE-WHILE-DETACHED).
-        restoreAnchor();
+        if (
+          shouldRestoreDetachedAnchor(
+            desktopNavigation,
+            desktopScrollActiveRef.current,
+          )
+        ) restoreAnchor();
         return;
       }
       roTries = 0; // extend the convergence window for this resize burst
@@ -1965,6 +2001,10 @@ export function Transcript({
       el.removeEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
+      if (desktopScrollSettleTimer !== undefined) {
+        globalThis.clearTimeout(desktopScrollSettleTimer);
+      }
+      desktopScrollActiveRef.current = false;
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
     };
   }, []);
@@ -2006,11 +2046,21 @@ export function Transcript({
       // Stuck → no live anchor; clear so the next detach captures fresh (never
       // restores to a stale, pre-re-stick position → a jump).
       freezeRef.current.key = null;
-    } else if (freezeRef.current.key === null) {
+    } else if (
+      shouldRestoreDetachedAnchor(
+        desktopNavigation,
+        desktopScrollActiveRef.current,
+      ) && freezeRef.current.key === null
+    ) {
       // Detached without a scroll gesture to capture one (e.g. the composer's
       // sticky toggle) → seed the anchor at the current view this first chunk.
       captureFreezeAnchor(el, freezeRef.current);
-    } else {
+    } else if (
+      shouldRestoreDetachedAnchor(
+        desktopNavigation,
+        desktopScrollActiveRef.current,
+      )
+    ) {
       restoreFreezeAnchor(el, freezeRef.current);
     }
     // Content grew/shrank → overflow may have flipped, and neither the RO (the

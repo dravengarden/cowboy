@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { keyLeavesLatest, wheelLeavesLatest } from "./transcriptFollowIntent.ts";
+import {
+  keyLeavesLatest,
+  shouldRestoreDetachedAnchor,
+  wheelLeavesLatest,
+} from "./transcriptFollowIntent.ts";
 
 Deno.test("wheel follow intent detaches only while scrolling away from latest", () => {
   assertEquals(wheelLeavesLatest(-1), true);
@@ -19,4 +23,12 @@ Deno.test("keyboard follow intent preserves following for bottom-bound commands"
     assertEquals(keyLeavesLatest({ key, shiftKey: false }), false, key);
   }
   assertEquals(keyLeavesLatest({ key: " ", shiftKey: false }), false);
+});
+
+Deno.test("detached anchor yields to active Desktop scrolling only", () => {
+  assertEquals(shouldRestoreDetachedAnchor(true, true), false);
+  assertEquals(shouldRestoreDetachedAnchor(true, false), true);
+  // Desktop gesture arbitration must not alter Mobile touch anchoring.
+  assertEquals(shouldRestoreDetachedAnchor(false, true), true);
+  assertEquals(shouldRestoreDetachedAnchor(false, false), true);
 });
