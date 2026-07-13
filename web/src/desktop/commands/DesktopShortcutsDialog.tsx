@@ -28,7 +28,7 @@ const NAVIGATION: ShortcutRow[] = [
   {
     keys: ["P/Q/D/E"],
     title: "Plan / Queue / Drafts / Editor inside Prompt",
-    description: "Available from lists or the composer in Vim Normal mode",
+    description: "Available from Prompt lists; the composer keeps native Vim commands",
   },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },

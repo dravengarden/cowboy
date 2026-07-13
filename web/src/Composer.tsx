@@ -177,6 +177,10 @@ const DesktopComposerCommandBindings = lazy(async () => {
   const module = await import("./desktop/commands/DesktopComposerShortcuts");
   return { default: module.DesktopComposerCommandBindings };
 });
+const DesktopPendingEditCommandBindings = lazy(async () => {
+  const module = await import("./desktop/commands/DesktopPendingEditShortcuts");
+  return { default: module.DesktopPendingEditCommandBindings };
+});
 const DesktopRegionShortcut = lazy(async () => {
   const module = await import("./desktop/DesktopRegionShortcut");
   return { default: module.DesktopRegionShortcut };
@@ -332,6 +336,7 @@ function ComposeBar(
     onJumpFront,
     submitLabel = "Send",
     submitIcon,
+    desktop = false,
   }: {
     readonly dead: boolean;
     readonly sendable: boolean;
@@ -358,6 +363,8 @@ function ComposeBar(
      *  live-saved, so their action is Done rather than Send. */
     readonly submitLabel?: string;
     readonly submitIcon?: React.ReactNode;
+    /** Desktop-only floating shortcut hints. Mobile keeps the touch toolbar. */
+    readonly desktop?: boolean;
   },
 ): React.JSX.Element {
   // The ⚙ opens the config POPUP (the labeled Mode/Model/Effort dropdowns live in
@@ -372,6 +379,19 @@ function ComposeBar(
   const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
   const hasSecondary = Boolean(onSaveDraft || onJumpFront || onForcePush);
+  const desktopShortcut = (
+    child: ReactNode,
+    badge: string,
+    shortcut: string,
+  ): ReactNode => desktop
+    ? (
+      <Suspense fallback={child}>
+        <DesktopContextShortcut badge={badge} shortcut={shortcut}>
+          {child}
+        </DesktopContextShortcut>
+      </Suspense>
+    )
+    : child;
   return (
     <Stack
       direction="column"
@@ -411,7 +431,7 @@ function ComposeBar(
       >
         <Tooltip title="Slash command / skill">
           <span>
-            <IconButton
+            {desktopShortcut(<IconButton
               aria-label="slash command"
               disabled={dead}
               sx={TOOLBAR_ICON_BTN}
@@ -423,32 +443,32 @@ function ComposeBar(
               >
                 /
               </Box>
-            </IconButton>
+            </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`)}
           </span>
         </Tooltip>
         <Tooltip title="Reference a file (@)">
           <span>
-            <IconButton
+            {desktopShortcut(<IconButton
               aria-label="reference a file"
               disabled={dead}
               sx={TOOLBAR_ICON_BTN}
               onClick={(): void => onTrigger("@")}
             >
               <AlternateEmail />
-            </IconButton>
+            </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`)}
           </span>
         </Tooltip>
         {onAttach && (
           <Tooltip title="Attach image or file">
             <span>
-              <IconButton
+              {desktopShortcut(<IconButton
                 aria-label="attach image or file"
                 disabled={dead}
                 sx={TOOLBAR_ICON_BTN}
                 onClick={onAttach}
               >
                 <AttachFile />
-              </IconButton>
+              </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`)}
             </span>
           </Tooltip>
         )}
@@ -531,7 +551,7 @@ function ComposeBar(
             ))}
         <Tooltip title={submitLabel}>
           <span>
-            <IconButton
+            {desktopShortcut(<IconButton
               color="primary"
               aria-label={submitLabel.toLowerCase()}
               disabled={!sendable}
@@ -539,7 +559,7 @@ function ComposeBar(
               onClick={onSend}
             >
               {submitIcon ?? <Send />}
-            </IconButton>
+            </IconButton>, `${MOD_LABEL}↵`, `${MOD_LABEL}Enter · ${submitLabel}`)}
           </span>
         </Tooltip>
         {onCollapse && (
@@ -558,13 +578,13 @@ function ComposeBar(
         {onExpand && (
           <Tooltip title="Expand editor">
             <span>
-              <IconButton
+              {desktopShortcut(<IconButton
                 aria-label="expand editor"
                 sx={TOOLBAR_ICON_BTN}
                 onClick={onExpand}
               >
                 <OpenInFull />
-              </IconButton>
+              </IconButton>, `${ALT_LABEL}E`, `${ALT_LABEL}E · expand editor`)}
             </span>
           </Tooltip>
         )}
@@ -3019,6 +3039,7 @@ function PendingPanel({
                     ? <OptimisticDraftRow sessionId={sessionId} message={m} />
                     : (
                       <PendingRow
+                        desktop={desktop}
                         kind={kind}
                         sessionId={sessionId}
                         message={m}
@@ -3062,6 +3083,7 @@ function PendingPanel({
 const ROW_ACTIONS_INLINE = "@container pendingPanel (min-width: 520px)";
 
 function PendingRow({
+  desktop,
   kind,
   sessionId,
   message,
@@ -3073,6 +3095,7 @@ function PendingRow({
   onMove,
   onSchedule,
 }: {
+  desktop: boolean;
   kind: "queued" | "draft";
   sessionId: string;
   message: QueuedMessage;
@@ -3251,6 +3274,7 @@ function PendingRow({
     // live-saved edit; ✓ / Esc just finish (a final commit + done, no revert).
     const editBar = (
       <ComposeBar
+        desktop={desktop}
         dead={false}
         sendable={!!draft.trim() || editAttachments.length > 0}
         attachments={editAttachments}
@@ -3279,6 +3303,19 @@ function PendingRow({
           }}
         />
         <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
+          {desktop && !overlayOpen && (
+            <Suspense fallback={null}>
+              <DesktopPendingEditCommandBindings
+                kind={kind}
+                sendable={!!draft.trim() || editAttachments.length > 0}
+                onSlash={(): void => editorRef.current?.insertTrigger("/")}
+                onReference={(): void => editorRef.current?.insertTrigger("@")}
+                onAttach={(): void => editFileInputRef.current?.click()}
+                onDone={save}
+                onExpand={(): void => setOverlayOpen(true)}
+              />
+            </Suspense>
+          )}
           {/* Inline editor — hidden while the focused overlay owns the edit so only
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */}
           {!overlayOpen && (

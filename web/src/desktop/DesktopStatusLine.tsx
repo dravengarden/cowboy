@@ -7,6 +7,7 @@ import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
 import { useImeStatus } from "./vim/imeStatusStore";
+import { useVimMacroRecording } from "./vim/macroStatusStore";
 
 function Segment({
   label,
@@ -109,6 +110,7 @@ export function DesktopStatusLine({
   const vimEnabled = useVimSetting();
   const vimMode = useVimMode();
   const ime = useImeStatus();
+  const macro = useVimMacroRecording();
   const connected = useStoreSelector((snapshot) => snapshot.connected);
   const promptEditorContext = focusedRegion?.startsWith("prompt.") === true;
   const effectiveMode = promptEditorContext && vimEnabled ? vimMode : mode;
@@ -131,8 +133,7 @@ export function DesktopStatusLine({
     : 0;
   const promptRegions = focusedPane === "prompt" &&
       focusedRegion?.startsWith("prompt.") === true &&
-      (focusedRegion !== "prompt.composer" ||
-        (vimEnabled && effectiveMode === "normal"))
+      focusedRegion !== "prompt.composer"
     ? [
       { keys: "P", label: "Plan" },
       { keys: "Q", label: "Queue" },
@@ -197,6 +198,32 @@ export function DesktopStatusLine({
               ? "Native IME composition committed"
               : "Native IME composition is active"}
             mono
+          />
+        )}
+        {macro && (
+          <Segment
+            label={
+              <Stack direction="row" spacing={0.6} alignItems="center">
+                <Box
+                  component="span"
+                  sx={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    bgcolor: "error.main",
+                    boxShadow: (theme) =>
+                      `0 0 0 3px ${alpha(theme.palette.error.main, 0.12)}`,
+                  }}
+                />
+                <Box component="span">REC @{macro.register}</Box>
+                <DesktopKeycap keyLabel="Q" quiet />
+                <Box component="span" sx={{ color: "text.secondary" }}>Stop</Box>
+              </Stack>
+            }
+            color="error.main"
+            tooltip={`Recording Vim macro into register ${macro.register}. Press Q or click to stop.`}
+            mono
+            onClick={macro.stop}
           />
         )}
       </Stack>

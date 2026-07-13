@@ -12,6 +12,10 @@ import {
   setImeCommitted,
   setImeComposing,
 } from "./imeStatusStore";
+import {
+  clearVimMacroRecording,
+  setVimMacroRecording,
+} from "./macroStatusStore";
 import { vimCommandKey } from "./vimCommandKey";
 
 const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C", "R"]);
@@ -20,6 +24,10 @@ const DIRECT_INSERT_KEYS = new Set(["i", "I", "a", "A", "o", "O", "s", "S", "C",
 // must not schedule a later Selection rewrite that can race fast IME startup.
 const STRUCTURAL_INSERT_KEYS = new Set(["o", "O", "s", "S", "C"]);
 const VISUAL_INSERT_KEYS = new Set(["A", "c", "C", "I", "s", "S", "R"]);
+
+export function vimMacroRegisterFromMessage(message: string | null | undefined): string | null {
+  return /^recording @(.+)$/i.exec(message?.trim() ?? "")?.[1] ?? null;
+}
 
 function visualSelectionDecorations(
   view: EditorView,
@@ -102,12 +110,14 @@ export function createImeAutoInsertVim(): {
     private cm: ReturnType<typeof getCM> = null;
     private focusFrame: number | null = null;
     private modeHandler: (() => void) | null = null;
+    private originalOpenDialog: NonNullable<ReturnType<typeof getCM>>["openDialog"] | null = null;
 
     constructor(readonly view: EditorView) {
       this.sink = document.createElement("div");
       this.sink.tabIndex = 0;
       this.sink.setAttribute("role", "application");
       this.sink.setAttribute("aria-label", "Vim Normal mode command input");
+      this.sink.setAttribute("data-vim-command-sink", "");
       Object.assign(this.sink.style, {
         height: "1px",
         opacity: "0",
@@ -124,6 +134,7 @@ export function createImeAutoInsertVim(): {
       // alone cannot protect a queued Selection rewrite.
       view.contentDOM.addEventListener("keydown", this.onNativeInput, true);
       view.contentDOM.addEventListener("beforeinput", this.onNativeInput, true);
+      view.dom.addEventListener("focusout", this.onFocusOut);
       view.dom.append(this.sink);
       queueMicrotask(() => this.connect());
     }
@@ -135,6 +146,7 @@ export function createImeAutoInsertVim(): {
 
     destroy(): void {
       clearImeStatus();
+      this.normalizeVimState();
       if (this.cm && this.modeHandler) {
         this.cm.off?.("vim-mode-change", this.modeHandler);
       }
@@ -144,6 +156,10 @@ export function createImeAutoInsertVim(): {
       this.sink.removeEventListener("keydown", this.onKeyDown);
       this.view.contentDOM.removeEventListener("keydown", this.onNativeInput, true);
       this.view.contentDOM.removeEventListener("beforeinput", this.onNativeInput, true);
+      this.view.dom.removeEventListener("focusout", this.onFocusOut);
+      if (this.cm && this.originalOpenDialog) {
+        this.cm.openDialog = this.originalOpenDialog;
+      }
       this.view.dom.classList.remove("cm-vim-command-focused");
       this.sink.remove();
     }
@@ -152,9 +168,39 @@ export function createImeAutoInsertVim(): {
       if (this.cm) return;
       this.cm = getCM(this.view);
       if (!this.cm) return;
+      this.installMacroStatusBridge();
       this.modeHandler = (): void => this.syncFocusToMode();
       this.cm.on?.("vim-mode-change", this.modeHandler);
       this.focusSinkIfNormal();
+    }
+
+    private installMacroStatusBridge(): void {
+      if (!this.cm || this.originalOpenDialog) return;
+      const original = this.cm.openDialog.bind(this.cm);
+      this.originalOpenDialog = original;
+      this.cm.openDialog = (template, callback, options) => {
+        const register = vimMacroRegisterFromMessage(template.textContent);
+        if (!register) return original(template, callback, options);
+        const stop = (): void => {
+          Vim.getVimGlobalState_().macroModeState.exitMacroRecordMode();
+        };
+        setVimMacroRecording(register, stop);
+        return (): void => clearVimMacroRecording(register);
+      };
+    }
+
+    private normalizeVimState(): void {
+      const macro = Vim.getVimGlobalState_().macroModeState;
+      if (macro.isRecording) macro.exitMacroRecordMode();
+      clearVimMacroRecording();
+      if (!this.cm?.state?.vim) return;
+      const state = this.cm.state.vim;
+      if (
+        state.insertMode || state.visualMode || state.inputState?.operator ||
+        (state.inputState?.keyBuffer?.length ?? 0) > 0
+      ) {
+        Vim.handleKey(this.cm, "<Esc>", "user");
+      }
     }
 
     private syncFocusToMode(): void {
@@ -286,6 +332,19 @@ export function createImeAutoInsertVim(): {
         cancelAnimationFrame(this.focusFrame);
         this.focusFrame = null;
       }
+    };
+
+    private readonly onFocusOut = (): void => {
+      // Focus can move between CodeMirror's contenteditable and the IME-safe
+      // command sink while changing Vim modes. Only a true exit from this editor
+      // normalizes it. Defer until the browser has committed activeElement so a
+      // programmatic Desktop region jump and a pointer click share one path.
+      queueMicrotask(() => {
+        if (!this.view.dom.isConnected || this.view.dom.contains(document.activeElement)) return;
+        composing = false;
+        clearImeStatus();
+        this.normalizeVimState();
+      });
     };
 
     private readonly onSinkFocus = (): void => {

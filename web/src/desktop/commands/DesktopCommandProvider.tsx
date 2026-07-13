@@ -16,8 +16,6 @@ import {
   parseShortcut,
 } from "./shortcut";
 import { isImeComposing } from "../vim/imeStatusStore";
-import { getVimMode } from "../../vimModeStore";
-import { getVimSetting } from "../../vimSetting";
 
 export interface DesktopCommand {
   id: string;
@@ -29,8 +27,6 @@ export interface DesktopCommand {
   regions?: string[];
   /** Global commands skip text editors unless explicitly opted in. */
   allowInEditor?: boolean;
-  /** Bare Vim-style command allowed in a text editor only while Vim is Normal. */
-  allowInVimNormal?: boolean;
   when?: () => boolean;
   disabledReason?: string | (() => string);
   run: () => void;
@@ -328,10 +324,7 @@ export function DesktopCommandProvider(
             !command.regions.includes(workspace.focusedRegion))
         ) continue;
         if (!command.allowInEditor && isTextEditingTarget(event.target)) {
-          const vimNormal = command.allowInVimNormal === true &&
-            workspace.mode === "normal" && getVimSetting() &&
-            getVimMode() === "normal";
-          if (!vimNormal) continue;
+          continue;
         }
         if (!matchesShortcut(parseShortcut(command.shortcut), event, isMac)) {
           continue;

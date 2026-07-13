@@ -59,6 +59,6 @@ export function matchesShortcut(
 export function isTextEditingTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
   return element?.matches(
-    "input, textarea, select, [contenteditable='true'], .cm-content",
+    "input, textarea, select, [contenteditable='true'], .cm-content, [data-vim-command-sink]",
   ) ?? false;
 }

@@ -31,8 +31,8 @@ same controller state.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Mod-b/e/t/u`: jump directly to Sessions, Prompt, Conversation or Top Bar.
 - `p/q/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
-  Inside the composer these are Normal-mode commands only; Insert and IME input
-  never expose or capture them.
+  The composer keeps native Vim `p/q/d/e`; these region jumps are available
+  only while a non-editor Prompt region owns focus.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
 - `Mod-j/k`: reorder the focused item when its region is reorderable.
 
@@ -103,6 +103,11 @@ the bottom-right of their target. Prefer one modifier plus one physical key
 browser-owned chords such as `Mod+D`. Put secondary Cowboy-specific actions in
 the searchable command palette. Shared modal shells may use the same visual
 primitive, but must hide it on the touch product.
+
+The inline queued/draft editor follows the same discoverable toolbar contract
+as the main Composer: `Alt+/` slash command, `Alt+R` reference, `Alt+A` attach,
+`Mod+Enter` finish editing, and `Alt+E` expand. Their keycaps appear only while
+that Pending region is focused; Mobile renders neither bindings nor hints.
 
 ## Visual hierarchy
 

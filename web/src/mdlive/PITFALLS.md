@@ -342,6 +342,21 @@ here says otherwise.
     remain. Keep a synchronous previous-text ref because CM6 changes can arrive
     faster than React renders.
 
+16. **Desktop Vim state must not leak across workspace focus changes.** A
+    Composer, queued-message editor, or draft editor can remain mounted after
+    focus moves to Sessions, Conversation, Top Bar, or another Prompt region.
+    Upstream Vim therefore kept Insert/Visual/operator-pending state alive and
+    rendered macro recording as an unthemed inline `recording @x` dialog.
+    **Fix (`desktop/vim/imeAutoInsertVim.ts`):** a true focus exit from the
+    editor (not the internal contenteditable ↔ command-sink handoff) sends one
+    Vim Escape, clears partial commands, and stops any active macro. Intercept
+    only upstream's macro-recording dialog and publish it to the Desktop status
+    line as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
+    upstream behavior. This runtime remains dynamically imported by Desktop
+    only; Mobile receives neither the focus reset nor the macro UI. Prompt's
+    bare `P/Q/D/E` region shortcuts must also yield while the command sink owns
+    focus, or they shadow native Vim paste, macro, delete, and motion commands.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
