@@ -175,6 +175,14 @@ const pulse = keyframes`
 // Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
 // verb word (color applied via background-clip:text in sx).
 const shimmer = keyframes`to { background-position: -200% 0; }`;
+// The active thought line is itself live state, not merely prose. A restrained
+// colour band moving through the glyphs makes that clear without adding another
+// spinner beside the existing work icon. Only the newest streaming step uses
+// this animation; completed reasoning stays still and cheap to paint.
+const thoughtTextShimmer = keyframes`
+  from { background-position: 110% 0; }
+  to   { background-position: -110% 0; }
+`;
 const codexPhraseFade = keyframes`
   0%   { opacity: 0.28; transform: translateY(1px); }
   12%  { opacity: 1; transform: translateY(0); }
@@ -687,6 +695,29 @@ function ThoughtSteps({
                 opacity: current || !streaming ? 1 : (codex ? 0.55 : 0.68),
                 fontStyle: "normal",
                 color: current ? "text.primary" : "text.secondary",
+                ...(codex && current && {
+                  backgroundImage: (theme) => {
+                    const quiet = theme.palette.text.secondary;
+                    const primary = theme.palette.primary.main;
+                    const accent = theme.palette.mode === "dark" ? "#62D6BC" : "#168B78";
+                    return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 34%, ${primary} 46%, ${accent} 54%, ${quiet} 66%, ${quiet} 100%)`;
+                  },
+                  backgroundSize: "240% 100%",
+                  WebkitBackgroundClip: "text",
+                  backgroundClip: "text",
+                  color: "transparent",
+                  animation: `${thoughtTextShimmer} 3.1s linear infinite`,
+                  // Markdown elements set their own text colour. Inherit the
+                  // transparent foreground so the parent gradient clips through
+                  // the actual glyphs instead of disappearing behind body text.
+                  "& p, & p *": { color: "inherit" },
+                  "@media (prefers-reduced-motion: reduce)": {
+                    animation: "none",
+                    backgroundImage: "none",
+                    color: "text.primary",
+                    WebkitTextFillColor: "currentColor",
+                  },
+                }),
                 "& p": {
                   m: 0,
                   fontStyle: "normal",
