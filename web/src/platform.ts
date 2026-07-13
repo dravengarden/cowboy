@@ -19,6 +19,8 @@ export const isMac: boolean = detectMac();
 
 /** Display label for the primary (send) modifier. */
 export const MOD_LABEL: string = isMac ? "⌘" : "Ctrl";
+/** Display label for the physical Alt/Option modifier used by Desktop commands. */
+export const ALT_LABEL: string = isMac ? "⌥" : "Alt";
 /** Display label for the secondary (save-as-draft) modifier. */
 export const DRAFT_LABEL: string = isMac ? "⌃" : "Alt";
 /** Return key glyph used across the hint chips. */

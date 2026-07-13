@@ -18,7 +18,7 @@ export function Kbd(
       keyLabel={keys}
       variant="modal"
       sx={floating
-        ? { position: "absolute", top: 0, right: -5, zIndex: 1 }
+        ? { position: "absolute", right: -5, bottom: -4, zIndex: 1 }
         : { ml: 0.75 }}
     />
   );

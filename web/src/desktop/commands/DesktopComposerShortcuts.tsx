@@ -9,12 +9,10 @@ import {
 export function DesktopContextShortcut({
   badge,
   shortcut,
-  placement = "top-end",
   children,
 }: {
   badge: string;
   shortcut: string;
-  placement?: "top-end" | "bottom-end";
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -42,7 +40,7 @@ export function DesktopContextShortcut({
         sx={{
           position: "absolute",
           zIndex: 2,
-          ...(placement === "top-end" ? { top: -6 } : { bottom: -13 }),
+          bottom: -5,
           right: -5,
           display: "inline-flex",
           opacity: 0,
@@ -63,6 +61,8 @@ export function DesktopComposerCommandBindings({
   canJumpFront,
   canForce,
   canMore,
+  onSlash,
+  onReference,
   onAttach,
   onSaveDraft,
   onSchedule,
@@ -75,6 +75,8 @@ export function DesktopComposerCommandBindings({
   canJumpFront: boolean;
   canForce: boolean;
   canMore: boolean;
+  onSlash: () => void;
+  onReference: () => void;
   onAttach: () => void;
   onSaveDraft: () => void;
   onSchedule: () => void;
@@ -88,6 +90,8 @@ export function DesktopComposerCommandBindings({
     canJumpFront,
     canForce,
     canMore,
+    onSlash,
+    onReference,
     onAttach,
     onSaveDraft,
     onSchedule,
@@ -101,6 +105,8 @@ export function DesktopComposerCommandBindings({
     canJumpFront,
     canForce,
     canMore,
+    onSlash,
+    onReference,
     onAttach,
     onSaveDraft,
     onSchedule,
@@ -110,12 +116,34 @@ export function DesktopComposerCommandBindings({
   };
   const commands = useMemo<DesktopCommand[]>(() => [
     {
+      id: "composer.slash",
+      title: "Insert slash command",
+      group: "Prompt actions",
+      leader: "p /",
+      shortcut: "Alt+/",
+      allowInEditor: true,
+      contexts: ["prompt"],
+      regions: ["prompt.composer"],
+      run: () => state.current.onSlash(),
+    },
+    {
+      id: "composer.reference",
+      title: "Reference a file",
+      group: "Prompt actions",
+      leader: "p r",
+      shortcut: "Alt+R",
+      allowInEditor: true,
+      contexts: ["prompt"],
+      regions: ["prompt.composer"],
+      run: () => state.current.onReference(),
+    },
+    {
       id: "composer.attach",
       title: "Attach file",
       description: "Pick an image or file for the current prompt",
       group: "Prompt actions",
       leader: "p a",
-      shortcut: "Mod+Shift+A",
+      shortcut: "Alt+A",
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -141,7 +169,7 @@ export function DesktopComposerCommandBindings({
       title: "Schedule prompt",
       group: "Prompt actions",
       leader: "p t",
-      shortcut: "Mod+Shift+S",
+      shortcut: "Alt+S",
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -168,7 +196,7 @@ export function DesktopComposerCommandBindings({
       description: "Interrupt the current turn and run this prompt now",
       group: "Prompt actions",
       leader: "p f",
-      shortcut: "Mod+Shift+Enter",
+      shortcut: "Alt+Enter",
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
@@ -197,5 +225,7 @@ export function DesktopComposerCommandBindings({
   useDesktopCommand(commands[3] as DesktopCommand);
   useDesktopCommand(commands[4] as DesktopCommand);
   useDesktopCommand(commands[5] as DesktopCommand);
+  useDesktopCommand(commands[6] as DesktopCommand);
+  useDesktopCommand(commands[7] as DesktopCommand);
   return null;
 }

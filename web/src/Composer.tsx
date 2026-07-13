@@ -89,7 +89,7 @@ import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
-import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
@@ -639,11 +639,10 @@ export function ComposerWorkspace({
     child: ReactNode,
     badge: string,
     shortcut: string,
-    placement: "top-end" | "bottom-end" = "top-end",
   ): ReactNode => desktop
     ? (
       <Suspense fallback={child}>
-        <DesktopContextShortcut badge={badge} shortcut={shortcut} placement={placement}>
+        <DesktopContextShortcut badge={badge} shortcut={shortcut}>
           {child}
         </DesktopContextShortcut>
       </Suspense>
@@ -1048,6 +1047,28 @@ export function ComposerWorkspace({
           pt: 1,
           pb: 1,
         }),
+        ...(desktop && {
+          // Desktop is a focus-driven workspace, not the Mobile stacked touch
+          // scroller. Keep auxiliary headers visible, but release inactive list
+          // height while any Prompt workspace owns focus. Composer therefore
+          // opens as a real writing canvas; Plan/Queue/Drafts expand on demand.
+          "&:has([data-desktop-region='prompt.plan'][data-desktop-focused='true'], [data-desktop-region='prompt.queued'][data-desktop-focused='true'], [data-desktop-region='prompt.draft'][data-desktop-focused='true'], [data-desktop-region='prompt.composer'][data-desktop-focused='true']) [data-desktop-aux-list]": {
+            maxHeight: 0,
+            paddingTop: 0,
+            paddingBottom: 0,
+          },
+          "& [data-desktop-region][data-desktop-focused='true'] [data-desktop-aux-list]": {
+            maxHeight: "min(52vh, 640px)",
+          },
+          "& [data-desktop-region='prompt.plan'][data-desktop-focused='true'] [data-desktop-aux-list]": {
+            maxHeight: "min(46vh, 560px)",
+            paddingTop: "10px",
+            paddingBottom: "10px",
+          },
+          "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'] [data-desktop-aux-list], & [data-desktop-region='prompt.draft'][data-desktop-focused='true'] [data-desktop-aux-list]": {
+            paddingBottom: "4px",
+          },
+        }),
       }}
     >
       {
@@ -1068,6 +1089,7 @@ export function ComposerWorkspace({
           <PlanDock
             entries={plan.entries}
             onDismiss={(): void => setDismissedPlanKey(plan.key)}
+            desktop={desktop}
           />
         </Box>
       )}
@@ -1119,7 +1141,7 @@ export function ComposerWorkspace({
           navbar below stay visible); `unbounded` drops each panel's own cap so the
           scroll isn't nested. minHeight:0 lets it shrink + scroll in the flex column. */
       }
-      {(queue.length > 0 || draftList.length > 0) && (
+      {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
           sx={{
             // Plain BLOCK scroll container — NOT flex-column: with flex, the panels
@@ -1135,7 +1157,7 @@ export function ComposerWorkspace({
               drain one per turn-end. */}
           {queue.length > 0 && (
             <PendingPanel
-              desktop={surface === "desktop"}
+              desktop={false}
               kind="queued"
               sessionId={sessionId}
               items={queue}
@@ -1147,7 +1169,7 @@ export function ComposerWorkspace({
           {/* Drafts: parked messages the user holds + activates on demand. */}
           {draftList.length > 0 && (
             <PendingPanel
-              desktop={surface === "desktop"}
+              desktop={false}
               kind="draft"
               sessionId={sessionId}
               items={draftList}
@@ -1155,6 +1177,43 @@ export function ComposerWorkspace({
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
               // Only offer "move" when there's somewhere to move to.
+              onMoveDraft={otherSessions.length > 0
+                ? (id: string): void => setMoveSrcId(id)
+                : undefined}
+              onScheduleDraft={(id: string): void =>
+                setScheduleTarget({
+                  id,
+                  initial: draftList.find((d) => d.id === id)?.schedule ?? null,
+                })}
+            />
+          )}
+        </Box>
+      )}
+      {(queue.length > 0 || draftList.length > 0) && desktop && (
+        <Box
+          sx={{
+            flexShrink: 0,
+            minHeight: 0,
+          }}
+        >
+          {queue.length > 0 && (
+            <PendingPanel
+              desktop
+              kind="queued"
+              sessionId={sessionId}
+              items={queue}
+              status={status}
+              commands={(): AvailableCommand[] => availableCommands}
+            />
+          )}
+          {draftList.length > 0 && (
+            <PendingPanel
+              desktop
+              kind="draft"
+              sessionId={sessionId}
+              items={draftList}
+              status={status}
+              commands={(): AvailableCommand[] => availableCommands}
               onMoveDraft={otherSessions.length > 0
                 ? (id: string): void => setMoveSrcId(id)
                 : undefined}
@@ -1415,6 +1474,8 @@ export function ComposerWorkspace({
                 canJumpFront={queue.length > 0}
                 canForce={busy || starting || paused}
                 canMore={!desktopActionsExpanded || clearAction !== null}
+                onSlash={(): void => editorRef.current?.insertTrigger("/")}
+                onReference={(): void => editorRef.current?.insertTrigger("@")}
                 onAttach={(): void => fileInputRef.current?.click()}
                 onSaveDraft={saveDraft}
                 onSchedule={(): void => setScheduleTarget({ id: undefined, initial: null })}
@@ -1441,7 +1502,7 @@ export function ComposerWorkspace({
                   onClick={(): void => editorRef.current?.insertTrigger("/")}
                 >
                   <Box component="span" sx={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1 }}>/</Box>
-                </IconButton>, "/", "Type / · slash command")}
+                </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`)}
               </span>
             </Tooltip>
             <Tooltip title="Reference a file (@)">
@@ -1453,7 +1514,7 @@ export function ComposerWorkspace({
                   onClick={(): void => editorRef.current?.insertTrigger("@")}
                 >
                   <AlternateEmail fontSize="small" />
-                </IconButton>, "@", "Type @ · reference a file")}
+                </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`)}
               </span>
             </Tooltip>
             <Tooltip title="Attach image or file">
@@ -1465,7 +1526,7 @@ export function ComposerWorkspace({
                   onClick={(): void => fileInputRef.current?.click()}
                 >
                   <AttachFile fontSize="small" />
-                </IconButton>, `${MOD_LABEL}⇧A`, `${MOD_LABEL}Shift+A · attach file`)}
+                </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`)}
               </span>
             </Tooltip>
             <Box sx={{ flex: 1 }} />
@@ -1493,7 +1554,7 @@ export function ComposerWorkspace({
                       onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
                     >
                       <Schedule fontSize="small" />
-                    </IconButton>, `${MOD_LABEL}⇧S`, `${MOD_LABEL}Shift+S · schedule prompt`)}
+                    </IconButton>, `${ALT_LABEL}S`, `${ALT_LABEL}S · schedule prompt`)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Jump to front of queue">
@@ -1518,7 +1579,7 @@ export function ComposerWorkspace({
                       onClick={(e): void => setForceAnchor(e.currentTarget)}
                     >
                       <Bolt fontSize="small" />
-                    </IconButton>, `${MOD_LABEL}⇧↵`, `${MOD_LABEL}Shift+Enter · force push`)}
+                    </IconButton>, `${ALT_LABEL}↵`, `${ALT_LABEL}Enter · force push`)}
                   </span>
                 </Tooltip>
               </>
@@ -1622,7 +1683,7 @@ export function ComposerWorkspace({
               }}
             >
               {busy || starting ? "Queue" : "Send"}
-            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`, "bottom-end")}
+            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`)}
             </Stack>
           </>
         ) : (
@@ -2714,6 +2775,9 @@ function PendingPanel({
         borderRadius: 1,
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
         overflow: "hidden",
+        ...(desktop && {
+          flexShrink: 0,
+        }),
         // Query container for the rows: their secondary actions go inline on a
         // roomy panel (iPad / desktop) and collapse to a kebab on a narrow phone
         // one (ROW_ACTIONS_INLINE). Keyed on the ACTUAL panel width, so the
@@ -2831,6 +2895,8 @@ function PendingPanel({
         <Stack
           spacing={0.5}
           ref={scrollRef}
+          data-desktop-pending-list={desktop ? "true" : undefined}
+          data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
             // Inner padding so the rows sit INSIDE the frame with a small inset
             // (the original framed look). The frame's OUTER edge is what aligns
@@ -2841,6 +2907,15 @@ function PendingPanel({
             // editor off a phone viewport. `unbounded`: the composer's shared
             // queue+drafts scroller owns the cap, so don't nest a second scroller.
             ...(unbounded ? {} : { maxHeight: "30vh", overflowY: "auto" }),
+            ...(desktop && {
+              maxHeight: 176,
+              overflowY: "auto",
+              overscrollBehavior: "contain",
+              transition: "max-height 150ms ease, padding 150ms ease",
+              "[data-desktop-focused='true'] &": {
+                maxHeight: "min(52vh, 640px)",
+              },
+            }),
           }}
         >
           {sortable.order.map((id) => {
@@ -3052,15 +3127,14 @@ function PendingRow({
     }
     // focusEnd, not focus: opening an existing draft/queued message should put
     // the caret at the end of its text so you continue typing, not at the start.
-    editorRef.current?.focusEnd();
-    // Focusing raises the keyboard; with `interactive-widget=resizes-content` the
-    // layout viewport then shrinks. A row low in the drafts list would land BEHIND
-    // the keyboard (you'd have to scroll up to see what you're typing). Once the
-    // keyboard has settled, pull the edit row into view.
-    const t = globalThis.setTimeout(() => {
-      rowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-    }, 350);
-    return () => globalThis.clearTimeout(t);
+    // Desktop's editor chunk can mount one frame after the row switches state;
+    // focus exactly once in that frame instead of racing the lazy editor now and
+    // focusing it again later (repeat focus writes can interfere with macOS IME).
+    const frame = globalThis.requestAnimationFrame(() => {
+      editorRef.current?.focusEnd();
+      rowRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, touchInput]);
   // Real-time save: while editing (desktop OR touch), debounce-persist the
   // in-progress edit back to the queued/draft item — editing is now live like the

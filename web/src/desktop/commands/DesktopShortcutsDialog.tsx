@@ -46,7 +46,7 @@ const DISCOVERY: ShortcutRow[] = [
   { keys: ["SPC", "?"], title: "Search every command" },
   { keys: ["SPC", "H", "K"], title: "Open this shortcut guide" },
   { keys: ["Mod+/"], title: "Open this shortcut guide from anywhere" },
-  { keys: ["Mod+Shift+P"], title: "Open Command Palette" },
+  { keys: ["Mod+K"], title: "Open Command Palette" },
 ];
 
 function KeySequence({ keys }: { keys: string[] }): React.JSX.Element {

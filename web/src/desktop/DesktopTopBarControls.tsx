@@ -36,7 +36,11 @@ import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import {
   fullResetTime,
+  type JsonRecord,
+  num,
+  type ProviderUsage,
   providerUsage,
+  record,
   relativeUpdateTime,
   shortResetTime,
   usageLimits,
@@ -81,6 +85,130 @@ function compactOptionName(option: ConfigOption): string {
   if (current === "Agent (full access)") return "Full access";
   if (label === "Fast mode") return `Fast ${current.toLowerCase()}`;
   return current;
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function DesktopUsageExtras(
+  { usage }: { usage: ProviderUsage },
+): React.JSX.Element {
+  const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
+  const availableCredits = num(resetCredits?.availableCount);
+  const credits = Array.isArray(resetCredits?.credits)
+    ? resetCredits.credits.map(record).filter((credit): credit is JsonRecord =>
+      credit !== undefined
+    )
+    : [];
+  const summary = record(usage.activity?.summary);
+  const session = record(usage.activity?.session);
+  const cost = record(session?.cost);
+  const contextUsed = num(session?.used);
+  const contextSize = num(session?.size);
+  const lifetimeTokens = num(summary?.lifetimeTokens);
+  const costAmount = num(cost?.amount);
+
+  return (
+    <>
+      {usage.provider === "codex" && credits.length > 0 && (
+        <Stack spacing={0.6}>
+          <Stack
+            direction="row"
+            alignItems="baseline"
+            justifyContent="space-between"
+          >
+            <Typography variant="subtitle2" fontWeight={750}>
+              Usage limit resets
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {availableCredits === undefined
+                ? credits.length
+                : availableCredits} available
+            </Typography>
+          </Stack>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 0.75,
+            }}
+          >
+            {credits.map((credit, index) => {
+              const expiresAt = num(credit.expiresAt);
+              return (
+                <Box
+                  key={textValue(credit.id) ?? index}
+                  sx={{
+                    minWidth: 0,
+                    px: 0.9,
+                    py: 0.75,
+                    borderRadius: 1.25,
+                    bgcolor: "action.hover",
+                  }}
+                >
+                  <Typography
+                    variant="caption"
+                    fontWeight={700}
+                    noWrap
+                    sx={{ display: "block" }}
+                  >
+                    {textValue(credit.title) ?? "Rate-limit reset"}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ display: "block" }}
+                  >
+                    {expiresAt === undefined
+                      ? "No expiry reported"
+                      : `Expires ${fullResetTime(expiresAt)}`}
+                  </Typography>
+                </Box>
+              );
+            })}
+          </Box>
+        </Stack>
+      )}
+      {(contextUsed !== undefined || lifetimeTokens !== undefined ||
+        costAmount !== undefined) && (
+        <Stack spacing={0.55}>
+          <Divider />
+          {contextUsed !== undefined && contextSize !== undefined && (
+            <Stack direction="row" justifyContent="space-between" spacing={2}>
+              <Typography variant="caption" color="text.secondary">
+                Latest context
+              </Typography>
+              <Typography variant="caption" fontWeight={650}>
+                {contextUsed.toLocaleString()} / {contextSize.toLocaleString()}
+              </Typography>
+            </Stack>
+          )}
+          {lifetimeTokens !== undefined && (
+            <Stack direction="row" justifyContent="space-between" spacing={2}>
+              <Typography variant="caption" color="text.secondary">
+                Lifetime tokens
+              </Typography>
+              <Typography variant="caption" fontWeight={650}>
+                {lifetimeTokens.toLocaleString()}
+              </Typography>
+            </Stack>
+          )}
+          {costAmount !== undefined && (
+            <Stack direction="row" justifyContent="space-between" spacing={2}>
+              <Typography variant="caption" color="text.secondary">
+                Session cost
+              </Typography>
+              <Typography variant="caption" fontWeight={650}>
+                {textValue(cost?.currency) ?? "USD"} {String(costAmount)}
+              </Typography>
+            </Stack>
+          )}
+        </Stack>
+      )}
+    </>
+  );
 }
 
 function ConfigOptionControl({
@@ -577,7 +705,16 @@ export function DesktopTopBarControls({
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
         slotProps={{
-          paper: { sx: { width: 390, mt: 0.75, p: 1.5, borderRadius: 2.5 } },
+          paper: {
+            sx: {
+              width: 410,
+              maxHeight: "min(720px, calc(100vh - 96px))",
+              overflowY: "auto",
+              mt: 0.75,
+              p: 1.5,
+              borderRadius: 2.5,
+            },
+          },
         }}
       >
         <Stack spacing={1.25}>
@@ -592,7 +729,8 @@ export function DesktopTopBarControls({
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {session?.provider ?? "Provider"} ·{" "}
-                {usage?.status ?? "unavailable"} · Updated {updatedAgo}
+                {usage?.source ?? usage?.status ?? "unavailable"} · Updated{" "}
+                {updatedAgo}
               </Typography>
             </Box>
             <Button
@@ -637,6 +775,7 @@ export function DesktopTopBarControls({
               {usage?.error ?? "This provider has not exposed account limits."}
             </Typography>
           )}
+          {usage && <DesktopUsageExtras usage={usage} />}
         </Stack>
       </Popover>
 

@@ -31,11 +31,15 @@ const planExpanded = persisted("cowboy:plan-expanded", false, {
 export function PlanDock({
   entries,
   onDismiss,
+  desktop = false,
 }: {
   entries: PlanEntry[];
   /** Manually close the dock (the X). The plan stays hidden until a new/different
    *  plan arrives — see Composer's dismissedPlanKey. */
   onDismiss: () => void;
+  /** Desktop owns focus-driven workspace sizing; Mobile keeps the bounded
+   * touch scroller that prevents the composer from leaving the viewport. */
+  desktop?: boolean;
 }): React.JSX.Element {
   const expanded = useStore(planExpanded);
   const total = entries.length;
@@ -137,19 +141,38 @@ export function PlanDock({
             `maxHeight` keeps the dock from crowding out the editor. */}
         <Stack
           spacing={0.5}
+          data-desktop-plan-list={desktop ? "true" : undefined}
+          data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
             p: 1.25,
-            maxHeight: "30vh",
+            maxHeight: desktop ? 176 : "30vh",
             overflowY: "auto",
             overscrollBehavior: "contain",
             WebkitOverflowScrolling: "touch",
+            ...(desktop && {
+              transition: "max-height 150ms ease, padding 150ms ease",
+              "[data-desktop-focused='true'] &": {
+                maxHeight: "min(46vh, 560px)",
+              },
+            }),
           }}
         >
           {entries.map((e, j) => {
             const completed = e.status === "completed";
             const inProgress = e.status === "in_progress";
             return (
-              <Stack key={j} direction="row" spacing={1} alignItems="center">
+              <Stack
+                key={j}
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                {...(desktop
+                  ? {
+                    "data-desktop-item": `plan-${String(j)}`,
+                    tabIndex: -1,
+                  }
+                  : {})}
+              >
                 {completed ? (
                   <CheckCircle fontSize="small" color="success" />
                 ) : inProgress ? (

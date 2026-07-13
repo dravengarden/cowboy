@@ -33,6 +33,20 @@ Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
 owns focus.
 
+## Prompt workspace sizing
+
+Plan, Queue and Drafts are independent Desktop regions, not children of
+Mobile's shared `40vh` touch scroller. Their headers remain visible as stable
+jump targets. Focusing one expands its own bounded list and releases the other
+auxiliary lists; focusing Composer releases all three lists so the writing
+canvas receives the column. A jump into a manually collapsed region expands it
+first and focuses its first item. Editing a queued prompt or draft keeps that
+region expanded, focuses the row editor after it mounts, and scrolls the row to
+the center without smooth-scroll latency.
+
+Mobile retains its shared capped scroller and fullscreen-first row editing. It
+must not load or emulate this focus-driven sizing contract.
+
 ## Commands and help
 
 Commands may declare pane `contexts` and exact `regions`. The leader board
@@ -51,9 +65,11 @@ Shortcut hints follow one shared keycap grammar and three visibility levels:
    width and disappear when attention moves elsewhere;
 3. modal actions show their real confirmation/dismissal chord next to the label.
 
-Never invent a hint for an action that is not wired. Avoid browser-owned common
-chords such as `Mod+D` and `Mod+Shift+S`; put Cowboy-specific actions under the
-discoverable leader tree instead. Shared modal shells may use the same visual
+Never invent a hint for an action that is not wired. Contextual hints anchor to
+the bottom-right of their target. Prefer one modifier plus one physical key
+(`Mod+S`, `Alt+A`) so commands stay fast and work across input sources; avoid
+browser-owned chords such as `Mod+D`. Put secondary Cowboy-specific actions
+under the discoverable leader tree. Shared modal shells may use the same visual
 primitive, but must hide it on the touch product.
 
 ## Visual hierarchy

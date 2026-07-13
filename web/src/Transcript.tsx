@@ -202,6 +202,8 @@ const codexCaret = keyframes`
   55%, 100% { opacity: 0.24; }
 `;
 
+const CODEX_PHRASE_MS = 4200;
+
 function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
   return (
     <Box
@@ -215,9 +217,11 @@ function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
         flexShrink: 0,
         overflow: "visible",
         color: "primary.main",
-        "& .codex-workcell-prompt": { animation: `${codexPrompt} 1.25s ease-in-out infinite` },
+        "& .codex-workcell-prompt": {
+          animation: `${codexPrompt} ${String(CODEX_PHRASE_MS)}ms ease-in-out infinite`,
+        },
         "& .codex-workcell-caret": {
-          animation: `${codexCaret} 1.05s steps(1, end) infinite`,
+          animation: `${codexCaret} ${String(CODEX_PHRASE_MS)}ms ease-in-out infinite`,
         },
         "@media (prefers-reduced-motion: reduce)": {
           "& .codex-workcell-prompt, & .codex-workcell-caret": { animation: "none" },
@@ -330,12 +334,14 @@ function CodexThinking(): React.JSX.Element {
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
-  const phraseMs = 4200;
   const [phraseIndex, setPhraseIndex] = useState(() =>
-    Math.floor(Date.now() / phraseMs) % CLAUDE_VERBS.length
+    Math.floor(Date.now() / CODEX_PHRASE_MS) % CLAUDE_VERBS.length
   );
   useEffect(() => {
-    const id = globalThis.setInterval(() => setPhraseIndex((index) => index + 1), phraseMs);
+    const id = globalThis.setInterval(
+      () => setPhraseIndex((index) => index + 1),
+      CODEX_PHRASE_MS,
+    );
     return () => globalThis.clearInterval(id);
   }, []);
   const phrase = CLAUDE_VERBS[
@@ -367,7 +373,7 @@ function CodexThinking(): React.JSX.Element {
           color: "transparent",
           animation: reducedMotion
             ? "none"
-            : `${codexPhraseFade} ${String(phraseMs)}ms ease-in-out, ${shimmer} 3.2s linear infinite`,
+            : `${codexPhraseFade} ${String(CODEX_PHRASE_MS)}ms ease-in-out, ${shimmer} 3.2s linear infinite`,
           "@media (prefers-reduced-motion: reduce)": {
             animation: "none",
             background: "none",
