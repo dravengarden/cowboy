@@ -22,15 +22,18 @@ export function DesktopContextShortcut({
       sx={{
         position: "relative",
         display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: 40,
         flexShrink: 0,
         "&:hover .cowboy-context-shortcut, &:focus-within .cowboy-context-shortcut":
           {
             opacity: 1,
-            transform: "translateY(0) scale(1)",
+            transform: "translate(-50%, 0) scale(1)",
           },
         "[data-desktop-focused='true'] & .cowboy-context-shortcut": {
           opacity: 0.82,
-          transform: "translateY(0) scale(1)",
+          transform: "translate(-50%, 0) scale(1)",
         },
       }}
     >
@@ -41,10 +44,10 @@ export function DesktopContextShortcut({
           position: "absolute",
           zIndex: 2,
           bottom: -5,
-          right: -5,
+          left: "50%",
           display: "inline-flex",
           opacity: 0,
-          transform: "translateY(2px) scale(.94)",
+          transform: "translate(-50%, 2px) scale(.94)",
           transition: "opacity 120ms ease, transform 120ms ease",
           pointerEvents: "none",
         }}

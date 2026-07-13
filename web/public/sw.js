@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes, which is what triggers the
 // auto-reload onto the fresh bundle.
-const VERSION = "cowboy-v345";
+const VERSION = "cowboy-v346";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Cowboy serves the independently switched
 // frontend on the same origin as the API/WS, so when the daemon is down (e.g. a
@@ -35,7 +35,22 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      const stale = keys.filter((k) => !k.startsWith(VERSION));
+      // Keep the immediately previous Cowboy cache generation as a rolling
+      // hand-off. An already-open client can request one of its old lazy chunks
+      // in the short interval between claim() and controllerchange reload. If
+      // activation deletes that cache first, the independently switched web
+      // root no longer contains the old hash and the dynamic import crashes.
+      // Two generations bound storage while making web-only deploys atomic from
+      // every open client's point of view. Never delete another app's caches.
+      const cowboyVersions = [...new Set(keys.flatMap((key) => {
+        const match = /^cowboy-v(\d+)-/.exec(key);
+        return match ? [Number(match[1])] : [];
+      }))].sort((a, b) => b - a);
+      const keep = new Set(cowboyVersions.slice(0, 2));
+      const stale = keys.filter((key) => {
+        const match = /^cowboy-v(\d+)-/.exec(key);
+        return match != null && !keep.has(Number(match[1]));
+      });
       await Promise.all(stale.map((k) => caches.delete(k)));
       await self.clients.claim();
       // `clients.claim()` changes the active controller for every open window.

@@ -1729,7 +1729,7 @@ export function App({
                         {surface === "desktop" && (
                             <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                         )}
-                        <Box sx={{ position: "relative", display: "inline-flex" }}>
+                        <Box sx={{ display: "inline-flex", alignItems: "center" }}>
                             <IconButton
                                 onClick={(): void => openSettings("settings")}
                                 aria-label="settings"
@@ -1740,7 +1740,7 @@ export function App({
                             >
                                 <SettingsIcon />
                             </IconButton>
-                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL},`} floating />}
+                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL},`} />}
                         </Box>
                     </Toolbar>
                 </AppBar>

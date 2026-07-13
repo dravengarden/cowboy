@@ -16,9 +16,38 @@
 
 import { Box, Button, Typography } from "@mui/material";
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { isModuleLoadError } from "./moduleRecovery";
 
 interface State {
   readonly error: Error | undefined;
+}
+
+const MODULE_RECOVERY_KEY = "cowboy.module-recovery-at";
+const MODULE_RECOVERY_COOLDOWN_MS = 30_000;
+
+async function recoverLatestBundle(force = false): Promise<void> {
+  const now = Date.now();
+  let previous = 0;
+  try {
+    previous = Number(globalThis.sessionStorage.getItem(MODULE_RECOVERY_KEY) ?? 0);
+  } catch {
+    // Some embedded/private contexts deny sessionStorage. Recovery must still
+    // work; the in-memory page is about to be replaced anyway.
+  }
+  if (!force && Number.isFinite(previous) && now - previous < MODULE_RECOVERY_COOLDOWN_MS) return;
+  try {
+    globalThis.sessionStorage.setItem(MODULE_RECOVERY_KEY, String(now));
+  } catch {
+    // Best-effort loop guard; continue to the network recovery path.
+  }
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    await registration?.update();
+  } catch {
+    // Reload still recovers through the network-first navigation path when the
+    // SW update probe itself is unavailable.
+  }
+  globalThis.location.reload();
 }
 
 export class AppErrorBoundary extends Component<{ children: ReactNode }, State> {
@@ -33,6 +62,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
     // below only shows the message (a full stack is noise for the user).
     // eslint-disable-next-line no-console
     console.error("AppErrorBoundary caught a render error", error, info.componentStack);
+    if (isModuleLoadError(error)) void recoverLatestBundle();
   }
 
   override render(): ReactNode {
@@ -70,10 +100,10 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
         <Button
           variant="contained"
           color="inherit"
-          onClick={() => globalThis.location.reload()}
+          onClick={() => void recoverLatestBundle(true)}
           sx={{ mt: 1, color: "error.main", fontWeight: 600 }}
         >
-          Reload
+          Update & reload
         </Button>
       </Box>
     );

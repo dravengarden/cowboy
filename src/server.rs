@@ -1359,7 +1359,9 @@ async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<Strin
 }
 
 /// Serve a separately deployed asset by path, falling back to `index.html` so
-/// the SPA owns client-side routing. Missing `index.html` (UI not built) → 404.
+/// the SPA owns client-side routing. Missing hashed assets never fall back: a
+/// module request must receive a real 404 rather than HTML with a 200 status.
+/// Missing `index.html` (UI not built) → 404.
 ///
 /// Caching: a per-file SHA256 is used as a content `ETag` (stable across
 /// rollouts when the bytes are unchanged). The
@@ -1393,11 +1395,21 @@ async fn static_handler(
     }
 
     // Serve the asset if it exists; otherwise fall back to index.html so the
-    // SPA handles the route. The mime is keyed off the *served* name so the
-    // fallback is delivered as text/html, not octet-stream.
+    // SPA handles the route. Vite's /assets names are content-addressed files,
+    // never client-side routes. Returning index.html for a missing old chunk
+    // makes browsers report the opaque "Importing a module script failed"
+    // error because a JS import received text/html.
     let requested_path = state.web_root.join(requested);
     let (name, content) = match tokio::fs::read(&requested_path).await {
         Ok(bytes) => (requested, bytes),
+        Err(request_error) if requested.starts_with("assets/") => {
+            tracing::info!(
+                requested = %requested_path.display(),
+                %request_error,
+                "requested web asset is no longer deployed"
+            );
+            return StatusCode::NOT_FOUND.into_response();
+        }
         Err(request_error) => match tokio::fs::read(state.web_root.join("index.html")).await {
             Ok(bytes) => ("index.html", bytes),
             Err(index_error) => {
