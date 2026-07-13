@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Status } from "./protocol";
-
-interface ContextValue {
-  used: number;
-  size: number;
-}
+import {
+  contextValueFromSessionInfo,
+  type ContextValue,
+} from "./sessionInfoContext";
 
 interface ContextOverride extends ContextValue {
   serverUsed: number;
@@ -93,11 +92,9 @@ export function useCompactionContext({
           { cache: "no-store" },
         );
         if (response.ok) {
-          const info = await response.json() as {
-            meta?: { context_used?: number; context_size?: number };
-          };
-          const used = info.meta?.context_used ?? 0;
-          const size = info.meta?.context_size ?? 0;
+          const value = contextValueFromSessionInfo(await response.json());
+          if (!value) throw new Error("invalid session info context usage");
+          const { used, size } = value;
           if (used !== baseline.used || size !== baseline.size) {
             if (!cancelled) {
               setOverride({ used, size, serverUsed, serverSize });
