@@ -679,7 +679,7 @@ function NewSessionDialog({
     /** Called with the new session's id so the UI can focus it immediately. */
     onCreated: (sessionId: string) => void;
 }): React.JSX.Element {
-    const [provider, setProvider] = useState<string>(PROVIDERS[0]);
+    const [provider, setProvider] = useState<string>("codex");
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
     const [workItemId, setWorkItemId] = useState<string>("");
     // Working-dir choices: start from the hard-coded fallback, then replace with
@@ -712,6 +712,7 @@ function NewSessionDialog({
     useEffect(() => {
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
+        setProvider("codex");
         setWorkItemId("");
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();

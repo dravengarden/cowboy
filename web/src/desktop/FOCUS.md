@@ -37,6 +37,10 @@ same controller state.
   In Sessions this switches the active session immediately while retaining
   focus in the rail, so the next `j/k` continues from the selected row.
 - `Mod-j/k`: reorder the focused item when its region is reorderable.
+- `Alt-Q`: expand or collapse the queued-message panel globally. `Mod-Q` is
+  deliberately reserved for the operating system's Quit command.
+- Inside Prompt, `E` returns from Plan, Queue, or Drafts to the main editor and
+  lands on the Desktop Vim command sink in Normal mode.
 
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target

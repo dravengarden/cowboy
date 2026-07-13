@@ -147,6 +147,21 @@ export function DesktopCommandHost({
       run: () => workspace.focusRegion("prompt.queued"),
     },
     {
+      id: "prompt.toggleQueue",
+      title: "Toggle Queue",
+      description: "Expand or collapse queued prompts from anywhere",
+      group: "Prompt",
+      shortcut: "Alt+Q",
+      allowInEditor: true,
+      when: () =>
+        document.querySelector("[data-desktop-collapse-toggle='queued']") !== null,
+      disabledReason: "The queue is empty",
+      run: () =>
+        document.querySelector<HTMLElement>(
+          "[data-desktop-collapse-toggle='queued']",
+        )?.click(),
+    },
+    {
       id: "prompt.focusDrafts",
       title: "Focus Drafts",
       description: "Move keyboard focus to parked drafts",
@@ -160,6 +175,7 @@ export function DesktopCommandHost({
     {
       id: "prompt.focusEditor",
       title: "Focus Prompt Editor",
+      description: "Return to the main editor in Vim Normal mode",
       group: "Prompt",
       shortcut: "E",
       contexts: ["prompt"],

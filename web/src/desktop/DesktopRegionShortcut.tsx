@@ -1,4 +1,5 @@
-import { Box, Tooltip } from "@mui/material";
+import { Box, type SxProps, type Theme, Tooltip } from "@mui/material";
+import type { DesktopPane } from "./DesktopWorkspaceController";
 import { useVimMode } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
@@ -8,10 +9,16 @@ export function DesktopRegionShortcut({
   shortcut,
   title,
   normalOnly = false,
+  showWhenPane,
+  hideWhenRegion,
+  sx,
 }: {
   shortcut: string;
   title: string;
   normalOnly?: boolean;
+  showWhenPane?: DesktopPane;
+  hideWhenRegion?: string;
+  sx?: SxProps<Theme>;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const vimEnabled = useVimSetting();
@@ -20,12 +27,14 @@ export function DesktopRegionShortcut({
     normalOnly && workspace.focusedRegion === "prompt.composer" &&
     (!vimEnabled || vimMode !== "normal")
   ) return <></>;
+  if (showWhenPane && workspace.focusedPane !== showWhenPane) return <></>;
+  if (hideWhenRegion && workspace.focusedRegion === hideWhenRegion) return <></>;
   return (
     <Tooltip title={`${title} · ${shortcut}`} enterDelay={450}>
       <Box
         component="span"
         data-desktop-region-shortcut
-        sx={{ display: "inline-flex", alignItems: "center", flexShrink: 0 }}
+        sx={{ display: "inline-flex", alignItems: "center", flexShrink: 0, ...sx }}
       >
         <DesktopShortcut shortcut={shortcut} quiet />
       </Box>

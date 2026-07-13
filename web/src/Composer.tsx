@@ -1339,7 +1339,18 @@ export function ComposerWorkspace({
           }),
         }}
       >
-      {/* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
+        {desktop && (
+          <Suspense fallback={null}>
+            <DesktopRegionShortcut
+              shortcut="E"
+              title="Focus editor in Vim Normal mode"
+              showWhenPane="prompt"
+              hideWhenRegion="prompt.composer"
+              sx={{ position: "absolute", top: 10, right: 10, zIndex: 4 }}
+            />
+          </Suspense>
+        )}
+        {/* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
           bottom threshold auto-collapses to the compact auto-grow editor, dragging
           up auto-expands (VSCode-terminal feel). A bigger hit area + an always-
           visible grab-pill so it's findable. Shown unless this is the fullscreen
@@ -2862,6 +2873,7 @@ function PendingPanel({
       >
         <IconButton
           data-desktop-item-action="default"
+          data-desktop-collapse-toggle={desktop ? kind : undefined}
           size="small"
           aria-label={collapsed ? "expand" : "collapse"}
           onClick={toggleCollapsed}
@@ -2903,13 +2915,23 @@ function PendingPanel({
         )}
         <Box sx={{ flex: 1, minWidth: 0 }} />
         {desktop && (
-          <Suspense fallback={null}>
-            <DesktopRegionShortcut
-              shortcut={kind === "queued" ? "Q" : "D"}
-              title={kind === "queued" ? "Focus queue" : "Focus drafts"}
-              normalOnly
-            />
-          </Suspense>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            {kind === "queued" && (
+              <Suspense fallback={null}>
+                <DesktopRegionShortcut
+                  shortcut="Alt+Q"
+                  title={collapsed ? "Expand queue" : "Collapse queue"}
+                />
+              </Suspense>
+            )}
+            <Suspense fallback={null}>
+              <DesktopRegionShortcut
+                shortcut={kind === "queued" ? "Q" : "D"}
+                title={kind === "queued" ? "Focus queue" : "Focus drafts"}
+                normalOnly
+              />
+            </Suspense>
+          </Stack>
         )}
         {
           /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
