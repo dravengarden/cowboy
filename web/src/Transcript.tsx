@@ -501,7 +501,15 @@ const fold = keyframes`
 //     terracotta shimmer + a squeezing fold icon = "condensing right now".
 //   • done   (anything followed it / the turn is idle): a calm, static muted
 //     "Context compacted" note — no infinite shimmer implying it's still going.
-function CompactingWidget({ active, provider }: { active: boolean; provider: string }): React.JSX.Element {
+function CompactingWidget({
+  active,
+  provider,
+  desktop,
+}: {
+  active: boolean;
+  provider: string;
+  desktop: boolean;
+}): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
   const accent = provider === "claude-code" ? "#D97757" : theme.palette.primary.main;
@@ -515,13 +523,17 @@ function CompactingWidget({ active, provider }: { active: boolean; provider: str
       alignItems="center"
       sx={{
         alignSelf: "flex-start",
-        my: 0.25,
-        px: 1,
-        py: 0.4,
+        my: desktop ? 0.25 : 0.5,
+        px: desktop ? 1 : 0.25,
+        py: desktop ? 0.4 : 0.5,
         borderRadius: 1.5,
-        border: 1,
+        border: desktop ? 1 : 0,
         borderColor: active ? alpha(accent, 0.35) : "divider",
-        bgcolor: active ? alpha(accent, 0.08) : "action.hover",
+        bgcolor: desktop
+          ? active
+            ? alpha(accent, 0.08)
+            : "action.hover"
+          : "transparent",
       }}
     >
       <UnfoldLess
@@ -566,7 +578,14 @@ function CompactingWidget({ active, provider }: { active: boolean; provider: str
   );
 }
 
-function CompactionRequestWidget(): React.JSX.Element {
+function CompactionRequestWidget({ desktop }: { desktop: boolean }): React.JSX.Element | null {
+  // Mobile presents compaction as one lifecycle row at the live edge: the
+  // synthetic active row below becomes the durable "Context compacted" row
+  // when ACP confirms completion. Re-rendering the literal `/compact` command
+  // as a second, right-aligned request chip duplicates that state and makes the
+  // two labels look like unrelated actions. Desktop retains the command record
+  // because its dense transcript intentionally exposes explicit user actions.
+  if (!desktop) return null;
   return (
     <Stack
       direction="row"
@@ -1014,6 +1033,7 @@ function MessageBubble({
   streaming,
   autoResumed,
   provider,
+  desktop,
 }: {
   role: "assistant" | "user";
   chunks: ContentChunk[];
@@ -1026,19 +1046,20 @@ function MessageBubble({
    *  otherwise read as a duplicate). */
   autoResumed?: boolean;
   provider: string;
+  desktop: boolean;
 }): React.JSX.Element {
   const mine = role === "user";
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
   // busy) means it's condensing right now; otherwise it's a finished record.
   if (!mine && isCompactingMessage(chunks)) {
-    return <CompactingWidget active={!!streaming} provider={provider} />;
+    return <CompactingWidget active={!!streaming} provider={provider} desktop={desktop} />;
   }
   if (!mine && isCompactionCompletion(chunks)) {
-    return <CompactingWidget active={false} provider={provider} />;
+    return <CompactingWidget active={false} provider={provider} desktop={desktop} />;
   }
   if (mine && isCompactionCommand(chunks)) {
-    return <CompactionRequestWidget />;
+    return <CompactionRequestWidget desktop={desktop} />;
   }
   const lastChunkIdx = chunks.length - 1;
   const body = chunks.map((c, i) => (
@@ -1369,6 +1390,7 @@ const ItemView = memo(function ItemView({
           streaming={!!streaming && item.role === "assistant"}
           autoResumed={item.autoResumed === true}
           provider={provider}
+          desktop={desktop}
         />
       );
     case "thought":
@@ -2255,7 +2277,7 @@ export function Transcript({
             )}
             {compacting && (
               <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
-                <CompactingWidget active provider={provider} />
+                <CompactingWidget active provider={provider} desktop={desktopNavigation} />
               </Box>
             )}
             {/* Optimistic chat bubbles: newest-first in the DOM (column-reverse →
