@@ -8,10 +8,12 @@ import { ShortcutKeycap } from "../../ShortcutKeycap";
 export function DesktopContextShortcut({
   badge,
   shortcut,
+  showBadge = true,
   children,
 }: {
   badge: string;
   shortcut: string;
+  showBadge?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -37,22 +39,24 @@ export function DesktopContextShortcut({
       }}
     >
       {children}
-      <Box
-        className="cowboy-context-shortcut"
-        sx={{
-          position: "absolute",
-          zIndex: 4,
-          bottom: -5,
-          left: "50%",
-          display: "inline-flex",
-          opacity: 0,
-          transform: "translate(-50%, 2px) scale(.94)",
-          transition: "opacity 120ms ease, transform 120ms ease",
-          pointerEvents: "none",
-        }}
-      >
-        <ShortcutKeycap keyLabel={badge} variant="context" />
-      </Box>
+      {showBadge && (
+        <Box
+          className="cowboy-context-shortcut"
+          sx={{
+            position: "absolute",
+            zIndex: 4,
+            bottom: -5,
+            left: "50%",
+            display: "inline-flex",
+            opacity: 0,
+            transform: "translate(-50%, 2px) scale(.94)",
+            transition: "opacity 120ms ease, transform 120ms ease",
+            pointerEvents: "none",
+          }}
+        >
+          <ShortcutKeycap keyLabel={badge} variant="context" />
+        </Box>
+      )}
     </Box>
   );
 }

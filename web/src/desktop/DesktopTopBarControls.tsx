@@ -527,7 +527,11 @@ export function DesktopTopBarControls({
           (status === "starting" || status === "running")
         ? <Skeleton variant="rounded" width={300} height={34} />
         : (
-          <DesktopContextShortcut badge="R" shortcut="R · Run configuration">
+          <DesktopContextShortcut
+            badge="R"
+            shortcut="R · Run configuration"
+            showBadge={false}
+          >
             <Tooltip title={configSummary || "Run configuration"}>
               <Button
                 data-desktop-item="topbar-config"
@@ -690,7 +694,7 @@ export function DesktopTopBarControls({
         </Box>
       </Popover>
 
-      <DesktopContextShortcut badge="U" shortcut="U · Usage limits">
+      <DesktopContextShortcut badge="U" shortcut="U · Usage limits" showBadge={false}>
         <ButtonBase
           data-desktop-item="topbar-usage"
           data-desktop-topbar-action="usage"
@@ -859,7 +863,11 @@ export function DesktopTopBarControls({
       </Popover>
 
       {compactAction && (
-        <DesktopContextShortcut badge="C" shortcut="C · Compact conversation">
+        <DesktopContextShortcut
+          badge="C"
+          shortcut="C · Compact conversation"
+          showBadge={false}
+        >
           <Tooltip
             title={compacting
               ? "Compacting…"

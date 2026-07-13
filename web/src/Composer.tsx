@@ -3706,13 +3706,21 @@ export function AutoScrollAndStop({
     return (
       <>
         <Suspense fallback={followButton}>
-          <DesktopContextShortcut badge="F" shortcut="F · Toggle following">
+          <DesktopContextShortcut
+            badge="F"
+            shortcut="F · Toggle following"
+            showBadge={false}
+          >
             {followButton}
           </DesktopContextShortcut>
         </Suspense>
         {stopButton && (
           <Suspense fallback={stopButton}>
-            <DesktopContextShortcut badge="S" shortcut="S · Stop current turn">
+            <DesktopContextShortcut
+              badge="S"
+              shortcut="S · Stop current turn"
+              showBadge={false}
+            >
               {stopButton}
             </DesktopContextShortcut>
           </Suspense>

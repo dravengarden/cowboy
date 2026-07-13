@@ -49,12 +49,17 @@ interface RegionHint {
   label: string;
 }
 
-function regionHints(region: string | null): RegionHint[] {
+function regionHints(region: string | null, status: Status): RegionHint[] {
   switch (region) {
     case "topbar.controls":
       return [
-        { keys: "H/L", label: "Move" },
+        { keys: "H/L", label: "Select" },
         { keys: "Enter", label: "Open" },
+        { keys: "R", label: "Config" },
+        { keys: "U", label: "Usage" },
+        { keys: "C", label: "Compact" },
+        { keys: "F", label: "Follow" },
+        ...(status === "busy" ? [{ keys: "S", label: "Stop" }] : []),
       ];
     case "sessions.list":
       return [
@@ -107,7 +112,7 @@ export function DesktopStatusLine({
     : ime.phase === "committed"
     ? "IME · COMMITTED"
     : null;
-  const hints = regionHints(focusedRegion);
+  const hints = regionHints(focusedRegion, status);
 
   return (
     <Box
