@@ -244,6 +244,7 @@ function StatusDot({
             <CircularProgress
                 size={11}
                 thickness={6}
+                disableShrink
                 color="inherit"
                 aria-label={statusLabel(status)}
                 sx={[{ flexShrink: 0, color: statusColor(status) }, ...extra]}
@@ -285,6 +286,7 @@ function AutoResumeBadge({
                 <CircularProgress
                     size={13}
                     thickness={6}
+                    disableShrink
                     sx={{ flexShrink: 0, color: "warning.main" }}
                 />
             </Tooltip>

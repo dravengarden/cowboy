@@ -234,19 +234,33 @@ function emit(): void {
 }
 
 // WebSocket chunks can arrive much faster than the display can paint. State is
-// still reduced synchronously (no event is lost), but subscribers render at
-// most once per animation frame. In a background tab rAF may be suspended, so a
-// coarse timer keeps its state observers progressing without burning CPU.
+// still reduced synchronously (no event is lost), but subscriber rendering is
+// capped at ~30fps. A model transcript gains no useful fidelity at 60–100
+// React/layout commits per second; sustained multi-session streams otherwise
+// make Desktop progressively sticky while competing with editor input. In a
+// background tab rAF may be suspended, so a coarse timer keeps state observers
+// progressing without burning CPU.
+const FOREGROUND_NOTIFY_INTERVAL_MS = 33;
 let notifyScheduled = false;
+let lastNotifyAt = 0;
 function flushNotify(): void {
   notifyScheduled = false;
+  lastNotifyAt = performance.now();
   for (const listener of listeners) listener();
 }
 function scheduleNotify(): void {
   if (notifyScheduled) return;
   notifyScheduled = true;
   if (typeof document !== "undefined" && document.visibilityState === "visible") {
-    requestAnimationFrame(flushNotify);
+    const remaining = Math.max(
+      0,
+      FOREGROUND_NOTIFY_INTERVAL_MS - (performance.now() - lastNotifyAt),
+    );
+    if (remaining === 0) {
+      requestAnimationFrame(flushNotify);
+    } else {
+      setTimeout(() => requestAnimationFrame(flushNotify), remaining);
+    }
   } else {
     setTimeout(flushNotify, 50);
   }
