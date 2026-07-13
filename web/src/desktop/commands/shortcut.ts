@@ -1,6 +1,7 @@
 export interface ShortcutStroke {
   key: string;
   mod: boolean;
+  ctrl: boolean;
   shift: boolean;
   alt: boolean;
 }
@@ -11,6 +12,7 @@ export function parseShortcut(shortcut: string): ShortcutStroke {
   return {
     key,
     mod: parts.slice(0, -1).some((part) => part.toLowerCase() === "mod"),
+    ctrl: parts.slice(0, -1).some((part) => part.toLowerCase() === "ctrl"),
     shift: parts.slice(0, -1).some((part) => part.toLowerCase() === "shift"),
     alt: parts.slice(0, -1).some((part) => part.toLowerCase() === "alt"),
   };
@@ -26,8 +28,8 @@ export function matchesShortcut(
     & { code?: string },
   mac: boolean,
 ): boolean {
-  const modDown = mac ? event.metaKey : event.ctrlKey;
-  const otherModDown = mac ? event.ctrlKey : event.metaKey;
+  const expectedMeta = mac && stroke.mod;
+  const expectedCtrl = stroke.ctrl || (!mac && stroke.mod);
   // Number-row shortcuts are positional. Some macOS input sources report a
   // produced symbol (rather than "2") in `key` while Cmd is held, but `code`
   // remains Digit2. This keeps session slots stable across keyboard layouts.
@@ -42,14 +44,14 @@ export function matchesShortcut(
     ? "Enter"
     : undefined;
   const keyMatches = event.key.toLowerCase() === stroke.key ||
-    ((stroke.mod || stroke.alt) && physicalCode !== undefined &&
+    ((stroke.mod || stroke.ctrl || stroke.alt) && physicalCode !== undefined &&
       event.code === physicalCode) ||
     (/^\d$/.test(stroke.key) &&
       (event.code === `Digit${stroke.key}` ||
         event.code === `Numpad${stroke.key}`));
   return keyMatches &&
-    modDown === stroke.mod &&
-    !otherModDown &&
+    event.metaKey === expectedMeta &&
+    event.ctrlKey === expectedCtrl &&
     event.shiftKey === stroke.shift &&
     event.altKey === stroke.alt;
 }

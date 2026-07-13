@@ -24,6 +24,7 @@ import { useVimMode } from "../../vimModeStore";
 import { isMac } from "../../platform";
 import { isTextEditingTarget } from "./shortcut";
 import { isImeComposing } from "../vim/imeStatusStore";
+import { desktopRegionShortcut } from "../DesktopRegionShortcut";
 
 export function DesktopCommandHost({
   sessions,
@@ -231,6 +232,8 @@ export function DesktopCommandHost({
       description: "Move keyboard focus to session controls and usage",
       group: "Workspace",
       leader: "w t",
+      shortcut: desktopRegionShortcut("7"),
+      allowInEditor: true,
       when: () => document.querySelector("[data-desktop-region='topbar.controls']") !== null,
       run: () => workspace.focusRegion("topbar.controls"),
     },
@@ -239,6 +242,8 @@ export function DesktopCommandHost({
       title: "Focus Sessions",
       group: "Workspace",
       leader: "w s",
+      shortcut: desktopRegionShortcut("6"),
+      allowInEditor: true,
       run: () => workspace.focusPane("sessions"),
     },
     {
@@ -261,6 +266,8 @@ export function DesktopCommandHost({
       description: "Move keyboard focus to the current task plan",
       group: "Prompt",
       leader: "p l",
+      shortcut: desktopRegionShortcut("1"),
+      allowInEditor: true,
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
       run: () => workspace.focusRegion("prompt.plan"),
@@ -271,6 +278,8 @@ export function DesktopCommandHost({
       description: "Move keyboard focus to queued prompts",
       group: "Prompt",
       leader: "p q",
+      shortcut: desktopRegionShortcut("2"),
+      allowInEditor: true,
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
       run: () => workspace.focusRegion("prompt.queued"),
@@ -281,6 +290,8 @@ export function DesktopCommandHost({
       description: "Move keyboard focus to parked drafts",
       group: "Prompt",
       leader: "p d",
+      shortcut: desktopRegionShortcut("3"),
+      allowInEditor: true,
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
       run: () => workspace.focusRegion("prompt.draft"),
@@ -290,6 +301,8 @@ export function DesktopCommandHost({
       title: "Focus Prompt Editor",
       group: "Prompt",
       leader: "p e",
+      shortcut: desktopRegionShortcut("4"),
+      allowInEditor: true,
       run: () => workspace.focusRegion("prompt.composer"),
     },
     {
@@ -297,6 +310,8 @@ export function DesktopCommandHost({
       title: "Focus Transcript",
       group: "Conversation",
       leader: "c c",
+      shortcut: desktopRegionShortcut("5"),
+      allowInEditor: true,
       run: () => workspace.focusRegion("conversation.transcript"),
     },
     {

@@ -7,6 +7,9 @@ export function displayShortcutKey(key: string): string {
   if (normalized === "mod") {
     return navigator.platform.toLowerCase().includes("mac") ? "⌘" : "Ctrl";
   }
+  if (normalized === "ctrl" || normalized === "control") {
+    return navigator.platform.toLowerCase().includes("mac") ? "⌃" : "Ctrl";
+  }
   if (normalized === "shift") return "⇧";
   if (normalized === "alt") {
     return navigator.platform.toLowerCase().includes("mac") ? "⌥" : "Alt";

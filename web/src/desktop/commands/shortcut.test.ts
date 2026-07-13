@@ -5,9 +5,37 @@ Deno.test("shortcut parser normalizes a desktop chord", () => {
   assertEquals(parseShortcut("Mod+Shift+P"), {
     key: "p",
     mod: true,
+    ctrl: false,
     shift: true,
     alt: false,
   });
+});
+
+Deno.test("Ctrl remains Control on every desktop platform", () => {
+  const stroke = parseShortcut("Ctrl+4");
+  assertEquals(stroke, {
+    key: "4",
+    mod: false,
+    ctrl: true,
+    shift: false,
+    alt: false,
+  });
+  assert(matchesShortcut(stroke, {
+    key: "4",
+    code: "Digit4",
+    metaKey: false,
+    ctrlKey: true,
+    shiftKey: false,
+    altKey: false,
+  }, true));
+  assertFalse(matchesShortcut(stroke, {
+    key: "4",
+    code: "Digit4",
+    metaKey: true,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  }, true));
 });
 
 Deno.test("Mod maps to Command on macOS and Control elsewhere", () => {

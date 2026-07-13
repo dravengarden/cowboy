@@ -132,6 +132,10 @@ const DesktopWorkspace = lazy(async () => {
     const module = await import("./desktop/DesktopWorkspace");
     return { default: module.DesktopWorkspace };
 });
+const DesktopRegionShortcut = lazy(async () => {
+    const module = await import("./desktop/DesktopRegionShortcut");
+    return { default: module.DesktopRegionShortcut };
+});
 
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
@@ -1236,6 +1240,11 @@ export function App({
                 Sessions
             </Typography>
             <Box sx={{ flex: 1 }} />
+            {surface === "desktop" && (
+                <Suspense fallback={null}>
+                    <DesktopRegionShortcut digit="6" title="Focus sessions" />
+                </Suspense>
+            )}
             <Typography
                 variant="caption"
                 color="text.disabled"
@@ -1748,6 +1757,11 @@ export function App({
                                 status={active.status}
                             />
                         ) : null}
+                        {surface === "desktop" && (
+                            <Suspense fallback={null}>
+                                <DesktopRegionShortcut digit="7" title="Focus top bar" />
+                            </Suspense>
+                        )}
                         {surface === "desktop" && (
                             <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                         )}

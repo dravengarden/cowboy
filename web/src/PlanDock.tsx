@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
+import type { ReactNode } from "react";
 import { persisted, useStore } from "./_store/mod.ts";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
@@ -32,6 +33,7 @@ export function PlanDock({
   entries,
   onDismiss,
   desktop = false,
+  shortcut,
 }: {
   entries: PlanEntry[];
   /** Manually close the dock (the X). The plan stays hidden until a new/different
@@ -40,6 +42,8 @@ export function PlanDock({
   /** Desktop owns focus-driven workspace sizing; Mobile keeps the bounded
    * touch scroller that prevents the composer from leaving the viewport. */
   desktop?: boolean;
+  /** Desktop-only persistent global navigation hint. */
+  shortcut?: ReactNode;
 }): React.JSX.Element {
   const expanded = useStore(planExpanded);
   const total = entries.length;
@@ -108,6 +112,7 @@ export function PlanDock({
               </Typography>
             )}
             {expanded && <Box sx={{ flex: 1 }} />}
+            {shortcut}
             {allDone && <CheckCircle fontSize="small" color="success" />}
             <Typography
               variant="caption"

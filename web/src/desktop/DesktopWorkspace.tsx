@@ -1,14 +1,17 @@
 import { alpha, Box, Typography } from "@mui/material";
 import type { DesktopPane } from "./DesktopWorkspaceController";
+import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
 
 function PaneHeader({
   pane,
+  shortcut,
   children,
 }: {
   pane: DesktopPane;
+  shortcut: { digit: string; title: string };
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -32,6 +35,8 @@ function PaneHeader({
       >
         {children}
       </Typography>
+      <Box sx={{ flex: 1 }} />
+      <DesktopRegionShortcut digit={shortcut.digit} title={shortcut.title} />
     </Box>
   );
 }
@@ -81,7 +86,9 @@ export function DesktopWorkspace({
           bgcolor: (theme) => alpha(theme.palette.background.paper, 0.24),
         }}
       >
-        <PaneHeader pane="prompt">Prompt</PaneHeader>
+        <PaneHeader pane="prompt" shortcut={{ digit: "4", title: "Focus prompt editor" }}>
+          Prompt
+        </PaneHeader>
         {prompt}
       </Box>
 
@@ -125,7 +132,12 @@ export function DesktopWorkspace({
           flexDirection: "column",
         }}
       >
-        <PaneHeader pane="conversation">Conversation</PaneHeader>
+        <PaneHeader
+          pane="conversation"
+          shortcut={{ digit: "5", title: "Focus conversation" }}
+        >
+          Conversation
+        </PaneHeader>
         <Box
           data-desktop-region="conversation.transcript"
           data-desktop-focus-default

@@ -178,6 +178,10 @@ const DesktopComposerCommandBindings = lazy(async () => {
   const module = await import("./desktop/commands/DesktopComposerShortcuts");
   return { default: module.DesktopComposerCommandBindings };
 });
+const DesktopRegionShortcut = lazy(async () => {
+  const module = await import("./desktop/DesktopRegionShortcut");
+  return { default: module.DesktopRegionShortcut };
+});
 
 // Per-panel-kind collapse pref (app-level, per-device, never synced). One
 // persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
@@ -1090,6 +1094,13 @@ export function ComposerWorkspace({
             entries={plan.entries}
             onDismiss={(): void => setDismissedPlanKey(plan.key)}
             desktop={desktop}
+            shortcut={desktop
+              ? (
+                <Suspense fallback={null}>
+                  <DesktopRegionShortcut digit="1" title="Focus plan" />
+                </Suspense>
+              )
+              : undefined}
           />
         </Box>
       )}
@@ -2839,6 +2850,14 @@ function PendingPanel({
           </Box>
         )}
         <Box sx={{ flex: 1, minWidth: 0 }} />
+        {desktop && (
+          <Suspense fallback={null}>
+            <DesktopRegionShortcut
+              digit={kind === "queued" ? "2" : "3"}
+              title={kind === "queued" ? "Focus queue" : "Focus drafts"}
+            />
+          </Suspense>
+        )}
         {
           /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
             only shown) with 2+ rows. Primary-tinted while active. HIDDEN on a wide

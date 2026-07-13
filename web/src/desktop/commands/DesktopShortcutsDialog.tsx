@@ -13,6 +13,7 @@ import { useMemo } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopCommands } from "./DesktopCommandProvider";
+import { desktopRegionShortcut } from "../DesktopRegionShortcut";
 
 interface ShortcutRow {
   keys: string[];
@@ -21,13 +22,20 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
+  { keys: [desktopRegionShortcut("1")], title: "Focus Plan" },
+  { keys: [desktopRegionShortcut("2")], title: "Focus Queue" },
+  { keys: [desktopRegionShortcut("3")], title: "Focus Drafts" },
+  { keys: [desktopRegionShortcut("4")], title: "Focus Prompt editor" },
+  { keys: [desktopRegionShortcut("5")], title: "Focus Conversation" },
+  { keys: [desktopRegionShortcut("6")], title: "Focus Sessions" },
+  { keys: [desktopRegionShortcut("7")], title: "Focus Top Bar" },
   {
     keys: ["SPC", "W", "T/S/E/C"],
-    title: "Jump to Top Bar, Sessions, Prompt or Conversation",
+    title: "Leader navigation for workspace panes",
   },
   {
     keys: ["SPC", "P", "L/Q/D/E"],
-    title: "Jump to Plan, Queue, Drafts or Composer",
+    title: "Leader navigation for Prompt regions",
   },
   { keys: ["SPC", "C", "C"], title: "Jump to Conversation transcript" },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
