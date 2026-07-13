@@ -82,17 +82,40 @@
         depsHash = "sha256-48jLO1HPzxqCjKcqq0sJ6ToqX7sGj1HQsJxnbFStTP4=";
       };
 
+      # This host's pinned Nixpkgs still has the first fetchCargoVendor
+      # implementation, which downloads through crates.io's rate-limited API.
+      # crates.io now rejects that bulk endpoint with a data-access 403. Newer
+      # Nixpkgs uses the official immutable static CDN for exactly this reason.
+      # Patch only the vendoring helper inside the FOD; Cargo.lock checksums and
+      # the aggregate cargo hash remain fully enforced.
+      cowboy-cargo-deps = pkgs.rustPlatform.fetchCargoVendor {
+        pname = "cowboy";
+        version = "0.1.0";
+        src = cowboy-src;
+        hash = "sha256-93G9GgFsRXuXDrcWip/BIox4JHOOFw9m77MQaynXktU=";
+        preBuild = ''
+          vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
+          if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
+            patched_util="$TMPDIR/cargo-vendor-bin/$(basename "$vendor_util")"
+            mkdir -p "$(dirname "$patched_util")"
+            cp "$vendor_util" "$patched_util"
+            chmod u+w "$patched_util"
+            substituteInPlace "$patched_util" \
+              --replace-fail \
+                "https://crates.io/api/v1/crates/" \
+                "https://static.crates.io/crates/"
+            export PATH="$(dirname "$patched_util"):$PATH"
+          fi
+        '';
+      };
+
       # API/control plane + detached ACP worker. The SPA is served from a
       # runtime path and is intentionally absent from this derivation.
       cowboy = pkgs.rustPlatform.buildRustPackage {
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        # fetchCargoVendor (cargoHash) rather than cargoLock: it downloads
-        # crates via python-requests, which sends a User-Agent. crates.io now
-        # 403s the download endpoint without one, and the plain-fetchurl
-        # cargoLock path sends none. Refresh: lib.fakeHash → build → copy hash.
-        cargoHash = "sha256-93G9GgFsRXuXDrcWip/BIox4JHOOFw9m77MQaynXktU=";
+        cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = [ "--bin" "cowboy" "--bin" "cowboy-acp-worker" ];
         passthru.workerGeneration = worker-generation;
         meta = {
@@ -105,7 +128,7 @@
         pname = "cowboy-agentd";
         version = "0.1.0";
         src = agentd-src;
-        cargoHash = "sha256-93G9GgFsRXuXDrcWip/BIox4JHOOFw9m77MQaynXktU=";
+        cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = [ "--no-default-features" "--bin" "cowboy-agentd" ];
         doCheck = false;
         meta = {
