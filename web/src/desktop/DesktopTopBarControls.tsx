@@ -34,6 +34,7 @@ import {
 import { isCompactingTail } from "../derive";
 import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
+import { useCompactionContext } from "../useCompactionContext";
 import {
   fullResetTime,
   type JsonRecord,
@@ -378,20 +379,6 @@ export function DesktopTopBarControls({
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [compactConfirm, setCompactConfirm] = useState(false);
-  const [compactContextBaseline, setCompactContextBaseline] = useState<
-    {
-      used: number;
-      size: number;
-    } | null
-  >(null);
-  const [contextOverride, setContextOverride] = useState<
-    {
-      used: number;
-      size: number;
-      serverUsed: number;
-      serverSize: number;
-    } | null
-  >(null);
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const options = useMemo(() => {
@@ -446,101 +433,30 @@ export function DesktopTopBarControls({
       ),
     [availableCommands, session?.provider],
   );
+  const compacting = status === "busy" && isCompactingTail(timeline);
+  const serverContextUsed = session?.context_used ?? 0;
+  const serverContextSize = session?.context_size ?? 0;
+  const compactContext = useCompactionContext({
+    sessionId,
+    status,
+    serverUsed: serverContextUsed,
+    serverSize: serverContextSize,
+  });
+  const contextUsed = compactContext.used;
+  const contextSize = compactContext.size;
+  const contextRefreshing = compactContext.refreshing;
   const confirmCompact = useCallback((): void => {
     setCompactConfirm(false);
     if (compactAction?.command) {
-      setCompactContextBaseline({
-        used: session?.context_used ?? 0,
-        size: session?.context_size ?? 0,
-      });
-      setContextOverride(null);
+      compactContext.beginRefresh();
       submitPrompt(sessionId, compactAction.command, []);
     }
   }, [
     compactAction?.command,
-    session?.context_size,
-    session?.context_used,
+    compactContext.beginRefresh,
     sessionId,
   ]);
   useConfirmEnter(compactConfirm, confirmCompact);
-  const compacting = status === "busy" && isCompactingTail(timeline);
-  const serverContextUsed = session?.context_used ?? 0;
-  const serverContextSize = session?.context_size ?? 0;
-  const contextUsed = contextOverride?.used ?? serverContextUsed;
-  const contextSize = contextOverride?.size ?? serverContextSize;
-  const contextRefreshing = compactContextBaseline !== null;
-  useEffect(() => {
-    if (
-      contextOverride &&
-      (serverContextUsed !== contextOverride.serverUsed ||
-        serverContextSize !== contextOverride.serverSize)
-    ) {
-      // The WebSocket caught up (or a newer turn reported usage). Return to the
-      // canonical live session value instead of pinning the HTTP bridge value.
-      setContextOverride(null);
-    }
-  }, [contextOverride, serverContextSize, serverContextUsed]);
-  useEffect(() => {
-    const baseline = compactContextBaseline;
-    if (!baseline) return;
-    if (
-      serverContextUsed !== baseline.used || serverContextSize !== baseline.size
-    ) {
-      setContextOverride(null);
-      setCompactContextBaseline(null);
-      return;
-    }
-    if (compacting) return;
-    let cancelled = false;
-    let attempts = 0;
-    const refresh = async (): Promise<void> => {
-      attempts += 1;
-      try {
-        const response = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/info`,
-          {
-            cache: "no-store",
-          },
-        );
-        if (response.ok) {
-          const info = await response.json() as {
-            meta?: { context_used?: number; context_size?: number };
-          };
-          const used = info.meta?.context_used ?? 0;
-          const size = info.meta?.context_size ?? 0;
-          if (used !== baseline.used || size !== baseline.size) {
-            if (!cancelled) {
-              setContextOverride({
-                used,
-                size,
-                serverUsed: serverContextUsed,
-                serverSize: serverContextSize,
-              });
-              setCompactContextBaseline(null);
-            }
-            return;
-          }
-        }
-      } catch {
-        // The live sessions broadcast remains authoritative. A transient HTTP
-        // miss must never turn a successful compaction into a UI failure.
-      }
-      if (!cancelled && attempts < 40) {
-        window.setTimeout(() => void refresh(), 500);
-      }
-    };
-    const timer = window.setTimeout(() => void refresh(), 150);
-    return (): void => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [
-    compactContextBaseline,
-    compacting,
-    serverContextSize,
-    serverContextUsed,
-    sessionId,
-  ]);
   const contextPercent = contextSize > 0
     ? Math.round(Math.min(100, (contextUsed / contextSize) * 100))
     : null;

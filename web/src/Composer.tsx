@@ -105,6 +105,7 @@ import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
+import { useCompactionContext } from "./useCompactionContext";
 import { desktopFocusBoundary, desktopFocusFill } from "./theme";
 import {
   type Attachment,
@@ -886,6 +887,12 @@ export function ComposerWorkspace({
     [provider, availableCommands],
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  const compactContext = useCompactionContext({
+    sessionId,
+    status,
+    serverUsed: session?.context_used ?? 0,
+    serverSize: session?.context_size ?? 0,
+  });
   function runSessionAction(a: SessionAction): void {
     haptic();
     if (a.kind === "reset") {
@@ -893,6 +900,7 @@ export function ComposerWorkspace({
       resetSession(sessionId);
     } else if (a.command !== undefined) {
       // Compact: send the agent's slash-command down the normal prompt path.
+      compactContext.beginRefresh();
       submitPrompt(sessionId, a.command, []);
     }
   }
@@ -1837,7 +1845,9 @@ export function ComposerWorkspace({
           <Tooltip
             title={compacting
               ? "Compacting…"
-              : compactTooltip(session?.context_used ?? 0, session?.context_size ?? 0)}
+              : compactContext.refreshing
+              ? "Refreshing context usage…"
+              : compactTooltip(compactContext.used, compactContext.size)}
           >
             <span>
               <IconButton
@@ -1847,8 +1857,8 @@ export function ComposerWorkspace({
                 onClick={(): void => setCmdConfirm(compactAction)}
               >
                 <CompactIcon
-                  used={session?.context_used ?? 0}
-                  size={session?.context_size ?? 0}
+                  used={compactContext.used}
+                  size={compactContext.size}
                   active={compacting}
                 />
               </IconButton>
