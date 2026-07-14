@@ -4,12 +4,12 @@
 // raw markdown text in a monospace pre so streaming still feels live during
 // the (one-time) chunk fetch.
 
-import { lazy, Suspense } from "react";
+import { lazy, memo, Suspense } from "react";
 import { Box } from "@mui/material";
 
 const MarkdownImpl = lazy(() => import("./MarkdownImpl"));
 
-export function Markdown({
+export const Markdown = memo(function Markdown({
   text,
   invert = false,
 }: {
@@ -37,4 +37,4 @@ export function Markdown({
       <MarkdownImpl text={text} invert={invert} />
     </Suspense>
   );
-}
+});

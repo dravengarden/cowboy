@@ -486,11 +486,16 @@ const ACTIVE_HISTORY_HIGH_WATER = 200;
 function releaseHistoryTail(sessionId: string, retain: number): boolean {
   const timeline = state.timelines.get(sessionId);
   if (!timeline || timeline.length <= retain) return false;
-  // Do not link the smaller tail back to the full timeline: this operation must
-  // let deep history and its rendered Markdown become collectible.
   const retained = retainTimelineState(timeline, retain);
+  // Preserve render-item identity across the trim for exactly one derivation.
+  // Without this link every surviving row receives a fresh RenderItem object,
+  // so React re-runs every visible Markdown tree at once — perceived as a full
+  // Conversation flash during a streaming turn. `derive()` consumes and deletes
+  // this parent link immediately; the discarded deep history is still
+  // collectible after that render (there is no ancestry chain).
+  const retainedTimeline = linkTimeline(retained.events, timeline);
   const timelines = new Map(state.timelines);
-  timelines.set(sessionId, retained.events);
+  timelines.set(sessionId, retainedTimeline);
   const pagination = new Map(state.pagination);
   pagination.set(sessionId, {
     reachedStart: false,
