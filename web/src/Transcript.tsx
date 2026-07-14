@@ -1522,6 +1522,16 @@ interface FreezeAnchor {
   self: boolean;
 }
 
+// `column-reverse` already keeps a followed transcript at scrollTop 0. Writing
+// the same value for every streamed ACP envelope is not a harmless no-op on
+// iOS WebKit: it schedules a scroll-layer update while adjacent thought and
+// tool rows are still being laid out, so one frame can paint the old card layer
+// over the newly positioned thought. Only correct real drift from the live
+// edge; leave an already-pinned compositor completely alone.
+function pinTranscriptToLatest(el: HTMLElement): void {
+  if (Math.abs(el.scrollTop) > 0.5) el.scrollTop = 0;
+}
+
 // Snapshot the message row at the viewport CENTRE + its offset from the
 // container top. Centre (not the top edge) so the probe always lands on a row,
 // never in the container's top padding / status-strip inset.
@@ -2041,7 +2051,7 @@ export function Transcript({
     const repin = (): void => {
       roRaf = 0;
       if (!stick.current) return;
-      el.scrollTop = 0; // column-reverse: 0 = bottom
+      pinTranscriptToLatest(el); // column-reverse: 0 = bottom
       if (++roTries < 5) roRaf = requestAnimationFrame(repin);
     };
     const ro = new ResizeObserver(() => {
@@ -2095,7 +2105,7 @@ export function Transcript({
     let tries = 0;
     const pin = (): void => {
       const el = parentRef.current;
-      if (el) el.scrollTop = 0; // column-reverse: 0 = bottom
+      if (el) pinTranscriptToLatest(el); // column-reverse: 0 = bottom
       if (++tries < 5) raf = requestAnimationFrame(pin);
     };
     raf = requestAnimationFrame(pin);
@@ -2113,7 +2123,7 @@ export function Transcript({
     const el = parentRef.current;
     if (!el) return;
     if (stick.current) {
-      el.scrollTop = 0;
+      pinTranscriptToLatest(el);
       // Stuck → no live anchor; clear so the next detach captures fresh (never
       // restores to a stale, pre-re-stick position → a jump).
       freezeRef.current.key = null;
@@ -2158,7 +2168,7 @@ export function Transcript({
     let tries = 0;
     const pin = (): void => {
       const el = parentRef.current;
-      if (el) el.scrollTop = 0;
+      if (el) pinTranscriptToLatest(el);
       if (++tries < 5) raf = requestAnimationFrame(pin);
     };
     raf = requestAnimationFrame(pin);
@@ -2326,6 +2336,14 @@ export function Transcript({
                     py: 0.625,
                     display: "flex",
                     flexDirection: "column",
+                    // Give every timeline row an independent paint boundary.
+                    // WebKit can otherwise retain a previous composited tool
+                    // card for one frame while a streamed sibling thought is
+                    // inserted/reflowed, visibly drawing the two rows on top of
+                    // each other even though their layout boxes do not overlap.
+                    // This does not size-contain the row: intrinsic Markdown and
+                    // tool height still contribute normally to scrollHeight.
+                    contain: "layout paint",
                     // Do not use content-visibility here. iOS WebKit can retain the
                     // intrinsic height but skip painting a row when it is inside a
                     // column-reverse scroller, leaving a large blank hole until the
