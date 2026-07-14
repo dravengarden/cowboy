@@ -1,4 +1,26 @@
 import type { Envelope } from "./protocol";
+import { derive } from "./derive";
+
+/**
+ * Translate a visual-row budget into the event suffix needed to preserve it.
+ * ACP histories are not one-event-per-row: a single tool card can be followed
+ * by many update envelopes, while message chunks coalesce into one bubble. A
+ * raw event cap can therefore collapse 170 visible rows to five and make the
+ * viewport auto-loader immediately fetch them again.
+ */
+export function retainedEventCountForRows(
+  timeline: Envelope[],
+  minimumEvents: number,
+  minimumRows: number,
+): number {
+  if (timeline.length <= minimumEvents) return timeline.length;
+  const items = derive(timeline);
+  const firstRetained = items[Math.max(0, items.length - minimumRows)];
+  if (!firstRetained) return minimumEvents;
+  const firstIndex = timeline.findIndex((event) => String(event.seq) === firstRetained.key);
+  if (firstIndex < 0) return minimumEvents;
+  return Math.max(minimumEvents, timeline.length - firstIndex);
+}
 
 /**
  * Keep the recent render window plus the older events that still define live

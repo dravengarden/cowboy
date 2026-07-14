@@ -37,7 +37,7 @@ import type {
   SkillView,
   WireQueued,
 } from "./protocol";
-import { retainTimelineState } from "./timelineRetention";
+import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 
 /// One notification slot — the App's snackbar shows the latest. We monotonically
 /// bump `seq` even on repeat messages so the UI can re-trigger the open
@@ -482,6 +482,7 @@ const INACTIVE_HISTORY_TAIL = 800;
 // The complete log remains in Postgres and `loadOlder` pages it back on demand.
 const ACTIVE_HISTORY_TAIL = 120;
 const ACTIVE_HISTORY_HIGH_WATER = 200;
+const ACTIVE_HISTORY_RENDER_ROWS = 48;
 
 function releaseHistoryTail(sessionId: string, retain: number): boolean {
   const timeline = state.timelines.get(sessionId);
@@ -511,7 +512,16 @@ function releaseHistoryTail(sessionId: string, retain: number): boolean {
 export function releaseFollowedHistory(sessionId: string): boolean {
   const timeline = state.timelines.get(sessionId);
   if (!timeline || timeline.length <= ACTIVE_HISTORY_HIGH_WATER) return false;
-  return releaseHistoryTail(sessionId, ACTIVE_HISTORY_TAIL);
+  // A raw ACP envelope count is not a visual-row count. Preserve enough event
+  // history to keep the latest real rows mounted; otherwise a tool-heavy turn
+  // can shrink below one viewport and the auto-fill loader immediately restores
+  // the just-trimmed page, creating a permanent trim/load flash loop.
+  const retain = retainedEventCountForRows(
+    timeline,
+    ACTIVE_HISTORY_TAIL,
+    ACTIVE_HISTORY_RENDER_ROWS,
+  );
+  return releaseHistoryTail(sessionId, retain);
 }
 
 /** Release deep scrollback after leaving a session. Recent context remains

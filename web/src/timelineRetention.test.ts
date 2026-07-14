@@ -2,7 +2,10 @@ import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import { latestAvailableCommands } from "./agentCommands";
 import { derive, latestPendingPermission, latestPlan, linkTimeline } from "./derive";
 import type { Envelope } from "./protocol";
-import { retainTimelineState } from "./timelineRetention";
+import {
+  retainedEventCountForRows,
+  retainTimelineState,
+} from "./timelineRetention";
 
 const update = (seq: number, sessionUpdate: string, extra = {}): Envelope => ({
   session_id: "s",
@@ -61,4 +64,26 @@ Deno.test("retention shares unchanged render rows across a history trim", () => 
   for (const item of after) {
     assertStrictEquals(item, before.find((candidate) => candidate.key === item.key));
   }
+});
+
+Deno.test("retention sizes a tool-heavy event tail by visible rows", () => {
+  const calls = Array.from({ length: 80 }, (_, index) =>
+    update(index + 1, "tool_call", {
+      toolCallId: `tool-${index}`,
+      title: `Tool ${index}`,
+      status: "pending",
+    })
+  );
+  const updates = Array.from({ length: 120 }, (_, index) =>
+    update(index + 81, "tool_call_update", {
+      toolCallId: `tool-${index % 80}`,
+      status: "completed",
+    })
+  );
+  const timeline = [...calls, ...updates];
+  const retain = retainedEventCountForRows(timeline, 120, 48);
+  const retained = retainTimelineState(timeline, retain).events;
+
+  assertEquals(retain, 168);
+  assertEquals(derive(retained).length, 48);
 });
