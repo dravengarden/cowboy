@@ -37,6 +37,7 @@ import type {
   SkillView,
   WireQueued,
 } from "./protocol";
+import { retainTimelineState } from "./timelineRetention";
 
 /// One notification slot — the App's snackbar shows the latest. We monotonically
 /// bump `seq` even on repeat messages so the UI can re-trigger the open
@@ -487,14 +488,14 @@ function releaseHistoryTail(sessionId: string, retain: number): boolean {
   if (!timeline || timeline.length <= retain) return false;
   // Do not link the smaller tail back to the full timeline: this operation must
   // let deep history and its rendered Markdown become collectible.
-  const retained = timeline.slice(-retain);
+  const retained = retainTimelineState(timeline, retain);
   const timelines = new Map(state.timelines);
-  timelines.set(sessionId, retained);
+  timelines.set(sessionId, retained.events);
   const pagination = new Map(state.pagination);
   pagination.set(sessionId, {
     reachedStart: false,
     loadingOlder: false,
-    beforeSeq: retained[0]?.seq ?? null,
+    beforeSeq: retained.recentStartSeq,
   });
   setState({ ...state, timelines, pagination });
   return true;

@@ -11,7 +11,7 @@ import {
 } from "@mui/material";
 import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from "@mui/icons-material";
 import type { PlanEntry } from "./protocol";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { persisted, useStore } from "./_store/mod.ts";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
@@ -29,7 +29,7 @@ const planExpanded = persisted("cowboy:plan-expanded", false, {
   deserialize: (s) => s === "1",
 });
 
-export function PlanDock({
+export const PlanDock = memo(function PlanDock({
   entries,
   onDismiss,
   desktop = false,
@@ -206,4 +206,4 @@ export function PlanDock({
       </Collapse>
     </Box>
   );
-}
+});

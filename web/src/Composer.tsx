@@ -716,6 +716,10 @@ export function ComposerWorkspace({
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
+  const planKey = plan?.key ?? null;
+  const dismissPlan = useCallback((): void => {
+    if (planKey !== null) setDismissedPlanKey(planKey);
+  }, [planKey]);
   // Show the plan unless (a) the user dismissed this exact plan, or (b) it's
   // fully complete AND the user has already moved on to a new turn — ACP never
   // signals "plan done", so a finished plan would otherwise linger forever.
@@ -1125,7 +1129,7 @@ export function ComposerWorkspace({
         >
           <PlanDock
             entries={plan.entries}
-            onDismiss={(): void => setDismissedPlanKey(plan.key)}
+            onDismiss={dismissPlan}
             desktop={desktop}
             shortcut={desktop
               ? (
