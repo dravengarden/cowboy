@@ -479,8 +479,8 @@ const INACTIVE_HISTORY_TAIL = 800;
 // The open transcript used to grow forever between page reloads. Keep a smaller
 // recent window once a following reader crosses this batched high-water mark.
 // The complete log remains in Postgres and `loadOlder` pages it back on demand.
-const ACTIVE_HISTORY_TAIL = 300;
-const ACTIVE_HISTORY_HIGH_WATER = 600;
+const ACTIVE_HISTORY_TAIL = 120;
+const ACTIVE_HISTORY_HIGH_WATER = 200;
 
 function releaseHistoryTail(sessionId: string, retain: number): boolean {
   const timeline = state.timelines.get(sessionId);
