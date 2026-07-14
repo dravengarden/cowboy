@@ -476,15 +476,18 @@ export async function loadOlder(sessionId: string): Promise<void> {
 }
 
 const INACTIVE_HISTORY_TAIL = 800;
+// The open transcript used to grow forever between page reloads. Keep a smaller
+// recent window once a following reader crosses this batched high-water mark.
+// The complete log remains in Postgres and `loadOlder` pages it back on demand.
+const ACTIVE_HISTORY_TAIL = 300;
+const ACTIVE_HISTORY_HIGH_WATER = 600;
 
-/** Release deep scrollback after leaving a session. Recent context remains
- * instant; immutable cursor pages can be fetched again if the user scrolls. */
-export function releaseInactiveHistory(sessionId: string): void {
+function releaseHistoryTail(sessionId: string, retain: number): boolean {
   const timeline = state.timelines.get(sessionId);
-  if (!timeline || timeline.length <= INACTIVE_HISTORY_TAIL) return;
-  // Deliberately do not link this smaller tail back to the full timeline: the
-  // point of releasing an inactive session is to make deep history collectible.
-  const retained = timeline.slice(-INACTIVE_HISTORY_TAIL);
+  if (!timeline || timeline.length <= retain) return false;
+  // Do not link the smaller tail back to the full timeline: this operation must
+  // let deep history and its rendered Markdown become collectible.
+  const retained = timeline.slice(-retain);
   const timelines = new Map(state.timelines);
   timelines.set(sessionId, retained);
   const pagination = new Map(state.pagination);
@@ -494,6 +497,23 @@ export function releaseInactiveHistory(sessionId: string): void {
     beforeSeq: retained[0]?.seq ?? null,
   });
   setState({ ...state, timelines, pagination });
+  return true;
+}
+
+/** Release deep scrollback only while the reader follows the live edge.
+ * Detached readers keep their complete visible window until they return. */
+export function releaseFollowedHistory(sessionId: string): boolean {
+  const timeline = state.timelines.get(sessionId);
+  if (!timeline || timeline.length <= ACTIVE_HISTORY_HIGH_WATER) return false;
+  return releaseHistoryTail(sessionId, ACTIVE_HISTORY_TAIL);
+}
+
+/** Release deep scrollback after leaving a session. Recent context remains
+ * instant; immutable cursor pages can be fetched again if the user scrolls. */
+export function releaseInactiveHistory(sessionId: string): void {
+  const timeline = state.timelines.get(sessionId);
+  if (!timeline || timeline.length <= INACTIVE_HISTORY_TAIL) return;
+  releaseHistoryTail(sessionId, INACTIVE_HISTORY_TAIL);
 }
 
 function setPagination(

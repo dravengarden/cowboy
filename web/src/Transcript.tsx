@@ -60,6 +60,7 @@ import type { Envelope, Status } from "./protocol";
 import {
   discardMessage,
   loadOlder,
+  releaseFollowedHistory,
   type QueuedMessage,
   retryMessage,
   send,
@@ -578,39 +579,6 @@ function CompactingWidget({
   );
 }
 
-function CompactionRequestWidget({ desktop }: { desktop: boolean }): React.JSX.Element | null {
-  // Mobile presents compaction as one lifecycle row at the live edge: the
-  // synthetic active row below becomes the durable "Context compacted" row
-  // when ACP confirms completion. Re-rendering the literal `/compact` command
-  // as a second, right-aligned request chip duplicates that state and makes the
-  // two labels look like unrelated actions. Desktop retains the command record
-  // because its dense transcript intentionally exposes explicit user actions.
-  if (!desktop) return null;
-  return (
-    <Stack
-      direction="row"
-      spacing={0.65}
-      alignItems="center"
-      sx={{
-        alignSelf: "flex-end",
-        my: 0.25,
-        px: 1,
-        py: 0.4,
-        borderRadius: 1.5,
-        border: 1,
-        borderColor: "divider",
-        bgcolor: "action.hover",
-        color: "text.secondary",
-      }}
-    >
-      <UnfoldLess aria-hidden sx={{ fontSize: 16, color: "primary.main" }} />
-      <Typography variant="caption" sx={{ fontWeight: 550 }}>
-        Context compaction requested
-      </Typography>
-    </Stack>
-  );
-}
-
 function toolColor(status: string): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
   if (status === "failed") return "error";
@@ -1047,7 +1015,7 @@ function MessageBubble({
   autoResumed?: boolean;
   provider: string;
   desktop: boolean;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const mine = role === "user";
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
@@ -1059,7 +1027,9 @@ function MessageBubble({
     return <CompactingWidget active={false} provider={provider} desktop={desktop} />;
   }
   if (mine && isCompactionCommand(chunks)) {
-    return <CompactionRequestWidget desktop={desktop} />;
+    // The live-edge CompactingWidget is the one lifecycle surface on both
+    // products. A second slash-command chip made Desktop diverge from Mobile.
+    return null;
   }
   const lastChunkIdx = chunks.length - 1;
   const body = chunks.map((c, i) => (
@@ -1827,6 +1797,18 @@ export function Transcript({
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
 
+  // Bound a long-running open session without disturbing a detached reader.
+  // Trimming is batched and old rows remain recoverable through `loadOlder`.
+  useEffect(() => {
+    const el = parentRef.current;
+    // Do not fight the short-history bootstrap above: it deliberately pages
+    // until the viewport fills. Once there is real overflow, the recent tail is
+    // already sufficient to fill the reader and can safely replace deep rows.
+    if (stick.current && el && el.scrollHeight > el.clientHeight + 1) {
+      releaseFollowedHistory(sessionId);
+    }
+  }, [sessionId, timeline.length]);
+
   // SCROLL MODEL: the scroll container is `flex-direction: column-reverse`, so
   // the browser anchors the viewport FROM THE BOTTOM natively. We render rows
   // newest-first in the DOM; column-reverse flips that to oldest-at-top,
@@ -1937,6 +1919,7 @@ export function Transcript({
         // Drop the freeze anchor so a later detach captures fresh, not a stale
         // pre-re-stick row (which would yank the view on restore).
         freezeRef.current.key = null;
+        releaseFollowedHistory(sessionIdRef.current);
       }
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
@@ -1973,6 +1956,7 @@ export function Transcript({
         stick.current = true;
         setSticky(sessionIdRef.current, true);
         freezeRef.current.key = null;
+        releaseFollowedHistory(sessionIdRef.current);
         return;
       }
       const direction = el.scrollTop > 0 ? -1 : 1;
@@ -1981,6 +1965,7 @@ export function Transcript({
     const followLatest = (): void => {
       stick.current = true;
       freezeRef.current.key = null;
+      releaseFollowedHistory(sessionIdRef.current);
       requestStickToBottom(sessionIdRef.current);
     };
     const onDesktopNavigation = (rawEvent: Event): void => {
