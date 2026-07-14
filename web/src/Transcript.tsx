@@ -1796,6 +1796,24 @@ export function Transcript({
   // Bumped by the composer toggle (requestStickToBottom) to ask us to scroll to
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
+  const historyReleaseTimerRef = useRef<number | undefined>(undefined);
+  const cancelHistoryRelease = (): void => {
+    if (historyReleaseTimerRef.current === undefined) return;
+    globalThis.clearTimeout(historyReleaseTimerRef.current);
+    historyReleaseTimerRef.current = undefined;
+  };
+  const scheduleHistoryRelease = (): void => {
+    cancelHistoryRelease();
+    historyReleaseTimerRef.current = globalThis.setTimeout(() => {
+      historyReleaseTimerRef.current = undefined;
+      const el = parentRef.current;
+      if (
+        !stick.current || desktopScrollActiveRef.current || !el ||
+        Math.abs(el.scrollTop) > 1 || el.scrollHeight <= el.clientHeight + 1
+      ) return;
+      releaseFollowedHistory(sessionIdRef.current);
+    }, 750);
+  };
 
   // Bound a long-running open session without disturbing a detached reader.
   // Trimming is batched and old rows remain recoverable through `loadOlder`.
@@ -1805,8 +1823,9 @@ export function Transcript({
     // until the viewport fills. Once there is real overflow, the recent tail is
     // already sufficient to fill the reader and can safely replace deep rows.
     if (stick.current && el && el.scrollHeight > el.clientHeight + 1) {
-      releaseFollowedHistory(sessionId);
+      scheduleHistoryRelease();
     }
+    return cancelHistoryRelease;
   }, [sessionId, timeline.length]);
 
   // SCROLL MODEL: the scroll container is `flex-direction: column-reverse`, so
@@ -1840,6 +1859,7 @@ export function Transcript({
     let touching = false;
     let desktopScrollSettleTimer: number | undefined;
     const detach = (): void => {
+      cancelHistoryRelease();
       if (stick.current) {
         stick.current = false;
         // Reading back history → stop following; the composer toggle goes
@@ -1862,6 +1882,7 @@ export function Transcript({
     const restoreAnchor = (): void => restoreFreezeAnchor(el, freezeRef.current);
     const markDesktopScrollActive = (): void => {
       if (!desktopNavigation) return;
+      cancelHistoryRelease();
       desktopScrollActiveRef.current = true;
       // A pending corrective scroll event must never swallow the reader's next
       // real movement. From this point the native gesture is authoritative.
@@ -1919,7 +1940,7 @@ export function Transcript({
         // Drop the freeze anchor so a later detach captures fresh, not a stale
         // pre-re-stick row (which would yank the view on restore).
         freezeRef.current.key = null;
-        releaseFollowedHistory(sessionIdRef.current);
+        scheduleHistoryRelease();
       }
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
@@ -1956,7 +1977,7 @@ export function Transcript({
         stick.current = true;
         setSticky(sessionIdRef.current, true);
         freezeRef.current.key = null;
-        releaseFollowedHistory(sessionIdRef.current);
+        scheduleHistoryRelease();
         return;
       }
       const direction = el.scrollTop > 0 ? -1 : 1;
@@ -1965,7 +1986,7 @@ export function Transcript({
     const followLatest = (): void => {
       stick.current = true;
       freezeRef.current.key = null;
-      releaseFollowedHistory(sessionIdRef.current);
+      scheduleHistoryRelease();
       requestStickToBottom(sessionIdRef.current);
     };
     const onDesktopNavigation = (rawEvent: Event): void => {
@@ -2053,6 +2074,7 @@ export function Transcript({
       if (desktopScrollSettleTimer !== undefined) {
         globalThis.clearTimeout(desktopScrollSettleTimer);
       }
+      cancelHistoryRelease();
       desktopScrollActiveRef.current = false;
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
     };
