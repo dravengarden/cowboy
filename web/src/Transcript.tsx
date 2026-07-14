@@ -1,6 +1,6 @@
-// Paged transcript. One row per canonical `RenderItem`; CSS containment skips
-// layout/paint for off-screen rows while preserving DOM and native scroll
-// anchoring as streamed markdown / code blocks / images grow.
+// Paged transcript. One row per canonical `RenderItem`; every row remains in
+// normal layout so native scroll anchoring can track streamed markdown / code
+// blocks / images as they grow.
 //
 // A JavaScript virtualizer was deliberately removed: unmounting variable-height
 // rows breaks the iOS column-reverse anchor and loses local tool/permission-card
@@ -2231,6 +2231,15 @@ export function Transcript({
           // Hide focus ring; we keep tabIndex for keyboard scroll capture.
           outline: "none",
           overscrollBehavior: "contain",
+          // This is a scrolling FLEX column, not a height-constrained toolbar.
+          // Flex items default to `flex-shrink: 1`; while a streamed message is
+          // growing and the next tool card lands, WebKit can briefly keep the
+          // message's old flex base size and paint the new lines outside that
+          // shrunken row. The result is the prose visibly crossing the next
+          // card until another layout pass. Transcript rows must always own
+          // their intrinsic content height so overflow increases scrollHeight
+          // instead of compressing siblings.
+          "& > *": { flex: "0 0 auto" },
         }}
       >
         {loading && items.length === 0 ? (
