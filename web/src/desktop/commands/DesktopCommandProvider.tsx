@@ -27,7 +27,7 @@ export interface DesktopCommand {
   contexts?: DesktopPane[];
   regions?: string[];
   /** Global commands skip text editors unless explicitly opted in. */
-  allowInEditor?: boolean;
+  allowInEditor?: boolean | ((target: EventTarget | null) => boolean);
   when?: () => boolean;
   disabledReason?: string | (() => string);
   run: () => void;
@@ -413,7 +413,10 @@ export function DesktopCommandProvider(
           (!workspace.focusedRegion ||
             !command.regions.includes(workspace.focusedRegion))
         ) continue;
-        if (!command.allowInEditor && isTextEditingTarget(event.target)) {
+        const allowedInEditor = typeof command.allowInEditor === "function"
+          ? command.allowInEditor(event.target)
+          : command.allowInEditor === true;
+        if (!allowedInEditor && isTextEditingTarget(event.target)) {
           continue;
         }
         if (!matchesShortcut(parseShortcut(command.shortcut), event, isMac)) {

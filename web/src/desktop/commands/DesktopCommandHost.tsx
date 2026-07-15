@@ -18,6 +18,8 @@ import {
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
+import { getVimMode } from "../../vimModeStore";
+import { getVimSetting } from "../../vimSetting";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -136,6 +138,15 @@ export function DesktopCommandHost({
       group: "Prompt",
       shortcut: "P",
       contexts: ["prompt"],
+      // Preserve Vim paste once the editor has a document. On an empty Normal
+      // canvas, the visible P hint may safely move focus to the task plan.
+      allowInEditor: (target) => {
+        if (!getVimSetting() || getVimMode() !== "normal") return false;
+        const element = target instanceof Element ? target : null;
+        return element?.closest<HTMLElement>(
+          "[data-desktop-region='prompt.composer'][data-desktop-editor-empty='true']",
+        ) !== null;
+      },
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
       run: () => workspace.focusRegion("prompt.plan"),

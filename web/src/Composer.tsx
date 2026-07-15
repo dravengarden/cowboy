@@ -1138,6 +1138,7 @@ export function ComposerWorkspace({
                     shortcut="P"
                     title="Focus Plan"
                     normalOnly
+                    availableInComposer={text.length === 0 && attachments.length === 0}
                   />
                 </Suspense>
               )
@@ -1335,6 +1336,9 @@ export function ComposerWorkspace({
           ? {
             "data-desktop-region": "prompt.composer",
             "data-desktop-focus-default": true,
+            "data-desktop-editor-empty": text.length === 0 && attachments.length === 0
+              ? "true"
+              : "false",
             tabIndex: -1,
           }
           : {})}

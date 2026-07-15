@@ -365,6 +365,10 @@ here says otherwise.
     only; Mobile receives neither the focus reset nor the macro UI. Prompt's
     bare `P/Q/D/E` region shortcuts must also yield while the command sink owns
     focus, or they shadow native Vim paste, macro, delete, and motion commands.
+    The sole narrow exception is `P` on a completely empty main composer in
+    Normal mode: there is no document-relative paste target, so the visible Plan
+    hint may move focus to Plan. As soon as text or an attachment exists, `p/P`
+    belongs to Vim again and the Plan hint is hidden.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

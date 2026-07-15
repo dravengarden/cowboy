@@ -32,7 +32,9 @@ same controller state.
 - `Mod-b/e/t/u`: jump directly to Sessions, Prompt, Conversation or Top Bar.
 - `p/q/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
   The composer keeps native Vim `p/q/d/e`; these region jumps are available
-  only while a non-editor Prompt region owns focus.
+  only while a non-editor Prompt region owns focus. One scoped exception keeps
+  the visible Plan hint honest: `p` may leave a completely empty Normal-mode
+  composer for Plan; once the editor has text or attachments, it is Vim paste.
 - `q` is also the Queue disclosure action: from another non-editor Prompt
   region it expands and focuses Queue; from Queue it collapses the panel and
   returns to the Composer in Normal mode.
