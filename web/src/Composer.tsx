@@ -151,6 +151,7 @@ import {
   setQueueEditing,
   submitPrompt,
   unscheduleDraft,
+  useConnected,
   useStoreSelector,
 } from "./store";
 import { ScheduleSheet } from "./ScheduleSheet";
@@ -3200,9 +3201,14 @@ function PendingRow({
   };
   const editorRef = useRef<ComposerEditorHandle>(null);
   const rowRef = useRef<HTMLDivElement>(null);
+  const connected = useConnected();
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
   const confirmForcePush = (): void => {
+    // `starting` has no interruptible turn yet, and a disconnected client would
+    // drop this non-durable command. Keep the event path guarded as well as the
+    // button so keyboard/confirm callbacks cannot bypass the disabled state.
+    if (!connected || status !== "busy") return;
     forcePushQueued(sessionId, message.id);
     setConfirmAnchor(null);
   };
@@ -3553,16 +3559,29 @@ function PendingRow({
       </Tooltip>
     );
   } else {
+    const canForcePush = connected && status === "busy";
+    const forcePushTitle = !connected
+      ? "Unavailable while reconnecting"
+      : status === "starting"
+      ? "Agent is starting — available when ready"
+      : "Force push (interrupt & send)";
     primary = (
-      <Tooltip title="Force push (interrupt & send)">
-        <IconButton
-          size="small"
-          color="warning"
-          aria-label="force push"
-          onClick={(e): void => setConfirmAnchor(e.currentTarget)}
-        >
-          <Bolt fontSize="small" />
-        </IconButton>
+      <Tooltip title={forcePushTitle}>
+        {/* MUI disabled buttons do not emit pointer events; the span keeps the
+            reason discoverable while the action itself remains inert. */}
+        <span>
+          <IconButton
+            size="small"
+            color="warning"
+            aria-label="force push"
+            disabled={!canForcePush}
+            onClick={(e): void => {
+              if (canForcePush) setConfirmAnchor(e.currentTarget);
+            }}
+          >
+            <Bolt fontSize="small" />
+          </IconButton>
+        </span>
       </Tooltip>
     );
   }
