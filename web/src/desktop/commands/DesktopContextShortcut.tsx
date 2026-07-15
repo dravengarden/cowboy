@@ -22,9 +22,13 @@ export function DesktopContextShortcut({
   const toolbar = placement === "toolbar";
   const restingTransform = corner
     ? "translate(1px, 1px) scale(.94)"
+    : toolbar
+    ? "translate(2px, -50%) scale(.94)"
     : "translate(-50%, 2px) scale(.94)";
   const visibleTransform = corner
     ? "translate(0, 0) scale(1)"
+    : toolbar
+    ? "translate(0, -50%) scale(1)"
     : "translate(-50%, 0) scale(1)";
   return (
     <Box
@@ -37,6 +41,10 @@ export function DesktopContextShortcut({
         justifyContent: "center",
         height: 40,
         flexShrink: 0,
+        // Top-bar hints belong beside their control, not below the bar. Keep a
+        // narrow inter-control lane for the floating keycap so it never crosses
+        // the pane header rail or covers the adjacent action.
+        mr: toolbar ? 1.25 : 0,
         "&:hover .cowboy-context-shortcut, &:focus-within .cowboy-context-shortcut":
           {
             opacity: 1,
@@ -55,9 +63,10 @@ export function DesktopContextShortcut({
           sx={{
             position: "absolute",
             zIndex: 4,
-            bottom: corner ? -3 : toolbar ? -14 : -5,
-            right: corner ? -4 : "auto",
-            left: corner ? "auto" : "50%",
+            top: toolbar ? "50%" : "auto",
+            bottom: toolbar ? "auto" : corner ? -3 : -5,
+            right: corner ? -4 : toolbar ? -9 : "auto",
+            left: corner || toolbar ? "auto" : "50%",
             display: "inline-flex",
             opacity: 0,
             transform: restingTransform,
