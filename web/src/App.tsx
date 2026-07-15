@@ -1779,7 +1779,7 @@ export function App({
                                 <DesktopContextShortcut
                                     badge={`${MOD_LABEL},`}
                                     shortcut={`${MOD_LABEL}, · Settings`}
-                                    placement="corner"
+                                    placement="toolbar"
                                 >
                                     <IconButton
                                         data-desktop-item="topbar-settings"

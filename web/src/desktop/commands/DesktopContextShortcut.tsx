@@ -15,10 +15,11 @@ export function DesktopContextShortcut({
   badge: string;
   shortcut: string;
   showBadge?: boolean;
-  placement?: "below" | "corner";
+  placement?: "below" | "corner" | "toolbar";
   children: React.ReactNode;
 }): React.JSX.Element {
   const corner = placement === "corner";
+  const toolbar = placement === "toolbar";
   const restingTransform = corner
     ? "translate(1px, 1px) scale(.94)"
     : "translate(-50%, 2px) scale(.94)";
@@ -54,7 +55,7 @@ export function DesktopContextShortcut({
           sx={{
             position: "absolute",
             zIndex: 4,
-            bottom: corner ? -3 : -5,
+            bottom: corner ? -3 : toolbar ? -14 : -5,
             right: corner ? -4 : "auto",
             left: corner ? "auto" : "50%",
             display: "inline-flex",
