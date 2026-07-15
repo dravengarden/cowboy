@@ -5,6 +5,13 @@ the API and the embedded React SPA, with
 one agent subprocess per session. Deployed as a NixOS service on hawk (:3333).
 Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 
+## Toolchain
+
+- Run Rust, Deno, build, lint, and test commands from the repository root in
+  the pinned shell, for example `nix develop -c just check`. Do not use host
+  `cargo` or `deno` as a preliminary check; a missing tool or stale Rustup
+  linker wrapper is an environment failure, not a product-code failure.
+
 ## Deploy (read before deploying)
 - cowboy is a NixOS service (`services/cowboy` on hawk), consumed via a
   `git+file://` flake input from this repo. To ship: commit here, then on hawk
@@ -27,6 +34,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - A **fresh worktree is missing `web/src/_shell`** (`harness shell link` no
   longer covers cowboy) — symlink it manually before building.
   (memory: cowboy-shell-symlink-fresh-worktree)
+- SQLx migration files are immutable after deployment, including comments and
+  whitespace because their exact bytes are checksummed. Add a new migration;
+  never edit an applied file or alter stored checksum records. If startup
+  reports a modified migration, restore its exact historical bytes before
+  diagnosing later service symptoms.
 
 ## Memory / sessions
 - cowboy does not own agent memory. Codex uses its native local-memory feature
