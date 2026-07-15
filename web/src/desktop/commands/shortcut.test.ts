@@ -109,7 +109,6 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
   }, true));
   for (const [shortcut, key, code] of [
     ["Alt+P", "π", "KeyP"],
-    ["Alt+Q", "œ", "KeyQ"],
     ["Alt+D", "∂", "KeyD"],
     ["Alt+E", "Dead", "KeyE"],
     ["Alt+C", "ç", "KeyC"],

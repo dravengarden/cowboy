@@ -2952,8 +2952,14 @@ function PendingPanel({
             {kind === "queued" && (
               <Suspense fallback={null}>
                 <DesktopRegionShortcut
-                  shortcut="Alt+Q"
-                  title={collapsed ? "Expand queue" : "Collapse queue"}
+                  shortcut="Q"
+                  title={
+                    collapsed
+                      ? "Open and focus queue"
+                      : "Close queue when focused"
+                  }
+                  normalOnly
+                  hideWhenRegion="prompt.composer"
                 />
               </Suspense>
             )}

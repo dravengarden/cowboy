@@ -142,29 +142,27 @@ export function DesktopCommandHost({
     },
     {
       id: "prompt.focusQueue",
-      title: "Focus Queue",
-      description: "Move keyboard focus to queued prompts",
+      title: "Open or Close Queue",
+      description:
+        "Open and focus queued prompts, or close them when the queue already owns focus",
       group: "Prompt",
       shortcut: "Q",
       contexts: ["prompt"],
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
-      run: () => workspace.focusRegion("prompt.queued"),
-    },
-    {
-      id: "prompt.toggleQueue",
-      title: "Toggle Queue",
-      description: "Expand or collapse queued prompts from anywhere",
-      group: "Prompt",
-      shortcut: "Alt+Q",
-      allowInEditor: true,
-      when: () =>
-        document.querySelector("[data-desktop-collapse-toggle='queued']") !== null,
-      disabledReason: "The queue is empty",
-      run: () =>
-        document.querySelector<HTMLElement>(
+      run: () => {
+        const toggle = document.querySelector<HTMLElement>(
           "[data-desktop-collapse-toggle='queued']",
-        )?.click(),
+        );
+        if (!toggle) return;
+        if (workspace.focusedRegion === "prompt.queued") {
+          if (toggle.getAttribute("aria-label") === "collapse") toggle.click();
+          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+          return;
+        }
+        if (toggle.getAttribute("aria-label") === "expand") toggle.click();
+        requestAnimationFrame(() => workspace.focusRegion("prompt.queued"));
+      },
     },
     {
       id: "prompt.focusDrafts",

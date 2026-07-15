@@ -33,12 +33,13 @@ same controller state.
 - `p/q/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
   The composer keeps native Vim `p/q/d/e`; these region jumps are available
   only while a non-editor Prompt region owns focus.
+- `q` is also the Queue disclosure action: from another non-editor Prompt
+  region it expands and focuses Queue; from Queue it collapses the panel and
+  returns to the Composer in Normal mode.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
   In Sessions this switches the active session immediately while retaining
   focus in the rail, so the next `j/k` continues from the selected row.
 - `Mod-j/k`: reorder the focused item when its region is reorderable.
-- `Alt-Q`: expand or collapse the queued-message panel globally. `Mod-Q` is
-  deliberately reserved for the operating system's Quit command.
 - Inside Prompt, `E` returns from Plan, Queue, or Drafts to the main editor and
   lands on the Desktop Vim command sink in Normal mode.
 
