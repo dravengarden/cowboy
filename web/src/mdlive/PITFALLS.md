@@ -369,6 +369,11 @@ here says otherwise.
     Normal mode: there is no document-relative paste target, so the visible Plan
     hint may move focus to Plan. As soon as text or an attachment exists, `p/P`
     belongs to Vim again and the Plan hint is hidden.
+    The exception must follow the actual focused `[data-vim-command-sink]`, not
+    React's asynchronously mirrored Vim-mode store. With a CJK input source,
+    that sink may receive `event.key=Process` / keyCode 229 even though it cannot
+    compose; match the physical `KeyP` there. Never enable physical bare-key
+    matching on `.cm-content`, where it would steal real Insert-mode text.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
@@ -401,5 +406,8 @@ Desktop Vim + IME checks:
 - [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
 - [ ] Composition text is accepted with a visible, focused caret after the switch.
 - [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.
+- [ ] With an empty Normal-mode composer and a visible Plan, physical `p` focuses
+      and expands Plan even while a CJK input source reports `Process` / 229;
+      after text or an attachment exists, `p/P` remains native Vim paste.
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.

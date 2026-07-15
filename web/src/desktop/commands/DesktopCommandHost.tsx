@@ -18,8 +18,6 @@ import {
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
-import { getVimMode } from "../../vimModeStore";
-import { getVimSetting } from "../../vimSetting";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -139,13 +137,19 @@ export function DesktopCommandHost({
       shortcut: "P",
       contexts: ["prompt"],
       // Preserve Vim paste once the editor has a document. On an empty Normal
-      // canvas, the visible P hint may safely move focus to the task plan.
+      // canvas, the visible P hint may safely move focus to the task plan. The
+      // command sink is the authoritative Normal-mode fact; React's mode and
+      // preference stores can trail a native focus event by one render.
       allowInEditor: (target) => {
-        if (!getVimSetting() || getVimMode() !== "normal") return false;
         const element = target instanceof Element ? target : null;
-        return element?.closest<HTMLElement>(
+        const composer = element?.closest<HTMLElement>(
           "[data-desktop-region='prompt.composer'][data-desktop-editor-empty='true']",
-        ) !== null;
+        );
+        return composer !== null &&
+          (element?.matches("[data-vim-command-sink]") === true ||
+            element?.closest(".cm-editor")?.classList.contains(
+              "cm-vim-command-focused",
+            ) === true);
       },
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",

@@ -133,3 +133,17 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
     altKey: true,
   }, true));
 });
+
+Deno.test("bare contextual shortcuts use physical keys only when explicitly safe", () => {
+  const shortcut = parseShortcut("P");
+  const imeKey = {
+    key: "Process",
+    code: "KeyP",
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  };
+  assertFalse(matchesShortcut(shortcut, imeKey, true));
+  assert(matchesShortcut(shortcut, imeKey, true, true));
+});

@@ -27,6 +27,7 @@ export function matchesShortcut(
     >
     & { code?: string },
   mac: boolean,
+  physicalBare = false,
 ): boolean {
   const expectedMeta = mac && stroke.mod;
   const expectedCtrl = stroke.ctrl || (!mac && stroke.mod);
@@ -44,7 +45,8 @@ export function matchesShortcut(
     ? "Enter"
     : undefined;
   const keyMatches = event.key.toLowerCase() === stroke.key ||
-    ((stroke.mod || stroke.ctrl || stroke.alt) && physicalCode !== undefined &&
+    ((stroke.mod || stroke.ctrl || stroke.alt || physicalBare) &&
+      physicalCode !== undefined &&
       event.code === physicalCode) ||
     (/^\d$/.test(stroke.key) &&
       (event.code === `Digit${stroke.key}` ||
