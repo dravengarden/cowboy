@@ -38,6 +38,7 @@ import type {
   WireQueued,
 } from "./protocol";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
+import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 
 /// One notification slot — the App's snackbar shows the latest. We monotonically
 /// bump `seq` even on repeat messages so the UI can re-trigger the open
@@ -236,12 +237,13 @@ function emit(): void {
 
 // WebSocket chunks can arrive much faster than the display can paint. State is
 // still reduced synchronously (no event is lost), but subscriber rendering is
-// capped at ~30fps. A model transcript gains no useful fidelity at 60–100
-// React/layout commits per second; sustained multi-session streams otherwise
-// make Desktop progressively sticky while competing with editor input. In a
+// capped at ~20fps, and ~10fps while a reader is scrolling. A model transcript
+// gains no useful fidelity from competing with a native 60fps scroll gesture;
+// the canonical state still consumes every ACP event synchronously. Sustained
+// multi-session streams otherwise make both products progressively sticky
+// while competing with editor input. In a
 // background tab rAF may be suspended, so a coarse timer keeps state observers
 // progressing without burning CPU.
-const FOREGROUND_NOTIFY_INTERVAL_MS = 33;
 let notifyScheduled = false;
 let lastNotifyAt = 0;
 function flushNotify(): void {
@@ -255,7 +257,7 @@ function scheduleNotify(): void {
   if (typeof document !== "undefined" && document.visibilityState === "visible") {
     const remaining = Math.max(
       0,
-      FOREGROUND_NOTIFY_INTERVAL_MS - (performance.now() - lastNotifyAt),
+      transcriptPresentationIntervalMs() - (performance.now() - lastNotifyAt),
     );
     if (remaining === 0) {
       requestAnimationFrame(flushNotify);

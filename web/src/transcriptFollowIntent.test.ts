@@ -25,10 +25,9 @@ Deno.test("keyboard follow intent preserves following for bottom-bound commands"
   assertEquals(keyLeavesLatest({ key: " ", shiftKey: false }), false);
 });
 
-Deno.test("detached anchor yields to active Desktop scrolling only", () => {
+Deno.test("detached anchor yields to active native scrolling on both products", () => {
   assertEquals(shouldRestoreDetachedAnchor(true, true), false);
   assertEquals(shouldRestoreDetachedAnchor(true, false), true);
-  // Desktop gesture arbitration must not alter Mobile touch anchoring.
-  assertEquals(shouldRestoreDetachedAnchor(false, true), true);
+  assertEquals(shouldRestoreDetachedAnchor(false, true), false);
   assertEquals(shouldRestoreDetachedAnchor(false, false), true);
 });

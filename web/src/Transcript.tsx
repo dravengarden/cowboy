@@ -79,6 +79,7 @@ import {
   shouldRestoreDetachedAnchor,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
+import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import { ImageLightbox } from "./_shell";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
@@ -1739,11 +1740,12 @@ export function Transcript({
   // Shared FREEZE-WHILE-DETACHED anchor (captured by the scroll listener,
   // restored by the per-chunk timeline effect). See the scroll effect below.
   const freezeRef = useRef<FreezeAnchor>({ key: null, top: 0, self: false });
-  // Desktop native scrolling temporarily owns scrollTop. Streaming chunks must
-  // not replay the detached anchor while wheel inertia, keyboard scrolling, or
-  // a scrollbar drag is still moving the viewport; doing so makes the two
-  // writers alternate and presents as a stuck / vibrating scrollbar.
-  const desktopScrollActiveRef = useRef(false);
+  // Native scrolling temporarily owns scrollTop on both products. Streaming
+  // chunks must not replay the detached anchor while touch momentum, wheel
+  // inertia, keyboard scrolling, or a scrollbar drag is still moving the
+  // viewport; doing so makes the two writers alternate and presents as a stuck
+  // or flashing transcript.
+  const nativeScrollActiveRef = useRef(false);
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
   const paging = useStoreSelector((snapshot) => snapshot.pagination.get(sessionId));
@@ -1818,7 +1820,7 @@ export function Transcript({
       historyReleaseTimerRef.current = undefined;
       const el = parentRef.current;
       if (
-        !stick.current || desktopScrollActiveRef.current || !el ||
+        !stick.current || nativeScrollActiveRef.current || !el ||
         Math.abs(el.scrollTop) > 1 || el.scrollHeight <= el.clientHeight + 1
       ) return;
       releaseFollowedHistory(sessionIdRef.current);
@@ -1867,7 +1869,7 @@ export function Transcript({
     // the toggle stuck "active" all the way up (the reported bug). Gate the
     // re-stick on this so it only fires once the gesture SETTLES at the bottom.
     let touching = false;
-    let desktopScrollSettleTimer: number | undefined;
+    let nativeScrollSettleTimer: number | undefined;
     const detach = (): void => {
       cancelHistoryRelease();
       if (stick.current) {
@@ -1890,26 +1892,27 @@ export function Transcript({
     // fire on content growth) plus this RO for container resizes (keyboard).
     const captureAnchor = (): void => captureFreezeAnchor(el, freezeRef.current);
     const restoreAnchor = (): void => restoreFreezeAnchor(el, freezeRef.current);
-    const markDesktopScrollActive = (): void => {
-      if (!desktopNavigation) return;
+    const markNativeScrollActive = (): void => {
       cancelHistoryRelease();
-      desktopScrollActiveRef.current = true;
+      markTranscriptScrollActivity();
+      nativeScrollActiveRef.current = true;
       // A pending corrective scroll event must never swallow the reader's next
       // real movement. From this point the native gesture is authoritative.
       freezeRef.current.self = false;
-      if (desktopScrollSettleTimer !== undefined) {
-        globalThis.clearTimeout(desktopScrollSettleTimer);
+      if (nativeScrollSettleTimer !== undefined) {
+        globalThis.clearTimeout(nativeScrollSettleTimer);
       }
-      desktopScrollSettleTimer = globalThis.setTimeout(() => {
+      nativeScrollSettleTimer = globalThis.setTimeout(() => {
         // Capture first, then hand ownership back to chunk/resize anchoring.
         // The next stream update therefore preserves the exact settled view.
         if (!stick.current) captureAnchor();
-        desktopScrollActiveRef.current = false;
-        desktopScrollSettleTimer = undefined;
-      }, 180);
+        nativeScrollActiveRef.current = false;
+        nativeScrollSettleTimer = undefined;
+      }, 240);
     };
     const onTouchStart = (): void => {
       touching = true;
+      markNativeScrollActive();
       detach();
     };
     const onTouchEnd = (): void => {
@@ -1921,7 +1924,7 @@ export function Transcript({
       // every wheel event therefore produced an on -> off flicker at the
       // boundary. Only an upward (away-from-latest) gesture expresses intent
       // to pause following.
-      markDesktopScrollActive();
+      markNativeScrollActive();
       if (wheelLeavesLatest(event.deltaY)) detach();
     };
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -1939,7 +1942,7 @@ export function Transcript({
       }
       // Covers scrollbar drags and keyboard/native scrolling as well as wheel
       // gestures. Debouncing here keeps inertia authoritative between events.
-      markDesktopScrollActive();
+      markNativeScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
       if (fromBottom < 24 && !stick.current && !touching) {
@@ -2062,7 +2065,7 @@ export function Transcript({
         if (
           shouldRestoreDetachedAnchor(
             desktopNavigation,
-            desktopScrollActiveRef.current,
+            nativeScrollActiveRef.current,
           )
         ) restoreAnchor();
         return;
@@ -2081,11 +2084,11 @@ export function Transcript({
       el.removeEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
-      if (desktopScrollSettleTimer !== undefined) {
-        globalThis.clearTimeout(desktopScrollSettleTimer);
+      if (nativeScrollSettleTimer !== undefined) {
+        globalThis.clearTimeout(nativeScrollSettleTimer);
       }
       cancelHistoryRelease();
-      desktopScrollActiveRef.current = false;
+      nativeScrollActiveRef.current = false;
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
     };
   }, []);
@@ -2130,7 +2133,7 @@ export function Transcript({
     } else if (
       shouldRestoreDetachedAnchor(
         desktopNavigation,
-        desktopScrollActiveRef.current,
+        nativeScrollActiveRef.current,
       ) && freezeRef.current.key === null
     ) {
       // Detached without a scroll gesture to capture one (e.g. the composer's
@@ -2139,7 +2142,7 @@ export function Transcript({
     } else if (
       shouldRestoreDetachedAnchor(
         desktopNavigation,
-        desktopScrollActiveRef.current,
+        nativeScrollActiveRef.current,
       )
     ) {
       restoreFreezeAnchor(el, freezeRef.current);
