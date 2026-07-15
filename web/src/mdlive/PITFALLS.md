@@ -363,7 +363,7 @@ here says otherwise.
     line as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
     upstream behavior. This runtime remains dynamically imported by Desktop
     only; Mobile receives neither the focus reset nor the macro UI. Prompt's
-    bare `P/Q/D/E` region shortcuts must also yield while the command sink owns
+    bare `P/O/D/E` region shortcuts must also yield while the command sink owns
     focus, or they shadow native Vim paste, macro, delete, and motion commands.
     The sole narrow exception is `P` on a completely empty main composer in
     Normal mode: there is no document-relative paste target, so the visible Plan

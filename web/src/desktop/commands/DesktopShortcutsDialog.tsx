@@ -21,12 +21,12 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
-  { keys: ["Mod+B"], title: "Focus Sessions" },
-  { keys: ["Mod+E"], title: "Focus Prompt" },
-  { keys: ["Mod+T"], title: "Focus Conversation" },
-  { keys: ["Mod+U"], title: "Focus Top Bar" },
+  { keys: ["Alt+B"], title: "Focus Sessions" },
+  { keys: ["Alt+P"], title: "Focus Prompt" },
+  { keys: ["Alt+C"], title: "Focus Conversation" },
+  { keys: ["Alt+T"], title: "Focus Top Bar" },
   {
-    keys: ["P/Q/D/E"],
+    keys: ["P/O/D/E"],
     title: "Plan / Queue / Drafts / Editor inside Prompt",
     description: "Available from Prompt lists; the composer keeps native Vim commands",
   },

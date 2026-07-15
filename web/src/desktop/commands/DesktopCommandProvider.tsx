@@ -17,6 +17,7 @@ import {
 } from "./shortcut";
 import { isImeComposing } from "../vim/imeStatusStore";
 import { workspaceCommandKey } from "./workspaceCommandKey";
+import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 
 export interface DesktopCommand {
   id: string;
@@ -93,6 +94,7 @@ export function DesktopCommandProvider(
   const [revision, setRevision] = useState(0);
   const workspace = useDesktopWorkspace();
   const register = useCallback((command: DesktopCommand): () => void => {
+    assertMacShortcutAllowed(command.id, command.shortcut);
     commands.current.set(command.id, command);
     setRevision((value) => value + 1);
     return () => {

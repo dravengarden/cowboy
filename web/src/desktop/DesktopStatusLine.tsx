@@ -139,7 +139,7 @@ export function DesktopStatusLine({
       focusedRegion !== "prompt.composer"
     ? [
       { keys: "P", label: "Plan" },
-      { keys: "Q", label: "Queue" },
+      { keys: "O", label: "Queue" },
       { keys: "D", label: "Drafts" },
       { keys: "E", label: "Editor" },
     ]

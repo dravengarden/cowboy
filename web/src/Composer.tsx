@@ -2957,7 +2957,7 @@ function PendingPanel({
             {kind === "queued" && (
               <Suspense fallback={null}>
                 <DesktopRegionShortcut
-                  shortcut="Q"
+                  shortcut="O"
                   title={
                     collapsed
                       ? "Open and focus queue"

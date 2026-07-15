@@ -86,7 +86,7 @@ export function DesktopPendingEditCommandBindings({
       id: `${prefix}.expand`,
       title: "Expand message editor",
       group: "Pending message editor",
-      shortcut: "Alt+E",
+      shortcut: "Alt+X",
       allowInEditor: true,
       contexts: ["prompt"],
       regions: [region],

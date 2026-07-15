@@ -29,13 +29,13 @@ same controller state.
   always starts on the currently open session.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
-- `Mod-b/e/t/u`: jump directly to Sessions, Prompt, Conversation or Top Bar.
-- `p/q/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
-  The composer keeps native Vim `p/q/d/e`; these region jumps are available
+- `Alt-b/p/c/t`: jump directly to Sessions, Prompt, Conversation or Top Bar.
+- `p/o/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
+  The composer keeps native Vim `p/o/d/e`; these region jumps are available
   only while a non-editor Prompt region owns focus. One scoped exception keeps
   the visible Plan hint honest: `p` may leave a completely empty Normal-mode
   composer for Plan; once the editor has text or attachments, it is Vim paste.
-- `q` is also the Queue disclosure action: from another non-editor Prompt
+- `o` is also the Queue disclosure action: from another non-editor Prompt
   region it expands and focuses Queue; from Queue it collapses the panel and
   returns to the Composer in Normal mode.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
@@ -106,7 +106,7 @@ entry or `Mod+/`. `Mod+k` opens the all-command palette.
 
 Shortcut hints follow one shared keycap grammar and three visibility levels:
 
-1. global shortcuts are always visible but quiet (`Mod+B/E/T/U`, `Mod+N`,
+1. global shortcuts are always visible but quiet (`Alt+B/P/C/T`, `Mod+N`,
    `Mod+,`) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
    focused (Prompt subregions and list item actions), so they add no layout
@@ -120,9 +120,36 @@ browser-owned chords such as `Mod+D`. Put secondary Cowboy-specific actions in
 the searchable command palette. Shared modal shells may use the same visual
 primitive, but must hide it on the touch product.
 
+### macOS collision policy
+
+Every Desktop shortcut must pass the checked-in macOS collision audit before
+it can enter the command registry. The policy follows Apple's system shortcut
+contract and the conventions users depend on in editors and browsers:
+
+- never capture destructive or system-owned chords such as `Mod+Q/W/H/M`,
+  `Mod+Tab`, `Mod+Space`, `Ctrl+Mod+Q/F`, `Alt+Mod+Esc`, or
+  `Shift+Mod+3/4/5`;
+- common application chords may be used only with matching native semantics:
+  `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
+  and `Mod+1…0` switches session tabs;
+- global Cowboy workspace navigation uses `Alt` plus a mnemonic
+  (`Alt+B/P/C/T`) instead of claiming a familiar `Mod` chord;
+- macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,
+  `Alt+E/I/N/U`) are reserved so Cowboy never breaks accent or IME entry;
+- do not assign bare `Q` to Cowboy navigation. A key pressed while Command is
+  being released can otherwise become `Mod+Q` and quit the native shell;
+- Vim-native keys remain unmodified and are active only in Normal mode or the
+  focused non-editor region. IME composition and text editing always win.
+
+`macShortcutPolicy.ts` is the executable source of truth. A conflicting
+registered command throws during development and fails the frontend test gate;
+update the policy and this document together when intentionally adding an
+exception. The reference inventory is Apple's official Mac keyboard-shortcut
+guide: <https://support.apple.com/en-us/102650>.
+
 The inline queued/draft editor follows the same discoverable toolbar contract
 as the main Composer: `Alt+/` slash command, `Alt+R` reference, `Alt+A` attach,
-`Mod+Enter` finish editing, and `Alt+E` expand. Their keycaps appear only while
+`Mod+Enter` finish editing, and `Alt+X` expand. Their keycaps appear only while
 that Pending region is focused; Mobile renders neither bindings nor hints.
 
 ## Visual hierarchy

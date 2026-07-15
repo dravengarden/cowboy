@@ -92,7 +92,7 @@ export function DesktopWorkspace({
           bgcolor: (theme) => alpha(theme.palette.background.paper, 0.24),
         }}
       >
-        <PaneHeader pane="prompt" shortcut={{ value: "Mod+E", title: "Focus Prompt" }}>
+        <PaneHeader pane="prompt" shortcut={{ value: "Alt+P", title: "Focus Prompt" }}>
           Prompt
         </PaneHeader>
         {prompt}
@@ -140,7 +140,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="conversation"
-          shortcut={{ value: "Mod+T", title: "Focus Conversation" }}
+          shortcut={{ value: "Alt+C", title: "Focus Conversation" }}
           actions={<DesktopConversationControls sessionId={sessionId} />}
         >
           Conversation
