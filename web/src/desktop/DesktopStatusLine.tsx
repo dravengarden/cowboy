@@ -147,7 +147,9 @@ export function DesktopStatusLine({
   const hints = [
     ...promptRegions,
     ...regionHints(focusedRegion, status),
-    ...(itemCount > 0 ? [{ keys: "Mod+1…0", label: "Jump" }] : []),
+    ...(focusedRegion === "sessions.list" && itemCount > 0
+      ? [{ keys: "Mod+1…0", label: "Switch" }]
+      : []),
     ...(regionElement?.dataset.desktopReorderable === "true"
       ? [{ keys: "Mod+J/K", label: "Reorder" }]
       : []),

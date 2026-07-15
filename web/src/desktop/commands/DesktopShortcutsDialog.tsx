@@ -34,7 +34,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
   { keys: ["J/K"], title: "Move through items in list regions" },
-  { keys: ["Mod+1…0"], title: "Jump to a visible item in the focused region" },
+  { keys: ["Mod+1…0"], title: "Switch directly to a visible session from anywhere" },
   { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },

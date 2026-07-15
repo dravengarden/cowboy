@@ -178,6 +178,41 @@ export function DesktopCommandProvider(
       const mod = isMac
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
+      // Sessions are first-level application navigation, so Mod+1…0 switches
+      // them globally instead of being scoped to whichever list currently owns
+      // focus. This intentionally works from the composer too: a modifier chord
+      // cannot become text, and requiring a preliminary Sessions focus defeats
+      // the purpose of a direct workspace switch.
+      if (
+        workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
+        document.querySelector("[role='dialog'], [role='menu']") === null
+      ) {
+        const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
+        if (match?.[1]) {
+          const sessionsRegion = document.querySelector<HTMLElement>(
+            "[data-desktop-region='sessions.list']",
+          );
+          const sessions = visibleRegionItems(sessionsRegion);
+          const digit = Number(match[1]);
+          const session = sessions[digit === 0 ? 9 : digit - 1];
+          if (session) {
+            event.preventDefault();
+            event.stopPropagation();
+            session.click();
+            if (workspace.focusedRegion === "sessions.list") {
+              const id = session.dataset.desktopItem;
+              if (id) {
+                requestAnimationFrame(() =>
+                  sessionsRegion?.querySelector<HTMLElement>(
+                    `[data-desktop-item="${CSS.escape(id)}"]`,
+                  )?.focus({ preventScroll: true })
+                );
+              }
+            }
+            return;
+          }
+        }
+      }
       const widgets = scrollNavigation ? conversationWidgets(region) : [];
       const activeWidget = document.activeElement instanceof HTMLElement
         ? document.activeElement.closest<HTMLElement>("[data-desktop-widget-toggle]")
@@ -269,41 +304,14 @@ export function DesktopCommandProvider(
           }
         }
       }
-      // Item slots are contextual, never global. Once a list region owns focus,
-      // Mod+1…0 jumps to its first ten painted rows. This keeps the global key
-      // map small while giving every Sessions/Plan/Queue/Drafts/Transcript list
-      // the same positional access contract.
+      // Reordering remains contextual to the focused list. Positional Mod+number
+      // access is reserved globally for Sessions above; local lists use standard
+      // Vim j/k, gg/G and Enter instead of overloading the same chord.
       if (
         workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
         !isTextEditingTarget(event.target) &&
         document.querySelector("[role='dialog'], [role='menu']") === null
       ) {
-        const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
-        if (match?.[1]) {
-          const digit = Number(match[1]);
-          const item = items[digit === 0 ? 9 : digit - 1];
-          if (item) {
-            event.preventDefault();
-            event.stopPropagation();
-            item.focus({ preventScroll: true });
-            item.scrollIntoView({ block: "nearest", inline: "nearest" });
-            if (region?.dataset.desktopRegion === "sessions.list") {
-              // Session number chords mean SWITCH, not merely move a hidden DOM
-              // focus ring. Keep focus in the rail so the next j/k continues
-              // from the newly selected session.
-              item.click();
-              const id = item.dataset.desktopItem;
-              if (id) {
-                requestAnimationFrame(() =>
-                  region.querySelector<HTMLElement>(
-                    `[data-desktop-item="${CSS.escape(id)}"]`,
-                  )?.focus({ preventScroll: true })
-                );
-              }
-            }
-            return;
-          }
-        }
         if (
           region?.dataset.desktopReorderable === "true" &&
           (event.key.toLowerCase() === "j" || event.key.toLowerCase() === "k")

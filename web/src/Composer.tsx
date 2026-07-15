@@ -2957,13 +2957,15 @@ function PendingPanel({
                 />
               </Suspense>
             )}
-            <Suspense fallback={null}>
-              <DesktopRegionShortcut
-                shortcut={kind === "queued" ? "Q" : "D"}
-                title={kind === "queued" ? "Focus queue" : "Focus drafts"}
-                normalOnly
-              />
-            </Suspense>
+            {kind === "draft" && (
+              <Suspense fallback={null}>
+                <DesktopRegionShortcut
+                  shortcut="D"
+                  title="Focus drafts"
+                  normalOnly
+                />
+              </Suspense>
+            )}
           </Stack>
         )}
         {
