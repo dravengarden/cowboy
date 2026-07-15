@@ -100,7 +100,82 @@ const SKELETON_TURNS: { mine: boolean; lines: string[] }[] = [
   { mine: false, lines: ["80%", "65%"] },
 ];
 
-function TranscriptSkeleton(): React.JSX.Element {
+function TranscriptSkeleton({
+  desktop,
+  provider,
+}: {
+  desktop: boolean;
+  provider: string;
+}): React.JSX.Element {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => setStalled(true), 8_000);
+    return () => globalThis.clearTimeout(timer);
+  }, []);
+
+  if (!desktop) {
+    const agent = provider === "claude-code"
+      ? "Claude Code"
+      : provider === "gemini"
+      ? "Gemini"
+      : "Codex";
+    return (
+      <Stack
+        aria-busy="true"
+        aria-label="Loading chat history"
+        sx={{
+          minHeight: "100%",
+          px: 3,
+          py: 8,
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          color: "text.secondary",
+        }}
+      >
+        <Box
+          sx={{
+            position: "relative",
+            width: 38,
+            height: 38,
+            mb: 1.75,
+            display: "grid",
+            placeItems: "center",
+          }}
+        >
+          <CircularProgress
+            size={38}
+            thickness={3}
+            aria-hidden
+            sx={{
+              position: "absolute",
+              inset: 0,
+              color: "primary.main",
+              opacity: 0.72,
+            }}
+          />
+          <Terminal aria-hidden sx={{ fontSize: 17, color: "primary.main" }} />
+        </Box>
+        <Typography variant="body2" sx={{ color: "text.primary", fontWeight: 650 }}>
+          Restoring conversation
+        </Typography>
+        <Typography variant="caption" sx={{ mt: 0.5, maxWidth: 280, lineHeight: 1.55 }}>
+          Loading recent messages and {agent} context…
+        </Typography>
+        {stalled && (
+          <Button
+            size="small"
+            variant="text"
+            onClick={(): void => globalThis.location.reload()}
+            sx={{ mt: 1.5, minHeight: 36, textTransform: "none" }}
+          >
+            Taking a while — reload
+          </Button>
+        )}
+      </Stack>
+    );
+  }
+
   return (
     <Stack
       spacing={3}
@@ -2256,7 +2331,7 @@ export function Transcript({
         }}
       >
         {loading && items.length === 0 ? (
-          <TranscriptSkeleton />
+          <TranscriptSkeleton desktop={desktopNavigation} provider={provider} />
         ) : items.length === 0 && isLive ? (
           <EmptyTranscript provider={provider} cwd={cwd} />
         ) : (
