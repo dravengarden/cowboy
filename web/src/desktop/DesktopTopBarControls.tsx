@@ -528,7 +528,7 @@ export function DesktopTopBarControls({
       direction="row"
       alignItems="center"
       spacing={0.75}
-      sx={{ flex: 1, minWidth: 0, ml: 2, overflow: "hidden" }}
+      sx={{ flex: 1, minWidth: 0, ml: 2, overflow: "visible" }}
     >
       {options.length === 0 && !dead &&
           (status === "starting" || status === "running")
@@ -537,7 +537,7 @@ export function DesktopTopBarControls({
           <DesktopContextShortcut
             badge="R"
             shortcut="R · Run configuration"
-            showBadge={false}
+            placement="corner"
           >
             <Tooltip title={configSummary || "Run configuration"}>
               <Button
@@ -707,7 +707,7 @@ export function DesktopTopBarControls({
       <DesktopContextShortcut
         badge="U"
         shortcut="U · Usage limits"
-        showBadge={false}
+        placement="corner"
       >
         <ButtonBase
           data-desktop-item="topbar-usage"
@@ -894,7 +894,7 @@ export function DesktopTopBarControls({
         <DesktopContextShortcut
           badge="C"
           shortcut="C · Compact conversation"
-          showBadge={false}
+          placement="corner"
         >
           <Tooltip
             title={compacting

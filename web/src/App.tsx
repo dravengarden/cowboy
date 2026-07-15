@@ -134,6 +134,10 @@ const DesktopRegionShortcut = lazy(async () => {
     const module = await import("./desktop/DesktopRegionShortcut");
     return { default: module.DesktopRegionShortcut };
 });
+const DesktopContextShortcut = lazy(async () => {
+    const module = await import("./desktop/commands/DesktopContextShortcut");
+    return { default: module.DesktopContextShortcut };
+});
 
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
@@ -1770,21 +1774,33 @@ export function App({
                         {surface === "desktop" && (
                             <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                         )}
-                        <Box sx={{ display: "inline-flex", alignItems: "center" }}>
+                        {surface === "desktop" ? (
+                            <Suspense fallback={null}>
+                                <DesktopContextShortcut
+                                    badge={`${MOD_LABEL},`}
+                                    shortcut={`${MOD_LABEL}, · Settings`}
+                                    placement="corner"
+                                >
+                                    <IconButton
+                                        data-desktop-item="topbar-settings"
+                                        data-desktop-topbar-action="settings"
+                                        onClick={(): void => openSettings("settings")}
+                                        aria-label="settings"
+                                        title="Settings"
+                                    >
+                                        <SettingsIcon />
+                                    </IconButton>
+                                </DesktopContextShortcut>
+                            </Suspense>
+                        ) : (
                             <IconButton
-                                data-desktop-item="topbar-settings"
-                                data-desktop-topbar-action="settings"
                                 onClick={(): void => openSettings("settings")}
                                 aria-label="settings"
                                 title="Settings"
-                                // Unified 44px box + 24px glyph (global MuiIconButton),
-                                // so the gear stays aligned with the action row's
-                                // send/stop button at any font scale.
                             >
                                 <SettingsIcon />
                             </IconButton>
-                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL},`} />}
-                        </Box>
+                        )}
                     </Toolbar>
                 </AppBar>
 
