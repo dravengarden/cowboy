@@ -1824,6 +1824,27 @@ export function Transcript({
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
   const paging = useStoreSelector((snapshot) => snapshot.pagination.get(sessionId));
+  // A retained recent tail can arrive before enough older pages have filled a
+  // tall phone viewport. Without an explicit state the latest reply sits above
+  // the composer while the unused upper viewport looks like a broken blank
+  // screen. Keep this distinct from ordinary scrollback loading: it is only the
+  // automatic, followed-mode viewport bootstrap below.
+  const [backfillingViewport, setBackfillingViewport] = useState(false);
+  const [showBackfillStatus, setShowBackfillStatus] = useState(false);
+  useEffect(() => {
+    if (!backfillingViewport) {
+      setShowBackfillStatus(false);
+      return undefined;
+    }
+    // Cached pages usually land inside one frame. Delay the status so fast
+    // restores stay visually silent instead of flashing a pill.
+    const timer = globalThis.setTimeout(() => setShowBackfillStatus(true), 280);
+    return () => globalThis.clearTimeout(timer);
+  }, [backfillingViewport]);
+  useEffect(() => {
+    setBackfillingViewport(false);
+    setShowBackfillStatus(false);
+  }, [sessionId]);
 
   // Bootstrap history until the viewport is actually filled. Older pages were
   // previously requested only from the scroll listener below; when the initial
@@ -1834,15 +1855,15 @@ export function Transcript({
   // and the column-reverse flex layout publish their final height first.
   useLayoutEffect(() => {
     const el = parentRef.current;
-    if (
-      !el ||
-      !paging ||
-      paging.reachedStart ||
-      paging.loadingOlder ||
-      paging.beforeSeq === null
-    ) return undefined;
+    if (!el || !paging || paging.reachedStart || paging.beforeSeq === null) {
+      setBackfillingViewport(false);
+      return undefined;
+    }
+    if (paging.loadingOlder) return undefined;
     const raf = requestAnimationFrame(() => {
-      if (el.scrollHeight <= el.clientHeight + 1) {
+      const needsOlderPage = el.scrollHeight <= el.clientHeight + 1;
+      setBackfillingViewport(needsOlderPage);
+      if (needsOlderPage) {
         void loadOlder(sessionId);
       }
     });
@@ -2455,6 +2476,44 @@ export function Transcript({
           }}
         >
           <CircularProgress size={16} thickness={5} sx={{ color: "text.disabled" }} />
+        </Box>
+      )}
+      {!desktopNavigation && showBackfillStatus && items.length > 0 && (
+        <Box
+          role="status"
+          aria-live="polite"
+          sx={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 1,
+            pointerEvents: "none",
+            display: "grid",
+            placeItems: "center",
+            px: 3,
+          }}
+        >
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{
+              px: 1.5,
+              py: 0.9,
+              borderRadius: 99,
+              color: "text.secondary",
+              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.84),
+              border: 1,
+              borderColor: "divider",
+              boxShadow: (theme) => `0 8px 24px ${alpha(theme.palette.common.black, 0.08)}`,
+              backdropFilter: "blur(10px)",
+              WebkitBackdropFilter: "blur(10px)",
+            }}
+          >
+            <CircularProgress size={14} thickness={4} color="inherit" aria-hidden />
+            <Typography variant="caption" sx={{ fontWeight: 550 }}>
+              Restoring earlier context…
+            </Typography>
+          </Stack>
         </Box>
       )}
       {/* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
