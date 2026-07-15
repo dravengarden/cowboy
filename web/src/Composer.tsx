@@ -3426,8 +3426,15 @@ function PendingRow({
             commands={commands}
             placeholder="Edit message…"
             sendable={!!draft.trim() || editAttachments.length > 0}
+            // Desktop owns one deliberate focus transfer in the row effect.
+            // Replaying the Mobile 0/120/320ms focus retries can land after the
+            // user has already started a native IME composition and detach its
+            // marked-text channel. Touch keeps the established keyboard retries.
+            autoFocus={touchInput}
             submitLabel="Done editing"
             submitIcon={<Check />}
+            vim={vim}
+            onVimMode={setVimMode}
             attachmentsSlot={editAttachments.some((a) => !a.isImage)
               ? (
                 <AttachmentPreviews

@@ -11,7 +11,10 @@ import {
   useTheme,
 } from "@mui/material";
 import { Check, CloseFullscreen, Send, Tune } from "@mui/icons-material";
-import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
+import {
+  PlatformComposerEditor,
+  type ComposerEditorHandle,
+} from "./composer/PlatformComposerEditor";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -42,6 +45,8 @@ export function FullscreenComposer({
   autoFocus = true,
   submitLabel = "Send",
   submitIcon,
+  vim = false,
+  onVimMode,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -70,6 +75,10 @@ export function FullscreenComposer({
    *  than sending the queued/draft item. */
   submitLabel?: string;
   submitIcon?: ReactNode;
+  /** Desktop preference. PlatformComposerEditor always forces this off on
+   * touch surfaces, so the native Mobile editor path remains unchanged. */
+  vim?: boolean;
+  onVimMode?: (mode: string) => void;
 }): React.JSX.Element {
   const theme = useTheme();
 
@@ -207,7 +216,7 @@ export function FullscreenComposer({
           // land mid-air on the `.cm-line` element → no menu; scrollPastEnd is the fix.
         }}
       >
-        <ComposerEditor
+        <PlatformComposerEditor
           ref={editorRef}
           value={seed}
           onChange={onChange}
@@ -220,7 +229,8 @@ export function FullscreenComposer({
           onSelectionChange={setHasSelection}
           borderless
           fill
-          vim={false}
+          vim={vim}
+          {...(onVimMode ? { onVimMode } : {})}
           onEscape={(): boolean => {
             onCollapse();
             return true;

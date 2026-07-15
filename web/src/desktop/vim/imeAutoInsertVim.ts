@@ -71,6 +71,11 @@ export function createImeAutoInsertVim(): {
   // compositionend. Vim may change mode in that window, but Cowboy must not
   // move focus or stabilize the caret until the browser commits marked text.
   let composing = false;
+  // The command-sink plugin owns the actual focus-exit normalization. Native
+  // composition handlers live at higher precedence, so bridge compositionend
+  // back to that plugin instead of treating a transient blur as an ended IME
+  // transaction. There is one bridge per editor runtime.
+  let finishPendingFocusExit: (() => void) | null = null;
   // A structural Vim insert command may queue DOM-caret repair for a line that
   // does not exist yet. The first physical key of a native IME reaches the
   // contenteditable before `compositionstart` on macOS. Treat ANY subsequent
@@ -95,12 +100,16 @@ export function createImeAutoInsertVim(): {
     compositionend: (): boolean => {
       composing = false;
       setImeCommitted();
+      finishPendingFocusExit?.();
       return false;
     },
     blur: (): boolean => {
-      // Self-heal an aborted composition (window switch / editor unmount).
-      composing = false;
-      clearImeStatus();
+      // macOS may transiently blur contenteditable while its candidate window
+      // still owns marked text. Clearing `composing` here lets focusout send a
+      // Vim Escape before compositionend, stranding the underlined pre-edit
+      // text with a dead input channel. The plugin defers a true editor exit
+      // until compositionend; an unmount is cleaned up by destroy().
+      if (!composing) clearImeStatus();
       return false;
     },
   }));
@@ -110,6 +119,7 @@ export function createImeAutoInsertVim(): {
     private cm: ReturnType<typeof getCM> = null;
     private focusFrame: number | null = null;
     private modeHandler: (() => void) | null = null;
+    private pendingFocusExit = false;
     private originalOpenDialog: NonNullable<ReturnType<typeof getCM>>["openDialog"] | null = null;
 
     constructor(readonly view: EditorView) {
@@ -136,6 +146,7 @@ export function createImeAutoInsertVim(): {
       view.contentDOM.addEventListener("beforeinput", this.onNativeInput, true);
       view.dom.addEventListener("focusout", this.onFocusOut);
       view.dom.append(this.sink);
+      finishPendingFocusExit = this.onCompositionSettled;
       queueMicrotask(() => this.connect());
     }
 
@@ -146,7 +157,12 @@ export function createImeAutoInsertVim(): {
 
     destroy(): void {
       clearImeStatus();
-      this.normalizeVimState();
+      // Never rewrite native focus/Selection while an active composition is
+      // being torn down. The editor DOM is leaving anyway.
+      if (!composing && !this.view.composing) this.normalizeVimState();
+      if (finishPendingFocusExit === this.onCompositionSettled) {
+        finishPendingFocusExit = null;
+      }
       if (this.cm && this.modeHandler) {
         this.cm.off?.("vim-mode-change", this.modeHandler);
       }
@@ -190,6 +206,10 @@ export function createImeAutoInsertVim(): {
     }
 
     private normalizeVimState(): void {
+      if (composing || this.view.composing) {
+        this.pendingFocusExit = true;
+        return;
+      }
       const macro = Vim.getVimGlobalState_().macroModeState;
       if (macro.isRecording) macro.exitMacroRecordMode();
       clearVimMacroRecording();
@@ -289,7 +309,10 @@ export function createImeAutoInsertVim(): {
         queueMicrotask(() => {
           const stillOwnsFocus = this.view.hasFocus ||
             this.view.dom.contains(document.activeElement);
-          if (stillOwnsFocus && !this.cm?.state?.vim?.insertMode && !composing) {
+          if (
+            stillOwnsFocus && !this.cm?.state?.vim?.insertMode &&
+            !composing && !this.view.composing
+          ) {
             this.sink.focus();
             this.view.dom.classList.add("cm-vim-command-focused");
           }
@@ -341,7 +364,25 @@ export function createImeAutoInsertVim(): {
       // programmatic Desktop region jump and a pointer click share one path.
       queueMicrotask(() => {
         if (!this.view.dom.isConnected || this.view.dom.contains(document.activeElement)) return;
-        composing = false;
+        if (composing || this.view.composing) {
+          this.pendingFocusExit = true;
+          return;
+        }
+        clearImeStatus();
+        this.normalizeVimState();
+      });
+    };
+
+    private readonly onCompositionSettled = (): void => {
+      if (!this.pendingFocusExit) return;
+      this.pendingFocusExit = false;
+      // compositionend can precede the final activeElement update. Normalize
+      // only when focus truly remained outside; a candidate-window focus bounce
+      // that returned inside must preserve the editor's current Vim mode.
+      queueMicrotask(() => {
+        if (
+          !this.view.dom.isConnected || this.view.dom.contains(document.activeElement)
+        ) return;
         clearImeStatus();
         this.normalizeVimState();
       });

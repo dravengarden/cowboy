@@ -10,7 +10,8 @@ export interface PlatformComposerEditorProps
   vim?: boolean;
 }
 
-// The only inline editor gateway used by product shells. It deliberately does
+// The only editor gateway used by product shells, including fullscreen/expanded
+// pending-message editors. It deliberately does
 // not alter the CM6 extension set, controlled/uncontrolled behaviour, or iOS
 // event handling; it only enforces platform capabilities at the boundary.
 export const PlatformComposerEditor = forwardRef<

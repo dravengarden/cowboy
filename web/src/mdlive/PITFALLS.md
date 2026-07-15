@@ -318,6 +318,15 @@ here says otherwise.
     bypass every key while either the event or the shared IME lifecycle reports
     composition (including legacy keyCode 229), and discard armed focus chords.
 
+    macOS can emit a transient `blur`/`focusout` while its candidate window still
+    owns marked text, before `compositionend`. Never clear the Desktop runtime's
+    composing flag or normalize Vim on that blur: sending Escape in this window
+    leaves an underlined pinyin fragment visible with a dead input channel. Record
+    the true focus exit, wait for `compositionend`, then normalize only if focus is
+    still outside the editor. Main compose, queued-message edit, draft edit, and
+    their expanded editor must all enter through `PlatformComposerEditor`; that
+    gateway enables this behavior only for Desktop and forces Vim off on Mobile.
+
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns
     Mobile's overlay composer, bottom navigation, detent sheets, and progressive
