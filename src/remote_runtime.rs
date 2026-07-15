@@ -304,6 +304,34 @@ impl RemoteRuntime {
         );
     }
 
+    pub fn reset(&self, mut session: StartSession) {
+        session.adopt_only = false;
+        if session.generation.is_empty() {
+            session
+                .generation
+                .clone_from(&self.shared.desired_generation);
+        }
+        let session_id = session.session_id.clone();
+        self.shared
+            .declarations
+            .lock()
+            .insert(session_id.clone(), session.clone());
+        // Re-declare the replacement metadata before the reset-flavoured stop.
+        // `send_pending` orders EnsureSession first, so agentd can atomically
+        // fence the old worker and relaunch from this fresh specification while
+        // preserving the existing v1 wire contract and worker generation.
+        let ensure_key = format!("ensure:{session_id}");
+        self.queue(ensure_key, CoreCommand::EnsureSession { session });
+        let command_id = self.next_id("reset");
+        self.queue(
+            command_id.clone(),
+            CoreCommand::StopSession {
+                session_id,
+                command_id,
+            },
+        );
+    }
+
     /// Stop accepting a deployment boundary only after every command already
     /// handed off by the Hub has been acknowledged by its worker. If the
     /// runtime stays unavailable through the deadline, return prompts to the
@@ -628,9 +656,27 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         } => {
             let command = shared.pending.lock().remove(&command_id);
             shared.sent.lock().remove(&command_id);
-            if matches!(&command, Some(CoreCommand::StopSession { .. })) {
-                shared.declarations.lock().remove(&session_id);
+            let reset_stop = matches!(
+                &command,
+                Some(CoreCommand::StopSession { command_id, .. })
+                    if command_id.starts_with("reset-")
+            );
+            if let Some(CoreCommand::StopSession { command_id, .. }) = &command {
+                if !command_id.starts_with("reset-") {
+                    shared.declarations.lock().remove(&session_id);
+                }
                 shared.workers.lock().remove(&session_id);
+            }
+            if reset_stop {
+                shared.hub.set_status(
+                    &session_id,
+                    if accepted {
+                        Status::Starting
+                    } else {
+                        Status::Crashed
+                    },
+                    None,
+                );
             }
             if !accepted {
                 handle_rejected_command(&shared.hub, &session_id, command, reason);
@@ -972,6 +1018,78 @@ mod tests {
             Some("failed".to_owned()),
         );
         assert_eq!(hub.session_info("s").expect("session").queue_count, 1);
+    }
+
+    #[tokio::test]
+    async fn reset_uses_existing_wire_and_preserves_replacement_declaration() {
+        let hub = Hub::new();
+        hub.create_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (left, _right) = UnixStream::pair().expect("socket pair");
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: vec![snapshot("s")],
+            buffered: Vec::new(),
+        };
+        let runtime = RemoteRuntime::new(
+            hub,
+            &bootstrap,
+            "gen-1".to_owned(),
+            Some("/bin/worker".to_owned()),
+        );
+        let mut replacement = snapshot("s").launch.expect("launch metadata");
+        replacement.agent_session_id = None;
+
+        runtime.reset(replacement);
+
+        let reset_command_id = {
+            let pending = runtime.shared.pending.lock();
+            assert!(pending
+                .values()
+                .any(|command| matches!(command, CoreCommand::EnsureSession { session } if session.agent_session_id.is_none())));
+            assert!(pending.values().any(
+                |command| matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
+            ));
+            pending
+                .values()
+                .find_map(|command| match command {
+                    CoreCommand::StopSession { command_id, .. }
+                        if command_id.starts_with("reset-") =>
+                    {
+                        Some(command_id.clone())
+                    }
+                    _ => None,
+                })
+                .expect("reset command")
+        };
+        assert!(runtime
+            .shared
+            .declarations
+            .lock()
+            .get("s")
+            .is_some_and(|session| session.agent_session_id.is_none()));
+        handle_frame(
+            &runtime.shared,
+            Frame::CommandAck {
+                session_id: "s".to_owned(),
+                command_id: reset_command_id,
+                accepted: true,
+                reason: None,
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("reset acknowledgement");
+        assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
     }
 
     #[tokio::test]

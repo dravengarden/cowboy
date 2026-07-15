@@ -78,6 +78,10 @@ struct Broker {
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
+    /// In-flight explicit context resets, keyed by their controller command id.
+    /// A permanent stop removes the token so a late reset task cannot revive a
+    /// session that was genuinely deleted while the old worker was stopping.
+    resetting_sessions: Mutex<HashMap<String, String>>,
     replacing: Mutex<HashMap<String, String>>,
     /// Session-local rollback pins. A healthy fallback must remain available
     /// even though the global desired generation is still marked unhealthy.
@@ -109,6 +113,7 @@ impl Broker {
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
+            resetting_sessions: Mutex::new(HashMap::new()),
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
@@ -537,6 +542,18 @@ impl Broker {
             let result = broker.spawn_with_fallback(session.clone(), None).await;
             broker.launching.lock().remove(&session.session_id);
             if let Err(error) = result {
+                if broker
+                    .resetting_sessions
+                    .lock()
+                    .contains_key(&session.session_id)
+                {
+                    tracing::debug!(
+                        session = %session.session_id,
+                        %error,
+                        "superseded worker launch stopped for context reset"
+                    );
+                    return;
+                }
                 tracing::error!(session = %session.session_id, error = %error, "worker launch failed");
                 broker.publish_session_state(&session.session_id, WorkerState::Crashed);
                 broker.command_rejected(
@@ -545,6 +562,61 @@ impl Broker {
                     error.to_string(),
                 );
             }
+        });
+    }
+
+    async fn reset_session(self: &Arc<Self>, mut session: StartSession, command_id: String) {
+        let session_id = session.session_id.clone();
+        session.adopt_only = false;
+        self.resetting_sessions
+            .lock()
+            .insert(session_id.clone(), command_id.clone());
+
+        // Fence both an attached worker and a launch that has not connected yet.
+        // The tombstone remains set until every old launch task has observed it.
+        self.cancelled_sessions.lock().insert(session_id.clone());
+        self.sessions.lock().remove(&session_id);
+        self.awaiting_reconnect.lock().remove(&session_id);
+        self.session_states.lock().remove(&session_id);
+        self.pending_commands.lock().remove(&session_id);
+        self.unpin_fallback(&session_id);
+        self.force_recycle_failed_start(&session_id).await;
+
+        let deadline = tokio::time::Instant::now() + self.args.worker_ready_timeout;
+        while self.launching.lock().contains(&session_id) && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        let still_current = self
+            .resetting_sessions
+            .lock()
+            .get(&session_id)
+            .is_some_and(|current| current == &command_id);
+        if !still_current {
+            return;
+        }
+        if self.launching.lock().contains(&session_id) {
+            self.resetting_sessions.lock().remove(&session_id);
+            self.command_rejected(
+                &session_id,
+                command_id,
+                "previous worker launch did not stop before reset".to_owned(),
+            );
+            return;
+        }
+
+        // `force_recycle_failed_start` queues Stop when no worker was attached;
+        // do not let that stale command reach the fresh replacement.
+        self.pending_commands.lock().remove(&session_id);
+        self.cancelled_sessions.lock().remove(&session_id);
+        self.resetting_sessions.lock().remove(&session_id);
+        self.ensure_session(session).await;
+        self.send_controller(Frame::CommandAck {
+            session_id,
+            command_id,
+            accepted: true,
+            reason: None,
         });
     }
 
@@ -1452,7 +1524,22 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
         CoreCommand::StopSession {
             session_id,
             command_id,
+        } if command_id.starts_with("reset-") => {
+            let Some(session) = broker.sessions.lock().get(&session_id).cloned() else {
+                broker.command_rejected(
+                    &session_id,
+                    command_id,
+                    "reset session metadata was not declared".to_owned(),
+                );
+                return;
+            };
+            broker.reset_session(session, command_id).await;
+        }
+        CoreCommand::StopSession {
+            session_id,
+            command_id,
         } => {
+            broker.resetting_sessions.lock().remove(&session_id);
             broker.sessions.lock().remove(&session_id);
             broker.cancelled_sessions.lock().insert(session_id.clone());
             broker.awaiting_reconnect.lock().remove(&session_id);
@@ -1848,6 +1935,47 @@ mod tests {
         assert!(!adopted.adopt_only, "launch specs must be normalized");
         assert!(broker.workers.lock().is_empty());
         assert!(broker.launching.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_reset_revokes_delete_tombstone_before_relaunch() {
+        let broker = Arc::new(Broker::new(AgentdArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_ready_timeout: Duration::from_millis(100),
+        }));
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-reset".to_owned());
+        broker.sessions.lock().insert(
+            "sess-reset".to_owned(),
+            StartSession {
+                session_id: "sess-reset".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: "/work".to_owned(),
+                agent_session_id: None,
+                system: false,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-reset".to_owned(),
+                command_id: "reset-1".to_owned(),
+            },
+        )
+        .await;
+
+        assert!(!broker.cancelled_sessions.lock().contains("sess-reset"));
+        assert!(broker.sessions.lock().contains_key("sess-reset"));
+        assert!(!broker.resetting_sessions.lock().contains_key("sess-reset"));
     }
 
     #[tokio::test]

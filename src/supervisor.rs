@@ -419,6 +419,23 @@ impl Supervisor {
             None => false,
         }
     }
+
+    /// Replace a session's agent with a fresh context without deleting the
+    /// Cowboy session. The remote broker needs an explicit reset operation so
+    /// its permanent-delete tombstone cannot poison the replacement launch.
+    pub fn reset_session(&self, session_id: &str) -> Result<(), String> {
+        match &self.backend {
+            Backend::Remote(runtime) => {
+                self.hub.set_status(session_id, Status::Starting, None);
+                runtime.reset(self.start_session(session_id)?);
+                Ok(())
+            }
+            Backend::Local(_) => {
+                self.delete_session(session_id);
+                self.revive(session_id)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
