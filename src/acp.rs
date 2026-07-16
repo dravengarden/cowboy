@@ -74,7 +74,10 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod startup_mode_tests {
-    use super::startup_full_access_mode;
+    use super::{
+        codex_full_access_available, codex_full_access_selected, startup_full_access_mode,
+    };
+    use agent_client_protocol::schema::v1::{SessionConfigOption, SessionConfigSelectOption};
 
     #[test]
     fn providers_use_their_native_full_access_mode() {
@@ -84,6 +87,31 @@ mod startup_mode_tests {
         );
         assert_eq!(startup_full_access_mode("gemini"), Some("yolo"));
         assert_eq!(startup_full_access_mode("codex"), None);
+    }
+
+    #[test]
+    fn codex_full_access_tracks_the_authoritative_mode() {
+        let choices = vec![
+            SessionConfigSelectOption::new("agent", "Agent"),
+            SessionConfigSelectOption::new("agent-full-access", "Agent (full access)"),
+        ];
+        let restricted = vec![SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "agent",
+            choices.clone(),
+        )];
+        let full_access = vec![SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "agent-full-access",
+            choices,
+        )];
+
+        assert!(codex_full_access_available(&restricted));
+        assert!(!codex_full_access_selected(&restricted));
+        assert!(!codex_full_access_available(&full_access));
+        assert!(codex_full_access_selected(&full_access));
     }
 }
 
@@ -115,6 +143,19 @@ fn codex_full_access_available(options: &[SessionConfigOption]) -> bool {
                             &select.options,
                             CODEX_FULL_ACCESS_CONFIG_VALUE,
                         )
+                }
+                #[allow(unreachable_patterns)]
+                _ => false,
+            }
+    })
+}
+
+fn codex_full_access_selected(options: &[SessionConfigOption]) -> bool {
+    options.iter().any(|option| {
+        option.id.0.as_ref() == CODEX_FULL_ACCESS_CONFIG_ID
+            && match &option.kind {
+                SessionConfigKind::Select(select) => {
+                    select.current_value.0.as_ref() == CODEX_FULL_ACCESS_CONFIG_VALUE
                 }
                 #[allow(unreachable_patterns)]
                 _ => false,
@@ -220,6 +261,12 @@ struct ClientState {
     capture: Mutex<Option<String>>,
     /// Monotonic counter for synthesizing permission request ids.
     next_perm: AtomicU64,
+    /// The Codex adapter's authoritative session mode is Full Access. Codex has
+    /// occasionally emitted permission requests after `session/load` despite
+    /// that mode (`approval_policy=never`); keep those upstream regressions
+    /// from blocking an explicitly unrestricted Cowboy session. This is never
+    /// enabled for a restricted mode or another provider.
+    codex_full_access: AtomicBool,
     /// While `true`, incoming `session/update` notifications are dropped rather
     /// than pushed to the Hub. Set only around a `session/load` resume: the
     /// agent replays the whole prior conversation as updates, but cowboy's own
@@ -426,6 +473,7 @@ async fn agent_main(
         pending: Mutex::new(HashMap::new()),
         capture: Mutex::new(None),
         next_perm: AtomicU64::new(0),
+        codex_full_access: AtomicBool::new(false),
         suppress_updates: AtomicBool::new(false),
     });
 
@@ -457,25 +505,30 @@ async fn agent_main(
                         responder,
                         cx: ConnectionTo<Agent>|
                         -> Result<(), Error> {
-                // System sessions (machine-driven, immutable, unattended) have no human
-                // to answer an approval. Auto-approve tool calls the way the
-                // try-agent path does; without this a system session hangs on
-                // its first MCP tool approval forever (the per-tool approval a
-                // provider like Codex requests just sits pending). The response
-                // is instant, so unlike the human path it needn't be deferred.
-                if perm_state.sink.session_is_system(&perm_state.session_id) {
-                    let allow = req.options.iter().find(|o| {
-                        matches!(
-                            o.kind,
-                            PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
-                        )
-                    });
+                // System sessions have no human to answer. Also absorb Codex's
+                // known resume regression where it asks despite its
+                // authoritative Full Access mode. Restricted user sessions
+                // continue through the human permission path below.
+                let system_session = perm_state.sink.session_is_system(&perm_state.session_id);
+                let codex_full_access = perm_state.codex_full_access.load(Ordering::SeqCst);
+                if system_session || codex_full_access {
+                    let allow = req
+                        .options
+                        .iter()
+                        .find(|o| matches!(o.kind, PermissionOptionKind::AllowAlways))
+                        .or_else(|| {
+                            req.options
+                                .iter()
+                                .find(|o| matches!(o.kind, PermissionOptionKind::AllowOnce))
+                        });
                     let outcome = match allow {
                         Some(opt) => {
                             tracing::info!(
                                 option = %opt.name,
                                 session = %perm_state.session_id,
-                                "auto-approving permission (system session)"
+                                system_session,
+                                codex_full_access,
+                                "auto-approving permission"
                             );
                             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                                 opt.option_id.clone(),
@@ -747,9 +800,14 @@ async fn run_session(
         config_options = session.config_options;
         session.session_id
     };
-    state.sink.set_status(&session_id, Status::Running, None);
-    // Handshake landed — disarm the spawn watchdog (see `agent_main`).
-    handshake_done.store(true, Ordering::SeqCst);
+    if provider_id == "codex" {
+        state.codex_full_access.store(
+            config_options
+                .as_ref()
+                .is_some_and(|opts| codex_full_access_selected(opts)),
+            Ordering::SeqCst,
+        );
+    }
 
     // Codex ACP exposes its approval preset as a config option instead of a
     // session mode. Default new/revived Codex panels to Full Access when the
@@ -769,6 +827,7 @@ async fn run_session(
         .await
         {
             tracing::info!(session = %session_id, "codex approval preset -> full access");
+            state.codex_full_access.store(true, Ordering::SeqCst);
             state.sink.set_config_options(&session_id, updated_options);
             config_options = None;
         }
@@ -805,6 +864,12 @@ async fn run_session(
             }
         }
     }
+
+    // Do not expose Running (which lets the broker drain queued prompts) until
+    // the startup permission mode is authoritative.
+    state.sink.set_status(&session_id, Status::Running, None);
+    // Handshake landed — disarm the spawn watchdog (see `agent_main`).
+    handshake_done.store(true, Ordering::SeqCst);
 
     // Surface config options the agent returned IN the session response (codex
     // ships its Model + approval options this way; claude instead emits a later
@@ -1014,6 +1079,7 @@ async fn run_session(
                 let sink = Arc::clone(&state.sink);
                 let sid = session_id.clone();
                 let acp = acp_id.clone();
+                let state = Arc::clone(state);
                 cx.clone().spawn(async move {
                     let params = serde_json::json!({
                         "sessionId": acp.0,
@@ -1038,6 +1104,14 @@ async fn run_session(
                         Ok(val) => {
                             // Response carries `{ configOptions: [...] }`.
                             if let Some(opts) = val.get("configOptions").cloned() {
+                                if config_id == CODEX_FULL_ACCESS_CONFIG_ID {
+                                    let selected =
+                                        serde_json::from_value::<Vec<SessionConfigOption>>(
+                                            opts.clone(),
+                                        )
+                                        .is_ok_and(|options| codex_full_access_selected(&options));
+                                    state.codex_full_access.store(selected, Ordering::SeqCst);
+                                }
                                 sink.set_config_options(&sid, opts);
                             }
                         }
