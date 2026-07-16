@@ -642,7 +642,24 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 let resetting = shared.resetting.lock().contains(&session_id);
-                if !resetting {
+                let stale_idle = matches!(
+                    event,
+                    RuntimeEvent::Status {
+                        state: WorkerState::Running | WorkerState::Draining,
+                        ..
+                    }
+                ) && shared
+                    .workers
+                    .lock()
+                    .get(&session_id)
+                    .is_some_and(|worker| worker.current_turn_id.is_some());
+                if stale_idle {
+                    tracing::warn!(
+                        session = %session_id,
+                        runtime_seq,
+                        "ignoring stale idle status while a newer turn is active"
+                    );
+                } else if !resetting {
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
                     apply_event(&shared.hub, &session_id, event);
                 }
@@ -799,7 +816,14 @@ fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) {
             },
         );
     }
-    hub.set_status(&worker.session_id, worker_status(worker.state), None);
+    let status = if worker.current_turn_id.is_some()
+        && matches!(worker.state, WorkerState::Running | WorkerState::Draining)
+    {
+        Status::Busy
+    } else {
+        worker_status(worker.state)
+    };
+    hub.set_status(&worker.session_id, status, None);
 }
 
 fn update_snapshot_from_event(
@@ -1141,6 +1165,106 @@ mod tests {
         .expect("reset acknowledgement");
         assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
+    }
+
+    #[tokio::test]
+    async fn stale_idle_status_cannot_end_a_newer_remote_turn() {
+        let hub = Hub::new();
+        hub.create_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (left, _right) = UnixStream::pair().expect("socket pair");
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: vec![snapshot("s")],
+            buffered: Vec::new(),
+        };
+        let runtime = RemoteRuntime::new(
+            hub,
+            &bootstrap,
+            "gen-1".to_owned(),
+            Some("/bin/worker".to_owned()),
+        );
+        let epoch = "worker-1".to_owned();
+
+        for (runtime_seq, event) in [
+            (
+                1,
+                RuntimeEvent::TurnStarted {
+                    turn_id: "new-turn".to_owned(),
+                    command_id: "new-prompt".to_owned(),
+                },
+            ),
+            (
+                2,
+                RuntimeEvent::Status {
+                    state: WorkerState::Running,
+                    detail: None,
+                },
+            ),
+        ] {
+            handle_frame(
+                &runtime.shared,
+                Frame::WorkerEvent {
+                    session_id: "s".to_owned(),
+                    worker_epoch: epoch.clone(),
+                    runtime_seq,
+                    event,
+                },
+                &mut tokio::io::sink(),
+            )
+            .await
+            .expect("worker event");
+        }
+        assert_eq!(runtime.shared.hub.status("s"), Some(Status::Busy));
+        assert_eq!(
+            runtime
+                .shared
+                .workers
+                .lock()
+                .get("s")
+                .and_then(|worker| worker.current_turn_id.as_deref()),
+            Some("new-turn")
+        );
+
+        for (runtime_seq, event) in [
+            (
+                3,
+                RuntimeEvent::TurnEnded {
+                    turn_id: "new-turn".to_owned(),
+                    stop_reason: "EndTurn".to_owned(),
+                },
+            ),
+            (
+                4,
+                RuntimeEvent::Status {
+                    state: WorkerState::Running,
+                    detail: None,
+                },
+            ),
+        ] {
+            handle_frame(
+                &runtime.shared,
+                Frame::WorkerEvent {
+                    session_id: "s".to_owned(),
+                    worker_epoch: epoch.clone(),
+                    runtime_seq,
+                    event,
+                },
+                &mut tokio::io::sink(),
+            )
+            .await
+            .expect("worker event");
+        }
+        assert_eq!(runtime.shared.hub.status("s"), Some(Status::Running));
     }
 
     #[tokio::test]
