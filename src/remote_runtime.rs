@@ -660,8 +660,19 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         "ignoring stale idle status while a newer turn is active"
                     );
                 } else if !resetting {
+                    let auto_permission = codex_full_access_permission(shared, &session_id, &event);
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
-                    apply_event(&shared.hub, &session_id, event);
+                    if let Some((request_id, option_id)) = auto_permission {
+                        tracing::info!(
+                            session = %session_id,
+                            %request_id,
+                            %option_id,
+                            "auto-approving Codex full-access permission at runtime boundary"
+                        );
+                        queue_permission(shared, &session_id, request_id, option_id);
+                    } else {
+                        apply_event(&shared.hub, &session_id, event);
+                    }
                 }
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
@@ -733,6 +744,67 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         other => tracing::debug!(?other, "ignoring unrelated agentd frame"),
     }
     Ok(())
+}
+
+fn codex_full_access_permission(
+    shared: &Shared,
+    session_id: &str,
+    event: &RuntimeEvent,
+) -> Option<(String, String)> {
+    let RuntimeEvent::PermissionRequest {
+        request_id,
+        options,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let workers = shared.workers.lock();
+    let worker = workers.get(session_id)?;
+    if worker.launch.as_ref()?.provider != "codex"
+        || !worker
+            .config_options
+            .as_ref()
+            .is_some_and(codex_config_is_full_access)
+    {
+        return None;
+    }
+    let option_id = options.as_array()?.iter().find_map(|option| {
+        (option.get("kind").and_then(serde_json::Value::as_str) == Some("allow_always"))
+            .then(|| option.get("optionId").and_then(serde_json::Value::as_str))
+            .flatten()
+            .map(str::to_owned)
+    })?;
+    Some((request_id.clone(), option_id))
+}
+
+fn codex_config_is_full_access(options: &serde_json::Value) -> bool {
+    options.as_array().is_some_and(|options| {
+        options.iter().any(|option| {
+            option.get("id").and_then(serde_json::Value::as_str) == Some("mode")
+                && option
+                    .get("currentValue")
+                    .or_else(|| option.get("current_value"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("agent-full-access")
+        })
+    })
+}
+
+fn queue_permission(shared: &Shared, session_id: &str, request_id: String, option_id: String) {
+    let value = shared.command_counter.fetch_add(1, Ordering::Relaxed);
+    let command_id = format!("permission-{}-{value}", std::process::id());
+    shared.sent.lock().remove(&command_id);
+    shared.pending.lock().insert(
+        command_id.clone(),
+        CoreCommand::Permission {
+            session_id: session_id.to_owned(),
+            command_id,
+            request_id,
+            option_id: Some(option_id),
+        },
+    );
+    let _ = shared.notify.send(());
 }
 
 fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
@@ -1011,6 +1083,19 @@ mod tests {
             pending_prompt_count: 0,
             drain_requested: false,
         }
+    }
+
+    #[test]
+    fn codex_full_access_config_is_detected_without_weakening_other_modes() {
+        assert!(codex_config_is_full_access(&serde_json::json!([{
+            "id": "mode",
+            "currentValue": "agent-full-access"
+        }])));
+        assert!(!codex_config_is_full_access(&serde_json::json!([{
+            "id": "mode",
+            "currentValue": "agent"
+        }])));
+        assert!(!codex_config_is_full_access(&serde_json::json!([])));
     }
 
     #[tokio::test]
