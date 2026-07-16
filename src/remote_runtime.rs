@@ -65,6 +65,11 @@ struct Shared {
     /// to spawn while surviving workers are still converging.
     declarations: Mutex<HashMap<String, StartSession>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
+    /// Sessions being atomically recycled. Old-worker events and snapshots are
+    /// acknowledged but ignored until the reset-flavoured stop is accepted, so
+    /// a late `Running` edge cannot drain a force-pushed prompt into the worker
+    /// that is being fenced.
+    resetting: Mutex<HashSet<String>>,
     highwaters: Mutex<HashMap<(String, String), u64>>,
     notify: mpsc::UnboundedSender<()>,
     command_counter: AtomicU64,
@@ -124,6 +129,7 @@ impl RemoteRuntime {
                         .map(|worker| (worker.session_id.clone(), worker))
                         .collect(),
                 ),
+                resetting: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
                 command_counter: AtomicU64::new(seed_counter()),
@@ -312,6 +318,7 @@ impl RemoteRuntime {
                 .clone_from(&self.shared.desired_generation);
         }
         let session_id = session.session_id.clone();
+        self.shared.resetting.lock().insert(session_id.clone());
         self.shared
             .declarations
             .lock()
@@ -634,8 +641,11 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 }
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
-                update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
-                apply_event(&shared.hub, &session_id, event);
+                let resetting = shared.resetting.lock().contains(&session_id);
+                if !resetting {
+                    update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
+                    apply_event(&shared.hub, &session_id, event);
+                }
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
             write_frame(
@@ -668,6 +678,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 shared.workers.lock().remove(&session_id);
             }
             if reset_stop {
+                shared.resetting.lock().remove(&session_id);
                 shared.hub.set_status(
                     &session_id,
                     if accepted {
@@ -684,6 +695,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         }
         Frame::Snapshot { worker } => {
             let session_id = worker.session_id.clone();
+            if shared.resetting.lock().contains(&session_id) {
+                return Ok(());
+            }
             update_declaration(shared, &worker);
             shared
                 .workers
@@ -707,6 +721,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
 fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
     let mut current = HashMap::new();
     for worker in workers {
+        if shared.resetting.lock().contains(&worker.session_id) {
+            continue;
+        }
         update_declaration(shared, &worker);
         apply_snapshot(&shared.hub, &worker);
         shared
@@ -725,6 +742,9 @@ fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
 fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
     let mut current = shared.workers.lock();
     for worker in workers {
+        if shared.resetting.lock().contains(&worker.session_id) {
+            continue;
+        }
         update_declaration(shared, &worker);
         apply_snapshot(&shared.hub, &worker);
         shared
@@ -1050,6 +1070,36 @@ mod tests {
         replacement.agent_session_id = None;
 
         runtime.reset(replacement);
+        runtime.shared.hub.set_status("s", Status::Starting, None);
+        assert!(runtime.shared.resetting.lock().contains("s"));
+
+        handle_frame(
+            &runtime.shared,
+            Frame::WorkerEvent {
+                session_id: "s".to_owned(),
+                worker_epoch: "old-worker".to_owned(),
+                runtime_seq: 1,
+                event: RuntimeEvent::Status {
+                    state: WorkerState::Busy,
+                    detail: None,
+                },
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("late old-worker event");
+        let mut late_snapshot = snapshot("s");
+        late_snapshot.state = WorkerState::Busy;
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(late_snapshot),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("late old-worker snapshot");
+        assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
 
         let reset_command_id = {
             let pending = runtime.shared.pending.lock();
@@ -1089,6 +1139,7 @@ mod tests {
         )
         .await
         .expect("reset acknowledgement");
+        assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
     }
 

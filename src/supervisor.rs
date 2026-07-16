@@ -424,6 +424,13 @@ impl Supervisor {
     /// Cowboy session. The remote broker needs an explicit reset operation so
     /// its permanent-delete tombstone cannot poison the replacement launch.
     pub fn reset_session(&self, session_id: &str) -> Result<(), String> {
+        self.recycle_session(session_id)
+    }
+
+    /// Fence and replace one session's agent while preserving its resumable ACP
+    /// id. Used after a force-cancel grace period expires; no other worker or
+    /// session is touched.
+    pub fn recycle_session(&self, session_id: &str) -> Result<(), String> {
         match &self.backend {
             Backend::Remote(runtime) => {
                 self.hub.set_status(session_id, Status::Starting, None);

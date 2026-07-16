@@ -2549,11 +2549,23 @@ impl Hub {
 
     /// Update a session's status, emit a `Lifecycle` event, refresh the list.
     pub fn set_status(&self, session_id: &str, status: Status, detail: Option<String>) {
+        let _ = self.set_status_if_current(session_id, None, status, detail);
+    }
+
+    /// Update a session only if its current status matches `expected`.
+    /// Passing `None` accepts any current status.
+    pub fn set_status_if_current(
+        &self,
+        session_id: &str,
+        expected: Option<Status>,
+        status: Status,
+        detail: Option<String>,
+    ) -> bool {
         let turn_ended;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
             // Clear the in-flight guard on a true turn-end (Busy → Running) or on
             // death — NOT on Starting → Running (a revive passes through that
@@ -2561,6 +2573,9 @@ impl Hub {
             // clearing there would release the next prompt early and overlap
             // turns). Mirrors the old client-side drain edge logic.
             let was = s.meta.status;
+            if expected.is_some_and(|expected| expected != was) {
+                return false;
+            }
             if (was == Status::Busy && status == Status::Running)
                 || matches!(
                     status,
@@ -2606,6 +2621,7 @@ impl Hub {
         // A turn-end / death may make the session drainable — try the next
         // queued prompt now (no-op if still busy, held, or nothing queued).
         self.try_drain(session_id);
+        true
     }
 
     /// Append an event to a session's log under the next `seq` and fan it out.
@@ -3812,6 +3828,26 @@ mod confirm_hold_tests {
             update(4, "agent_message_chunk", "now", "a", Some("final_answer")),
         ];
         assert_eq!(last_judge_text(&log), "done now");
+    }
+
+    #[test]
+    fn conditional_status_transition_does_not_claim_a_completed_turn() {
+        let hub = hub_with_session("status-cas");
+        hub.set_status("status-cas", Status::Busy, None);
+
+        assert!(hub.set_status_if_current(
+            "status-cas",
+            Some(Status::Busy),
+            Status::Interrupted,
+            Some("watchdog".to_owned()),
+        ));
+        assert!(!hub.set_status_if_current(
+            "status-cas",
+            Some(Status::Busy),
+            Status::Interrupted,
+            None,
+        ));
+        assert_eq!(hub.status("status-cas"), Some(Status::Interrupted));
     }
 
     #[test]

@@ -59,6 +59,7 @@ struct AppState {
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
+const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
@@ -653,6 +654,39 @@ async fn run_purge_sweeper(store: Store) {
             Err(e) => tracing::warn!(error = %e, "purge sweep failed"),
         }
     }
+}
+
+fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
+    state.supervisor.send(session_id, AgentCommand::Cancel)?;
+    let hub = state.hub.clone();
+    let supervisor = Arc::clone(&state.supervisor);
+    let session_id = session_id.to_owned();
+    tokio::spawn(async move {
+        tokio::time::sleep(FORCE_CANCEL_GRACE).await;
+        let Some(stuck_status @ (Status::Busy | Status::Starting)) = hub.status(&session_id) else {
+            return;
+        };
+        if !hub.set_status_if_current(
+            &session_id,
+            Some(stuck_status),
+            Status::Interrupted,
+            Some("force cancel timed out; recycling session worker".to_owned()),
+        ) {
+            return;
+        }
+        tracing::error!(
+            session = %session_id,
+            grace_seconds = FORCE_CANCEL_GRACE.as_secs(),
+            "force cancel did not end turn; recycling only this session worker"
+        );
+        // The interrupted edge frees Hub's in-flight guard, but its automatic
+        // drain waits for the replacement worker to become Running.
+        if let Err(error) = supervisor.recycle_session(&session_id) {
+            tracing::error!(session = %session_id, %error, "force-cancel recycle failed");
+            hub.set_status(&session_id, Status::Crashed, Some(error));
+        }
+    });
+    Ok(())
 }
 
 /// Drain the Hub→dispatcher channel: each [`DispatchReq`] is a queued prompt the
@@ -1996,7 +2030,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                         Some(Status::Busy | Status::Starting)
                     )
                 {
-                    state.supervisor.send(&session_id, AgentCommand::Cancel)
+                    force_cancel_with_watchdog(state, &session_id)
                 } else {
                     // Not busy: force_submit front-inserted the prompt but nothing
                     // dispatched it — a PAUSED (or awaiting-user) queue HOLDS the
@@ -2049,7 +2083,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
                 state.hub.status(&session_id),
                 Some(Status::Busy | Status::Starting)
             ) {
-                state.supervisor.send(&session_id, AgentCommand::Cancel)
+                force_cancel_with_watchdog(state, &session_id)
             } else {
                 Ok(())
             }
