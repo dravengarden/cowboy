@@ -508,6 +508,11 @@ struct Session {
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared on
     /// the `Busy`→`Running` turn-end edge or on death (see `set_status`).
     in_flight: bool,
+    /// Monotonic identity for the current lifecycle edge. Bumped only when the
+    /// status actually changes, so duplicate worker snapshots do not disguise a
+    /// stuck turn while a Busy -> Running -> Busy replacement invalidates every
+    /// watchdog armed for the previous turn.
+    lifecycle_epoch: u64,
     /// Monotonic counter bumped on every turn-end judge dispatch. The async
     /// confirm-detect verdict carries the seq it was issued under and is applied
     /// ONLY if still current — a newer turn-end supersedes a stale verdict (the
@@ -1441,6 +1446,7 @@ impl Hub {
                         in_flight: runtime.is_some_and(|worker| {
                             worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                         }),
+                        lifecycle_epoch: 0,
                         judge_seq: 0,
                         judge_runs,
                     },
@@ -1626,6 +1632,7 @@ impl Hub {
                     drafts: Vec::new(),
                     editing: None,
                     in_flight: false,
+                    lifecycle_epoch: 0,
                     judge_seq: 0,
                     judge_runs: Vec::new(),
                 },
@@ -2549,15 +2556,26 @@ impl Hub {
 
     /// Update a session's status, emit a `Lifecycle` event, refresh the list.
     pub fn set_status(&self, session_id: &str, status: Status, detail: Option<String>) {
-        let _ = self.set_status_if_current(session_id, None, status, detail);
+        let _ = self.set_status_if_revision(session_id, None, status, detail);
     }
 
-    /// Update a session only if its current status matches `expected`.
-    /// Passing `None` accepts any current status.
-    pub fn set_status_if_current(
+    /// Return the status plus the monotonic identity of its current lifecycle
+    /// edge. A force-cancel watchdog captures this before sending Cancel.
+    #[must_use]
+    pub fn status_revision(&self, session_id: &str) -> Option<(Status, u64)> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|session| (session.meta.status, session.lifecycle_epoch))
+    }
+
+    /// Update a session only if both its status and lifecycle identity still
+    /// match `expected`. Passing `None` accepts any current revision.
+    pub fn set_status_if_revision(
         &self,
         session_id: &str,
-        expected: Option<Status>,
+        expected: Option<(Status, u64)>,
         status: Status,
         detail: Option<String>,
     ) -> bool {
@@ -2573,7 +2591,7 @@ impl Hub {
             // clearing there would release the next prompt early and overlap
             // turns). Mirrors the old client-side drain edge logic.
             let was = s.meta.status;
-            if expected.is_some_and(|expected| expected != was) {
+            if expected.is_some_and(|expected| expected != (was, s.lifecycle_epoch)) {
                 return false;
             }
             if (was == Status::Busy && status == Status::Running)
@@ -2601,6 +2619,9 @@ impl Hub {
             // back — the point to ask the confirm-detect skill "is it waiting on
             // me?". Captured here under the lock; the judge runs after we release.
             turn_ended = was == Status::Busy && status == Status::Running;
+            if was != status {
+                s.lifecycle_epoch = s.lifecycle_epoch.wrapping_add(1);
+            }
             s.meta.status = status;
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -3831,23 +3852,39 @@ mod confirm_hold_tests {
     }
 
     #[test]
-    fn conditional_status_transition_does_not_claim_a_completed_turn() {
+    fn watchdog_revision_does_not_claim_the_replacement_turn() {
         let hub = hub_with_session("status-cas");
         hub.set_status("status-cas", Status::Busy, None);
+        let cancelled_turn = hub.status_revision("status-cas").expect("busy revision");
 
-        assert!(hub.set_status_if_current(
+        // The cancelled turn ends and the force-pushed replacement starts. Its
+        // status is also Busy, but it is not the turn the watchdog was armed for.
+        hub.set_status("status-cas", Status::Running, None);
+        hub.set_status("status-cas", Status::Busy, None);
+
+        assert!(!hub.set_status_if_revision(
             "status-cas",
-            Some(Status::Busy),
+            Some(cancelled_turn),
             Status::Interrupted,
             Some("watchdog".to_owned()),
         ));
-        assert!(!hub.set_status_if_current(
-            "status-cas",
-            Some(Status::Busy),
+        assert_eq!(hub.status("status-cas"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn watchdog_revision_ignores_duplicate_busy_snapshots_on_a_stuck_turn() {
+        let hub = hub_with_session("status-stuck");
+        hub.set_status("status-stuck", Status::Busy, None);
+        let stuck_turn = hub.status_revision("status-stuck").expect("busy revision");
+        hub.set_status("status-stuck", Status::Busy, None);
+
+        assert!(hub.set_status_if_revision(
+            "status-stuck",
+            Some(stuck_turn),
             Status::Interrupted,
             None,
         ));
-        assert_eq!(hub.status("status-cas"), Some(Status::Interrupted));
+        assert_eq!(hub.status("status-stuck"), Some(Status::Interrupted));
     }
 
     #[test]

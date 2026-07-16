@@ -657,18 +657,20 @@ async fn run_purge_sweeper(store: Store) {
 }
 
 fn force_cancel_with_watchdog(state: &AppState, session_id: &str) -> Result<(), String> {
+    let Some(cancelled_revision @ (Status::Busy | Status::Starting, _)) =
+        state.hub.status_revision(session_id)
+    else {
+        return Ok(());
+    };
     state.supervisor.send(session_id, AgentCommand::Cancel)?;
     let hub = state.hub.clone();
     let supervisor = Arc::clone(&state.supervisor);
     let session_id = session_id.to_owned();
     tokio::spawn(async move {
         tokio::time::sleep(FORCE_CANCEL_GRACE).await;
-        let Some(stuck_status @ (Status::Busy | Status::Starting)) = hub.status(&session_id) else {
-            return;
-        };
-        if !hub.set_status_if_current(
+        if !hub.set_status_if_revision(
             &session_id,
-            Some(stuck_status),
+            Some(cancelled_revision),
             Status::Interrupted,
             Some("force cancel timed out; recycling session worker".to_owned()),
         ) {
