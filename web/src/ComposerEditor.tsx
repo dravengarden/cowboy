@@ -4,7 +4,6 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
-  useState,
 } from "react";
 import { Box, useTheme } from "@mui/material";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -52,6 +51,7 @@ import {
   slashCompletionSource,
 } from "./composerCompletions";
 import type { AvailableCommand } from "./protocol";
+import { createLoadedDesktopVimRuntime } from "./desktop/vim/runtimeLoader";
 
 export interface ComposerEditorHandle {
   focus: () => void;
@@ -165,41 +165,23 @@ function backspaceChain(view: EditorView): boolean {
     deleteTokenBackward(view);
 }
 
-// Desktop-only Vim. Loads the composition-aware runtime lazily, and ONLY when
-// the device has a precise pointer + hover (a real keyboard). Touch/Mobile never
-// imports it. The runtime keeps contenteditable stable and auto-enters Insert
-// when a real IME composition starts outside an editable Vim mode.
+// Desktop-only Vim. PlatformComposerEditor preloads the composition-aware
+// runtime before mounting an interactive editor. Creating it synchronously here
+// is intentional: adding Vim to an already-editable CM6 instance dispatches an
+// extension reconfiguration that can invalidate macOS native marked text.
 function useVimExtension(
   enabled: boolean,
   apiRef: { current: VimApi | null },
 ): Extension | null {
-  const [ext, setExt] = useState<Extension | null>(null);
-  useEffect(() => {
+  const runtime = useMemo(() => {
     const desktop = typeof window !== "undefined" &&
       window.matchMedia("(pointer: fine) and (hover: hover)").matches;
-    if (!enabled || !desktop) {
-      setExt(null);
-      apiRef.current = null;
-      return undefined;
-    }
-    let alive = true;
-    void import("./desktop/vim/imeAutoInsertVim")
-      .then((m) => {
-        if (alive) {
-          const runtime = m.createImeAutoInsertVim();
-          setExt(runtime.extension);
-          apiRef.current = { getCM: runtime.getCM as VimApi["getCM"] };
-        }
-      })
-      .catch(() => {
-        /* vim is best-effort; ignore load failures */
-      });
-    return () => {
-      alive = false;
-      apiRef.current = null;
-    };
-  }, [enabled, apiRef]);
-  return ext;
+    return enabled && desktop ? createLoadedDesktopVimRuntime() : null;
+  }, [enabled]);
+  apiRef.current = runtime
+    ? { getCM: runtime.getCM as VimApi["getCM"] }
+    : null;
+  return runtime?.extension ?? null;
 }
 
 // CodeMirror-6 composer input, styled as a MUI outlined field. Replaces the
@@ -315,14 +297,14 @@ export const ComposerEditor = forwardRef<
   onEscapeRef.current = onEscape;
   const onPasteFilesRef = useRef(onPasteFiles);
   onPasteFilesRef.current = onPasteFiles;
-  // Set by useVimExtension once the lazy vim module loads; read by the Escape
-  // keymap to tell insert mode from normal/visual.
+  // Set synchronously by useVimExtension on the first interactive Desktop
+  // mount; read by the Escape keymap to tell insert from normal/visual mode.
   const vimApiRef = useRef<VimApi | null>(null);
 
   const vimExt = useVimExtension(vim ?? false, vimApiRef);
 
-  // Surface the live vim mode to the card's NORMAL/INSERT hint. Once the lazy
-  // vim module has loaded (vimExt truthy → vimApiRef populated), subscribe to the
+  // Surface the live vim mode to the card's NORMAL/INSERT hint. Once Vim is
+  // present (vimExt truthy → vimApiRef populated), subscribe to the
   // CM5-compat `vim-mode-change` event and emit the initial mode. No-op when vim
   // is off or not yet loaded; cleans up on toggle/unmount.
   const onVimModeRef = useRef(onVimMode);

@@ -327,6 +327,17 @@ here says otherwise.
     their expanded editor must all enter through `PlatformComposerEditor`; that
     gateway enables this behavior only for Desktop and forces Vim off on Mobile.
 
+    **Initial extension ownership (2026-07-17):** native composition must never
+    span a CodeMirror extension reconfiguration. `@uiw/react-codemirror` applies
+    a changed `extensions` prop with `StateEffect.reconfigure`; lazily adding the
+    Desktop Vim runtime after the editor is already interactive can therefore
+    strand macOS marked text even when every Vim callback has a composition
+    guard. `PlatformComposerEditor` must preload the Desktop-only Vim chunk and
+    keep its temporary editor disabled, then mount a separate interactive editor
+    whose initial `EditorState` already contains Vim. Mobile/touch must not load
+    that chunk. If loading fails, prefer an interactive non-Vim composer over a
+    permanently disabled input.
+
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns
     Mobile's overlay composer, bottom navigation, detent sheets, and progressive
