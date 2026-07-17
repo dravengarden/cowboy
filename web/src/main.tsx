@@ -7,6 +7,7 @@ import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
+import { setTouchTranscriptPresentation } from "./transcriptRenderPacing";
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
@@ -27,6 +28,9 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
+  useEffect(() => {
+    setTouchTranscriptPresentation(surface.kind !== "desktop");
+  }, [surface.kind]);
   useEffect(() => {
     if (surface.kind !== "desktop") return undefined;
     const claimModalEscape = (event: KeyboardEvent): void => {
@@ -130,13 +134,17 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
         if (globalThis.document.visibilityState === "visible") void reg.update();
       };
       // Phones get backgrounded/foregrounded constantly, so visibilitychange
-      // alone refreshes them. A DESKTOP window (incl. the Tauri shell) often
-      // stays open + focused for hours — visibilitychange never fires, so it
-      // would sit on the old bundle until a manual restart (the reported
-      // "desktop auto-update doesn't work"). Poll too: a tiny sw.js fetch every
-      // 60s that only does anything when VERSION actually changed.
+      // alone refreshes them. Avoid a minute-by-minute timer + network fetch on
+      // touch devices. A DESKTOP window (incl. the Tauri shell) often stays open
+      // + focused for hours — visibilitychange never fires, so only that surface
+      // needs the 60s fallback poll.
       globalThis.document.addEventListener("visibilitychange", checkForUpdate);
-      globalThis.setInterval(checkForUpdate, 60_000);
+      const desktopSurface = globalThis.matchMedia(
+        "(pointer: fine) and (hover: hover) and (any-pointer: fine)",
+      ).matches &&
+        (globalThis.navigator.maxTouchPoints ?? 0) === 0 &&
+        !globalThis.matchMedia("(any-pointer: coarse)").matches;
+      if (desktopSurface) globalThis.setInterval(checkForUpdate, 60_000);
       checkForUpdate();
     }).catch(() => {});
   });

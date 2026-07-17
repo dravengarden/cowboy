@@ -216,17 +216,31 @@ function startLiveness(ws: WebSocket): void {
 }
 
 // Mobile suspends a backgrounded tab (freezing timers AND often killing the
-// socket without an `onclose`); on return the socket may be a zombie. Timers
-// were frozen, so the watchdog above hasn't run — probe immediately on
-// foreground and reconnect if we haven't heard from the server recently.
+// socket without an `onclose`). Stop our own watchdog/reconnect wakeups while
+// hidden; the socket itself stays open so background turn notifications still
+// work when the OS permits them. On return, immediately repaint the latest
+// canonical state, validate the socket, and resume the watchdog.
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (
-      document.visibilityState === "visible" && socket &&
-      socket.readyState === WebSocket.OPEN &&
-      Date.now() - lastMessageAt > FOREGROUND_STALE_MS
-    ) {
+    if (document.visibilityState !== "visible") {
+      stopLiveness();
+      if (reconnectTimer !== undefined) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+      }
+      return;
+    }
+
+    if (notifyScheduled) flushNotify();
+    if (!socket) {
+      if (listeners.size > 0) connect();
+      return;
+    }
+    if (socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastMessageAt > FOREGROUND_STALE_MS) {
       socket.close();
+    } else {
+      startLiveness(socket);
     }
   });
 }
@@ -237,19 +251,36 @@ function emit(): void {
 
 // WebSocket chunks can arrive much faster than the display can paint. State is
 // still reduced synchronously (no event is lost), but subscriber rendering is
-// capped at ~20fps, and ~10fps while a reader is scrolling. A model transcript
-// gains no useful fidelity from competing with a native 60fps scroll gesture;
-// the canonical state still consumes every ACP event synchronously. Sustained
-// multi-session streams otherwise make both products progressively sticky
-// while competing with editor input. In a
-// background tab rAF may be suspended, so a coarse timer keeps state observers
-// progressing without burning CPU.
+// capped by the active surface profile (Desktop up to 20fps; Touch up to 10fps,
+// lower while scrolling). A model transcript gains no useful fidelity from
+// competing with a native 60fps scroll gesture; the canonical state still
+// consumes every ACP event synchronously. In a background tab rAF may be
+// suspended, so observers receive a coarse 1fps flush instead of rendering at
+// the old foreground cadence. Foregrounding flushes immediately above.
 let notifyScheduled = false;
 let lastNotifyAt = 0;
+let notifyTimer: ReturnType<typeof setTimeout> | undefined;
+let notifyFrame = 0;
 function flushNotify(): void {
+  if (notifyTimer !== undefined) {
+    clearTimeout(notifyTimer);
+    notifyTimer = undefined;
+  }
+  if (notifyFrame !== 0) {
+    cancelAnimationFrame(notifyFrame);
+    notifyFrame = 0;
+  }
+  if (!notifyScheduled) return;
   notifyScheduled = false;
   lastNotifyAt = performance.now();
   for (const listener of listeners) listener();
+}
+function scheduleNotifyFrame(): void {
+  if (notifyFrame !== 0) return;
+  notifyFrame = requestAnimationFrame(() => {
+    notifyFrame = 0;
+    flushNotify();
+  });
 }
 function scheduleNotify(): void {
   if (notifyScheduled) return;
@@ -260,12 +291,18 @@ function scheduleNotify(): void {
       transcriptPresentationIntervalMs() - (performance.now() - lastNotifyAt),
     );
     if (remaining === 0) {
-      requestAnimationFrame(flushNotify);
+      scheduleNotifyFrame();
     } else {
-      setTimeout(() => requestAnimationFrame(flushNotify), remaining);
+      notifyTimer = setTimeout(() => {
+        notifyTimer = undefined;
+        scheduleNotifyFrame();
+      }, remaining);
     }
   } else {
-    setTimeout(flushNotify, 50);
+    notifyTimer = setTimeout(() => {
+      notifyTimer = undefined;
+      flushNotify();
+    }, 1000);
   }
 }
 
@@ -715,9 +752,11 @@ export function notify(message: string, severity: "error" | "warning" = "error")
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
 function scheduleReconnect(delay: number): void {
-  if (reconnectTimer) return;
+  if (reconnectTimer !== undefined) return;
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
     connect();
   }, delay);
 }
