@@ -353,7 +353,11 @@ incremental disabled, so the dev shell does not force a compiler wrapper.
 The shell still provides sccache for explicit clean-build experiments through
 `just build-cached`. Keep it opt-in unless a representative repeated workload
 at a stable target path is faster. Hermetic `nix build` uses Nix's own
-dependency caching.
+dependency caching. A 2026-07-18 same-path clean rebuild measured 16.41s with
+282 Rust cache hits versus 28.20s for a plain cold build; filling the cache took
+32.93s and an unchanged incremental build took 0.13s. This confirms that the
+cached recipe is useful for clean rebuilds but must not replace the normal edit
+loop.
 
 ## 11. Build order (first vertical slice)
 

@@ -2,20 +2,20 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use parking_lot::Mutex;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
 use crate::core::{Event, Hub, Status};
 use crate::runtime_wire::{
-    read_frame, write_frame, CoreCommand, Frame, FrameReader, PeerRole, RuntimeEvent, StartSession,
-    WorkerSnapshot, WorkerState, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    CoreCommand, Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole,
+    RuntimeEvent, StartSession, WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
 
 pub struct RemoteBootstrap {
@@ -633,12 +633,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             // After a Cowboy restart the worker has already discarded every
             // ACKed prefix, so the first replayed sequence may be greater than
             // one. Once this controller observes a sequence, gaps are errors.
-            if let Some(previous) = previous {
-                if runtime_seq > previous.saturating_add(1) {
-                    anyhow::bail!(
-                        "runtime event gap for {session_id}/{worker_epoch}: have {previous}, got {runtime_seq}"
-                    );
-                }
+            if let Some(previous) = previous
+                && runtime_seq > previous.saturating_add(1)
+            {
+                anyhow::bail!(
+                    "runtime event gap for {session_id}/{worker_epoch}: have {previous}, got {runtime_seq}"
+                );
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 let resetting = shared.resetting.lock().contains(&session_id);
@@ -1230,12 +1230,14 @@ mod tests {
                 })
                 .expect("reset command")
         };
-        assert!(runtime
-            .shared
-            .declarations
-            .lock()
-            .get("s")
-            .is_some_and(|session| session.agent_session_id.is_none()));
+        assert!(
+            runtime
+                .shared
+                .declarations
+                .lock()
+                .get("s")
+                .is_some_and(|session| session.agent_session_id.is_none())
+        );
         handle_frame(
             &runtime.shared,
             Frame::CommandAck {

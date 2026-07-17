@@ -6,8 +6,8 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -21,8 +21,8 @@ use crate::agent_model::{Event, Status};
 use crate::agent_sink::AgentSink;
 use crate::provider;
 use crate::runtime_wire::{
-    read_frame, write_frame, Frame, FrameReader, PeerRole, RuntimeEvent, WorkerCommand,
-    WorkerSnapshot, WorkerState, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
+    WorkerCommand, WorkerSnapshot, WorkerState, read_frame, write_frame,
 };
 
 #[derive(Debug, Clone)]

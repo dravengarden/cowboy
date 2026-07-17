@@ -8,8 +8,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
@@ -26,14 +26,14 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{
     Agent, Client, ConnectionTo, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Stdio,
 };
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{Context as _, anyhow, bail};
 use futures::{SinkExt as _, StreamExt as _};
 use parking_lot::Mutex;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Notify};
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
 use crate::acp::HANDSHAKE_TIMEOUT;
 use crate::cli::ServeAcpArgs;
@@ -518,14 +518,14 @@ impl Bridge {
                 meta.provider, self.provider
             ));
         }
-        if let Some(cwd) = cwd {
-            if std::path::Path::new(&meta.cwd) != cwd {
-                return Err(format!(
-                    "session {session_id:?} cwd mismatch: stored {}, requested {}",
-                    meta.cwd,
-                    cwd.display()
-                ));
-            }
+        if let Some(cwd) = cwd
+            && std::path::Path::new(&meta.cwd) != cwd
+        {
+            return Err(format!(
+                "session {session_id:?} cwd mismatch: stored {}, requested {}",
+                meta.cwd,
+                cwd.display()
+            ));
         }
         Ok(())
     }
@@ -852,14 +852,14 @@ impl Bridge {
         cx: &ConnectionTo<Client>,
         envelope: &Envelope,
     ) -> Result<(), String> {
-        if let Event::Update { update } = &envelope.event {
-            if let Ok(update) = serde_json::from_value::<SessionUpdate>(update.clone()) {
-                cx.send_notification(SessionNotification::new(
-                    envelope.session_id.clone(),
-                    update,
-                ))
-                .map_err(|error| error.to_string())?;
-            }
+        if let Event::Update { update } = &envelope.event
+            && let Ok(update) = serde_json::from_value::<SessionUpdate>(update.clone())
+        {
+            cx.send_notification(SessionNotification::new(
+                envelope.session_id.clone(),
+                update,
+            ))
+            .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -941,12 +941,11 @@ impl Bridge {
                 return ConnectedExit::Disconnected(None);
             }
         }
-        if let Some(command) = retry_command.take() {
-            if self.should_send_command(&command)
-                && send_daemon_command(&mut sink, &command).await.is_err()
-            {
-                return ConnectedExit::Disconnected(Some(command));
-            }
+        if let Some(command) = retry_command.take()
+            && self.should_send_command(&command)
+            && send_daemon_command(&mut sink, &command).await.is_err()
+        {
+            return ConnectedExit::Disconnected(Some(command));
         }
 
         loop {
@@ -1233,30 +1232,25 @@ impl Bridge {
             let mut prompt_outcome = None;
             let mut cancel_active = false;
             if let Some(prompts) = state.pending_prompts.get_mut(&session_id) {
-                if let Some(cmid) = envelope.cmid.as_deref() {
-                    if let Some(prompt) = prompts.iter_mut().find(|prompt| prompt.cmid == cmid) {
-                        prompt.started = true;
-                        cancel_active = prompt.cancel_requested;
-                    }
+                if let Some(cmid) = envelope.cmid.as_deref()
+                    && let Some(prompt) = prompts.iter_mut().find(|prompt| prompt.cmid == cmid)
+                {
+                    prompt.started = true;
+                    cancel_active = prompt.cancel_requested;
                 }
-                if let Event::Update { update } = &envelope.event {
-                    if update
+                if let Event::Update { update } = &envelope.event
+                    && update
                         .get("sessionUpdate")
                         .and_then(serde_json::Value::as_str)
                         == Some("cowboy_prompt_cancelled")
-                    {
-                        if let Some(cmid) = update.get("cmid").and_then(serde_json::Value::as_str) {
-                            if let Some(index) =
-                                prompts.iter().position(|prompt| prompt.cmid == cmid)
-                            {
-                                let pending = prompts.remove(index).expect("index came from queue");
-                                prompt_outcome = Some((
-                                    pending.completion,
-                                    PromptOutcome::Stopped(StopReason::Cancelled),
-                                ));
-                            }
-                        }
-                    }
+                    && let Some(cmid) = update.get("cmid").and_then(serde_json::Value::as_str)
+                    && let Some(index) = prompts.iter().position(|prompt| prompt.cmid == cmid)
+                {
+                    let pending = prompts.remove(index).expect("index came from queue");
+                    prompt_outcome = Some((
+                        pending.completion,
+                        PromptOutcome::Stopped(StopReason::Cancelled),
+                    ));
                 }
                 if let Event::TurnEnd { stop_reason } = &envelope.event {
                     if let Some(index) = prompts.iter().position(|prompt| prompt.started) {
@@ -1281,12 +1275,11 @@ impl Bridge {
                         }
                         Status::Starting | Status::Busy => None,
                     };
-                    if let Some(reason) = settled {
-                        if let Some(index) = prompts.iter().position(|prompt| prompt.started) {
-                            let pending = prompts.remove(index).expect("index came from queue");
-                            prompt_outcome =
-                                Some((pending.completion, PromptOutcome::Stopped(reason)));
-                        }
+                    if let Some(reason) = settled
+                        && let Some(index) = prompts.iter().position(|prompt| prompt.started)
+                    {
+                        let pending = prompts.remove(index).expect("index came from queue");
+                        prompt_outcome = Some((pending.completion, PromptOutcome::Stopped(reason)));
                     }
                 }
             }

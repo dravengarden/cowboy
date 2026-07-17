@@ -59,6 +59,10 @@ const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
 ///   prior `gemini` OAuth login in `~/.gemini`, or `GEMINI_API_KEY`).
 #[must_use]
 pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
+    builtin_with_env(|key| std::env::var(key).ok())
+}
+
+fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'static str, LaunchSpec> {
     let mut m = HashMap::new();
     m.insert(
         "claude-code",
@@ -66,6 +70,7 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
             "claude-code",
             "npx",
             &["-y", "@agentclientprotocol/claude-agent-acp"],
+            &get_env,
         ),
     );
     m.insert(
@@ -78,13 +83,19 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
                 CODEX_FULL_ACCESS_ARGS,
             ),
             CODEX_FULL_ACCESS_ARGS,
+            &get_env,
         ),
     );
     m.insert(
         "gemini",
         // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's no
         // separate npm package like the others.
-        spec("gemini", "npx", &["-y", "@google/gemini-cli", "--acp"]),
+        spec(
+            "gemini",
+            "npx",
+            &["-y", "@google/gemini-cli", "--acp"],
+            &get_env,
+        ),
     );
     m
 }
@@ -104,8 +115,13 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
 /// entirely — no install-at-spawn, no race, no poison, no network dependency.
 /// Unset ⇒ the npx default. A provider may still add adapter-specific default
 /// flags that are independent from the npx wrapper itself.
-fn spec(id: &'static str, default_cmd: &str, default_args: &[&str]) -> LaunchSpec {
-    spec_with_custom_default_args(id, default_cmd, default_args, &[])
+fn spec(
+    id: &'static str,
+    default_cmd: &str,
+    default_args: &[&str],
+    get_env: &impl Fn(&str) -> Option<String>,
+) -> LaunchSpec {
+    spec_with_custom_default_args(id, default_cmd, default_args, &[], get_env)
 }
 
 fn concat_slices(left: &[&'static str], right: &[&'static str]) -> Vec<&'static str> {
@@ -117,16 +133,16 @@ fn spec_with_custom_default_args(
     default_cmd: &str,
     default_args: &[&str],
     custom_default_args: &[&str],
+    get_env: &impl Fn(&str) -> Option<String>,
 ) -> LaunchSpec {
     let key = id.to_uppercase().replace('-', "_");
-    let arg_override = std::env::var(format!("COWBOY_ACP_{key}_ARGS"))
-        .ok()
+    let arg_override = get_env(&format!("COWBOY_ACP_{key}_ARGS"))
         .map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
-    match std::env::var(format!("COWBOY_ACP_{key}_CMD")) {
+    match get_env(&format!("COWBOY_ACP_{key}_CMD")) {
         // A custom command replaces npx: the npx-specific prefix (`-y <pkg>`)
         // does NOT carry over. Provider-specific args may still apply, e.g.
         // Codex's default full-access config for a pre-installed adapter.
-        Ok(command) => LaunchSpec {
+        Some(command) => LaunchSpec {
             id,
             command,
             args: arg_override.unwrap_or_else(|| {
@@ -137,7 +153,7 @@ fn spec_with_custom_default_args(
             }),
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
-        Err(_) => LaunchSpec {
+        None => LaunchSpec {
             id,
             command: default_cmd.to_owned(),
             args: arg_override
@@ -154,31 +170,21 @@ pub fn lookup(id: &str) -> Option<LaunchSpec> {
 
 #[cfg(test)]
 mod tests {
-    // Defaults AND the env override, in ONE test: the override sets a
-    // process-global env var, so keeping both assertions in a single (serial)
-    // function avoids racing a separate defaults test running in parallel.
+    use std::collections::HashMap;
+
+    fn lookup_with(overrides: &[(&str, &str)], id: &str) -> Option<super::LaunchSpec> {
+        let overrides: HashMap<_, _> = overrides.iter().copied().collect();
+        super::builtin_with_env(|key| overrides.get(key).map(|value| (*value).to_owned()))
+            .remove(id)
+    }
+
     #[test]
     fn defaults_and_env_override() {
-        // Hermetic: clear any AMBIENT override first. In production the daemon
-        // sets these (services/cowboy), and a cowboy-spawned test process inherits
-        // them — without this the "default" assertions below see the deployed
-        // /opt/npm-global paths instead of npx.
-        for k in [
-            "COWBOY_ACP_CLAUDE_CODE_CMD",
-            "COWBOY_ACP_CLAUDE_CODE_ARGS",
-            "COWBOY_ACP_CODEX_CMD",
-            "COWBOY_ACP_CODEX_ARGS",
-            "COWBOY_ACP_GEMINI_CMD",
-            "COWBOY_ACP_GEMINI_ARGS",
-        ] {
-            std::env::remove_var(k);
-        }
-
         // Default (no env): npx + the pinned adapter args; unknown id → None.
-        let claude = super::lookup("claude-code").expect("claude-code registered");
+        let claude = lookup_with(&[], "claude-code").expect("claude-code registered");
         assert_eq!(claude.command, "npx");
         assert_eq!(claude.args, ["-y", "@agentclientprotocol/claude-agent-acp"]);
-        let codex = super::lookup("codex").expect("codex registered");
+        let codex = lookup_with(&[], "codex").expect("codex registered");
         assert_eq!(codex.command, "npx");
         assert_eq!(
             codex.args,
@@ -192,15 +198,18 @@ mod tests {
             ]
         );
         assert_eq!(
-            super::lookup("gemini").map(|s| s.command),
+            lookup_with(&[], "gemini").map(|s| s.command),
             Some("npx".to_owned())
         );
-        assert!(super::lookup("nope").is_none());
+        assert!(lookup_with(&[], "nope").is_none());
 
         // Override just _CMD: npx-specific args are dropped, while Codex keeps
         // its provider-specific full-access config for the pre-installed binary.
-        std::env::set_var("COWBOY_ACP_CODEX_CMD", "/opt/npm-global/bin/codex-acp");
-        let codex = super::lookup("codex").unwrap();
+        let codex = lookup_with(
+            &[("COWBOY_ACP_CODEX_CMD", "/opt/npm-global/bin/codex-acp")],
+            "codex",
+        )
+        .unwrap();
         assert_eq!(codex.command, "/opt/npm-global/bin/codex-acp");
         assert_eq!(
             codex.args,
@@ -211,14 +220,15 @@ mod tests {
                 "sandbox_mode=\"danger-full-access\"",
             ]
         );
-        std::env::remove_var("COWBOY_ACP_CODEX_CMD");
-
         // Other custom commands still drop the npx-specific default args.
-        std::env::set_var(
-            "COWBOY_ACP_CLAUDE_CODE_CMD",
-            "/opt/npm-global/bin/claude-agent-acp",
-        );
-        let o = super::lookup("claude-code").unwrap();
+        let o = lookup_with(
+            &[(
+                "COWBOY_ACP_CLAUDE_CODE_CMD",
+                "/opt/npm-global/bin/claude-agent-acp",
+            )],
+            "claude-code",
+        )
+        .unwrap();
         assert_eq!(o.command, "/opt/npm-global/bin/claude-agent-acp");
         assert!(
             o.args.is_empty(),
@@ -226,15 +236,20 @@ mod tests {
         );
 
         // _ARGS overrides independently (e.g. gemini's `--acp`).
-        std::env::set_var("COWBOY_ACP_CLAUDE_CODE_ARGS", "--acp --foo");
         assert_eq!(
-            super::lookup("claude-code").unwrap().args,
+            lookup_with(
+                &[
+                    (
+                        "COWBOY_ACP_CLAUDE_CODE_CMD",
+                        "/opt/npm-global/bin/claude-agent-acp",
+                    ),
+                    ("COWBOY_ACP_CLAUDE_CODE_ARGS", "--acp --foo"),
+                ],
+                "claude-code",
+            )
+            .unwrap()
+            .args,
             ["--acp", "--foo"]
         );
-
-        std::env::remove_var("COWBOY_ACP_CLAUDE_CODE_CMD");
-        std::env::remove_var("COWBOY_ACP_CLAUDE_CODE_ARGS");
-        // Back to the default once unset.
-        assert_eq!(super::lookup("claude-code").unwrap().command, "npx");
     }
 }

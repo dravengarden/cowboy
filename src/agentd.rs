@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::fd::FromRawFd as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
@@ -18,8 +18,8 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::runtime_wire::{
-    negotiate, read_frame, write_frame, CoreCommand, Frame, PeerRole, RuntimeEvent, StartSession,
-    WorkerCommand, WorkerSnapshot, WorkerState, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
+    CoreCommand, Frame, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
+    StartSession, WorkerCommand, WorkerSnapshot, WorkerState, negotiate, read_frame, write_frame,
 };
 
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -327,12 +327,13 @@ impl Broker {
         let state = snapshot.state;
         let launch = snapshot.launch.clone();
         let mut accepted = false;
-        if let Some(worker) = self.workers.lock().get_mut(&session_id) {
-            if worker.connection_id == connection_id && worker.epoch == snapshot.worker_epoch {
-                worker.snapshot = snapshot;
-                worker.last_seen = Instant::now();
-                accepted = true;
-            }
+        if let Some(worker) = self.workers.lock().get_mut(&session_id)
+            && worker.connection_id == connection_id
+            && worker.epoch == snapshot.worker_epoch
+        {
+            worker.snapshot = snapshot;
+            worker.last_seen = Instant::now();
+            accepted = true;
         }
         if !accepted {
             return;
@@ -340,16 +341,16 @@ impl Broker {
         if self.cancelled_sessions.lock().contains(&session_id) {
             return;
         }
-        if let Some(launch) = launch.as_ref() {
-            if let Some(failed_generation) = launch.fallback_for.as_ref() {
-                let desired = self.desired_generation.lock().clone();
-                if desired.is_empty() || desired == *failed_generation {
-                    self.pin_fallback(&session_id, &launch.generation, failed_generation);
-                    *self.previous_generation.lock() = Some(launch.generation.clone());
-                    self.unhealthy_generations
-                        .lock()
-                        .insert((failed_generation.clone(), launch.provider.clone()));
-                }
+        if let Some(launch) = launch.as_ref()
+            && let Some(failed_generation) = launch.fallback_for.as_ref()
+        {
+            let desired = self.desired_generation.lock().clone();
+            if desired.is_empty() || desired == *failed_generation {
+                self.pin_fallback(&session_id, &launch.generation, failed_generation);
+                *self.previous_generation.lock() = Some(launch.generation.clone());
+                self.unhealthy_generations
+                    .lock()
+                    .insert((failed_generation.clone(), launch.provider.clone()));
             }
         }
         if let Some(launch) = launch {
@@ -359,10 +360,10 @@ impl Broker {
     }
 
     fn touch_worker(&self, session_id: &str, connection_id: u64) {
-        if let Some(worker) = self.workers.lock().get_mut(session_id) {
-            if worker.connection_id == connection_id {
-                worker.last_seen = Instant::now();
-            }
+        if let Some(worker) = self.workers.lock().get_mut(session_id)
+            && worker.connection_id == connection_id
+        {
+            worker.last_seen = Instant::now();
         }
     }
 
@@ -406,13 +407,13 @@ impl Broker {
                 .get_or_insert_with(|| generation.clone());
         }
         let mut workers = self.workers.lock();
-        if let Some(existing) = workers.get(&session_id) {
-            if existing.epoch != epoch {
-                anyhow::bail!(
-                    "session {session_id} already has worker epoch {}",
-                    existing.epoch
-                );
-            }
+        if let Some(existing) = workers.get(&session_id)
+            && existing.epoch != epoch
+        {
+            anyhow::bail!(
+                "session {session_id} already has worker epoch {}",
+                existing.epoch
+            );
         }
         workers.insert(
             session_id.clone(),
@@ -669,19 +670,18 @@ impl Broker {
         let generation_key = (session.generation.clone(), session.provider.clone());
         let desired_is_unhealthy = self.unhealthy_generations.lock().contains(&generation_key);
         let mut selected = session.clone();
-        if desired_is_unhealthy {
-            if let Some(previous) = session_fallback
+        if desired_is_unhealthy
+            && let Some(previous) = session_fallback
                 .clone()
                 .or_else(|| self.previous_generation.lock().clone())
-            {
-                selected.generation = previous;
-                selected.fallback_for = Some(session.generation.clone());
-                self.pin_fallback(
-                    &selected.session_id,
-                    &selected.generation,
-                    &session.generation,
-                );
-            }
+        {
+            selected.generation = previous;
+            selected.fallback_for = Some(session.generation.clone());
+            self.pin_fallback(
+                &selected.session_id,
+                &selected.generation,
+                &session.generation,
+            );
         }
         match self.spawn_and_wait_ready(&selected).await {
             Ok(()) => {
@@ -1096,10 +1096,10 @@ impl Broker {
             .arg(&session.cwd)
             .arg("--generation")
             .arg(&session.generation);
-        if self.args.spawn_mode == SpawnMode::Direct {
-            if let Some(fallback_for) = &session.fallback_for {
-                command.env("COWBOY_FALLBACK_FOR", fallback_for);
-            }
+        if self.args.spawn_mode == SpawnMode::Direct
+            && let Some(fallback_for) = &session.fallback_for
+        {
+            command.env("COWBOY_FALLBACK_FOR", fallback_for);
         }
         if let Some(resume) = &session.agent_session_id {
             command.arg("--resume").arg(resume);
@@ -1440,14 +1440,14 @@ async fn handle_core(
                 worker_epoch,
                 runtime_seq,
             } => {
-                if let Some(worker) = broker.workers.lock().get(&session_id) {
-                    if worker.epoch == worker_epoch {
-                        let _ = worker.tx.send(Frame::Ack {
-                            session_id,
-                            worker_epoch,
-                            runtime_seq,
-                        });
-                    }
+                if let Some(worker) = broker.workers.lock().get(&session_id)
+                    && worker.epoch == worker_epoch
+                {
+                    let _ = worker.tx.send(Frame::Ack {
+                        session_id,
+                        worker_epoch,
+                        runtime_seq,
+                    });
                 }
             }
             Frame::Heartbeat => {

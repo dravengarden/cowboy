@@ -8,9 +8,9 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
@@ -314,9 +314,11 @@ mod tests {
     fn unavailable_snapshot_is_explicit() {
         let providers = unavailable_providers();
         assert_eq!(providers.len(), 3);
-        assert!(providers
-            .iter()
-            .all(|p| p.status == "unavailable" && p.error.is_some()));
+        assert!(
+            providers
+                .iter()
+                .all(|p| p.status == "unavailable" && p.error.is_some())
+        );
     }
 
     #[test]

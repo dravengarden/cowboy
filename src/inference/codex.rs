@@ -7,8 +7,8 @@
 
 use std::process::Stdio;
 
-use anyhow::{bail, Context as _, Result};
-use serde_json::{json, Value};
+use anyhow::{Context as _, Result, bail};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 

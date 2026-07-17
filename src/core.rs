@@ -16,8 +16,8 @@
 
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -48,8 +48,8 @@ pub enum SessionOrigin {
     Web,
 }
 
-pub use crate::agent_model::{Event, Status};
 use crate::agent_model::{AUTO_CONTINUE_PREFIX, SCHED_PREFIX};
+pub use crate::agent_model::{Event, Status};
 
 /// One event stamped with its session + monotonic `seq`. This is the unit
 /// stored in the log and streamed to clients.
@@ -2782,17 +2782,17 @@ impl Hub {
     }
 
     fn send_dispatch(&self, req: DispatchReq) {
-        if let Some(tx) = self.inner.dispatch_tx.lock().as_ref() {
-            if let Err(error) = tx.try_send(req) {
-                let req = error.into_inner();
-                tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-                self.clear_in_flight(&req.session_id);
-                self.requeue_prompt(&req.session_id, req.text, req.content, req.cmid);
-                self.broadcast_error(
-                    Some(req.session_id),
-                    "dispatch queue is full; prompt remains queued".to_owned(),
-                );
-            }
+        if let Some(tx) = self.inner.dispatch_tx.lock().as_ref()
+            && let Err(error) = tx.try_send(req)
+        {
+            let req = error.into_inner();
+            tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
+            self.clear_in_flight(&req.session_id);
+            self.requeue_prompt(&req.session_id, req.text, req.content, req.cmid);
+            self.broadcast_error(
+                Some(req.session_id),
+                "dispatch queue is full; prompt remains queued".to_owned(),
+            );
         }
     }
 
@@ -2933,10 +2933,10 @@ impl Hub {
             // The in-flight turn is over (it crashed); free the guard so the queue
             // can drain again once an agent is alive.
             s.in_flight = false;
-            if let Some(c) = cmid.as_deref() {
-                if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
-                    return;
-                }
+            if let Some(c) = cmid.as_deref()
+                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
+            {
+                return;
             }
             let id = self.next_qid();
             s.queue.insert(
@@ -2982,10 +2982,10 @@ impl Hub {
             // Idempotent on cmid (a retry whose original actually landed in the
             // queue must not double-add). The dispatch branch (chat) doesn't
             // store a QueuedMessage, so cmid reconciliation there is Phase 2.
-            if let Some(c) = cmid.as_deref() {
-                if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
-                    return;
-                }
+            if let Some(c) = cmid.as_deref()
+                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
+            {
+                return;
             }
             // The user is actively sending → they've engaged with whatever the
             // agent asked, so the "awaiting your reply" state is resolved. Clear it
@@ -3052,10 +3052,10 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            if let Some(c) = cmid.as_deref() {
-                if s.queue.iter().any(|m| m.cmid.as_deref() == Some(c)) {
-                    return false;
-                }
+            if let Some(c) = cmid.as_deref()
+                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
+            {
+                return false;
             }
             // Explicit send → the "awaiting your reply" state is resolved; clear it.
             if s.meta.awaiting_user || s.meta.done {
@@ -3293,10 +3293,10 @@ impl Hub {
             // Idempotent on cmid: when a send looked failed the client resends
             // with the SAME cmid, but the original may actually have landed — so
             // a matching cmid means "already staged", don't double-add.
-            if let Some(c) = cmid.as_deref() {
-                if s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c)) {
-                    return;
-                }
+            if let Some(c) = cmid.as_deref()
+                && s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c))
+            {
+                return;
             }
             let id = self.next_qid();
             s.drafts.push(QueuedMessage {
@@ -3438,10 +3438,10 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if let Some(c) = cmid.as_deref() {
-                if s.queue.iter().any(|q| q.cmid.as_deref() == Some(c)) {
-                    return;
-                }
+            if let Some(c) = cmid.as_deref()
+                && s.queue.iter().any(|q| q.cmid.as_deref() == Some(c))
+            {
+                return;
             }
             // A fired schedule is the user's pre-committed "reply" → clear any
             // awaiting-user hold so it isn't stranded behind that widget. (Pause is

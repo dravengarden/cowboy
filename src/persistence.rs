@@ -46,20 +46,18 @@ impl EventReducer {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
             if let (Some(kind), Some(chunk)) = (kind, text) {
-                if let Some(slot) = self.text.get_mut(&sid) {
-                    if slot.kind == kind && slot.message_id == message_id {
-                        if let Event::Update { update } = &mut slot.envelope.event {
-                            if let Some(value) = update
-                                .get_mut("content")
-                                .and_then(|content| content.get_mut("text"))
-                            {
-                                let mut joined = value.as_str().unwrap_or_default().to_owned();
-                                joined.push_str(chunk);
-                                *value = serde_json::Value::String(joined);
-                                return Some(slot.envelope.clone());
-                            }
-                        }
-                    }
+                if let Some(slot) = self.text.get_mut(&sid)
+                    && slot.kind == kind
+                    && slot.message_id == message_id
+                    && let Event::Update { update } = &mut slot.envelope.event
+                    && let Some(value) = update
+                        .get_mut("content")
+                        .and_then(|content| content.get_mut("text"))
+                {
+                    let mut joined = value.as_str().unwrap_or_default().to_owned();
+                    joined.push_str(chunk);
+                    *value = serde_json::Value::String(joined);
+                    return Some(slot.envelope.clone());
                 }
                 self.text.insert(
                     sid,
@@ -90,21 +88,19 @@ impl EventReducer {
                             },
                             Event::Update { update: delta },
                         ) = (&mut tool_env.event, &env.event)
-                        {
-                            if let (Some(base_object), Some(delta)) =
+                            && let (Some(base_object), Some(delta)) =
                                 (base_update.as_object_mut(), delta.as_object())
-                            {
-                                for (name, value) in delta {
-                                    if name != "sessionUpdate" {
-                                        base_object.insert(name.clone(), value.clone());
-                                    }
+                        {
+                            for (name, value) in delta {
+                                if name != "sessionUpdate" {
+                                    base_object.insert(name.clone(), value.clone());
                                 }
-                                base_object.insert(
-                                    "sessionUpdate".to_owned(),
-                                    serde_json::Value::String("tool_call".to_owned()),
-                                );
-                                merged = true;
                             }
+                            base_object.insert(
+                                "sessionUpdate".to_owned(),
+                                serde_json::Value::String("tool_call".to_owned()),
+                            );
+                            merged = true;
                         }
                         if merged {
                             return Some(tool_env.clone());

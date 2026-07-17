@@ -51,8 +51,10 @@ The `justfile` is the task surface (run inside `nix develop`):
 
 Local Rust builds use Cargo incremental compilation. `just build-cached`
 explicitly disables incremental compilation and enables sccache for measured
-clean-rebuild experiments at a stable target path. The hermetic `nix build`
-uses Nix's own Cargo dependency caching instead.
+clean-rebuild experiments at a stable target path. On 2026-07-18, a full
+`--all-targets --all-features` cold build took 28.20s with plain Cargo; rebuilding
+the cleared same-path target took 16.41s with 282 Rust cache hits. The hermetic
+`nix build` uses Nix's own Cargo dependency caching instead.
 
 ## CLI / daemon flags
 

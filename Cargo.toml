@@ -1,7 +1,7 @@
 [package]
 name = "cowboy"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Drive coding-agent CLIs from anywhere over ACP, with one shared live progress."
 license = "MIT"
 rust-version = "1.95"

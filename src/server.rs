@@ -15,13 +15,13 @@ use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use axum::Router;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -627,12 +627,14 @@ mod store_writer_tests {
     #[test]
     fn reducer_drops_transient_frames() {
         let mut reducer = EventReducer::default();
-        assert!(reducer
-            .reduce(update(
-                30,
-                serde_json::json!({"sessionUpdate": "usage_update", "used": 1, "size": 2}),
-            ))
-            .is_none());
+        assert!(
+            reducer
+                .reduce(update(
+                    30,
+                    serde_json::json!({"sessionUpdate": "usage_update", "used": 1, "size": 2}),
+                ))
+                .is_none()
+        );
     }
 }
 
@@ -1033,8 +1035,7 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
         let _ = writeln!(
             body,
             "cowboy_agent_memory_bytes{{session=\"{session}\"}} {}\ncowboy_agent_pids{{session=\"{session}\"}} {}\ncowboy_agent_cpu_seconds_total{{session=\"{session}\"}} {seconds}.{micros:06}",
-            stats.memory_bytes,
-            stats.pids,
+            stats.memory_bytes, stats.pids,
         );
     }
     (
@@ -1469,10 +1470,9 @@ async fn static_handler(
     if let Some(inm) = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
+        && inm.contains(etag.as_str())
     {
-        if inm.contains(etag.as_str()) {
-            return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
-        }
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
     }
 
     let cache_control = if name.starts_with("assets/") {
@@ -1560,8 +1560,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     }
     for meta in state.hub.session_list() {
-        if let Some((events, reached_start)) = state.hub.snapshot(&meta.id) {
-            if send_json(
+        if let Some((events, reached_start)) = state.hub.snapshot(&meta.id)
+            && send_json(
                 &mut sink,
                 &Outbound::Snapshot {
                     session_id: meta.id.clone(),
@@ -1571,15 +1571,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
             )
             .await
             .is_err()
-            {
-                return;
-            }
+        {
+            return;
         }
         // Replay the last-seen agent config options so the composer's
         // mode / model / effort dropdowns hydrate on first paint instead of
         // waiting for the next `config_option_update` to fire upstream.
-        if let Some(options) = state.hub.config_options(&meta.id) {
-            if send_json(
+        if let Some(options) = state.hub.config_options(&meta.id)
+            && send_json(
                 &mut sink,
                 &Outbound::ConfigOptions {
                     session_id: meta.id.clone(),
@@ -1588,17 +1587,16 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
             )
             .await
             .is_err()
-            {
-                return;
-            }
+        {
+            return;
         }
         // Replay the server-authoritative queue + drafts as a resync SyncPatch
         // (state "queue:<id>") so a freshly-opened terminal renders the same
         // staged messages and adopts them across a daemon restart.
-        if let Some(patch) = state.hub.queue_resync(&meta.id) {
-            if send_json(&mut sink, &patch).await.is_err() {
-                return;
-            }
+        if let Some(patch) = state.hub.queue_resync(&meta.id)
+            && send_json(&mut sink, &patch).await.is_err()
+        {
+            return;
         }
         // Seed the confirm-detect judge-run history so the inspector widget
         // (long-press the turn-status pill) hydrates with the persisted runs on
@@ -1793,16 +1791,15 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
     };
     // A view-only system session rejects user-driven turns; only the backend
     // wake endpoint (POST /api/sessions/{id}/prompt) drives it.
-    if let Some(sid) = &session_id_for_err {
-        if matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. })
-            && state.hub.session_is_system(sid)
-        {
-            state.hub.broadcast_error(
-                Some(sid.clone()),
-                "view-only system session: input is disabled".to_owned(),
-            );
-            return;
-        }
+    if let Some(sid) = &session_id_for_err
+        && matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. })
+        && state.hub.session_is_system(sid)
+    {
+        state.hub.broadcast_error(
+            Some(sid.clone()),
+            "view-only system session: input is disabled".to_owned(),
+        );
+        return;
     }
     let result = match cmd {
         Inbound::NewSession { provider, cwd } => state
@@ -1845,10 +1842,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             let result = state
                 .supervisor
                 .send(&session_id, AgentCommand::Prompt(blocks, None, None));
-            if result.is_ok() {
-                if let Some(title) = auto {
-                    state.hub.auto_title(&session_id, title);
-                }
+            if result.is_ok()
+                && let Some(title) = auto
+            {
+                state.hub.auto_title(&session_id, title);
             }
             result
         }

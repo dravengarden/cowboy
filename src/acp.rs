@@ -21,14 +21,15 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 // ACP 1.0 versioned the wire schema: the message types that were flat under
 // `schema::` in 0.14 now live under `schema::v1::` (v1 is the stable line; v2 is
 // unstable/feature-gated). `ProtocolVersion` stayed at the `schema::` root
 // (version-agnostic), and the `Agent`/`Client` traits at the crate root.
+use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
     LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
@@ -37,7 +38,6 @@ use agent_client_protocol::schema::v1::{
     SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Error};
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
@@ -45,7 +45,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::agent_model::{Event, Status, AUTO_CONTINUE_PREFIX, SCHED_PREFIX, WAKEUP_PREFIX};
+use crate::agent_model::{AUTO_CONTINUE_PREFIX, Event, SCHED_PREFIX, Status, WAKEUP_PREFIX};
 use crate::agent_sink::{AgentSink, HubAgentSink};
 use crate::cgroup;
 use crate::core::Hub;
@@ -650,12 +650,11 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
         }
         return;
     }
-    if let SessionUpdate::AgentMessageChunk(ref chunk) = notif.update {
-        if let ContentBlock::Text(text) = &chunk.content {
-            if let Some(capture) = state.capture.lock().as_mut() {
-                capture.push_str(&text.text);
-            }
-        }
+    if let SessionUpdate::AgentMessageChunk(ref chunk) = notif.update
+        && let ContentBlock::Text(text) = &chunk.content
+        && let Some(capture) = state.capture.lock().as_mut()
+    {
+        capture.push_str(&text.text);
     }
     match serde_json::to_value(&notif.update) {
         Ok(update) => {
@@ -719,13 +718,13 @@ fn maybe_arm_wakeup(state: &ClientState, update: &serde_json::Value) {
     let delay = update
         .pointer("/rawInput/delaySeconds")
         .and_then(serde_json::Value::as_i64);
-    if let (Some(prompt), Some(delay)) = (prompt, delay) {
-        if !prompt.trim().is_empty() {
-            tracing::info!(session = %state.session_id, delay_s = delay, "scheduler: arming ScheduleWakeup");
-            state
-                .sink
-                .schedule_wakeup(&state.session_id, delay, prompt.to_owned());
-        }
+    if let (Some(prompt), Some(delay)) = (prompt, delay)
+        && !prompt.trim().is_empty()
+    {
+        tracing::info!(session = %state.session_id, delay_s = delay, "scheduler: arming ScheduleWakeup");
+        state
+            .sink
+            .schedule_wakeup(&state.session_id, delay, prompt.to_owned());
     }
 }
 
@@ -816,8 +815,7 @@ async fn run_session(
         && config_options
             .as_ref()
             .is_some_and(|opts| codex_full_access_available(opts))
-    {
-        if let Some(updated_options) = set_startup_config_option(
+        && let Some(updated_options) = set_startup_config_option(
             &cx,
             &session_id,
             &acp_id,
@@ -825,12 +823,11 @@ async fn run_session(
             CODEX_FULL_ACCESS_CONFIG_VALUE,
         )
         .await
-        {
-            tracing::info!(session = %session_id, "codex approval preset -> full access");
-            state.codex_full_access.store(true, Ordering::SeqCst);
-            state.sink.set_config_options(&session_id, updated_options);
-            config_options = None;
-        }
+    {
+        tracing::info!(session = %session_id, "codex approval preset -> full access");
+        state.codex_full_access.store(true, Ordering::SeqCst);
+        state.sink.set_config_options(&session_id, updated_options);
+        config_options = None;
     }
 
     // Open every provider at its own full-access session mode when advertised.

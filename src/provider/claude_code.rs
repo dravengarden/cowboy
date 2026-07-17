@@ -4,7 +4,7 @@
 //! "needs input" end, a permission-style handoff that survives to turn-end, …)
 //! land here as they're observed live, ahead of the L2 LLM judge.
 
-use super::confirm::{stop_reason_l1, TurnEndCtx};
+use super::confirm::{TurnEndCtx, stop_reason_l1};
 use crate::skills::Verdict;
 
 /// L1 for claude-code. No reliable claude-code-specific `EndTurn` marker yet, so

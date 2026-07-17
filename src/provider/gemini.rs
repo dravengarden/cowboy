@@ -3,7 +3,7 @@
 //! Expected to change often — gemini-specific turn-end markers land here as
 //! they're observed live, ahead of the L2 LLM judge.
 
-use super::confirm::{stop_reason_l1, TurnEndCtx};
+use super::confirm::{TurnEndCtx, stop_reason_l1};
 use crate::skills::Verdict;
 
 /// L1 for gemini. No reliable gemini-specific `EndTurn` marker yet, so this is
