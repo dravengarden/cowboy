@@ -1799,29 +1799,34 @@ export function ComposerWorkspace({
         >
         {/* (Vim mode moved OUT of the toolbar into a Zed-style bottom status bar
             below — see the StatusBar at the card's bottom edge.) */}
-        <Tooltip title="Slash command / skill">
-          <span>
-            <IconButton
-              aria-label="slash command"
-              disabled={dead}
-              sx={TOOLBAR_ICON_BTN}
-              onClick={(): void => editorRef.current?.insertTrigger("/")}
-            >
-              {
-                /* rem, NOT px: the global font scale (useGlobalFontScale) grows
-                  the app via the root font-size, so the sibling SvgIcons (rem)
-                  scale but a px glyph wouldn't. 1.375rem = the old 22px at 100%,
-                  tracking the ~1.5rem medium icons next to it. */
-              }
-              <Box
-                component="span"
-                sx={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1 }}
+        {/* Mobile starts with the useful, state-bearing Compact action instead of
+            a one-tap `/` insertion that is easy to hit accidentally. Slash
+            completion remains available by typing `/` in the editor. Desktop
+            keeps its dedicated slash affordance in the separate toolbar above. */}
+        {!desktop && compactAction && (
+          <Tooltip
+            title={compacting
+              ? "Compacting…"
+              : compactContext.refreshing
+              ? "Refreshing context usage…"
+              : compactTooltip(compactContext.used, compactContext.size)}
+          >
+            <span>
+              <IconButton
+                aria-label="compact conversation"
+                disabled={dead || compacting}
+                sx={TOOLBAR_ICON_BTN}
+                onClick={(): void => setCmdConfirm(compactAction)}
               >
-                /
-              </Box>
-            </IconButton>
-          </span>
-        </Tooltip>
+                <CompactIcon
+                  used={compactContext.used}
+                  size={compactContext.size}
+                  active={compacting}
+                />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
         {/* @ folds out on compact (mobile) — the row is too tight, and typing
             "@" raises the same file picker. Desktop keeps the dedicated button. */}
         {!compact && (
@@ -1850,36 +1855,8 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        {/* Session-lifecycle actions (Compact / Clear). Each resolves to the
-            running agent's real slash-command (agentCommands.ts) — hidden when the
-            agent offers no equivalent — and opens a confirm dialog before firing.
-            Disabled while dead (no live agent to run the command). Compact doubles
-            as the context-fullness indicator: the ring around its glyph shows how
-            full the window is (no separate %-label button). */}
-        {!desktop && compactAction && (
-          <Tooltip
-            title={compacting
-              ? "Compacting…"
-              : compactContext.refreshing
-              ? "Refreshing context usage…"
-              : compactTooltip(compactContext.used, compactContext.size)}
-          >
-            <span>
-              <IconButton
-                aria-label="compact conversation"
-                disabled={dead || compacting}
-                sx={TOOLBAR_ICON_BTN}
-                onClick={(): void => setCmdConfirm(compactAction)}
-              >
-                <CompactIcon
-                  used={compactContext.used}
-                  size={compactContext.size}
-                  active={compacting}
-                />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
+        {/* Session-lifecycle Clear action. Compact is mobile's first button above;
+            both actions still require confirmation before they run. */}
         {clearAction && (
           <Tooltip title="Clear conversation">
             <span>
