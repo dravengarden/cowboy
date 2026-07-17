@@ -1,5 +1,16 @@
 import { assertEquals } from "jsr:@std/assert";
-import { desktopVimMountPolicy } from "./desktopVimMountPolicy";
+import {
+  desktopVimMountPolicy,
+  shouldPreloadDesktopVim,
+} from "./desktopVimMountPolicy";
+
+Deno.test("only a pending Desktop Vim runtime starts the preload promise", () => {
+  assertEquals(shouldPreloadDesktopVim("desktop", true, "pending"), true);
+  assertEquals(shouldPreloadDesktopVim("desktop", true, "ready"), false);
+  assertEquals(shouldPreloadDesktopVim("desktop", true, "failed"), false);
+  assertEquals(shouldPreloadDesktopVim("mobile", true, "pending"), false);
+  assertEquals(shouldPreloadDesktopVim("desktop", false, "pending"), false);
+});
 
 Deno.test("Desktop Vim waits for its runtime before the interactive mount", () => {
   assertEquals(desktopVimMountPolicy("desktop", true, false), {

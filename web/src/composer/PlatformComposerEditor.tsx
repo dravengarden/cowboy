@@ -10,7 +10,11 @@ import {
   isDesktopVimRuntimeLoaded,
   preloadDesktopVimRuntime,
 } from "../desktop/vim/runtimeLoader";
-import { desktopVimMountPolicy } from "./desktopVimMountPolicy";
+import {
+  type DesktopVimRuntimeState,
+  desktopVimMountPolicy,
+  shouldPreloadDesktopVim,
+} from "./desktopVimMountPolicy";
 
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
 
@@ -32,27 +36,20 @@ export const PlatformComposerEditor = forwardRef<
   ref,
 ): React.JSX.Element {
   const surface = useSurfaceProfile();
-  const wantsDesktopVim = surface.kind === "desktop" && vim;
-  const [runtimeState, setRuntimeState] = useState<
-    "idle" | "loading" | "ready" | "failed"
-  >(() => isDesktopVimRuntimeLoaded() ? "ready" : "idle");
+  const [runtimeState, setRuntimeState] = useState<DesktopVimRuntimeState>(
+    () => isDesktopVimRuntimeLoaded() ? "ready" : "pending",
+  );
 
   useEffect(() => {
-    if (
-      !wantsDesktopVim || runtimeState === "ready" ||
-      runtimeState === "loading" || runtimeState === "failed"
-    ) {
-      return undefined;
-    }
+    if (!shouldPreloadDesktopVim(surface.kind, vim, runtimeState)) return undefined;
     let alive = true;
-    setRuntimeState("loading");
     void preloadDesktopVimRuntime().then((loaded) => {
       if (alive) setRuntimeState(loaded ? "ready" : "failed");
     });
     return (): void => {
       alive = false;
     };
-  }, [runtimeState, wantsDesktopVim]);
+  }, [runtimeState, surface.kind, vim]);
 
   const policy = desktopVimMountPolicy(
     surface.kind,

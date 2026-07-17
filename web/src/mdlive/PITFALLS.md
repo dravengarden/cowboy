@@ -338,6 +338,13 @@ here says otherwise.
     that chunk. If loading fails, prefer an interactive non-Vim composer over a
     permanently disabled input.
 
+    The preload effect must also remain attached to its promise. Do not set an
+    intermediate `loading` state from an effect that depends on that same state:
+    the resulting render cleans up the effect, invalidates its completion
+    callback, and leaves the temporary editor permanently `contenteditable=false`.
+    A single `pending` state owns both the in-flight promise and the disabled
+    mount; only promise completion may transition it to `ready` or `failed`.
+
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns
     Mobile's overlay composer, bottom navigation, detent sheets, and progressive
