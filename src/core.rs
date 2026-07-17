@@ -1046,20 +1046,23 @@ impl StoreSink {
                 // bounded queue. Wait for capacity off the synchronous Hub path.
                 let tx = self.tx.clone();
                 let health = Arc::clone(&self.health);
-                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    runtime.spawn(async move {
+                match tokio::runtime::Handle::try_current() {
+                    Ok(runtime) => {
+                        runtime.spawn(async move {
                         if let Err(error) = tx.send(write).await {
                             health.consumed(1);
                             health.mark_rejected(&error.to_string());
                             tracing::error!(%error, "critical persistence intent was not accepted");
                         }
                     });
-                    true
-                } else {
-                    self.health.consumed(1);
-                    self.health
-                        .mark_rejected("persistence queue full outside Tokio runtime");
-                    false
+                        true
+                    }
+                    _ => {
+                        self.health.consumed(1);
+                        self.health
+                            .mark_rejected("persistence queue full outside Tokio runtime");
+                        false
+                    }
                 }
             }
             Err(error) => {

@@ -238,18 +238,21 @@ impl Broker {
     }
 
     fn route_worker(&self, session_id: &str, command: WorkerCommand) {
-        if let Some(tx) = self
+        match self
             .workers
             .lock()
             .get(session_id)
             .map(|worker| worker.tx.clone())
         {
-            let _ = tx.send(Frame::WorkerCommand {
-                session_id: session_id.to_owned(),
-                command,
-            });
-        } else {
-            self.queue_pending(session_id, command);
+            Some(tx) => {
+                let _ = tx.send(Frame::WorkerCommand {
+                    session_id: session_id.to_owned(),
+                    command,
+                });
+            }
+            _ => {
+                self.queue_pending(session_id, command);
+            }
         }
     }
 

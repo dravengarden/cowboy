@@ -36,6 +36,10 @@ lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
     cd web && deno task lint
 
+dependencies:
+    cargo deny check
+    cargo machete --with-metadata
+
 typecheck:
     cd web && deno task typecheck
 
@@ -43,7 +47,7 @@ test:
     cargo test --all-targets --all-features --locked
     cd web && deno task test
 
-check: fmt lint typecheck test
+check: fmt lint dependencies typecheck test
     cargo build --all-features --locked
 
 test-fast:

@@ -163,6 +163,8 @@
           rustfmt
           sccache
           cargo-nextest
+          cargo-deny
+          cargo-machete
           just
           nodejs_24
         ] ++ [ shared.deno ];
