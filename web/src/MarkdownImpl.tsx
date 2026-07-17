@@ -16,6 +16,7 @@ import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ImageLightbox } from "./_shell";
+import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   oneDark,
@@ -344,6 +345,11 @@ const MarkdownImpl = memo(function MarkdownImpl({
           href={href ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={(event): void => {
+            if (!href || !shouldRouteExternalClick(event)) return;
+            event.preventDefault();
+            openExternalUrl(href);
+          }}
           // On an inverted (user) bubble the text is white on the primary fill, so
           // the default theme link colour is near-invisible — a link (e.g. a bare
           // `git@github.com` that remark-gfm auto-linked) then reads as "lost". Make

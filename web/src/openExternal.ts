@@ -23,6 +23,18 @@ export function openExternalUrl(url: string): void {
   openInBrowser(resolved);
 }
 
+export function shouldRouteExternalClick(event: {
+  button: number;
+  defaultPrevented: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return event.button === 0 && !event.defaultPrevented && !event.altKey &&
+    !event.ctrlKey && !event.metaKey && !event.shiftKey;
+}
+
 const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 
 export function safeExternalUrl(url: string): string | null {
