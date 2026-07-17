@@ -10,17 +10,6 @@ export function shouldPreloadDesktopVim(
   return surfaceKind === "desktop" && vimRequested && runtimeState === "pending";
 }
 
-export function shouldRestoreDesktopComposerFocus(
-  surfaceKind: SurfaceKind,
-  vimRequested: boolean,
-  runtimeState: DesktopVimRuntimeState,
-  regionStillFocused: boolean,
-  focusIsUnownedOrTemporary: boolean,
-): boolean {
-  return surfaceKind === "desktop" && vimRequested && runtimeState === "ready" &&
-    regionStillFocused && focusIsUnownedOrTemporary;
-}
-
 export function desktopVimMountPolicy(
   surfaceKind: SurfaceKind,
   vimRequested: boolean,

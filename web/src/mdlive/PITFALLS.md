@@ -344,11 +344,11 @@ here says otherwise.
     callback, and leaves the temporary editor permanently `contenteditable=false`.
     A single `pending` state owns both the in-flight promise and the disabled
     mount; only promise completion may transition it to `ready` or `failed`.
-    The Desktop workspace may already designate `prompt.composer` while the
-    temporary editor owns no usable focus. When the real Vim editor mounts,
-    reconcile that state to the command sink only if focus is still on `BODY`,
-    the region itself, or its temporary editor. Recheck on every deferred attempt;
-    never steal focus after the user has moved to another region or control.
+    The Desktop workspace may designate `prompt.composer` before its lazy subtree
+    exists. `DesktopWorkspaceProvider` owns reconciling that state: observe only
+    until the selected region mounts, apply its focus markers, and focus it only
+    while `BODY` still owns focus. Disconnect immediately afterward; never make
+    an editor-local callback guess workspace state or steal a newer user focus.
 
 14. **A narrow Desktop window is not the Mobile product.** Do not derive
     composer mode from a viewport breakpoint. `surface === "touch"` alone owns

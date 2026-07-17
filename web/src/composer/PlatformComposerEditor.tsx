@@ -14,7 +14,6 @@ import {
   type DesktopVimRuntimeState,
   desktopVimMountPolicy,
   shouldPreloadDesktopVim,
-  shouldRestoreDesktopComposerFocus,
 } from "./desktopVimMountPolicy";
 
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
@@ -50,35 +49,6 @@ export const PlatformComposerEditor = forwardRef<
     return (): void => {
       alive = false;
     };
-  }, [runtimeState, surface.kind, vim]);
-
-  useEffect(() => {
-    if (runtimeState !== "ready") return undefined;
-    const restore = (): void => {
-      const region = document.querySelector<HTMLElement>(
-        "[data-desktop-region='prompt.composer'][data-desktop-focused='true']",
-      );
-      const active = document.activeElement;
-      const focusIsUnownedOrTemporary = active === document.body || active === region;
-      if (
-        !shouldRestoreDesktopComposerFocus(
-          surface.kind,
-          vim,
-          runtimeState,
-          region !== null,
-          focusIsUnownedOrTemporary,
-        )
-      ) return;
-      region?.querySelector<HTMLElement>("[data-vim-command-sink]")?.focus({
-        preventScroll: true,
-      });
-    };
-    // CM6 normally installs the sink before parent effects run. Repeat once on
-    // the next frame for browsers that commit the child ref/plugin a beat later;
-    // every attempt rechecks ownership so it cannot steal a newer user focus.
-    restore();
-    const frame = requestAnimationFrame(restore);
-    return (): void => cancelAnimationFrame(frame);
   }, [runtimeState, surface.kind, vim]);
 
   const policy = desktopVimMountPolicy(

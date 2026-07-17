@@ -175,20 +175,49 @@ export function DesktopWorkspaceProvider({
   }, []);
 
   useEffect(() => {
-    for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
-      if (element.dataset.desktopPane === focusedPane) {
-        element.dataset.desktopPaneFocused = "true";
-      } else {
-        delete element.dataset.desktopPaneFocused;
+    const syncMountedWorkspace = (): boolean => {
+      for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
+        if (element.dataset.desktopPane === focusedPane) {
+          element.dataset.desktopPaneFocused = "true";
+        } else {
+          delete element.dataset.desktopPaneFocused;
+        }
       }
-    }
-    for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
-      if (element.dataset.desktopRegion === focusedRegion) {
-        element.dataset.desktopFocused = "true";
-      } else {
-        delete element.dataset.desktopFocused;
+      let focusedElement: HTMLElement | null = null;
+      for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
+        if (element.dataset.desktopRegion === focusedRegion) {
+          element.dataset.desktopFocused = "true";
+          focusedElement = element;
+        } else {
+          delete element.dataset.desktopFocused;
+        }
       }
-    }
+      if (!focusedElement) return false;
+      if (
+        focusedElement.dataset.desktopRegion === "prompt.composer" &&
+        !focusedElement.querySelector(
+          "[data-vim-command-sink], .cm-content[contenteditable='true']",
+        )
+      ) {
+        // The region shell arrived before its real editor. Keep observing past
+        // the disabled preload mount; focusing the Paper here would strand the
+        // eventual Vim command sink without a block cursor.
+        return false;
+      }
+      // The provider's default state can predate the lazy Desktop subtree. Once
+      // that region appears, make DOM focus agree with the status line only if
+      // nobody else has claimed focus in the meantime.
+      if (document.activeElement === document.body) focusElement(focusedElement);
+      return true;
+    };
+
+    if (syncMountedWorkspace()) return undefined;
+    const root = document.getElementById("root") ?? document.body;
+    const observer = new MutationObserver(() => {
+      if (syncMountedWorkspace()) observer.disconnect();
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    return (): void => observer.disconnect();
   }, [focusedPane, focusedRegion]);
 
   const value = useMemo<DesktopWorkspaceContextValue>(() => ({

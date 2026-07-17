@@ -2,7 +2,6 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   desktopVimMountPolicy,
   shouldPreloadDesktopVim,
-  shouldRestoreDesktopComposerFocus,
 } from "./desktopVimMountPolicy";
 
 Deno.test("only a pending Desktop Vim runtime starts the preload promise", () => {
@@ -11,29 +10,6 @@ Deno.test("only a pending Desktop Vim runtime starts the preload promise", () =>
   assertEquals(shouldPreloadDesktopVim("desktop", true, "failed"), false);
   assertEquals(shouldPreloadDesktopVim("mobile", true, "pending"), false);
   assertEquals(shouldPreloadDesktopVim("desktop", false, "pending"), false);
-});
-
-Deno.test("ready Desktop Vim restores only an otherwise unowned focused composer", () => {
-  assertEquals(
-    shouldRestoreDesktopComposerFocus("desktop", true, "ready", true, true),
-    true,
-  );
-  assertEquals(
-    shouldRestoreDesktopComposerFocus("desktop", true, "pending", true, true),
-    false,
-  );
-  assertEquals(
-    shouldRestoreDesktopComposerFocus("desktop", true, "ready", false, true),
-    false,
-  );
-  assertEquals(
-    shouldRestoreDesktopComposerFocus("desktop", true, "ready", true, false),
-    false,
-  );
-  assertEquals(
-    shouldRestoreDesktopComposerFocus("mobile", true, "ready", true, true),
-    false,
-  );
 });
 
 Deno.test("Desktop Vim waits for its runtime before the interactive mount", () => {
