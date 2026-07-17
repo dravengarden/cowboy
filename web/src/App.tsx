@@ -97,6 +97,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { ConnectionBanner, DetentSheet, ThemeModeControl, useAnyDetentSheetOpen } from "./_shell";
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
+import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { SegmentedPill } from "./SegmentedPill";
@@ -814,7 +815,10 @@ function NewSessionDialog({
                         // Create). Field-level, NOT a global useConfirmEnter: this modal
                         // has Provider/Working-dir Selects, and a global capture handler
                         // would hijack the Enter that picks an open dropdown option.
-                        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        if (
+                            e.key === "Enter" && !e.shiftKey &&
+                            !isImeKeyEvent(e.nativeEvent)
+                        ) {
                             e.preventDefault();
                             create();
                         }

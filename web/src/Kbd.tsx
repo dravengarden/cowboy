@@ -2,6 +2,7 @@ import type React from "react";
 import { useEffect, useRef } from "react";
 import { ShortcutKeycap } from "./ShortcutKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { isImeKeyEvent } from "./imeKey";
 
 // A keyboard-shortcut keycap (Linear / Raycast style) shown after a modal
 // button's label. Desktop-ONLY: use the canonical product surface instead of a
@@ -41,7 +42,7 @@ export function useConfirmEnter(open: boolean, onConfirm: () => void): void {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== "Enter" || e.shiftKey || e.repeat || e.isComposing) return;
+      if (e.key !== "Enter" || e.shiftKey || e.repeat || isImeKeyEvent(e)) return;
       e.preventDefault();
       e.stopPropagation();
       ref.current();
