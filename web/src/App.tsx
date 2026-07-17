@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
     Alert,
     alpha,
@@ -877,6 +877,54 @@ function NewSessionDialog({
     );
 }
 
+const StoreTranscript = memo(function StoreTranscript({
+    sessionId,
+    status,
+    provider,
+    cwd,
+    topInset,
+    bottomInset,
+    onScrollableChange,
+    desktopNavigation,
+}: {
+    sessionId: string;
+    status: Status;
+    provider: string;
+    cwd: string;
+    topInset: string;
+    bottomInset: string;
+    onScrollableChange?: ((scrollable: boolean) => void) | undefined;
+    desktopNavigation: boolean;
+}): React.JSX.Element {
+    // Streaming changes only this boundary. Keeping the three high-frequency
+    // store slices out of App prevents every ACP chunk from re-running the
+    // navigation, sheets, composer shell and glass layout while preserving the
+    // Transcript's established render cadence and exact visual behaviour.
+    const timeline = useStoreSelector((snapshot) =>
+        snapshot.timelines.get(sessionId)
+    );
+    const hydrated = useStoreSelector((snapshot) =>
+        snapshot.hydrated.has(sessionId)
+    );
+    const connected = useStoreSelector((snapshot) => snapshot.connected);
+
+    return (
+        <Transcript
+            desktopNavigation={desktopNavigation}
+            sessionId={sessionId}
+            timeline={timeline ?? []}
+            status={status}
+            provider={provider}
+            cwd={cwd}
+            loading={!hydrated}
+            connected={connected}
+            topInset={topInset}
+            bottomInset={bottomInset}
+            onScrollableChange={onScrollableChange}
+        />
+    );
+});
+
 export function App({
     themeMode,
     onSetThemeMode,
@@ -889,7 +937,6 @@ export function App({
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
-    const connected = useStoreSelector((snapshot) => snapshot.connected);
     const settings = useStoreSelector((snapshot) => snapshot.settings);
     const autoResumeDefaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     // The error notice is monotonically `seq`-stamped so the same message
@@ -1077,14 +1124,6 @@ export function App({
     // Default to the first session once one exists.
     const active =
         sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
-    // Subscribe the shell only to the active session's slice. A new event in a
-    // background session must not re-render this 2,700-line application tree.
-    const activeTimeline = useStoreSelector((snapshot) =>
-        active ? snapshot.timelines.get(active.id) : undefined
-    );
-    const activeHydrated = useStoreSelector((snapshot) =>
-        active ? snapshot.hydrated.has(active.id) : false
-    );
     const previousActiveRef = useRef<string | null>(null);
     useEffect(() => {
         const previous = previousActiveRef.current;
@@ -1835,15 +1874,12 @@ export function App({
                                     /></Suspense>
                                 )}
                                 conversation={(
-                                    <Transcript
+                                    <StoreTranscript
                                         desktopNavigation
                                         sessionId={active.id}
-                                        timeline={activeTimeline ?? []}
                                         status={active.status}
                                         provider={active.provider}
                                         cwd={active.cwd}
-                                        loading={!activeHydrated}
-                                        connected={connected}
                                         topInset="0px"
                                         bottomInset="0px"
                                     />
@@ -1863,19 +1899,12 @@ export function App({
                         <Box
                             sx={{ position: "absolute", inset: 0, zIndex: 0, display: "flex", flexDirection: "column" }}
                         >
-                            <Transcript
+                            <StoreTranscript
                                 desktopNavigation={false}
                                 sessionId={active.id}
-                                timeline={activeTimeline ?? []}
                                 status={active.status}
                                 provider={active.provider}
                                 cwd={active.cwd}
-                                // Skeleton until this session's history snapshot
-                                // lands (vs an empty session, which is hydrated).
-                                loading={!activeHydrated}
-                                // While the WS is down the "working" spinner must not
-                                // keep spinning on a stale status (daemon restart).
-                                connected={connected}
                                 // Gate the composer slab's up-shadow on real
                                 // scroll-overflow (content under the glass).
                                 onScrollableChange={setTranscriptScrollable}
