@@ -356,6 +356,55 @@ export function stripImageTokens(text: string): string {
   return text.replace(IMG_TOKEN_RE, "").replace(/ {2,}/g, " ");
 }
 
+export type AttachmentDisplayPart =
+  | { type: "text"; text: string }
+  | { type: "attachment"; attachment: Attachment };
+
+/**
+ * Rebuild a local message's display order without turning image bytes into a
+ * Markdown URL. react-markdown intentionally rejects `data:` image URLs, which
+ * makes the browser paint only the image's alt text (for example `image.png`)
+ * while an optimistic send is offline. Render attachments directly from the
+ * message-owned data instead, so pending/failed/retry UI never depends on the
+ * composer registry or the network.
+ */
+export function attachmentDisplayParts(
+  text: string,
+  attachments: readonly Attachment[],
+): AttachmentDisplayPart[] {
+  const tokens = imageTokensInText(text);
+  if (tokens.length === 0) {
+    return [
+      ...attachments.map((attachment): AttachmentDisplayPart => ({
+        type: "attachment",
+        attachment,
+      })),
+      ...(text ? [{ type: "text" as const, text }] : []),
+    ];
+  }
+
+  const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]));
+  const seen = new Set<string>();
+  const parts: AttachmentDisplayPart[] = [];
+  let cursor = 0;
+  for (const token of tokens) {
+    const segment = text.slice(cursor, token.from);
+    if (segment) parts.push({ type: "text", text: segment });
+    const attachment = byId.get(token.id);
+    if (attachment) {
+      parts.push({ type: "attachment", attachment });
+      seen.add(attachment.id);
+    }
+    cursor = token.to;
+  }
+  const tail = text.slice(cursor);
+  if (tail) parts.push({ type: "text", text: tail });
+  for (const attachment of attachments) {
+    if (!seen.has(attachment.id)) parts.push({ type: "attachment", attachment });
+  }
+  return parts;
+}
+
 /// Drop only the inline-image tokens whose bytes aren't in `ids` — used when
 /// rehydrating a persisted draft, so a token left orphaned by a prior quota-drop
 /// of its attachment doesn't reload as a stray fallback chip ("的样式 bug").

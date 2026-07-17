@@ -19,7 +19,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
-import { type Attachment, IMG_TOKEN_RE } from "./attachments";
+import type { Attachment } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 
 const registry = new Map<string, Attachment>();
@@ -58,21 +58,6 @@ export function getInlineAttachment(id: string): Attachment | undefined {
 }
 export function forgetInlineAttachment(id: string): void {
   registry.delete(id);
-}
-
-/// Turn the composer's `![name](cowboy-att:id)` tokens into REAL markdown images
-/// (`![name](previewUrl)`) for any read-only display (transcript bubble, queue /
-/// draft previews) so MarkdownImpl renders the actual picture + lightbox instead
-/// of a broken `cowboy-att:` src. A token whose bytes aren't registered on this
-/// device (e.g. synced history after a reload) is dropped — clean text, no broken
-/// image. Use this anywhere a sent/queued/draft message's text is rendered.
-export function inlineTokensToMarkdown(text: string): string {
-  return text.replace(IMG_TOKEN_RE, (_full, id: string) => {
-    const att = registry.get(id);
-    return att?.previewUrl !== undefined && att.isImage
-      ? `![${att.name}](${att.previewUrl})`
-      : "";
-  });
 }
 
 class InlineImageWidget extends WidgetType {

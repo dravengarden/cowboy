@@ -44,7 +44,7 @@ import {
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
-import { inlineTokensToMarkdown } from "./inlineImages";
+import { attachmentDisplayParts } from "./attachments";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import {
   COMPACTING_NOTICE,
@@ -999,6 +999,7 @@ function OptimisticUserBubble({
   const failed = message.status === "failed";
   const sending = message.status === "sending";
   const cmid = message.cmid ?? "";
+  const content = attachmentDisplayParts(message.text, message.attachments);
   return (
     <Stack alignItems="flex-end" spacing={0.25} sx={{ alignSelf: "stretch", maxWidth: "100%" }}>
       <Paper
@@ -1017,7 +1018,25 @@ function OptimisticUserBubble({
           ...(failed && { borderColor: "error.main" }),
         }}
       >
-        <Markdown text={inlineTokensToMarkdown(message.text) || "📎 attachment"} invert />
+        {content.length === 0
+          ? <Markdown text="📎 attachment" invert />
+          : content.map((part, index) =>
+            part.type === "text"
+              ? <Markdown key={`text-${index}`} text={part.text} invert />
+              : part.attachment.isImage && part.attachment.previewUrl
+              ? (
+                <TranscriptImage
+                  key={`attachment-${index}-${part.attachment.id}`}
+                  src={part.attachment.previewUrl}
+                  alt={part.attachment.name}
+                />
+              )
+              : (
+                <Typography key={`attachment-${index}-${part.attachment.id}`} variant="body2">
+                  📎 {part.attachment.name}
+                </Typography>
+              )
+          )}
         {sending && (
           <Box
             aria-hidden

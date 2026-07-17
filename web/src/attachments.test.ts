@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  attachmentDisplayParts,
   type Attachment,
   reconcileDeletedInlineImages,
 } from "./attachments.ts";
@@ -32,4 +33,32 @@ Deno.test("an image attachment remains while any matching token remains", () => 
   const next = "![two](cowboy-att:inline)";
 
   assertEquals(reconcileDeletedInlineImages(previous, next, [inline]), [inline]);
+});
+
+Deno.test("local message display keeps image bytes at their inline position", () => {
+  const image = attachment("shot", true);
+  image.previewUrl = "data:image/png;base64,c2hvdA==";
+  const file = attachment("notes", false);
+
+  assertEquals(
+    attachmentDisplayParts(
+      "before\n![image.png](cowboy-att:shot)\nafter",
+      [image, file],
+    ),
+    [
+      { type: "text", text: "before\n" },
+      { type: "attachment", attachment: image },
+      { type: "text", text: "\nafter" },
+      { type: "attachment", attachment: file },
+    ],
+  );
+});
+
+Deno.test("local attachment-only messages render the attachment, not fallback text", () => {
+  const image = attachment("shot", true);
+  image.previewUrl = "data:image/png;base64,c2hvdA==";
+
+  assertEquals(attachmentDisplayParts("", [image]), [
+    { type: "attachment", attachment: image },
+  ]);
 });
