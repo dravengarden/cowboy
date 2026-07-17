@@ -1219,6 +1219,10 @@ pub async fn run(args: AgentdArgs) -> Result<()> {
 
 /// Adopt fd 3 when launched by a systemd `.socket` unit. Socket ownership then
 /// stays outside agentd, so connections queue while the broker binary rolls.
+#[allow(
+    unsafe_code,
+    reason = "systemd transfers ownership of the inherited socket descriptor"
+)]
 fn inherited_systemd_listener() -> Result<Option<UnixListener>> {
     let listen_pid = std::env::var("LISTEN_PID")
         .ok()

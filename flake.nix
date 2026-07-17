@@ -153,7 +153,7 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        # Rust toolchain + sccache compiler cache, plus the frontend toolchain
+        # Rust toolchain plus opt-in sccache, and the frontend toolchain
         # (the shared pinned deno 2.8.1 + node 24 for any node-shaped tool that
         # deno's npm interop can't shim).
         nativeBuildInputs = with pkgs; [
@@ -162,18 +162,13 @@
           clippy
           rustfmt
           sccache
+          cargo-nextest
           just
           nodejs_24
         ] ++ [ shared.deno ];
 
-        # All Rust builds in this project go through sccache (see design.md §10).
-        # CARGO_INCREMENTAL=0 because incremental compilation and sccache
-        # conflict; disabling it maximizes cache hits.
-        RUSTC_WRAPPER = "sccache";
-        CARGO_INCREMENTAL = "0";
-
         shellHook = ''
-          echo "cowboy dev shell — rust + sccache + deno"
+          echo "cowboy dev shell — rust + optional sccache + deno"
           sccache --version >/dev/null 2>&1 && echo "sccache: $(sccache --version)"
           deno --version 2>/dev/null | head -1
         '';

@@ -3,6 +3,7 @@ name = "cowboy"
 version = "0.1.0"
 edition = "2021"
 description = "Drive coding-agent CLIs from anywhere over ACP, with one shared live progress."
+rust-version = "1.95"
 
 [features]
 default = ["full"]
@@ -53,6 +54,18 @@ nucleo-matcher = "0.3"
 [dev-dependencies]
 syn = { version = "2", features = ["full"] }
 
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+
 [lints.clippy]
-all = "warn"
-pedantic = "warn"
+all = { level = "warn", priority = -1 }
+# Cowboy predates the machine-wide pedantic baseline. Keep the ordinary Clippy
+# gate strict while its existing pedantic debt is reduced separately.
+pedantic = { level = "allow", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.dev]
+debug = "line-tables-only"

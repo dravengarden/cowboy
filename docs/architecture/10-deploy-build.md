@@ -43,16 +43,16 @@ The `justfile` is the task surface (run inside `nix develop`):
 | Task | Does |
 |---|---|
 | `just install` | `deno install` → `web/node_modules` |
-| `just dev` | `cargo run -- serve` (foreground daemon) |
+| `just dev` | `cargo run --locked -- serve` (foreground daemon) |
 | `just dev-web` | Vite dev server with HMR, proxying `/ws` + `/healthz` to the daemon |
 | `just build-web` | build the SPA bundle |
-| `just build` | `build-web` then `cargo build --release` |
+| `just build` | `build-web` then `cargo build --release --locked` |
 | `just check` | `fmt` + `lint` (clippy `-D warnings` + deno lint) + `typecheck` |
 
-All Rust builds in the dev shell go through **sccache** (`RUSTC_WRAPPER`), with
-`CARGO_INCREMENTAL=0` because incremental compilation and sccache conflict —
-disabling it maximizes cache hits. The hermetic `nix build` uses Nix's own
-crane/cargo caching instead.
+Local Rust builds use Cargo incremental compilation. `just check-cached`
+explicitly disables incremental compilation and enables sccache for measured
+cross-target experiments. The hermetic `nix build` uses Nix's own Cargo
+dependency caching instead.
 
 ## CLI / daemon flags
 

@@ -11,7 +11,7 @@ install:
 
 # Run the daemon in the foreground (dev). Pair with `just dev-web` for HMR.
 dev *ARGS:
-    cargo run -- serve {{ARGS}}
+    cargo run --locked -- serve {{ARGS}}
 
 # Frontend dev server (Vite), proxying /ws + /healthz to a running daemon.
 dev-web:
@@ -23,7 +23,7 @@ build-web:
 
 # Build both release artifacts for local use.
 build: build-web
-    cargo build --release
+    cargo build --release --locked
 
 # Quality gates.
 fmt:
@@ -33,18 +33,25 @@ fmt-write:
     cargo fmt
 
 lint:
-    cargo clippy --all-targets -- -D warnings -A clippy::pedantic
+    cargo clippy --all-targets --all-features --locked -- -D warnings
     cd web && deno task lint
 
 typecheck:
     cd web && deno task typecheck
 
 test:
-    cargo test --all-targets
+    cargo test --all-targets --all-features --locked
     cd web && deno task test
 
 check: fmt lint typecheck test
-    cargo build
+    cargo build --all-features --locked
+
+test-fast:
+    cargo nextest run --all-features --locked
+
+# Opt in only for workloads that demonstrate useful cross-target cache reuse.
+check-cached:
+    RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo check --all-targets --all-features --locked
 
 # Show sccache cache stats.
 cache-stats:

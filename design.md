@@ -345,21 +345,14 @@ projects/cowboy/
 **frontend recipe** and the "single binary embeds UI / file-as-config / no
 service DB" *habits* are inherited.
 
-**Build cache — sccache.** All Rust builds use **sccache** as the compiler
-cache, wired in the **flake `devShell`** (dev-time `cargo build` iteration), not
-in the hermetic `nix build` (which is sandboxed and uses Nix's own
-crane/cargoHash caching — sccache there adds nothing and hurts hermeticity).
-In the devShell:
+**Build cache — Cargo by default, sccache by measurement.** Local builds keep
+Cargo incremental compilation enabled. A fresh-target `cargo check --all-targets`
+on 2026-07-17 took 17.26s with plain Cargo and 33.57s with sccache plus
+incremental disabled, so the dev shell does not force a compiler wrapper.
 
-- add `sccache` to `nativeBuildInputs`;
-- set `RUSTC_WRAPPER = "sccache"`;
-- set `CARGO_INCREMENTAL = "0"` — sccache and cargo incremental compilation
-  conflict; disabling incremental maximizes cache hits (sccache's documented
-  usage).
-
-Cache backend starts as **local disk** (`~/.cache/sccache`); a shared backend
-(S3 / redis) can be swapped in later for cross-machine/CI reuse without changing
-the wrapper config.
+The shell still provides sccache for explicit cross-target experiments through
+`just check-cached`. Keep it opt-in unless a representative repeated workload
+is faster. Hermetic `nix build` uses Nix's own dependency caching.
 
 ## 11. Build order (first vertical slice)
 
