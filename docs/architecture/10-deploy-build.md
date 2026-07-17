@@ -49,10 +49,10 @@ The `justfile` is the task surface (run inside `nix develop`):
 | `just build` | `build-web` then `cargo build --release --locked` |
 | `just check` | `fmt` + `lint` (clippy `-D warnings` + deno lint) + `typecheck` |
 
-Local Rust builds use Cargo incremental compilation. `just check-cached`
+Local Rust builds use Cargo incremental compilation. `just build-cached`
 explicitly disables incremental compilation and enables sccache for measured
-cross-target experiments. The hermetic `nix build` uses Nix's own Cargo
-dependency caching instead.
+clean-rebuild experiments at a stable target path. The hermetic `nix build`
+uses Nix's own Cargo dependency caching instead.
 
 ## CLI / daemon flags
 

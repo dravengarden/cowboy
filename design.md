@@ -350,9 +350,10 @@ Cargo incremental compilation enabled. A fresh-target `cargo check --all-targets
 on 2026-07-17 took 17.26s with plain Cargo and 33.57s with sccache plus
 incremental disabled, so the dev shell does not force a compiler wrapper.
 
-The shell still provides sccache for explicit cross-target experiments through
-`just check-cached`. Keep it opt-in unless a representative repeated workload
-is faster. Hermetic `nix build` uses Nix's own dependency caching.
+The shell still provides sccache for explicit clean-build experiments through
+`just build-cached`. Keep it opt-in unless a representative repeated workload
+at a stable target path is faster. Hermetic `nix build` uses Nix's own
+dependency caching.
 
 ## 11. Build order (first vertical slice)
 

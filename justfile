@@ -53,9 +53,9 @@ check: fmt lint dependencies typecheck test
 test-fast:
     cargo nextest run --all-features --locked
 
-# Opt in only for workloads that demonstrate useful cross-target cache reuse.
-check-cached:
-    RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo check --all-targets --all-features --locked
+# Opt in only for clean rebuilds that demonstrate useful cache reuse.
+build-cached:
+    RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --all-targets --all-features --locked
 
 # Show sccache cache stats.
 cache-stats:
