@@ -13,6 +13,7 @@ import { CheckCircle, Close, ExpandLess, ExpandMore, RadioButtonUnchecked } from
 import type { PlanEntry } from "./protocol";
 import { memo, type ReactNode } from "react";
 import { persisted, useStore } from "./_store/mod.ts";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
 // update), docked above the message queue so the task's progress stays in view
@@ -58,6 +59,7 @@ export const PlanDock = memo(function PlanDock({
   const toggle = (): void => {
     planExpanded.set(!expanded);
   };
+  const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggle);
 
   return (
     <Box
@@ -80,7 +82,7 @@ export const PlanDock = memo(function PlanDock({
           the text (usability over a font-relative row height). */}
       <Stack direction="row" alignItems="center">
         <ButtonBase
-          onClick={toggle}
+          {...toggleTap}
           aria-label={expanded ? "Collapse plan" : "Expand plan"}
           sx={{
             flex: 1,
@@ -91,6 +93,7 @@ export const PlanDock = memo(function PlanDock({
             py: 0.5,
             minHeight: 40,
             "@media (pointer: coarse)": { minHeight: 44 },
+            touchAction: "manipulation",
           }}
         >
           <Stack direction="row" alignItems="center" spacing={1} sx={{ width: "100%", minWidth: 0 }}>

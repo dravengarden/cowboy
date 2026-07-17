@@ -1,4 +1,14 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import {
+    forwardRef,
+    lazy,
+    memo,
+    Suspense,
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+} from "react";
+import type { ComponentPropsWithoutRef } from "react";
 import {
     Alert,
     alpha,
@@ -74,6 +84,7 @@ import {
     useStoreSelector,
 } from "./store";
 import { useSortable } from "./useSortable";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -331,6 +342,24 @@ function originColor(
     }
 }
 
+const ReliableListItemButton = forwardRef<
+    HTMLDivElement,
+    Omit<ComponentPropsWithoutRef<typeof ListItemButton>, "onClick"> & { onActivate: () => void }
+>(function ReliableListItemButton({ onActivate, sx, ...props }, ref) {
+    const tap = useReliableTouchTap<HTMLDivElement>(onActivate);
+    return (
+        <ListItemButton
+            {...props}
+            {...tap}
+            ref={ref}
+            sx={[
+                { touchAction: "manipulation" },
+                ...(Array.isArray(sx) ? sx : [sx]),
+            ]}
+        />
+    );
+});
+
 function SessionList({
     sessions,
     activeId,
@@ -439,14 +468,14 @@ function SessionList({
                     const s = byId.get(id);
                     if (!s) return null;
                     return (
-                    <ListItemButton
+                    <ReliableListItemButton
                         key={s.id}
                         data-desktop-item={s.id}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
-                        onClick={(): void => onPick(s.id)}
+                        onActivate={(): void => onPick(s.id)}
                         // Symmetric side gutters so the leading grip + trailing
                         // kebab circles never hug / get clipped by the screen edge
                         // (floored at 12px, but yielding to a larger safe-area
@@ -557,7 +586,7 @@ function SessionList({
                         >
                             <MoreVert sx={{ fontSize: 24 }} />
                         </IconButton>
-                    </ListItemButton>
+                    </ReliableListItemButton>
                     );
                 })}
                 {sessions.length === 0 && (
