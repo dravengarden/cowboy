@@ -705,9 +705,9 @@ function NewSessionDialog({
     const titleRef = useRef<HTMLInputElement>(null);
     // Session count, captured in a ref so its default name is computed at open
     // time WITHOUT a session arriving mid-edit clobbering what you're typing.
-    const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-    const sessionCountRef = useRef(sessions.length);
-    sessionCountRef.current = sessions.length;
+    const sessionCount = useStoreSelector((snapshot) => snapshot.sessions.length);
+    const sessionCountRef = useRef(sessionCount);
+    sessionCountRef.current = sessionCount;
     // On open: reset to a fresh "New session N" default (N keeps it distinct if
     // you open several without renaming), then focus + select it so you can type
     // a name straight away — or clear it to let the first message auto-name.

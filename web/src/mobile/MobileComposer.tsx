@@ -1,7 +1,8 @@
+import { memo } from "react";
 import { ComposerWorkspace } from "../Composer";
 import type { ComposerWorkspaceProps } from "../composer/contracts";
 
-export function MobileComposer({
+export const MobileComposer = memo(function MobileComposer({
   sessionId,
   status,
 }: Omit<ComposerWorkspaceProps, "variant">): React.JSX.Element {
@@ -13,4 +14,4 @@ export function MobileComposer({
       surface="mobile"
     />
   );
-}
+});

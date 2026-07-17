@@ -78,11 +78,7 @@ import {
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
-import {
-  latestAvailableCommands,
-  resolveSessionAction,
-  type SessionAction,
-} from "./agentCommands";
+import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
@@ -94,11 +90,14 @@ import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
 import {
-  isCompactingTail,
-  latestCompactionCompletionSeq,
-  latestPendingPermission,
-  latestPlan,
-} from "./derive";
+  composerTimelineSlice,
+  sameComposerTimelineSlice,
+} from "./composerTimelineSlice";
+import {
+  composerSessionSlice,
+  sameComposerSessionSlice,
+  sameComposerSheetSession,
+} from "./composerSessionSlice";
 import {
   setComposerExpanded,
   setComposerHeight,
@@ -192,6 +191,8 @@ const DesktopRegionShortcut = lazy(async () => {
   const module = await import("./desktop/DesktopRegionShortcut");
   return { default: module.DesktopRegionShortcut };
 });
+
+const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
 // Per-panel-kind collapse pref (app-level, per-device, never synced). One
 // persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
@@ -697,8 +698,14 @@ export function ComposerWorkspace({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const drafts = useStoreSelector((snapshot) => snapshot.drafts);
   const queues = useStoreSelector((snapshot) => snapshot.queues);
-  const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-  const timeline = useStoreSelector((snapshot) => snapshot.timelines.get(sessionId));
+  const sessionState = useStoreSelector(
+    (snapshot) => composerSessionSlice(snapshot.sessions, sessionId),
+    sameComposerSessionSlice,
+  );
+  const timelineState = useStoreSelector(
+    (snapshot) => composerTimelineSlice(snapshot.timelines.get(sessionId)),
+    sameComposerTimelineSlice,
+  );
   // `queues`/`drafts` already merge the server rows with this device's optimistic
   // (sending/failed) rows via the queue sync client (commitQueue) — server rows
   // first, optimistic rebased after, reconciled out the instant their cmid lands.
@@ -706,14 +713,11 @@ export function ComposerWorkspace({
   const draftList = drafts.get(sessionId) ?? [];
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
-  const plan = useMemo(() => latestPlan(timeline ?? []), [timeline]);
+  const plan = timelineState.plan;
   // The latest unresolved tool-permission request (cheap single pass). When set,
   // the sticky PermissionOverlay takes the floating slot INSTEAD of the
   // turn-status pill — the two share the slot + material but never show at once.
-  const pendingPermission = useMemo(
-    () => latestPendingPermission(timeline ?? []),
-    [timeline],
-  );
+  const pendingPermission = timelineState.pendingPermission;
   // Manual dismiss: keyed on the plan's step list so it stays gone as the agent
   // updates statuses, but a genuinely new plan (different steps) reappears.
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
@@ -732,7 +736,6 @@ export function ComposerWorkspace({
   // sheet (mobile's "session settings" popup). Desktop shows the same facts
   // in the always-visible sidebar, so the sheet — and this lookup — only
   // matters on the compact tier.
-  const session = sessions.find((s) => s.id === sessionId);
   const theme = useTheme();
   // Touch tier collapses the agent config into a single Tune button — tapping
   // it opens a BottomSheet with the session info + every config option in one
@@ -828,7 +831,7 @@ export function ComposerWorkspace({
   const [moveUndo, setMoveUndo] = useState<
     { id: string; toId: string; toTitle: string } | null
   >(null);
-  const otherSessions = sessions.filter((s) => s.id !== sessionId);
+  const otherSessions = sessionState.destinations;
   // When the navbar sits at the bottom it owns the home-indicator safe area and
   // renders BELOW the composer, so the composer must drop its own bottom inset
   // (otherwise a double gap opens above the bar).
@@ -845,13 +848,10 @@ export function ComposerWorkspace({
   // Claude Code's "Compacting..." notice (covers both a hand-fired /compact and
   // the agent's own auto-compaction). Drives the Compact button's disabled +
   // spinner state so a second /compact can't be fired mid-run.
-  const compacting = useMemo(
-    () => busy && isCompactingTail(timeline ?? []),
-    [busy, timeline],
-  );
+  const compacting = busy && timelineState.compactingTail;
   // Queue manually paused: keep the ⚡ force button usable so a message can still
   // be pushed PAST the held queue (run now) even while the agent is idle.
-  const paused = session?.paused ?? false;
+  const paused = sessionState.paused;
   // Interrupted is a dead/resumable state too (a turn cut off by a daemon
   // restart) — the composer treats it like exited/crashed: "send to resume".
   const dead = status === "exited" || status === "crashed" ||
@@ -875,10 +875,7 @@ export function ComposerWorkspace({
   // Popper pickers or caret/regex bookkeeping here. The editor reads the
   // agent-advertised `/` commands through a thunk; `@` files come from the
   // daemon's `/api/sessions/{id}/files` search.
-  const availableCommands = useMemo(
-    () => latestAvailableCommands(timeline ?? []),
-    [timeline],
-  );
+  const availableCommands = timelineState.availableCommands;
 
   // Session-lifecycle one-tap actions (Compact / Clear). Resolved per agent from
   // the agent's advertised command list + a provider default (see
@@ -887,7 +884,7 @@ export function ComposerWorkspace({
   // confirm dialog first (Clear drops history — not undoable); confirming sends
   // the slash-command down the SAME prompt path as a typed message, so it queues
   // if the agent is mid-turn, exactly like sending "/compact" by hand.
-  const provider = session?.provider ?? "";
+  const provider = sessionState.provider;
   const compactAction = useMemo(
     () => resolveSessionAction("compact", provider, availableCommands),
     [provider, availableCommands],
@@ -900,9 +897,9 @@ export function ComposerWorkspace({
   const compactContext = useCompactionContext({
     sessionId,
     status,
-    serverUsed: session?.context_used ?? 0,
-    serverSize: session?.context_size ?? 0,
-    completionSeq: latestCompactionCompletionSeq(timeline ?? []),
+    serverUsed: sessionState.contextUsed,
+    serverSize: sessionState.contextSize,
+    completionSeq: timelineState.completionSeq,
   });
   function runSessionAction(a: SessionAction): void {
     haptic();
@@ -1179,10 +1176,10 @@ export function ComposerWorkspace({
           sessionId={sessionId}
           status={status}
           working={turnWorking}
-          awaitingUser={session?.awaiting_user ?? false}
-          done={session?.done ?? false}
-          judging={session?.judging ?? false}
-          paused={session?.paused ?? false}
+          awaitingUser={sessionState.awaitingUser}
+          done={sessionState.done}
+          judging={sessionState.judging}
+          paused={sessionState.paused}
           queue={queue}
           onFocusComposer={(): void => editorRef.current?.focus()}
         />
@@ -2774,9 +2771,10 @@ function PendingPanel({
   // aren't advancing. The pause/resume CONTROL itself is session-level and lives
   // in the navbar (AutoScrollAndStop), reachable even with an empty queue; here we
   // only surface the status badge. Read live so it tracks the toggle.
-  const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-  const queueHeld = kind === "queued" &&
-    (sessions.find((s) => s.id === sessionId)?.paused ?? false);
+  const queueHeld = useStoreSelector((snapshot) =>
+    kind === "queued" &&
+    (snapshot.sessions.find((session) => session.id === sessionId)?.paused ?? false)
+  );
   // Reordering 0/1 items is meaningless — drop out of the mode (and hide its
   // toggle) so a cleared/sent-down panel never sits stuck in an empty mode.
   useEffect(() => {
@@ -3920,9 +3918,13 @@ export function SessionControls({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
-  const configOptions = useStoreSelector((snapshot) => snapshot.configOptions);
-  const sessions = useStoreSelector((snapshot) => snapshot.sessions);
-  const session = sessions.find((s) => s.id === sessionId);
+  const configOptions = useStoreSelector((snapshot) =>
+    snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
+  );
+  const session = useStoreSelector(
+    (snapshot) => snapshot.sessions.find((candidate) => candidate.id === sessionId),
+    sameComposerSheetSession,
+  );
   const touchInput = useTouchComposer();
   const [sheetOpen, setSheetOpen] = useState(false);
   const dead = status === "exited" || status === "crashed" ||
@@ -3930,9 +3932,8 @@ export function SessionControls({
   // Same fixed display order as the old inline chip row, so the sheet's selectors
   // never reshuffle between config_option_update notifications.
   const options = useMemo(() => {
-    const raw = configOptions.get(sessionId) ?? [];
     const order = ["mode", "model", "effort"];
-    return [...raw].sort((a, b) => {
+    return [...configOptions].sort((a, b) => {
       const ai = order.indexOf(a.id);
       const bi = order.indexOf(b.id);
       if (ai === -1 && bi === -1) return a.id.localeCompare(b.id);
@@ -3940,7 +3941,7 @@ export function SessionControls({
       if (bi === -1) return -1;
       return ai - bi;
     });
-  }, [configOptions, sessionId]);
+  }, [configOptions]);
   const showSkeleton = !dead && options.length === 0 &&
     (status === "starting" || status === "running");
   const hasConfig = showSkeleton || options.length > 0;

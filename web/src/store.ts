@@ -1701,14 +1701,20 @@ export function useStore(): State {
 
 /** Subscribe to one stable slice instead of re-rendering for every unrelated
  * store mutation. `getSnapshot` keeps the previous reference when the selected
- * value is `Object.is`-equal, as required by `useSyncExternalStore`. */
-export function useStoreSelector<T>(selector: (snapshot: State) => T): T {
+ * value passes the supplied equality check, as required by
+ * `useSyncExternalStore`; existing callers retain `Object.is` semantics. */
+export function useStoreSelector<T>(
+  selector: (snapshot: State) => T,
+  equal: (previous: T, next: T) => boolean = Object.is,
+): T {
   const selectorRef = useRef(selector);
   selectorRef.current = selector;
+  const equalRef = useRef(equal);
+  equalRef.current = equal;
   const cacheRef = useRef<{ value: T } | undefined>(undefined);
   const getSnapshot = useCallback((): T => {
     const next = selectorRef.current(state);
-    if (cacheRef.current && Object.is(cacheRef.current.value, next)) {
+    if (cacheRef.current && equalRef.current(cacheRef.current.value, next)) {
       return cacheRef.current.value;
     }
     cacheRef.current = { value: next };
