@@ -342,24 +342,22 @@ const CLAUDE_FRAME_MS = 200;
 // playful 黑话 bank (~3.5s) and a literal "…". Under `prefers-reduced-motion` the
 // glyph freezes on frame 0 ("·") and the verb shimmer collapses to a static
 // muted word (CC freezes the glyph the same way — `reducedMotion ? 0 : …`).
-// Desktop keeps the verb rotation; Touch freezes the whole decorative indicator
-// so a long turn does not keep the phone's rendering pipeline awake.
-function ClaudeThinking({ animate }: { animate: boolean }): React.JSX.Element {
+// Verb rotation is content, not motion, so it stays.
+function ClaudeThinking(): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
   // Claude Code's own terracotta — this indicator is Claude's branded "working"
   // personality (its star glyph + jargon verbs), so it keeps the brand colour.
   const accent = "#D97757";
-  const reducedMotion = !animate || globalThis.matchMedia?.(
+  const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
   const [vi, setVi] = useState(0);
   const [frame, setFrame] = useState(0);
   useEffect(() => {
-    if (!animate) return undefined;
     const id = globalThis.setInterval(() => setVi((v) => v + 1), 3500);
     return () => globalThis.clearInterval(id);
-  }, [animate]);
+  }, []);
   useEffect(() => {
     if (reducedMotion) return undefined;
     const id = globalThis.setInterval(
@@ -422,22 +420,21 @@ function ClaudeThinking({ animate }: { animate: boolean }): React.JSX.Element {
   );
 }
 
-function CodexThinking({ animate }: { animate: boolean }): React.JSX.Element {
+function CodexThinking(): React.JSX.Element {
   const theme = useTheme();
-  const reducedMotion = !animate || globalThis.matchMedia?.(
+  const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
   const [phraseIndex, setPhraseIndex] = useState(() =>
     Math.floor(Date.now() / CODEX_PHRASE_MS) % CLAUDE_VERBS.length
   );
   useEffect(() => {
-    if (!animate) return undefined;
     const id = globalThis.setInterval(
       () => setPhraseIndex((index) => index + 1),
       CODEX_PHRASE_MS,
     );
     return () => globalThis.clearInterval(id);
-  }, [animate]);
+  }, []);
   const phrase = CLAUDE_VERBS[
     phraseIndex % CLAUDE_VERBS.length
   ] ?? "Thinking";
@@ -502,13 +499,11 @@ function DefaultThinking(): React.JSX.Element {
 // Codex workcell, and a neutral Material fallback for providers without one.
 function ThinkingIndicator({
   provider,
-  animate,
 }: {
   provider: string;
-  animate: boolean;
 }): React.JSX.Element {
-  if (provider === "claude-code") return <ClaudeThinking animate={animate} />;
-  if (provider === "codex") return <CodexThinking animate={animate} />;
+  if (provider === "claude-code") return <ClaudeThinking />;
+  if (provider === "codex") return <CodexThinking />;
   return <DefaultThinking />;
 }
 
@@ -1697,7 +1692,7 @@ function itemProgressSignature(item: RenderItem | undefined, count: number): str
  *  since the last streamed activity. Refs are updated during render (derived from
  *  the prop) so there's no frame lag; a coarse 30s tick re-reads the clock. This
  *  is a human-facing minute counter, not precise timing, and never touches state. */
-function useQuietMinutes(signature: string, enabled: boolean): number {
+function useQuietMinutes(signature: string): number {
   const changedAt = useRef(Date.now());
   const prevSig = useRef(signature);
   const [, tick] = useState(0);
@@ -1706,13 +1701,10 @@ function useQuietMinutes(signature: string, enabled: boolean): number {
     changedAt.current = Date.now();
   }
   useEffect(() => {
-    if (!enabled) return undefined;
     const id = setInterval(() => tick((n) => n + 1), 30_000);
     return () => clearInterval(id);
-  }, [enabled]);
-  return enabled
-    ? Math.max(0, Math.floor((Date.now() - changedAt.current) / 60_000))
-    : 0;
+  }, []);
+  return Math.max(0, Math.floor((Date.now() - changedAt.current) / 60_000));
 }
 
 export function Transcript({
@@ -1806,7 +1798,7 @@ export function Transcript({
   // new item is appended — drives the caret idle-cap (Layer 5). Cheap: serializes
   // only the last item.
   const lastSig = itemProgressSignature(lastItem, items.length);
-  const quietMin = useQuietMinutes(lastSig, working);
+  const quietMin = useQuietMinutes(lastSig);
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
@@ -2367,16 +2359,6 @@ export function Transcript({
           // Hide focus ring; we keep tabIndex for keyboard scroll capture.
           outline: "none",
           overscrollBehavior: "contain",
-          // Mobile activity is already communicated by live text, status labels,
-          // colours and static glyphs. Infinite shimmer/pulse/spinner animations
-          // kept WebKit's layout, paint and GPU pipeline at 60fps for an entire
-          // turn, so the Touch transcript freezes decorative motion while
-          // Desktop retains its richer ambient feedback.
-          ...(!desktopNavigation && {
-            "& *, & *::before, & *::after": {
-              animation: "none !important",
-            },
-          }),
           // This is a scrolling FLEX column, not a height-constrained toolbar.
           // Flex items default to `flex-shrink: 1`; while a streamed message is
           // growing and the next tool card lands, WebKit can briefly keep the
@@ -2434,7 +2416,7 @@ export function Transcript({
             )}
             {showTrailingDots && (
               <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
-                <ThinkingIndicator provider={provider} animate={desktopNavigation} />
+                <ThinkingIndicator provider={provider} />
               </Box>
             )}
             {compacting && (

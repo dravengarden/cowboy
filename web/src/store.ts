@@ -216,31 +216,20 @@ function startLiveness(ws: WebSocket): void {
 }
 
 // Mobile suspends a backgrounded tab (freezing timers AND often killing the
-// socket without an `onclose`). Stop our own watchdog/reconnect wakeups while
-// hidden; the socket itself stays open so background turn notifications still
-// work when the OS permits them. On return, immediately repaint the latest
-// canonical state, validate the socket, and resume the watchdog.
+// socket without an `onclose`); on return the socket may be a zombie. Timers
+// were frozen, so the watchdog above hasn't run — repaint pending canonical
+// state immediately, then probe the socket and reconnect if it has gone stale.
+// Keep the liveness and reconnect policy unchanged while hidden so background
+// turn notifications retain their existing delivery behaviour.
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") {
-      stopLiveness();
-      if (reconnectTimer !== undefined) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = undefined;
-      }
-      return;
-    }
-
+    if (document.visibilityState !== "visible") return;
     if (notifyScheduled) flushNotify();
-    if (!socket) {
-      if (listeners.size > 0) connect();
-      return;
-    }
-    if (socket.readyState !== WebSocket.OPEN) return;
-    if (Date.now() - lastMessageAt > FOREGROUND_STALE_MS) {
+    if (
+      socket && socket.readyState === WebSocket.OPEN &&
+      Date.now() - lastMessageAt > FOREGROUND_STALE_MS
+    ) {
       socket.close();
-    } else {
-      startLiveness(socket);
     }
   });
 }
@@ -250,13 +239,11 @@ function emit(): void {
 }
 
 // WebSocket chunks can arrive much faster than the display can paint. State is
-// still reduced synchronously (no event is lost), but subscriber rendering is
-// capped by the active surface profile (Desktop up to 20fps; Touch up to 10fps,
-// lower while scrolling). A model transcript gains no useful fidelity from
-// competing with a native 60fps scroll gesture; the canonical state still
-// consumes every ACP event synchronously. In a background tab rAF may be
-// suspended, so observers receive a coarse 1fps flush instead of rendering at
-// the old foreground cadence. Foregrounding flushes immediately above.
+// still reduced synchronously (no event is lost), but visible subscriber
+// rendering keeps the established ~20fps cadence and ~10fps while scrolling.
+// In a hidden tab, observers receive a coarse 1fps flush instead of repeatedly
+// rendering an invisible tree; foregrounding flushes pending canonical state
+// immediately above. Alert delivery remains synchronous in `handle`.
 let notifyScheduled = false;
 let lastNotifyAt = 0;
 let notifyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -753,10 +740,8 @@ export function notify(message: string, severity: "error" | "warning" = "error")
 // computed off the consecutive-failure count). One pending attempt at a time.
 function scheduleReconnect(delay: number): void {
   if (reconnectTimer !== undefined) return;
-  if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
     connect();
   }, delay);
 }
