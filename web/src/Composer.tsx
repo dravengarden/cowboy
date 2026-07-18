@@ -334,29 +334,44 @@ export function CompactIcon(
       }}
     >
       <Box
-        aria-hidden
+        component="svg"
+        viewBox="0 0 26 26"
+        aria-hidden="true"
         sx={(theme) => ({
           position: "absolute",
           inset: 0,
-          border: "clamp(1px, 0.125rem, 2px) solid",
-          borderColor: alpha(theme.palette.text.secondary, 0.38),
-          borderRadius: "50%",
-          boxSizing: "border-box",
-        })}
-      />
-      <CircularProgress
-        variant="determinate"
-        value={pct}
-        size={COMPACT_GAUGE_SIZE}
-        thickness={3.2}
-        sx={{
+          width: "100%",
+          height: "100%",
           color,
-          position: "absolute",
-          top: 0,
-          left: 0,
-          "& .MuiCircularProgress-circle": { strokeLinecap: "round" },
-        }}
-      />
+          overflow: "visible",
+          "& .compact-gauge-track": {
+            stroke: alpha(theme.palette.text.secondary, 0.38),
+          },
+        })}
+      >
+        <circle
+          className="compact-gauge-track"
+          cx="13"
+          cy="13"
+          r="11"
+          fill="none"
+          strokeWidth="2"
+        />
+        {pct > 0 && (
+          <circle
+            cx="13"
+            cy="13"
+            r="11"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap={pct < 100 ? "round" : undefined}
+            pathLength="100"
+            strokeDasharray={pct < 100 ? `${pct} ${100 - pct}` : undefined}
+            transform="rotate(-90 13 13)"
+          />
+        )}
+      </Box>
       <CompactReading value={pct} />
     </Box>
   );
