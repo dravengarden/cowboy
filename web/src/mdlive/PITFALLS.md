@@ -318,6 +318,15 @@ here says otherwise.
     bypass every key while either the event or the shared IME lifecycle reports
     composition (including legacy keyCode 229), and discard armed focus chords.
 
+    An empty document needs one synchronous exception to the "plain `i` has no
+    deferred stabilization" rule. CM6 renders an empty `.cm-line` with placeholder
+    widgets plus a `<br>`, but focusing `contentDOM` can leave the browser Selection
+    on the content root. The editor is then correctly in Insert mode with native
+    caret color enabled, yet there is no paintable caret anchor. During the same
+    command-sink keydown, after Vim enters Insert, collapse Selection to offset 0
+    of that existing empty `.cm-line`. This is synchronous and precedes any later
+    native/IME key; do not turn it into a RAF or apply it to non-empty documents.
+
     macOS can emit a transient `blur`/`focusout` while its candidate window still
     owns marked text, before `compositionend`. Never clear the Desktop runtime's
     composing flag or normalize Vim on that blur: sending Escape in this window

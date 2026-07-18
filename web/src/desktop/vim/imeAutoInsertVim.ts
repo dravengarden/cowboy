@@ -247,6 +247,24 @@ export function createImeAutoInsertVim(): {
       this.view.contentDOM.focus({ preventScroll: true });
     }
 
+    /**
+     * An empty CM6 document is represented by a real `.cm-line` containing only
+     * the placeholder widgets and a `<br>`. Focusing contentDOM can leave the
+     * browser Selection on the content root instead of that line, which gives
+     * the native Insert caret no paintable anchor. Repair it synchronously in
+     * the Vim keydown handoff, before a following native/IME key can arrive.
+     */
+    private stabilizeEmptyNativeCaret(): void {
+      if (
+        this.view.state.doc.length !== 0 ||
+        document.activeElement !== this.view.contentDOM ||
+        composing || this.view.composing
+      ) return;
+      const line = this.view.contentDOM.querySelector<HTMLElement>(".cm-line");
+      if (!line) return;
+      window.getSelection()?.collapse(line, 0);
+    }
+
     private scheduleNativeCaretStabilization(): void {
       if (this.focusFrame !== null) cancelAnimationFrame(this.focusFrame);
       const epoch = nativeInputEpoch;
@@ -344,6 +362,7 @@ export function createImeAutoInsertVim(): {
       Vim.handleKey(this.cm, key, "user");
       const enteredInsert = !!this.cm.state?.vim?.insertMode;
       this.syncFocusToMode();
+      if (enteredInsert) this.stabilizeEmptyNativeCaret();
       if (enteredInsert && (STRUCTURAL_INSERT_KEYS.has(key) || wasVisual || changing)) {
         this.scheduleNativeCaretStabilization();
       }
