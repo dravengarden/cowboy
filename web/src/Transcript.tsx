@@ -7,19 +7,27 @@
 // state. Server history paging and live event coalescing bound the expensive
 // work without fighting native momentum scrolling.
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   Box,
   Button,
   Chip,
   CircularProgress,
   IconButton,
+  keyframes,
   Paper,
   Skeleton,
   Stack,
   Tooltip,
   Typography,
-  keyframes,
   useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -48,20 +56,20 @@ import { attachmentDisplayParts } from "./attachments";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import {
   COMPACTING_NOTICE,
+  type ContentChunk,
   derive,
+  isCompactingTail,
   isCompactionCommandText,
   isCompactionCompletionTail,
   isCompactionCompletionText,
-  isCompactingTail,
-  type ContentChunk,
   type RenderItem,
 } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
   discardMessage,
   loadOlder,
-  releaseFollowedHistory,
   type QueuedMessage,
+  releaseFollowedHistory,
   retryMessage,
   send,
   useStoreSelector,
@@ -81,6 +89,7 @@ import {
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import { ImageLightbox } from "./_shell";
+import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
@@ -157,10 +166,16 @@ function TranscriptSkeleton({
           />
           <Terminal aria-hidden sx={{ fontSize: 17, color: "primary.main" }} />
         </Box>
-        <Typography variant="body2" sx={{ color: "text.primary", fontWeight: 650 }}>
+        <Typography
+          variant="body2"
+          sx={{ color: "text.primary", fontWeight: 650 }}
+        >
           Restoring conversation
         </Typography>
-        <Typography variant="caption" sx={{ mt: 0.5, maxWidth: 280, lineHeight: 1.55 }}>
+        <Typography
+          variant="caption"
+          sx={{ mt: 0.5, maxWidth: 280, lineHeight: 1.55 }}
+        >
           Loading recent messages and {agent} context…
         </Typography>
         {stalled && (
@@ -191,25 +206,32 @@ function TranscriptSkeleton({
           spacing={0.7}
           sx={{ alignItems: turn.mine ? "flex-end" : "stretch", width: "100%" }}
         >
-          {turn.mine ? (
-            <Skeleton
-              variant="rounded"
-              animation="pulse"
-              width={turn.lines[0]}
-              height={34}
-              sx={{ maxWidth: "75%", borderRadius: 2.5 }}
-            />
-          ) : (
-            turn.lines.map((w, j) => (
-              <Skeleton key={j} variant="text" animation="pulse" width={w} height={20} />
-            ))
-          )}
+          {turn.mine
+            ? (
+              <Skeleton
+                variant="rounded"
+                animation="pulse"
+                width={turn.lines[0]}
+                height={34}
+                sx={{ maxWidth: "75%", borderRadius: 2.5 }}
+              />
+            )
+            : (
+              turn.lines.map((w, j) => (
+                <Skeleton
+                  key={j}
+                  variant="text"
+                  animation="pulse"
+                  width={w}
+                  height={20}
+                />
+              ))
+            )}
         </Stack>
       ))}
     </Stack>
   );
 }
-
 
 // Shown when a session has NO messages yet but IS live — a freshly created
 // session (`new_session` spawns the agent right away, so it's Running and idle,
@@ -217,7 +239,9 @@ function TranscriptSkeleton({
 // wrong and a blank wall reads as broken). Dormant / interrupted / crashed empty
 // sessions are NOT handled here — their SessionStatusBar already carries the
 // matching "send a message to wake/restart it" line, so this would just double it.
-function EmptyTranscript({ provider, cwd }: { provider: string; cwd: string }): React.JSX.Element {
+function EmptyTranscript(
+  { provider, cwd }: { provider: string; cwd: string },
+): React.JSX.Element {
   return (
     <Stack
       // m:auto centers the single child within the column-reverse scroll area.
@@ -233,11 +257,15 @@ function EmptyTranscript({ provider, cwd }: { provider: string; cwd: string }): 
       }}
     >
       <ChatBubbleOutline sx={{ fontSize: 38, opacity: 0.4 }} />
-      <Typography variant="body1" sx={{ fontWeight: 600, color: "text.primary" }}>
+      <Typography
+        variant="body1"
+        sx={{ fontWeight: 600, color: "text.primary" }}
+      >
         Send a message to start
       </Typography>
       <Typography variant="caption" sx={{ lineHeight: 1.55 }}>
-        The {provider} agent is ready and waiting — your first message kicks off the turn.
+        The {provider}{" "}
+        agent is ready and waiting — your first message kicks off the turn.
       </Typography>
       {cwd && (
         <Typography
@@ -310,18 +338,39 @@ function CodexWorkcell({ size = 16 }: { size?: number }): React.JSX.Element {
         overflow: "visible",
         color: "primary.main",
         "& .codex-workcell-prompt": {
-          animation: `${codexPrompt} ${String(CODEX_PHRASE_MS)}ms ease-in-out infinite`,
+          animation: `${codexPrompt} ${
+            String(CODEX_PHRASE_MS)
+          }ms ease-in-out infinite`,
         },
         "& .codex-workcell-caret": {
-          animation: `${codexCaret} ${String(CODEX_PHRASE_MS)}ms ease-in-out infinite`,
+          animation: `${codexCaret} ${
+            String(CODEX_PHRASE_MS)
+          }ms ease-in-out infinite`,
         },
         "@media (prefers-reduced-motion: reduce)": {
-          "& .codex-workcell-prompt, & .codex-workcell-caret": { animation: "none" },
+          "& .codex-workcell-prompt, & .codex-workcell-caret": {
+            animation: "none",
+          },
         },
       }}
     >
-      <path className="codex-workcell-prompt" d="M3.5 5.5 7 9l-3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-      <path className="codex-workcell-caret" d="M9.5 12.5h5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path
+        className="codex-workcell-prompt"
+        d="M3.5 5.5 7 9l-3.5 3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        className="codex-workcell-caret"
+        d="M9.5 12.5h5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
     </Box>
   );
 }
@@ -401,7 +450,8 @@ function ClaudeThinking(): React.JSX.Element {
         sx={{
           fontWeight: 500,
           letterSpacing: 0.2,
-          background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
+          background:
+            `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
           backgroundSize: "200% 100%",
           WebkitBackgroundClip: "text",
           backgroundClip: "text",
@@ -458,14 +508,17 @@ function CodexThinking(): React.JSX.Element {
         sx={{
           fontWeight: 550,
           letterSpacing: "0.015em",
-          background: `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${blue} 44%, ${mint} 56%, ${muted} 74%, ${muted} 100%)`,
+          background:
+            `linear-gradient(100deg, ${muted} 0%, ${muted} 24%, ${blue} 44%, ${mint} 56%, ${muted} 74%, ${muted} 100%)`,
           backgroundSize: "220% 100%",
           WebkitBackgroundClip: "text",
           backgroundClip: "text",
           color: "transparent",
           animation: reducedMotion
             ? "none"
-            : `${codexPhraseFade} ${String(CODEX_PHRASE_MS)}ms ease-in-out, ${shimmer} 3.2s linear infinite`,
+            : `${codexPhraseFade} ${
+              String(CODEX_PHRASE_MS)
+            }ms ease-in-out, ${shimmer} 3.2s linear infinite`,
           "@media (prefers-reduced-motion: reduce)": {
             animation: "none",
             background: "none",
@@ -555,14 +608,20 @@ function isCompactingMessage(chunks: ContentChunk[]): boolean {
 }
 
 function isCompactionCommand(chunks: ContentChunk[]): boolean {
-  if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) return false;
-  const command = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "").join("").trim();
+  if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) {
+    return false;
+  }
+  const command = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "")
+    .join("").trim();
   return isCompactionCommandText(command);
 }
 
 function isCompactionCompletion(chunks: ContentChunk[]): boolean {
-  if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) return false;
-  const text = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "").join("");
+  if (chunks.length === 0 || chunks.some((chunk) => chunk.type !== "text")) {
+    return false;
+  }
+  const text = chunks.map((chunk) => chunk.type === "text" ? chunk.text : "")
+    .join("");
   return isCompactionCompletionText(text);
 }
 
@@ -590,7 +649,9 @@ function CompactingWidget({
 }): React.JSX.Element {
   const theme = useTheme();
   const muted = theme.palette.text.secondary;
-  const accent = provider === "claude-code" ? "#D97757" : theme.palette.primary.main;
+  const accent = provider === "claude-code"
+    ? "#D97757"
+    : theme.palette.primary.main;
   const reducedMotion = globalThis.matchMedia?.(
     "(prefers-reduced-motion: reduce)",
   ).matches;
@@ -608,9 +669,7 @@ function CompactingWidget({
         border: desktop ? 1 : 0,
         borderColor: active ? alpha(accent, 0.35) : "divider",
         bgcolor: desktop
-          ? active
-            ? alpha(accent, 0.08)
-            : "action.hover"
+          ? active ? alpha(accent, 0.08) : "action.hover"
           : "transparent",
       }}
     >
@@ -621,42 +680,47 @@ function CompactingWidget({
           color: active ? accent : muted,
           ...(active &&
             !reducedMotion && {
-              animation: `${fold} 1.4s ease-in-out infinite`,
-            }),
+            animation: `${fold} 1.4s ease-in-out infinite`,
+          }),
         }}
       />
-      {active ? (
-        <Typography
-          variant="caption"
-          sx={{
-            fontWeight: 500,
-            letterSpacing: 0.2,
-            background: `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
-            backgroundSize: "200% 100%",
-            WebkitBackgroundClip: "text",
-            backgroundClip: "text",
-            color: "transparent",
-            animation: `${shimmer} 2.4s linear infinite`,
-            "@media (prefers-reduced-motion: reduce)": {
-              animation: "none",
-              background: "none",
-              color: muted,
-              WebkitTextFillColor: muted,
-            },
-          }}
-        >
-          Compacting context…
-        </Typography>
-      ) : (
-        <Typography variant="caption" sx={{ color: muted, fontWeight: 500 }}>
-          Context compacted
-        </Typography>
-      )}
+      {active
+        ? (
+          <Typography
+            variant="caption"
+            sx={{
+              fontWeight: 500,
+              letterSpacing: 0.2,
+              background:
+                `linear-gradient(90deg, ${muted} 0%, ${muted} 40%, ${accent} 50%, ${muted} 60%, ${muted} 100%)`,
+              backgroundSize: "200% 100%",
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              color: "transparent",
+              animation: `${shimmer} 2.4s linear infinite`,
+              "@media (prefers-reduced-motion: reduce)": {
+                animation: "none",
+                background: "none",
+                color: muted,
+                WebkitTextFillColor: muted,
+              },
+            }}
+          >
+            Compacting context…
+          </Typography>
+        )
+        : (
+          <Typography variant="caption" sx={{ color: muted, fontWeight: 500 }}>
+            Context compacted
+          </Typography>
+        )}
     </Stack>
   );
 }
 
-function toolColor(status: string): "default" | "success" | "error" | "warning" {
+function toolColor(
+  status: string,
+): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
   if (status === "failed") return "error";
   if (status === "in_progress") return "warning";
@@ -688,7 +752,9 @@ function toolIcon(kind: string): React.ReactElement {
 // (see attachments.ts), so it's light enough to inline here and sharp enough to
 // zoom. plate={false}: chat images are screenshots/photos, not white-bg figures
 // that need a frame.
-function TranscriptImage({ src, alt }: { src: string; alt: string }): React.JSX.Element {
+function TranscriptImage(
+  { src, alt }: { src: string; alt: string },
+): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const openTap = useReliableTouchTap<HTMLImageElement>(() => setOpen(true));
   return (
@@ -746,13 +812,19 @@ function ThoughtSteps({
 }): React.JSX.Element {
   const visible = sections.filter((section) => section.trim() !== "");
   return (
-    <Stack spacing={0} sx={{ flex: 1, minWidth: 0 }} aria-label="Thinking steps">
-      {/* ACP starts a fresh thought item whenever reasoning resumes after a
+    <Stack
+      spacing={0}
+      sx={{ flex: 1, minWidth: 0 }}
+      aria-label="Thinking steps"
+    >
+      {
+        /* ACP starts a fresh thought item whenever reasoning resumes after a
           tool call.  That boundary is useful to the renderer, but it is not a
           user-facing section: labelling every completed item "Reasoning"
           produces a wall of duplicate headings in tool-heavy turns.  Keep the
           status label only on the one live thought; completed thoughts already
-          have their lightbulb + meaningful step text. */}
+          have their lightbulb + meaningful step text. */
+      }
       {codex && streaming && (
         <Stack
           direction="row"
@@ -821,8 +893,12 @@ function ThoughtSteps({
                     display: "grid",
                     placeItems: "center",
                     color: current ? "primary.main" : "text.disabled",
-                    animation: current ? `${pulse} 1.5s ease-in-out infinite` : "none",
-                    "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                    animation: current
+                      ? `${pulse} 1.5s ease-in-out infinite`
+                      : "none",
+                    "@media (prefers-reduced-motion: reduce)": {
+                      animation: "none",
+                    },
                   }}
                 >
                   <LightbulbOutlined sx={{ fontSize: 14 }} />
@@ -839,8 +915,12 @@ function ThoughtSteps({
                     height: 5,
                     borderRadius: codex ? 1 : "50%",
                     bgcolor: current ? "primary.main" : "text.disabled",
-                    animation: current ? `${pulse} 1.4s ease-in-out infinite` : "none",
-                    "@media (prefers-reduced-motion: reduce)": { animation: "none" },
+                    animation: current
+                      ? `${pulse} 1.4s ease-in-out infinite`
+                      : "none",
+                    "@media (prefers-reduced-motion: reduce)": {
+                      animation: "none",
+                    },
                   }}
                 />
               )}
@@ -850,7 +930,9 @@ function ThoughtSteps({
                 sx={{
                   position: "absolute",
                   left: codex ? 9 : 4,
-                  top: codex ? (current ? "calc(0.43em + 15px)" : "calc(0.08em + 15px)") : "calc(0.62em + 6px)",
+                  top: codex
+                    ? (current ? "calc(0.43em + 15px)" : "calc(0.08em + 15px)")
+                    : "calc(0.62em + 6px)",
                   bottom: -2,
                   width: "1px",
                   bgcolor: "divider",
@@ -866,7 +948,9 @@ function ThoughtSteps({
                   backgroundImage: (theme) => {
                     const quiet = theme.palette.text.secondary;
                     const primary = theme.palette.primary.main;
-                    const accent = theme.palette.mode === "dark" ? "#62D6BC" : "#168B78";
+                    const accent = theme.palette.mode === "dark"
+                      ? "#62D6BC"
+                      : "#168B78";
                     return `linear-gradient(100deg, ${quiet} 0%, ${quiet} 34%, ${primary} 46%, ${accent} 54%, ${quiet} 66%, ${quiet} 100%)`;
                   },
                   backgroundSize: "240% 100%",
@@ -931,7 +1015,9 @@ function CollapsibleUserBody({
     // offsetHeight synchronously for every transcript row forced a style/layout
     // flush during startup, especially on slower Mobile devices.
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setOverflowing(entry.contentRect.height > COLLAPSED_BUBBLE_PX + 80);
+      if (entry) {
+        setOverflowing(entry.contentRect.height > COLLAPSED_BUBBLE_PX + 80);
+      }
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -945,7 +1031,12 @@ function CollapsibleUserBody({
   return (
     <>
       <Box sx={{ position: "relative" }}>
-        <Box sx={{ maxHeight: clamp ? COLLAPSED_BUBBLE_PX : "none", overflow: "hidden" }}>
+        <Box
+          sx={{
+            maxHeight: clamp ? COLLAPSED_BUBBLE_PX : "none",
+            overflow: "hidden",
+          }}
+        >
           <Box ref={ref}>{children}</Box>
         </Box>
         {overflowing && clamp && (
@@ -969,7 +1060,8 @@ function CollapsibleUserBody({
           <Button
             size="small"
             disableRipple
-            onClick={(): void => setExpanded((e) => !e)}
+            onClick={(): void =>
+              setExpanded((e) => !e)}
             endIcon={expanded ? <ExpandLess /> : <ExpandMore />}
             sx={{
               color: "primary.contrastText",
@@ -1010,7 +1102,11 @@ function OptimisticUserBubble({
   const cmid = message.cmid ?? "";
   const content = attachmentDisplayParts(message.text, message.attachments);
   return (
-    <Stack alignItems="flex-end" spacing={0.25} sx={{ alignSelf: "stretch", maxWidth: "100%" }}>
+    <Stack
+      alignItems="flex-end"
+      spacing={0.25}
+      sx={{ alignSelf: "stretch", maxWidth: "100%" }}
+    >
       <Paper
         variant="outlined"
         sx={{
@@ -1041,7 +1137,10 @@ function OptimisticUserBubble({
                 />
               )
               : (
-                <Typography key={`attachment-${index}-${part.attachment.id}`} variant="body2">
+                <Typography
+                  key={`attachment-${index}-${part.attachment.id}`}
+                  variant="body2"
+                >
                   📎 {part.attachment.name}
                 </Typography>
               )
@@ -1063,8 +1162,17 @@ function OptimisticUserBubble({
         )}
       </Paper>
       {sending && (
-        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ pr: 0.25 }}>
-          <CircularProgress size={11} thickness={5} sx={{ color: "text.secondary" }} />
+        <Stack
+          direction="row"
+          spacing={0.5}
+          alignItems="center"
+          sx={{ pr: 0.25 }}
+        >
+          <CircularProgress
+            size={11}
+            thickness={5}
+            sx={{ color: "text.secondary" }}
+          />
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
             Sending…
           </Typography>
@@ -1125,10 +1233,18 @@ function MessageBubble({
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
   // busy) means it's condensing right now; otherwise it's a finished record.
   if (!mine && isCompactingMessage(chunks)) {
-    return <CompactingWidget active={!!streaming} provider={provider} desktop={desktop} />;
+    return (
+      <CompactingWidget
+        active={!!streaming}
+        provider={provider}
+        desktop={desktop}
+      />
+    );
   }
   if (!mine && isCompactionCompletion(chunks)) {
-    return <CompactingWidget active={false} provider={provider} desktop={desktop} />;
+    return (
+      <CompactingWidget active={false} provider={provider} desktop={desktop} />
+    );
   }
   if (mine && isCompactionCommand(chunks)) {
     // The live-edge CompactingWidget is the one lifecycle surface on both
@@ -1162,7 +1278,11 @@ function MessageBubble({
           py: 0.5,
         }}
       >
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontWeight: 600 }}
+        >
           Auto-resumed the interrupted turn
         </Typography>
         <Box
@@ -1190,7 +1310,9 @@ function MessageBubble({
   // message" affordance.
   if (!mine) {
     return (
-      <Box sx={{ alignSelf: "stretch", maxWidth: "100%", color: "text.primary" }}>
+      <Box
+        sx={{ alignSelf: "stretch", maxWidth: "100%", color: "text.primary" }}
+      >
         {body}
       </Box>
     );
@@ -1207,7 +1329,9 @@ function MessageBubble({
         overflow: "hidden",
       }}
     >
-      <CollapsibleUserBody containsImage={chunks.some((chunk) => chunk.type === "image")}>
+      <CollapsibleUserBody
+        containsImage={chunks.some((chunk) => chunk.type === "image")}
+      >
         {body}
       </CollapsibleUserBody>
     </Paper>
@@ -1225,27 +1349,23 @@ function ToolCard({
   // Raw escape hatch: any card can flip to the verbatim input/output JSON,
   // regardless of how the friendly renderer formatted it.
   const [raw, setRaw] = useState(false);
-  // On expand, pull the card's TOP into view. In the column-reverse (bottom-
-  // anchored) transcript a growing card shifts its top UP — often behind the
-  // frosted AppBar — so the start of the output is hidden. `nearest` + the
-  // container's scrollPaddingTop reveals the top below the bar; it no-ops when the
-  // card is already fully visible (no yank). Double-rAF so it runs AFTER the resize
-  // settles and the transcript's own anchor logic has had its frame.
-  const cardRef = useRef<HTMLDivElement>(null);
+  // Let the modal shell paint and finish its 300ms entrance before mounting a
+  // potentially huge diff/highlighter tree. Otherwise React's first render can
+  // monopolise the main thread and the user's tap appears to do nothing.
+  const [detailReady, setDetailReady] = useState(false);
   useEffect(() => {
-    if (!open) return undefined;
-    let inner = 0;
-    const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => {
-        cardRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      });
-    });
-    return () => {
-      cancelAnimationFrame(outer);
-      cancelAnimationFrame(inner);
-    };
+    if (!open) {
+      setDetailReady(false);
+      return undefined;
+    }
+    const id = globalThis.setTimeout(() => setDetailReady(true), 320);
+    return () => globalThis.clearTimeout(id);
   }, [open]);
   const hasDetail = item.rawInput !== undefined || item.content !== undefined;
+  const openDetail = (): void => {
+    if (hasDetail) setOpen(true);
+  };
+  const openTap = useReliableTouchTap<HTMLDivElement>(openDetail);
   const running = item.status === "in_progress" || item.status === "pending";
   // The header shows only the first line of the title — a Bash title IS the whole
   // (possibly multi-line) command, which would otherwise blow up the row.
@@ -1254,143 +1374,220 @@ function ToolCard({
     toolName: item.toolName,
     kind: item.toolKind,
     title: item.title,
-    rawInput: item.rawInput && typeof item.rawInput === "object" && !Array.isArray(item.rawInput)
+    rawInput: item.rawInput && typeof item.rawInput === "object" &&
+        !Array.isArray(item.rawInput)
       ? (item.rawInput as Record<string, unknown>)
       : {},
     content: item.content,
     running,
   };
   return (
-    <Paper
-      ref={cardRef}
-      elevation={0}
-      sx={{
-        alignSelf: "stretch",
-        overflow: "hidden",
-        // Borderless: a filled `background.paper` surface (a touch lighter than
-        // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
-        // outlined border (theme `divider`) drew a faint violet line top+bottom
-        // on every collapsed card, and a tool-heavy transcript stacked them into
-        // a "ruled paper" look. The icon + status chip already mark it as a tool.
-        bgcolor: "background.paper",
-        borderRadius: 1,
-        // Subtle breathing while a tool is mid-flight; nothing while
-        // completed/failed (those are static states).
-        animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
-      }}
-    >
-      <Stack
-        {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
-        {...(desktop && hasDetail
-          ? {
-            "data-desktop-widget-toggle": "tool",
-            "aria-expanded": open,
-            tabIndex: -1,
-          }
-          : {})}
-        direction="row"
-        spacing={1}
-        alignItems="center"
+    <>
+      <Paper
+        elevation={0}
         sx={{
-          p: 1,
-          cursor: hasDetail ? "pointer" : "default",
-          "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
-          ...(desktop && hasDetail && {
-            outline: "none",
-            "&:focus-visible": {
-              bgcolor: "action.focus",
-              boxShadow: (theme) =>
-                `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
-            },
-          }),
-        }}
-        onClick={(): void => {
-          if (hasDetail) setOpen((o) => !o);
+          alignSelf: "stretch",
+          overflow: "hidden",
+          // Borderless: a filled `background.paper` surface (a touch lighter than
+          // the transcript bg) reads as a soft card WITHOUT a 1px outline. The
+          // outlined border (theme `divider`) drew a faint violet line top+bottom
+          // on every collapsed card, and a tool-heavy transcript stacked them into
+          // a "ruled paper" look. The icon + status chip already mark it as a tool.
+          bgcolor: "background.paper",
+          borderRadius: 1,
+          // Subtle breathing while a tool is mid-flight; nothing while
+          // completed/failed (those are static states).
+          animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,
         }}
       >
-        {toolIcon(item.toolKind)}
-        <Typography
-          variant="body2"
+        <Stack
+          {...(hasDetail
+            ? {
+              ...openTap,
+              role: "button",
+              tabIndex: desktop ? -1 : 0,
+              "aria-expanded": open,
+              "aria-haspopup": "dialog" as const,
+              onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openDetail();
+                }
+              },
+            }
+            : {})}
+          {...(hasDetail ? { "data-desktop-item-action": "default" } : {})}
+          {...(desktop && hasDetail
+            ? {
+              "data-desktop-widget-toggle": "tool",
+            }
+            : {})}
+          direction="row"
+          spacing={1}
+          alignItems="center"
           sx={{
-            flex: 1,
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            // Match the prose typography so a tool card reads as part of the same
-            // document, not as smaller UI chrome:
-            //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
-            //    does, instead of letting MUI Typography pin the theme font —
-            //    otherwise picking a serif/sans reading face restyles the messages
-            //    but the tool cards stay on the system font, which reads as
-            //    inconsistent. Shell commands (execute) stay monospace: they're
-            //    code, and a path full of slashes in a serif is worse, not better.
-            //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
-            //    the transcript's reading-size scale (the scroll container's
-            //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
-            //    the title visibly smaller than the prose and, worse, it didn't
-            //    grow when the reading size was bumped — same family but reading as
-            //    two different fonts.
-            fontSize: "inherit",
-            fontFamily:
-              item.toolKind === "execute"
-                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
-                : "var(--cowboy-reading-font, inherit)",
+            p: 1,
+            cursor: hasDetail ? "pointer" : "default",
+            "&:hover": hasDetail ? { bgcolor: "action.hover" } : undefined,
+            ...(desktop && hasDetail && {
+              outline: "none",
+              "&:focus-visible": {
+                bgcolor: "action.focus",
+                boxShadow: (theme) =>
+                  `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.78)}`,
+              },
+            }),
           }}
         >
-          {headerTitle}
-        </Typography>
-        <Chip size="small" color={toolColor(item.status)} label={item.status} variant="outlined" />
-        {hasDetail && (open ? <ExpandLess fontSize="medium" /> : <ExpandMore fontSize="medium" />)}
-      </Stack>
-      {open && hasDetail && (
-        <Box sx={{ borderTop: 1, borderColor: "divider", p: 1, bgcolor: "background.paper" }}>
-          {/* Formatted ⇄ Raw toggle (top-right) — friendly view by default, the
+          {toolIcon(item.toolKind)}
+          <Typography
+            variant="body2"
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              // Match the prose typography so a tool card reads as part of the same
+              // document, not as smaller UI chrome:
+              //  - FAMILY: follow the `--cowboy-reading-font` setting like the prose
+              //    does, instead of letting MUI Typography pin the theme font —
+              //    otherwise picking a serif/sans reading face restyles the messages
+              //    but the tool cards stay on the system font, which reads as
+              //    inconsistent. Shell commands (execute) stay monospace: they're
+              //    code, and a path full of slashes in a serif is worse, not better.
+              //  - SIZE: `inherit` (not body2's fixed 0.875rem) so the title tracks
+              //    the transcript's reading-size scale (the scroll container's
+              //    `${fontScale}em`) exactly like the markdown body. A fixed rem made
+              //    the title visibly smaller than the prose and, worse, it didn't
+              //    grow when the reading size was bumped — same family but reading as
+              //    two different fonts.
+              fontSize: "inherit",
+              fontFamily: item.toolKind === "execute"
+                ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                : "var(--cowboy-reading-font, inherit)",
+            }}
+          >
+            {headerTitle}
+          </Typography>
+          <Chip
+            size="small"
+            color={toolColor(item.status)}
+            label={item.status}
+            variant="outlined"
+          />
+          {hasDetail && (
+            <ExpandMore
+              fontSize="medium"
+              sx={{ transform: "rotate(-90deg)", color: "text.secondary" }}
+            />
+          )}
+        </Stack>
+      </Paper>
+      {hasDetail && createPortal(
+        <Sheet
+          open={open}
+          onClose={(): void => setOpen(false)}
+          title="Tool details"
+          wide
+          forceSheet={!desktop}
+          cover={!desktop}
+        >
+          <Stack spacing={1.25} sx={{ pb: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Box sx={{ pt: 0.25, color: "text.secondary" }}>
+                {toolIcon(item.toolKind)}
+              </Box>
+              <Typography
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflowWrap: "anywhere",
+                  fontFamily: item.toolKind === "execute"
+                    ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                    : "var(--cowboy-reading-font, inherit)",
+                }}
+              >
+                {item.title}
+              </Typography>
+              <Chip
+                size="small"
+                color={toolColor(item.status)}
+                label={item.status}
+                variant="outlined"
+                sx={{ flexShrink: 0 }}
+              />
+            </Stack>
+            <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
+              {
+                /* Formatted ⇄ Raw toggle (top-right) — friendly view by default, the
               verbatim JSON one tap away for when the structured render hides a
-              detail. */}
-          <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.5 }}>
-            <Box
-              role="button"
-              tabIndex={0}
-              onClick={(): void => setRaw((v) => !v)}
-              onKeyDown={(e): void => {
-                if (e.key === "Enter" || e.key === " ") setRaw((v) => !v);
-              }}
-              sx={{
-                cursor: "pointer",
-                fontSize: 11,
-                fontWeight: 600,
-                color: raw ? "primary.main" : "text.disabled",
-                fontFamily: "ui-monospace, monospace",
-                userSelect: "none",
-                px: 0.5,
-                "&:hover": { color: "primary.main" },
-              }}
-            >
-              {raw ? "↩ Formatted" : "{ } Raw"}
+              detail. */
+              }
+              <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.5 }}>
+                <Box
+                  role="button"
+                  tabIndex={0}
+                  onClick={(): void => setRaw((v) => !v)}
+                  onKeyDown={(e): void => {
+                    if (e.key === "Enter" || e.key === " ") setRaw((v) => !v);
+                  }}
+                  sx={{
+                    cursor: "pointer",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: raw ? "primary.main" : "text.disabled",
+                    fontFamily: "ui-monospace, monospace",
+                    userSelect: "none",
+                    px: 0.5,
+                    "&:hover": { color: "primary.main" },
+                  }}
+                >
+                  {raw ? "↩ Formatted" : "{ } Raw"}
+                </Box>
+              </Stack>
+              {!detailReady
+                ? (
+                  <Stack spacing={0.75} aria-label="Loading tool details">
+                    <Skeleton animation="wave" width="92%" />
+                    <Skeleton animation="wave" width="78%" />
+                    <Skeleton animation="wave" width="86%" />
+                  </Stack>
+                )
+                : raw
+                ? (
+                  <>
+                    {item.rawInput !== undefined && (
+                      <>
+                        <Typography variant="caption" color="text.secondary">
+                          Input
+                        </Typography>
+                        <Markdown
+                          text={"```json\n" +
+                            JSON.stringify(item.rawInput, null, 2) + "\n```"}
+                        />
+                      </>
+                    )}
+                    {item.content !== undefined && (
+                      <>
+                        <Typography variant="caption" color="text.secondary">
+                          Output
+                        </Typography>
+                        <Markdown
+                          text={"```json\n" +
+                            JSON.stringify(item.content, null, 2) + "\n```"}
+                        />
+                      </>
+                    )}
+                  </>
+                )
+                : <ToolBody ctx={ctx} />}
             </Box>
           </Stack>
-          {raw
-            ? (
-              <>
-                {item.rawInput !== undefined && (
-                  <>
-                    <Typography variant="caption" color="text.secondary">Input</Typography>
-                    <Markdown text={"```json\n" + JSON.stringify(item.rawInput, null, 2) + "\n```"} />
-                  </>
-                )}
-                {item.content !== undefined && (
-                  <>
-                    <Typography variant="caption" color="text.secondary">Output</Typography>
-                    <Markdown text={"```json\n" + JSON.stringify(item.content, null, 2) + "\n```"} />
-                  </>
-                )}
-              </>
-            )
-            : <ToolBody ctx={ctx} />}
-        </Box>
+        </Sheet>,
+        document.body,
       )}
-    </Paper>
+    </>
   );
 }
 
@@ -1501,16 +1698,17 @@ const ItemView = memo(function ItemView({
       const color = item.status === "crashed"
         ? "error.main"
         : interrupted
-          ? "warning.main"
-          : "text.secondary";
+        ? "warning.main"
+        : "text.secondary";
       return (
         <Stack direction="row" spacing={1} alignItems="center" sx={{ color }}>
-          {interrupted ? (
-            <WarningAmberRounded fontSize="medium" />
-          ) : (
-            <ErrorOutline fontSize="medium" />
-          )}
-          <Typography variant="caption" sx={{ fontWeight: interrupted ? 600 : 400 }}>
+          {interrupted
+            ? <WarningAmberRounded fontSize="medium" />
+            : <ErrorOutline fontSize="medium" />}
+          <Typography
+            variant="caption"
+            sx={{ fontWeight: interrupted ? 600 : 400 }}
+          >
             {item.status}
             {item.detail ? `: ${item.detail}` : ""}
           </Typography>
@@ -1529,9 +1727,17 @@ const ItemView = memo(function ItemView({
           sx={{ color: "text.disabled", alignSelf: "stretch", my: 0.5 }}
         >
           <Box sx={{ flex: 1, height: "1px", bgcolor: "divider" }} />
-          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            alignItems="center"
+            sx={{ flexShrink: 0 }}
+          >
             <CleaningServices sx={{ fontSize: "0.95rem" }} />
-            <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: 0.3 }}>
+            <Typography
+              variant="caption"
+              sx={{ fontWeight: 600, letterSpacing: 0.3 }}
+            >
               Conversation cleared
             </Typography>
           </Stack>
@@ -1571,7 +1777,8 @@ function SessionStatusBar({
   if (status === "interrupted") {
     tone = "warning";
     icon = <WarningAmberRounded fontSize="small" />;
-    text = "Last turn was interrupted before it finished — send a message to start a new one.";
+    text =
+      "Last turn was interrupted before it finished — send a message to start a new one.";
   } else if (status === "crashed") {
     tone = "error";
     icon = <ErrorOutline fontSize="small" />;
@@ -1590,12 +1797,11 @@ function SessionStatusBar({
       spacing={1}
       alignItems="center"
       sx={(theme) => {
-        const main =
-          tone === "error"
-            ? theme.palette.error.main
-            : tone === "warning"
-              ? theme.palette.warning.main
-              : theme.palette.text.disabled;
+        const main = tone === "error"
+          ? theme.palette.error.main
+          : tone === "warning"
+          ? theme.palette.warning.main
+          : theme.palette.text.disabled;
         return {
           flexShrink: 0,
           px: 1.5,
@@ -1643,7 +1849,10 @@ function pinTranscriptToLatest(el: HTMLElement): void {
 // never in the container's top padding / status-strip inset.
 function captureFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
   const r = el.getBoundingClientRect();
-  const hit = el.ownerDocument.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  const hit = el.ownerDocument.elementFromPoint(
+    r.left + r.width / 2,
+    r.top + r.height / 2,
+  );
   const row = hit?.closest<HTMLElement>("[data-key]");
   if (!row) {
     a.key = null;
@@ -1661,9 +1870,12 @@ function captureFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
 // a streamed token doesn't churn a scroll write every frame.
 function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
   if (a.key === null) return;
-  const row = el.querySelector<HTMLElement>(`[data-key="${CSS.escape(a.key)}"]`);
+  const row = el.querySelector<HTMLElement>(
+    `[data-key="${CSS.escape(a.key)}"]`,
+  );
   if (!row) return;
-  const delta = row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+  const delta = row.getBoundingClientRect().top -
+    el.getBoundingClientRect().top - a.top;
   if (Math.abs(delta) < 0.5) return;
   a.self = true;
   el.scrollTop += delta;
@@ -1679,19 +1891,28 @@ const QUIET_BADGE_MIN = 5;
 /** Activity signature without serializing tool payloads. A screenshot-bearing
  * tool result can be tens of megabytes; JSON.stringify here used to block the
  * main thread again on every unrelated Transcript render. */
-function itemProgressSignature(item: RenderItem | undefined, count: number): string {
+function itemProgressSignature(
+  item: RenderItem | undefined,
+  count: number,
+): string {
   if (!item) return "";
   switch (item.kind) {
     case "message":
-      return `${count}:${item.key}:m:${item.chunks.map((chunk) =>
-        chunk.type === "text" ? chunk.text.length : chunk.src.length
-      ).join(",")}`;
+      return `${count}:${item.key}:m:${
+        item.chunks.map((chunk) =>
+          chunk.type === "text" ? chunk.text.length : chunk.src.length
+        ).join(",")
+      }`;
     case "thought":
-      return `${count}:${item.key}:t:${item.sections.map((section) => section.length).join(",")}`;
+      return `${count}:${item.key}:t:${
+        item.sections.map((section) => section.length).join(",")
+      }`;
     case "tool":
       return `${count}:${item.key}:tool:${item.status}:${item.title}`;
     case "permission":
-      return `${count}:${item.key}:permission:${item.resolved}:${item.chosen ?? ""}`;
+      return `${count}:${item.key}:permission:${item.resolved}:${
+        item.chosen ?? ""
+      }`;
     case "lifecycle":
       return `${count}:${item.key}:lifecycle:${item.status}`;
     case "cleared":
@@ -1802,7 +2023,8 @@ export function Transcript({
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
   // already covered by SessionStatusBar's hint, so they fall through to a plain
   // empty area + that bar (no duplicate).
-  const isLive = status === "starting" || status === "running" || status === "busy";
+  const isLive = status === "starting" || status === "running" ||
+    status === "busy";
   const lastIdx = items.length - 1;
   const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
   // Signature that changes whenever the last item grows (more chunks / text) or a
@@ -1813,8 +2035,7 @@ export function Transcript({
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
-  const lastIsStreamingAssistant =
-    working &&
+  const lastIsStreamingAssistant = working &&
     !!lastItem &&
     ((lastItem.kind === "message" && lastItem.role === "assistant") ||
       lastItem.kind === "thought");
@@ -1824,7 +2045,8 @@ export function Transcript({
   // a caret-tipped streaming assistant bubble at the bottom (i.e. between
   // sending a prompt and the first chunk landing, or after a tool call
   // completes while waiting for the model to start text again).
-  const showTrailingDots = working && !lastIsStreamingAssistant && !compacting && !compactedAtTail;
+  const showTrailingDots = working && !lastIsStreamingAssistant &&
+    !compacting && !compactedAtTail;
   const parentRef = useRef<HTMLDivElement>(null);
   // Report scroll-overflow (content taller than the viewport) to the parent so
   // the composer slab can gate its up-shadow on real scrollable content. Kept in
@@ -1853,7 +2075,9 @@ export function Transcript({
   const nativeScrollActiveRef = useRef(false);
   // History pagination state for this session (from the store): drives the
   // "loading older…" indicator at the top + the reached-start cutoff.
-  const paging = useStoreSelector((snapshot) => snapshot.pagination.get(sessionId));
+  const paging = useStoreSelector((snapshot) =>
+    snapshot.pagination.get(sessionId)
+  );
   // A retained recent tail can arrive before enough older pages have filled a
   // tall phone viewport. Without an explicit state the latest reply sits above
   // the composer while the unused upper viewport looks like a broken blank
@@ -1898,12 +2122,19 @@ export function Transcript({
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [items.length, paging?.beforeSeq, paging?.loadingOlder, paging?.reachedStart, sessionId]);
+  }, [
+    items.length,
+    paging?.beforeSeq,
+    paging?.loadingOlder,
+    paging?.reachedStart,
+    sessionId,
+  ]);
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
   // user bubbles below the latest real item (newest at the very bottom), dropped
   // by cmid the moment the echo lands. Empty in the common (confirmed) case.
   const optimisticMsgs = useStoreSelector(
-    (snapshot) => snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
+    (snapshot) =>
+      snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
   );
   // "stick-to-bottom" UX, done properly this time:
   //
@@ -2016,8 +2247,10 @@ export function Transcript({
     // scrolls, then re-assert that offset on every content change — driven from
     // the per-chunk timeline layout effect below (the container's own RO doesn't
     // fire on content growth) plus this RO for container resizes (keyboard).
-    const captureAnchor = (): void => captureFreezeAnchor(el, freezeRef.current);
-    const restoreAnchor = (): void => restoreFreezeAnchor(el, freezeRef.current);
+    const captureAnchor = (): void =>
+      captureFreezeAnchor(el, freezeRef.current);
+    const restoreAnchor = (): void =>
+      restoreFreezeAnchor(el, freezeRef.current);
     const markNativeScrollActive = (): void => {
       cancelHistoryRelease();
       markTranscriptScrollActivity();
@@ -2129,7 +2362,8 @@ export function Transcript({
       requestStickToBottom(sessionIdRef.current);
     };
     const onDesktopNavigation = (rawEvent: Event): void => {
-      const action = (rawEvent as CustomEvent<{ action?: string }>).detail?.action;
+      const action = (rawEvent as CustomEvent<{ action?: string }>).detail
+        ?.action;
       const line = Math.max(
         32,
         Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24,
@@ -2144,7 +2378,10 @@ export function Transcript({
       else if (action === "page-down") scrollTowardLatest(page);
       else if (action === "oldest") {
         detach();
-        el.scrollTo({ top: awayDirection() * el.scrollHeight, behavior: "auto" });
+        el.scrollTo({
+          top: awayDirection() * el.scrollHeight,
+          behavior: "auto",
+        });
       } else if (action === "latest") followLatest();
       else if (action === "toggle-following") {
         if (stick.current) detach();
@@ -2207,7 +2444,10 @@ export function Transcript({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
+      el.removeEventListener(
+        "cowboy:desktop-transcript-nav",
+        onDesktopNavigation,
+      );
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
       if (nativeScrollSettleTimer !== undefined) {
@@ -2320,7 +2560,9 @@ export function Transcript({
     >
       <Box
         ref={parentRef}
-        data-desktop-transcript-scroller={desktopNavigation ? "true" : undefined}
+        data-desktop-transcript-scroller={desktopNavigation
+          ? "true"
+          : undefined}
         tabIndex={0}
         sx={{
           flex: 1,
@@ -2381,119 +2623,138 @@ export function Transcript({
           "& > *": { flex: "0 0 auto" },
         }}
       >
-        {loading && items.length === 0 ? (
-          <TranscriptSkeleton desktop={desktopNavigation} provider={provider} />
-        ) : items.length === 0 && isLive ? (
-          <EmptyTranscript provider={provider} cwd={cwd} />
-        ) : (
-          // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
-          // oldest-at-top / newest-at-bottom on screen. The trailing dots are
-          // DOM-first → the very bottom (below the newest item). Keyed by the
-          // item's STABLE key (first envelope seq) so prepending older history
-          // doesn't re-mount/jump rows.
-          <>
-            {/* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
+        {loading && items.length === 0
+          ? (
+            <TranscriptSkeleton
+              desktop={desktopNavigation}
+              provider={provider}
+            />
+          )
+          : items.length === 0 && isLive
+          ? <EmptyTranscript provider={provider} cwd={cwd} />
+          : (
+            // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
+            // oldest-at-top / newest-at-bottom on screen. The trailing dots are
+            // DOM-first → the very bottom (below the newest item). Keyed by the
+            // item's STABLE key (first envelope seq) so prepending older history
+            // doesn't re-mount/jump rows.
+            <>
+              {
+                /* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.
                 cowboy no longer auto-kills a silent turn (see acp.rs) — the human
-                decides, so the recovery action is a first-class control here. */}
-            {working && quietMin >= QUIET_BADGE_MIN && (
-              <Box
-                sx={{
-                  py: 0.5,
-                  display: "flex",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  gap: 1,
-                  flexWrap: "wrap",
-                }}
-              >
-                <Typography variant="caption" color="text.secondary">
-                  ⏱ 已等待 {quietMin} 分钟无响应
-                </Typography>
-                <Button
-                  size="small"
-                  variant="contained"
-                  color="error"
-                  startIcon={<Stop sx={{ fontSize: 16 }} />}
-                  onClick={(): void => {
-                    haptic(24); // medium — interrupting a turn is significant
-                    send({ type: "cancel", session_id: sessionId });
-                  }}
-                  sx={{ textTransform: "none", minHeight: 28, py: 0.25 }}
-                >
-                  中断
-                </Button>
-              </Box>
-            )}
-            {showTrailingDots && (
-              <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
-                <ThinkingIndicator provider={provider} />
-              </Box>
-            )}
-            {compacting && (
-              <Box sx={{ py: 0.625, display: "flex", flexDirection: "column" }}>
-                <CompactingWidget active provider={provider} desktop={desktopNavigation} />
-              </Box>
-            )}
-            {/* Optimistic chat bubbles: newest-first in the DOM (column-reverse →
-                they sit just above the latest real item / below the dots). */}
-            {optimisticMsgs
-              .slice()
-              .reverse()
-              .map((om) => (
+                decides, so the recovery action is a first-class control here. */
+              }
+              {working && quietMin >= QUIET_BADGE_MIN && (
                 <Box
-                  key={`opt-${om.cmid ?? om.id}`}
+                  sx={{
+                    py: 0.5,
+                    display: "flex",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    gap: 1,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary">
+                    ⏱ 已等待 {quietMin} 分钟无响应
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="error"
+                    startIcon={<Stop sx={{ fontSize: 16 }} />}
+                    onClick={(): void => {
+                      haptic(24); // medium — interrupting a turn is significant
+                      send({ type: "cancel", session_id: sessionId });
+                    }}
+                    sx={{ textTransform: "none", minHeight: 28, py: 0.25 }}
+                  >
+                    中断
+                  </Button>
+                </Box>
+              )}
+              {showTrailingDots && (
+                <Box
                   sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
                 >
-                  <OptimisticUserBubble sessionId={sessionId} message={om} />
+                  <ThinkingIndicator provider={provider} />
                 </Box>
-              ))}
-            {items
-              .map((item, i) => ({ item, i }))
-              .reverse()
-              .map(({ item, i }) => (
+              )}
+              {compacting && (
                 <Box
-                  key={item.key}
-                  data-key={item.key}
-                  {...(desktopNavigation
-                    ? {
-                      "data-desktop-item": item.key,
-                      tabIndex: -1,
-                    }
-                    : {})}
-                  sx={{
-                    py: 0.625,
-                    display: "flex",
-                    flexDirection: "column",
-                    // Give every timeline row an independent paint boundary.
-                    // WebKit can otherwise retain a previous composited tool
-                    // card for one frame while a streamed sibling thought is
-                    // inserted/reflowed, visibly drawing the two rows on top of
-                    // each other even though their layout boxes do not overlap.
-                    // This does not size-contain the row: intrinsic Markdown and
-                    // tool height still contribute normally to scrollHeight.
-                    contain: "layout paint",
-                    // Do not use content-visibility here. iOS WebKit can retain the
-                    // intrinsic height but skip painting a row when it is inside a
-                    // column-reverse scroller, leaving a large blank hole until the
-                    // user scrolls. Correct transcript rendering is more important
-                    // than avoiding paint for off-screen Markdown rows.
-                  }}
+                  sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
                 >
+                  <CompactingWidget
+                    active
+                    provider={provider}
+                    desktop={desktopNavigation}
+                  />
+                </Box>
+              )}
+              {
+                /* Optimistic chat bubbles: newest-first in the DOM (column-reverse →
+                they sit just above the latest real item / below the dots). */
+              }
+              {optimisticMsgs
+                .slice()
+                .reverse()
+                .map((om) => (
+                  <Box
+                    key={`opt-${om.cmid ?? om.id}`}
+                    sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
+                  >
+                    <OptimisticUserBubble sessionId={sessionId} message={om} />
+                  </Box>
+                ))}
+              {items
+                .map((item, i) => ({ item, i }))
+                .reverse()
+                .map(({ item, i }) => (
+                  <Box
+                    key={item.key}
+                    data-key={item.key}
+                    {...(desktopNavigation
+                      ? {
+                        "data-desktop-item": item.key,
+                        tabIndex: -1,
+                      }
+                      : {})}
+                    sx={{
+                      py: 0.625,
+                      display: "flex",
+                      flexDirection: "column",
+                      // Give every timeline row an independent paint boundary.
+                      // WebKit can otherwise retain a previous composited tool
+                      // card for one frame while a streamed sibling thought is
+                      // inserted/reflowed, visibly drawing the two rows on top of
+                      // each other even though their layout boxes do not overlap.
+                      // This does not size-contain the row: intrinsic Markdown and
+                      // tool height still contribute normally to scrollHeight.
+                      contain: "layout paint",
+                      // Do not use content-visibility here. iOS WebKit can retain the
+                      // intrinsic height but skip painting a row when it is inside a
+                      // column-reverse scroller, leaving a large blank hole until the
+                      // user scrolls. Correct transcript rendering is more important
+                      // than avoiding paint for off-screen Markdown rows.
+                    }}
+                  >
                     <ItemView
                       item={item}
                       streaming={working && i === lastIdx}
                       provider={provider}
                       desktop={desktopNavigation}
                     />
-                </Box>
-              ))}
-          </>
-        )}
+                  </Box>
+                ))}
+            </>
+          )}
       </Box>
-      {/* "Loading older history" — an ABSOLUTE overlay at the top (not in the
+      {
+        /* "Loading older history" — an ABSOLUTE overlay at the top (not in the
           scroll flow) so it gives feedback without adding height that would
-          shift the viewport. Rarely seen thanks to the 2-screen prefetch. */}
+          shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
+      }
       {paging?.loadingOlder && (
         <Box
           sx={{
@@ -2505,7 +2766,11 @@ export function Transcript({
             display: "flex",
           }}
         >
-          <CircularProgress size={16} thickness={5} sx={{ color: "text.disabled" }} />
+          <CircularProgress
+            size={16}
+            thickness={5}
+            sx={{ color: "text.disabled" }}
+          />
         </Box>
       )}
       {!desktopNavigation && showBackfillStatus && items.length > 0 && (
@@ -2534,25 +2799,35 @@ export function Transcript({
               bgcolor: (theme) => alpha(theme.palette.background.paper, 0.84),
               border: 1,
               borderColor: "divider",
-              boxShadow: (theme) => `0 8px 24px ${alpha(theme.palette.common.black, 0.08)}`,
+              boxShadow: (theme) =>
+                `0 8px 24px ${alpha(theme.palette.common.black, 0.08)}`,
               backdropFilter: "blur(10px)",
               WebkitBackdropFilter: "blur(10px)",
             }}
           >
-            <CircularProgress size={14} thickness={4} color="inherit" aria-hidden />
+            <CircularProgress
+              size={14}
+              thickness={4}
+              color="inherit"
+              aria-hidden
+            />
             <Typography variant="caption" sx={{ fontWeight: 550 }}>
               Restoring earlier context…
             </Typography>
           </Stack>
         </Box>
       )}
-      {/* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
+      {
+        /* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
           In-flow (flexShrink:0) so it sits below the scroll area, above the
-          composer — never covering the last message. */}
+          composer — never covering the last message. */
+      }
       <SessionStatusBar status={status} />
-      {/* The scroll-to-latest affordance is the persistent sticky/auto-scroll
+      {
+        /* The scroll-to-latest affordance is the persistent sticky/auto-scroll
           toggle in the composer (stickyStore + Composer), not a pill here. A
-          pending permission is surfaced by the PermissionOverlay in the composer. */}
+          pending permission is surfaced by the PermissionOverlay in the composer. */
+      }
     </Box>
   );
 }
