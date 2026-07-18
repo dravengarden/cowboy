@@ -276,7 +276,7 @@ function CompactReading({ value, muted = false }: { value: number; muted?: boole
 // A thin ring has less visual mass than a filled toolbar glyph, so give it a
 // small optical-size correction while keeping it rem-based. It still follows
 // the same global font/icon scaling as its neighbours.
-const COMPACT_GAUGE_SIZE = "1.75rem";
+const COMPACT_GAUGE_SIZE = "min(1.75rem, 32px)";
 
 // Context-window fullness (agent-reported over ACP `usage_update`, used/size
 // tokens) drawn as a Zed-style ring around an integer 0–100 reading — so ONE
@@ -302,6 +302,7 @@ export function CompactIcon(
           position: "relative",
           width: COMPACT_GAUGE_SIZE,
           height: COMPACT_GAUGE_SIZE,
+          flexShrink: 0,
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
@@ -326,6 +327,7 @@ export function CompactIcon(
         position: "relative",
         width: COMPACT_GAUGE_SIZE,
         height: COMPACT_GAUGE_SIZE,
+        flexShrink: 0,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
@@ -336,7 +338,7 @@ export function CompactIcon(
         sx={(theme) => ({
           position: "absolute",
           inset: 0,
-          border: "2px solid",
+          border: "clamp(1px, 0.125rem, 2px) solid",
           borderColor: alpha(theme.palette.text.secondary, 0.38),
           borderRadius: "50%",
           boxSizing: "border-box",
@@ -1863,7 +1865,7 @@ export function ComposerWorkspace({
               <IconButton
                 aria-label="compact conversation"
                 disabled={dead || compacting}
-                sx={TOOLBAR_ICON_BTN}
+                sx={{ ...TOOLBAR_ICON_BTN, p: 0.75 }}
                 onClick={(): void => setCmdConfirm(compactAction)}
               >
                 <CompactIcon
