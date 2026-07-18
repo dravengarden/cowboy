@@ -209,6 +209,33 @@ function toolNameOf(update: AcpUpdate): string {
   return "";
 }
 
+// Codex MCP read calls may expose their useful payload through the generic
+// `locations` + `rawOutput.formatted_output` fields instead of ACP's optional
+// `rawInput` + `content` pair. Normalize both shapes once so the transcript can
+// always offer the same details surface.
+function toolInputOf(update: AcpUpdate): unknown {
+  const explicit = update["rawInput"] ?? update["input"];
+  if (explicit !== undefined) return explicit;
+  const locations = update["locations"];
+  if (!Array.isArray(locations) || locations.length === 0) return undefined;
+  const first = locations[0];
+  if (first && typeof first === "object") {
+    const path = (first as { path?: unknown }).path;
+    if (typeof path === "string") return { path, locations };
+  }
+  return { locations };
+}
+
+function toolContentOf(update: AcpUpdate): unknown {
+  if (update["content"] !== undefined) return update["content"];
+  const rawOutput = update["rawOutput"];
+  if (!rawOutput || typeof rawOutput !== "object") return undefined;
+  const formatted = (rawOutput as { formatted_output?: unknown }).formatted_output;
+  return typeof formatted === "string"
+    ? [{ type: "raw_output", text: formatted }]
+    : undefined;
+}
+
 function pushChunk(item: { chunks: ContentChunk[] }, chunk: ContentChunk): void {
   const last = item.chunks[item.chunks.length - 1];
   if (last && last.type === "text" && chunk.type === "text") {
@@ -274,8 +301,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               toolKind: u.kind ?? "other",
               toolName: toolNameOf(u),
               status: u.status ?? "pending",
-              rawInput: u["rawInput"] ?? u["input"],
-              content: u["content"],
+              rawInput: toolInputOf(u),
+              content: toolContentOf(u),
             });
             toolIndex.set(id, items.length - 1);
             break;
@@ -288,8 +315,10 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               if (u.status) existing.status = u.status;
               if (u.title) existing.title = u.title;
               if (!existing.toolName) existing.toolName = toolNameOf(u);
-              if (u["rawInput"] !== undefined) existing.rawInput = u["rawInput"];
-              if (u["content"] !== undefined) existing.content = u["content"];
+              const input = toolInputOf(u);
+              const content = toolContentOf(u);
+              if (input !== undefined) existing.rawInput = input;
+              if (content !== undefined) existing.content = content;
             }
             break;
           }

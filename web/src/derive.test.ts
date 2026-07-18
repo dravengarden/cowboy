@@ -103,6 +103,32 @@ Deno.test("derive preserves unchanged row identities across timeline successors"
   if (second[2]?.kind !== "message") throw new Error("new row should still be derived");
 });
 
+Deno.test("derive exposes Codex read locations and formatted raw output", () => {
+  const items = derive([{
+    session_id: "s1",
+    seq: 7,
+    kind: "update",
+    update: {
+      sessionUpdate: "tool_call",
+      toolCallId: "read-1",
+      kind: "read",
+      title: "Read file '/tmp/example.txt'",
+      status: "completed",
+      locations: [{ path: "/tmp/example.txt" }],
+      rawOutput: { exit_code: 0, formatted_output: "example contents" },
+    },
+  }]);
+  const tool = items[0];
+  if (tool?.kind !== "tool") throw new Error("expected a tool row");
+  if ((tool.rawInput as { path?: string }).path !== "/tmp/example.txt") {
+    throw new Error("read location should become the renderer path");
+  }
+  const content = tool.content as { type?: string; text?: string }[];
+  if (content[0]?.type !== "raw_output" || content[0].text !== "example contents") {
+    throw new Error("formatted raw output should remain expandable");
+  }
+});
+
 Deno.test("derive turns empty Codex HTML separators into thought sections only", () => {
   const timeline: Envelope[] = [
     {

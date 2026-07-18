@@ -215,6 +215,11 @@ export function OutputBlocks({ content, lang }: { content: unknown; lang?: strin
       rendered.push(<DiffView key={i} oldText={d.oldText ?? ""} newText={d.newText ?? ""} />);
       return;
     }
+    if (b.type === "raw_output") {
+      const text = typeof b.text === "string" ? b.text : "";
+      if (text) rendered.push(<PreBlock key={i} text={text} maxHeight={420} />);
+      return;
+    }
     const text = b.type === "content" ? (b as TextBlock).content?.text ?? "" : (b as { text?: string }).text ?? "";
     if (text) {
       rendered.push(
