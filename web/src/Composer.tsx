@@ -273,6 +273,10 @@ function CompactReading({ value, muted = false }: { value: number; muted?: boole
   );
 }
 
+// Match the Composer toolbar's local MuiSvgIcon size. Keeping this rem-based
+// makes the gauge follow the same global font/icon scaling as its neighbours.
+const COMPACT_GAUGE_SIZE = "1.25rem";
+
 // Context-window fullness (agent-reported over ACP `usage_update`, used/size
 // tokens) drawn as a Zed-style ring around an integer 0–100 reading — so ONE
 // button both shows exactly how full the window is and compacts it. Colour still
@@ -288,22 +292,22 @@ export function CompactIcon(
     : 0;
   // Compaction running right now → an indeterminate terracotta (Claude accent,
   // matching the transcript's CompactingWidget) spinner around a dimmed reading, in
-  // the same 26px footprint so the toolbar doesn't shift. The button is disabled
+  // the same icon footprint so the toolbar doesn't shift. The button is disabled
   // in this state, so the ring reads as "working", not an affordance.
   if (active) {
     return (
       <Box
         sx={{
           position: "relative",
-          width: 26,
-          height: 26,
+          width: COMPACT_GAUGE_SIZE,
+          height: COMPACT_GAUGE_SIZE,
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
         }}
       >
         <CircularProgress
-          size={26}
+          size={COMPACT_GAUGE_SIZE}
           thickness={3}
           sx={{ color: "#D97757", position: "absolute", top: 0, left: 0 }}
         />
@@ -319,8 +323,8 @@ export function CompactIcon(
     <Box
       sx={{
         position: "relative",
-        width: 26,
-        height: 26,
+        width: COMPACT_GAUGE_SIZE,
+        height: COMPACT_GAUGE_SIZE,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
@@ -329,14 +333,14 @@ export function CompactIcon(
       <CircularProgress
         variant="determinate"
         value={100}
-        size={26}
+        size={COMPACT_GAUGE_SIZE}
         thickness={3}
         sx={{ color: "action.disabledBackground", position: "absolute", top: 0, left: 0 }}
       />
       <CircularProgress
         variant="determinate"
         value={pct}
-        size={26}
+        size={COMPACT_GAUGE_SIZE}
         thickness={3}
         sx={{ color, position: "absolute", top: 0, left: 0 }}
       />
