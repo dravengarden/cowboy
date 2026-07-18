@@ -185,6 +185,53 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
     }
 }
 
+// (2c) Native foreground lifecycle bridge. WKWebView may keep the document
+// `visible` while the app is backgrounded and resumed, emitting neither
+// visibilitychange nor pageshow. Tell the web app explicitly whenever UIKit says
+// the application became active so its service-worker coordinator can check for
+// a freshly deployed Cowboy bundle immediately.
+@interface CowboyLifecycleBridge : NSObject
+@end
+
+@implementation CowboyLifecycleBridge
+
++ (instancetype)shared {
+    static CowboyLifecycleBridge *inst;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ inst = [[CowboyLifecycleBridge alloc] init]; });
+    return inst;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(onDidBecomeActive:)
+                   name:UIApplicationDidBecomeActiveNotification
+                 object:nil];
+    }
+    return self;
+}
+
+- (void)onDidBecomeActive:(NSNotification *)note {
+    (void)note;
+    WKWebView *wv = gCowboyWebView;
+    if (wv == nil) return;
+    [wv evaluateJavaScript:
+            @"window.dispatchEvent(new Event('cowboy:native-resume'))"
+         completionHandler:nil];
+}
+
+@end
+
+__attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            (void)[CowboyLifecycleBridge shared];
+        }
+    });
+}
+
 // (3) Native keyboard avoidance — the Obsidian/Capacitor "resize: native" model.
 // On keyboard show, shrink the WKWebView's frame by the keyboard's overlap so the
 // web's LAYOUT viewport (and `vh`/`100%`) shrinks with it; restore on hide. This is
