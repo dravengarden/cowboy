@@ -336,14 +336,25 @@ export function CompactIcon(
         value={100}
         size={COMPACT_GAUGE_SIZE}
         thickness={3}
-        sx={{ color: "action.disabledBackground", position: "absolute", top: 0, left: 0 }}
+        sx={(theme) => ({
+          color: alpha(theme.palette.text.secondary, 0.24),
+          position: "absolute",
+          top: 0,
+          left: 0,
+        })}
       />
       <CircularProgress
         variant="determinate"
         value={pct}
         size={COMPACT_GAUGE_SIZE}
         thickness={3}
-        sx={{ color, position: "absolute", top: 0, left: 0 }}
+        sx={{
+          color,
+          position: "absolute",
+          top: 0,
+          left: 0,
+          "& .MuiCircularProgress-circle": { strokeLinecap: "round" },
+        }}
       />
       <CompactReading value={pct} />
     </Box>
