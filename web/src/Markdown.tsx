@@ -12,9 +12,12 @@ const MarkdownImpl = lazy(() => import("./MarkdownImpl"));
 export const Markdown = memo(function Markdown({
   text,
   invert = false,
+  centerCopy = false,
 }: {
   text: string;
   invert?: boolean;
+  /** Vertically center the copy control in compact single-line code cards. */
+  centerCopy?: boolean;
 }): React.JSX.Element {
   return (
     <Suspense
@@ -34,7 +37,7 @@ export const Markdown = memo(function Markdown({
         </Box>
       }
     >
-      <MarkdownImpl text={text} invert={invert} />
+      <MarkdownImpl text={text} invert={invert} centerCopy={centerCopy} />
     </Suspense>
   );
 });

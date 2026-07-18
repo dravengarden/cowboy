@@ -53,10 +53,20 @@ export function Labeled({ label, children }: { label: string; children: ReactNod
 }
 
 /** Highlighted source code (via Markdown's fenced highlighter), folded if long. */
-export function CodeView({ code, lang, maxHeight }: { code: string; lang?: string; maxHeight?: number }): React.JSX.Element {
+export function CodeView({
+  code,
+  lang,
+  maxHeight,
+  centerCopy = false,
+}: {
+  code: string;
+  lang?: string;
+  maxHeight?: number;
+  centerCopy?: boolean;
+}): React.JSX.Element {
   return (
     <Collapsible maxHeight={maxHeight ?? 280}>
-      <Markdown text={"```" + (lang ?? "") + "\n" + code + "\n```"} />
+      <Markdown text={"```" + (lang ?? "") + "\n" + code + "\n```"} centerCopy={centerCopy} />
     </Collapsible>
   );
 }

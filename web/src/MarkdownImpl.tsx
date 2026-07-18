@@ -114,11 +114,13 @@ function CodeBlock({
   lang,
   codeTheme,
   dark,
+  centerCopy,
 }: {
   code: string;
   lang: string;
   codeTheme: typeof oneDark;
   dark: boolean;
+  centerCopy: boolean;
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const onCopy = useCallback(() => {
@@ -166,8 +168,9 @@ function CodeBlock({
         size="small"
         sx={{
           position: "absolute",
-          top: 6,
+          top: centerCopy ? "50%" : 6,
           right: 6,
+          transform: centerCopy ? "translateY(-50%)" : "none",
           height: 32,
           minWidth: 32,
           // Explicit width to OVERRIDE the global MuiIconButton `width: 44` —
@@ -257,12 +260,14 @@ function makeHeading(
 const MarkdownImpl = memo(function MarkdownImpl({
   text,
   invert = false,
+  centerCopy = false,
 }: {
   /** Raw markdown source. */
   text: string;
   /** When true, render on a primary-colored bubble (the user's own
    *  messages). Switches code-block theme to light-on-dark inverse. */
   invert?: boolean;
+  centerCopy?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
   const dark = theme.palette.mode === "dark" || invert;
@@ -329,7 +334,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
         );
       }
       const lang = className?.replace("language-", "") ?? "";
-      return <CodeBlock code={text} lang={lang} codeTheme={codeTheme} dark={dark} />;
+      return <CodeBlock code={text} lang={lang} codeTheme={codeTheme} dark={dark} centerCopy={centerCopy} />;
     },
     // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
     // above already renders its own scrollable container (the highlighter's

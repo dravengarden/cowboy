@@ -69,7 +69,7 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
     <>
       {cmd && (
         <Labeled label="Command">
-          <CodeView code={cmd} lang="bash" maxHeight={180} />
+          <CodeView code={cmd} lang="bash" maxHeight={180} centerCopy />
         </Labeled>
       )}
       <Labeled label="Output">
