@@ -247,23 +247,24 @@ function fmtTokens(n: number): string {
 // proportionally if the toolbar icon size changes instead of relying on a
 // viewport/root-font-dependent CSS size.
 function CompactReading({ value, muted = false }: { value: number; muted?: boolean }): React.JSX.Element {
-  const fontSize = value < 10 ? 13 : value < 100 ? 12 : 10;
+  const fontSize = value < 10 ? 10.5 : value < 100 ? 9.5 : 8.25;
   return (
     <Box
       component="svg"
       viewBox="0 0 26 26"
       aria-hidden="true"
-      sx={{ width: "100%", height: "100%", color: muted ? "text.disabled" : "text.primary" }}
+      sx={{ width: "100%", height: "100%", color: muted ? "text.disabled" : "text.secondary" }}
     >
       <text
         x="13"
-        y="13"
+        y="13.25"
         textAnchor="middle"
         dominantBaseline="central"
         fill="currentColor"
-        fontFamily="inherit"
+        fontFamily="system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
         fontSize={fontSize}
-        fontWeight="700"
+        fontWeight="600"
+        letterSpacing={value === 100 ? -0.2 : 0}
         style={{ fontVariantNumeric: "tabular-nums" }}
       >
         {value}
