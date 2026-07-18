@@ -412,8 +412,11 @@ here says otherwise.
     children behavior so an inline queued/draft editor, attachment preview, and
     sortable registration are not recreated by every fold. Composer height is
     observed by the single persistent ResizeObserver in `App.tsx`; do not add a
-    panel-local observer or per-frame React state. Re-verify touch scrolling and
-    inline-editor focus after changing this animation.
+    panel-local observer or per-frame React state. The Collapse height layer uses
+    `will-change: height`, and its wrapper inner uses `contain: layout paint` so a
+    large attachment preview is laid out once instead of producing a long paint
+    stall during every reveal frame. Re-verify touch scrolling and inline-editor
+    focus after changing this animation.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

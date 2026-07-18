@@ -3090,7 +3090,16 @@ function PendingPanel({
       {/* Match PlanDock's disclosure motion. Collapse keeps the rows mounted, so
           draft/queue editor state survives, while the shared persistent composer
           ResizeObserver follows the animated height without remounting observers. */}
-      <Collapse in={!collapsed}>
+      <Collapse
+        in={!collapsed}
+        sx={{
+          willChange: "height",
+          // Large attachment previews otherwise re-enter layout + paint on
+          // every clipped-height frame. Isolate the already-laid-out list so
+          // the compositor can reveal it as smoothly as Plan's text-only list.
+          "& .MuiCollapse-wrapperInner": { contain: "layout paint" },
+        }}
+      >
         <Stack
           spacing={0.5}
           ref={scrollRef}
