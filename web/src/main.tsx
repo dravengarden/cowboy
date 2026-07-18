@@ -114,7 +114,8 @@ globalThis.addEventListener("keydown", (e: KeyboardEvent): void => {
 // a manual reload (the recurring "redeploy doesn't show up" trap). So: re-check
 // for a new SW whenever the app returns to the foreground (the SW's VERSION bumps
 // per web deploy → a new sw.js → install → skipWaiting → activate → claim), and
-// reload ONCE when that new worker takes control, picking up the fresh bundle.
+// surface the shared 3-second update countdown when that new worker takes
+// control; the banner owns the one cache-clearing reload into the fresh bundle.
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   // Only auto-reload on an UPDATE (a new worker replacing one already in control),
   // never on the first-install claim.
@@ -123,7 +124,15 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (reloading || !hadController) return;
     reloading = true;
-    globalThis.location.reload();
+    // App/store are already loaded by the time an update installs. Keep this a
+    // dynamic edge so main's initial shell stays lean, and route SW detection
+    // into the same visible countdown as /version detection. Never reload here:
+    // doing so made the countdown disappear entirely.
+    void import("./store").then(({ conn }) => conn.updateAvailable()).catch(() => {
+      // If the old module graph is already unavailable, a reload is the only
+      // recovery path. Normal updates always take the countdown route above.
+      globalThis.location.reload();
+    });
   });
   window.addEventListener("load", () => {
     void navigator.serviceWorker.register("/sw.js").then((reg) => {
