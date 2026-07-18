@@ -18,6 +18,7 @@ import {
   ButtonBase,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -3086,14 +3087,10 @@ function PendingPanel({
           }}
         />
       </Stack>
-      {/* Instant show/hide — NOT MUI <Collapse>: its 300ms height animation
-          re-fired the composer-height ResizeObserver (App.tsx measureGlass) and
-          reflowed every row's CodeMirror preview EACH frame; in sticky mode the
-          transcript then repainted its heavy newest content per frame — the
-          reported expand/collapse jank. `display:none` keeps the rows mounted
-          (no remount cost), costs no layout/paint while collapsed, and resizes
-          the composer ONCE, so the transcript inset recomputes once. */}
-      <Box sx={{ display: collapsed ? "none" : "block" }}>
+      {/* Match PlanDock's disclosure motion. Collapse keeps the rows mounted, so
+          draft/queue editor state survives, while the shared persistent composer
+          ResizeObserver follows the animated height without remounting observers. */}
+      <Collapse in={!collapsed}>
         <Stack
           spacing={0.5}
           ref={scrollRef}
@@ -3190,7 +3187,7 @@ function PendingPanel({
             );
           })}
         </Stack>
-      </Box>
+      </Collapse>
     </Box>
   );
 }

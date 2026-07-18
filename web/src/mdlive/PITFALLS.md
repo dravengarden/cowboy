@@ -407,6 +407,14 @@ here says otherwise.
     compose; match the physical `KeyP` there. Never enable physical bare-key
     matching on `.cm-content`, where it would steal real Insert-mode text.
 
+17. **Queue/Draft disclosure motion must preserve mounted editor state.** These
+    panels use the same MUI `Collapse` motion as Plan. Keep its default mounted
+    children behavior so an inline queued/draft editor, attachment preview, and
+    sortable registration are not recreated by every fold. Composer height is
+    observed by the single persistent ResizeObserver in `App.tsx`; do not add a
+    panel-local observer or per-frame React state. Re-verify touch scrolling and
+    inline-editor focus after changing this animation.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
