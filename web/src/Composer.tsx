@@ -2960,6 +2960,7 @@ function PendingPanel({
             controls, so tapping them never also folds the panel. */}
         <ButtonBase
           {...toggleTap}
+          disableRipple
           data-desktop-item-action="default"
           data-desktop-collapse-toggle={desktop ? kind : undefined}
           aria-label={`${collapsed ? "Expand" : "Collapse"} ${noun.toLowerCase()}s`}
@@ -2972,6 +2973,11 @@ function PendingPanel({
             textAlign: "left",
             pl: 0.5,
             touchAction: "manipulation",
+            // MUI's touch ripple can remain painted on iOS when this reliable
+            // pointerup activation changes the panel layout before Safari emits
+            // its follow-up click. Keep immediate press feedback without a
+            // stateful ripple that can get stranded after the panel expands.
+            "&:active": { bgcolor: "action.hover" },
           }}
         >
           <Box sx={{ width: 40, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>
