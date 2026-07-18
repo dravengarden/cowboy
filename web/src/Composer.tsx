@@ -15,6 +15,7 @@ import {
   alpha,
   Box,
   Button,
+  ButtonBase,
   Chip,
   CircularProgress,
   Dialog,
@@ -159,6 +160,7 @@ import { haptic } from "./haptic";
 import { useSortable } from "./useSortable";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 import { originLabel } from "./protocol";
 import type {
   AvailableCommand,
@@ -2827,6 +2829,7 @@ function PendingPanel({
     haptic();
     collapse.set(!collapsed);
   };
+  const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggleCollapsed);
   const [editingId, setEditingId] = useState<string | null>(null);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by
   // default (they'd waste ~40px on every row of a narrow phone) and revealed
@@ -2950,78 +2953,87 @@ function PendingPanel({
         // `MuiInputBase-root` minHeight) so the "N Drafts" bar and the message box
         // read as the same-height pair. `py: 0` drops the old extra 8px that made
         // the bar (a 44px icon button + padding) taller than the input.
-        sx={{ pl: 0.5, pr: 0.75, py: 0, minHeight: 44 }}
+        sx={{ pr: 0.75, py: 0, minHeight: 44 }}
       >
-        <IconButton
+        {/* Match PlanDock: the whole summary area is one disclosure button, not
+            just the chevron/label. Bulk and reorder actions stay separate sibling
+            controls, so tapping them never also folds the panel. */}
+        <ButtonBase
+          {...toggleTap}
           data-desktop-item-action="default"
           data-desktop-collapse-toggle={desktop ? kind : undefined}
-          size="small"
-          aria-label={collapsed ? "expand" : "collapse"}
-          onClick={toggleCollapsed}
-          sx={{ flexShrink: 0 }}
+          aria-label={`${collapsed ? "Expand" : "Collapse"} ${noun.toLowerCase()}s`}
+          aria-expanded={!collapsed}
+          sx={{
+            alignSelf: "stretch",
+            flex: 1,
+            minWidth: 0,
+            justifyContent: "flex-start",
+            textAlign: "left",
+            pl: 0.5,
+            touchAction: "manipulation",
+          }}
         >
-          {collapsed
-            ? <ChevronRight fontSize="small" />
-            : <ExpandMore fontSize="small" />}
-        </IconButton>
-        <Typography
-          variant="caption"
-          sx={{ fontWeight: 600, minWidth: 0, cursor: "pointer" }}
-          onClick={toggleCollapsed}
-        >
-          {count} {noun}
-          {count === 1 ? "" : "s"}
-        </Typography>
-        {/* Why-it's-held badge: the queue is manually paused, so it won't drain
-            until the user resumes (the ⏸ toggle in the nav/status bar). */}
-        {queueHeld && (
-          <Box
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 0.25,
-              ml: 0.75,
-              px: 0.625,
-              py: 0.125,
-              borderRadius: 1,
-              bgcolor: "warning.main",
-              color: "warning.contrastText",
-              flexShrink: 0,
-            }}
-          >
-            <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-              Paused
-            </Typography>
+          <Box sx={{ width: 40, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>
+            {collapsed
+              ? <ChevronRight fontSize="small" />
+              : <ExpandMore fontSize="small" />}
           </Box>
-        )}
-        <Box sx={{ flex: 1, minWidth: 0 }} />
-        {desktop && (
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            {kind === "queued" && (
-              <Suspense fallback={null}>
-                <DesktopRegionShortcut
-                  shortcut="O"
-                  title={
-                    collapsed
-                      ? "Open and focus queue"
-                      : "Close queue when focused"
-                  }
-                  normalOnly
-                  hideWhenRegion="prompt.composer"
-                />
-              </Suspense>
-            )}
-            {kind === "draft" && (
-              <Suspense fallback={null}>
-                <DesktopRegionShortcut
-                  shortcut="D"
-                  title="Focus drafts"
-                  normalOnly
-                />
-              </Suspense>
-            )}
-          </Stack>
-        )}
+          <Typography variant="caption" sx={{ fontWeight: 600, minWidth: 0 }}>
+            {count} {noun}
+            {count === 1 ? "" : "s"}
+          </Typography>
+          {/* Why-it's-held badge: the queue is manually paused, so it won't drain
+              until the user resumes (the ⏸ toggle in the nav/status bar). */}
+          {queueHeld && (
+            <Box
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.25,
+                ml: 0.75,
+                px: 0.625,
+                py: 0.125,
+                borderRadius: 1,
+                bgcolor: "warning.main",
+                color: "warning.contrastText",
+                flexShrink: 0,
+              }}
+            >
+              <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                Paused
+              </Typography>
+            </Box>
+          )}
+          <Box sx={{ flex: 1, minWidth: 0 }} />
+          {desktop && (
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              {kind === "queued" && (
+                <Suspense fallback={null}>
+                  <DesktopRegionShortcut
+                    shortcut="O"
+                    title={
+                      collapsed
+                        ? "Open and focus queue"
+                        : "Close queue when focused"
+                    }
+                    normalOnly
+                    hideWhenRegion="prompt.composer"
+                  />
+                </Suspense>
+              )}
+              {kind === "draft" && (
+                <Suspense fallback={null}>
+                  <DesktopRegionShortcut
+                    shortcut="D"
+                    title="Focus drafts"
+                    normalOnly
+                  />
+                </Suspense>
+              )}
+            </Stack>
+          )}
+        </ButtonBase>
         {
           /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
             only shown) with 2+ rows. Primary-tinted while active. HIDDEN on a wide
