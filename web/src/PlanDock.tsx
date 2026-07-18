@@ -185,13 +185,28 @@ export const PlanDock = memo(function PlanDock({
                   }
                   : {})}
               >
-                {completed ? (
-                  <CheckCircle fontSize="small" color="success" />
-                ) : inProgress ? (
-                  <CircularProgress size={16} thickness={5} color="warning" sx={{ mx: 0.25 }} />
-                ) : (
-                  <RadioButtonUnchecked fontSize="small" color="disabled" />
-                )}
+                <Box
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    flex: "0 0 20px",
+                    display: "grid",
+                    placeItems: "center",
+                  }}
+                >
+                  {completed ? (
+                    <CheckCircle color="success" sx={{ fontSize: "18px" }} />
+                  ) : inProgress ? (
+                    <CircularProgress
+                      size={18}
+                      thickness={4.5}
+                      color="warning"
+                      sx={{ width: "18px !important", height: "18px !important" }}
+                    />
+                  ) : (
+                    <RadioButtonUnchecked color="disabled" sx={{ fontSize: "18px" }} />
+                  )}
+                </Box>
                 <Typography
                   variant="body2"
                   color={completed ? "text.disabled" : "text.primary"}
