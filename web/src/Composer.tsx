@@ -276,7 +276,7 @@ function CompactReading({ value, muted = false }: { value: number; muted?: boole
 // A thin ring has less visual mass than a filled toolbar glyph, so give it a
 // small optical-size correction while keeping it rem-based. It still follows
 // the same global font/icon scaling as its neighbours.
-const COMPACT_GAUGE_SIZE = "1.5rem";
+const COMPACT_GAUGE_SIZE = "1.75rem";
 
 // Context-window fullness (agent-reported over ACP `usage_update`, used/size
 // tokens) drawn as a Zed-style ring around an integer 0–100 reading — so ONE
