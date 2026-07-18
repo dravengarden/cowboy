@@ -243,16 +243,20 @@ function fmtTokens(n: number): string {
 }
 
 // Context-window fullness (agent-reported over ACP `usage_update`, used/size
-// tokens) drawn as a Zed-style ring AROUND the Compact glyph — so ONE button both
-// shows how full the window is and compacts it. No % label: the fill + colour
-// carry it at a glance (amber ≥70%, red ≥90% — the auto-compaction zone), and the
-// exact numbers live in the Compact tooltip. Before the agent reports a size it's
+// tokens) drawn as a Zed-style ring around an integer 0–100 reading — so ONE
+// button both shows exactly how full the window is and compacts it. Colour still
+// warns at a glance (amber ≥70%, red ≥90% — the auto-compaction zone), while the
+// token counts live in the Compact tooltip. Before the agent reports a size it's
 // just the bare Compress icon.
 export function CompactIcon(
   { used, size, active }: { used: number; size: number; active: boolean },
 ): React.JSX.Element {
+  const hasSize = size > 0;
+  const pct = hasSize
+    ? (used > 0 ? Math.max(1, Math.round(Math.min(100, (used / size) * 100))) : 0)
+    : 0;
   // Compaction running right now → an indeterminate terracotta (Claude accent,
-  // matching the transcript's CompactingWidget) spinner around a dimmed glyph, in
+  // matching the transcript's CompactingWidget) spinner around a dimmed reading, in
   // the same 26px footprint so the toolbar doesn't shift. The button is disabled
   // in this state, so the ring reads as "working", not an affordance.
   if (active) {
@@ -272,12 +276,20 @@ export function CompactIcon(
           thickness={3}
           sx={{ color: "#D97757", position: "absolute", top: 0, left: 0 }}
         />
-        <Compress sx={{ fontSize: "1.05rem", color: "text.disabled" }} />
+        {hasSize
+          ? (
+            <Typography
+              component="span"
+              sx={{ fontSize: pct === 100 ? 9 : 10, fontWeight: 700, lineHeight: 1, color: "text.disabled" }}
+            >
+              {pct}
+            </Typography>
+          )
+          : <Compress sx={{ fontSize: "1.05rem", color: "text.disabled" }} />}
       </Box>
     );
   }
-  if (!(size > 0)) return <Compress fontSize="small" />;
-  const pct = Math.min(100, (used / size) * 100);
+  if (!hasSize) return <Compress fontSize="small" />;
   const color = pct >= 90 ? "error.main" : pct >= 70 ? "warning.main" : "success.main";
   return (
     <Box
@@ -304,7 +316,12 @@ export function CompactIcon(
         thickness={3}
         sx={{ color, position: "absolute", top: 0, left: 0 }}
       />
-      <Compress sx={{ fontSize: "1.05rem" }} />
+      <Typography
+        component="span"
+        sx={{ fontSize: pct === 100 ? 9 : 10, fontWeight: 700, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}
+      >
+        {pct}
+      </Typography>
     </Box>
   );
 }
