@@ -119,7 +119,8 @@ export function Collapsible({
         {children}
       </Box>
       {clamped && (
-        // Fade the clipped edge into the card surface (transparent → paper).
+        // Fade only the clipped edge; the compact affordance floats inside the
+        // content instead of adding a visually empty row below the code card.
         <Box
           aria-hidden
           sx={{
@@ -127,13 +128,38 @@ export function Collapsible({
             left: 0,
             right: 0,
             bottom: 0,
-            height: 48,
+            height: 76,
             pointerEvents: "none",
-            background: `linear-gradient(to bottom, ${alpha(paper, 0)}, ${paper})`,
+            background: `linear-gradient(to bottom, ${alpha(paper, 0)}, ${alpha(paper, 0.96)} 72%, ${paper})`,
           }}
         />
       )}
-      {overflows && !open && <Box sx={{ mt: 0.5, display: "inline-flex" }}>{toggleButton(false)}</Box>}
+      {overflows && !open && (
+        <Box
+          sx={{
+            position: "absolute",
+            left: "50%",
+            bottom: 4,
+            zIndex: 1,
+            transform: "translateX(-50%)",
+            pointerEvents: "none",
+          }}
+        >
+          <Box
+            sx={{
+              pointerEvents: "auto",
+              borderRadius: 999,
+              backgroundColor: alpha(paper, 0.94),
+              backdropFilter: "blur(8px)",
+              border: 1,
+              borderColor: alpha(theme.palette.primary.main, 0.22),
+              boxShadow: `0 2px 8px ${alpha(theme.palette.common.black, 0.18)}`,
+            }}
+          >
+            {toggleButton(false)}
+          </Box>
+        </Box>
+      )}
     </Box>
   );
 }
