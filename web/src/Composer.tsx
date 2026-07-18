@@ -331,23 +331,22 @@ export function CompactIcon(
         justifyContent: "center",
       }}
     >
-      <CircularProgress
-        variant="determinate"
-        value={100}
-        size={COMPACT_GAUGE_SIZE}
-        thickness={3}
+      <Box
+        aria-hidden
         sx={(theme) => ({
-          color: alpha(theme.palette.text.secondary, 0.24),
           position: "absolute",
-          top: 0,
-          left: 0,
+          inset: 0,
+          border: "2px solid",
+          borderColor: alpha(theme.palette.text.secondary, 0.38),
+          borderRadius: "50%",
+          boxSizing: "border-box",
         })}
       />
       <CircularProgress
         variant="determinate"
         value={pct}
         size={COMPACT_GAUGE_SIZE}
-        thickness={3}
+        thickness={3.2}
         sx={{
           color,
           position: "absolute",
