@@ -273,9 +273,10 @@ function CompactReading({ value, muted = false }: { value: number; muted?: boole
   );
 }
 
-// Match the Composer toolbar's local MuiSvgIcon size. Keeping this rem-based
-// makes the gauge follow the same global font/icon scaling as its neighbours.
-const COMPACT_GAUGE_SIZE = "1.25rem";
+// A thin ring has less visual mass than a filled toolbar glyph, so give it a
+// small optical-size correction while keeping it rem-based. It still follows
+// the same global font/icon scaling as its neighbours.
+const COMPACT_GAUGE_SIZE = "1.5rem";
 
 // Context-window fullness (agent-reported over ACP `usage_update`, used/size
 // tokens) drawn as a Zed-style ring around an integer 0–100 reading — so ONE
