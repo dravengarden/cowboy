@@ -7,6 +7,7 @@ import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
+import { createServiceWorkerUpdateCheck } from "./serviceWorkerUpdates";
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
@@ -126,16 +127,22 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   });
   window.addEventListener("load", () => {
     void navigator.serviceWorker.register("/sw.js").then((reg) => {
+      const check = createServiceWorkerUpdateCheck(() => reg.update());
       const checkForUpdate = (): void => {
-        if (globalThis.document.visibilityState === "visible") void reg.update();
+        // WKWebView can remain `visible` through an app background/resume, so
+        // only suppress checks when it explicitly reports `hidden`.
+        if (globalThis.document.visibilityState !== "hidden") check();
       };
-      // Phones get backgrounded/foregrounded constantly, so visibilitychange
-      // alone refreshes them. A DESKTOP window (incl. the Tauri shell) often
-      // stays open + focused for hours — visibilitychange never fires, so it
-      // would sit on the old bundle until a manual restart (the reported
-      // "desktop auto-update doesn't work"). Poll too: a tiny sw.js fetch every
-      // 60s that only does anything when VERSION actually changed.
+      // Browser/PWA lifecycle signals. iOS WKWebView does not reliably emit
+      // `visibilitychange`, so cover BFCache restores, focus, and network return.
       globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+      globalThis.addEventListener("pageshow", checkForUpdate);
+      globalThis.addEventListener("focus", checkForUpdate);
+      globalThis.addEventListener("online", checkForUpdate);
+      // The native iOS shell emits this from UIApplication.didBecomeActive. It
+      // closes the last lifecycle gap where WKWebView emits no standard event.
+      globalThis.addEventListener("cowboy:native-resume", checkForUpdate);
+      // Low-frequency safety net for a continuously visible desktop window.
       globalThis.setInterval(checkForUpdate, 60_000);
       checkForUpdate();
     }).catch(() => {});
