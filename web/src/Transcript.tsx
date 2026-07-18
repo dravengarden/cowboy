@@ -9,6 +9,7 @@
 
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -28,6 +29,7 @@ import {
   Stack,
   Tooltip,
   Typography,
+  useMediaQuery,
   useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -43,6 +45,9 @@ import {
   ExpandMore,
   Folder,
   LightbulbOutlined,
+  MyLocation,
+  NavigateBefore,
+  NavigateNext,
   Refresh,
   Search,
   Stop,
@@ -290,6 +295,12 @@ function EmptyTranscript(
 const pulse = keyframes`
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.55; }
+`;
+
+const toolLocateFlash = keyframes`
+  0% { box-shadow: 0 0 0 0 transparent; }
+  18% { box-shadow: 0 0 0 3px currentColor; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 `;
 
 // Claude Code's "prompt keyword shimmer": a highlight band sweeps across the
@@ -1341,49 +1352,25 @@ function MessageBubble({
 function ToolCard({
   item,
   desktop,
+  selected,
+  onOpen,
 }: {
   item: Extract<RenderItem, { kind: "tool" }>;
   desktop: boolean;
+  selected: boolean;
+  onOpen: (key: string) => void;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  // Raw escape hatch: any card can flip to the verbatim input/output JSON,
-  // regardless of how the friendly renderer formatted it.
-  const [raw, setRaw] = useState(false);
-  // Let the modal shell paint and finish its 300ms entrance before mounting a
-  // potentially huge diff/highlighter tree. Otherwise React's first render can
-  // monopolise the main thread and the user's tap appears to do nothing.
-  const [detailReady, setDetailReady] = useState(false);
-  useEffect(() => {
-    if (!open) {
-      setDetailReady(false);
-      return undefined;
-    }
-    const id = globalThis.setTimeout(() => setDetailReady(true), 320);
-    return () => globalThis.clearTimeout(id);
-  }, [open]);
   const hasDetail = item.rawInput !== undefined || item.content !== undefined;
   const openDetail = (): void => {
-    if (hasDetail) setOpen(true);
+    if (hasDetail) onOpen(item.key);
   };
   const openTap = useReliableTouchTap<HTMLDivElement>(openDetail);
   const running = item.status === "in_progress" || item.status === "pending";
   // The header shows only the first line of the title — a Bash title IS the whole
   // (possibly multi-line) command, which would otherwise blow up the row.
   const headerTitle = (item.title || "").split("\n")[0] || item.title;
-  const ctx: ToolCtx = {
-    toolName: item.toolName,
-    kind: item.toolKind,
-    title: item.title,
-    rawInput: item.rawInput && typeof item.rawInput === "object" &&
-        !Array.isArray(item.rawInput)
-      ? (item.rawInput as Record<string, unknown>)
-      : {},
-    content: item.content,
-    running,
-  };
   return (
-    <>
-      <Paper
+    <Paper
         elevation={0}
         sx={{
           alignSelf: "stretch",
@@ -1406,7 +1393,7 @@ function ToolCard({
               ...openTap,
               role: "button",
               tabIndex: desktop ? -1 : 0,
-              "aria-expanded": open,
+              "aria-expanded": selected,
               "aria-haspopup": "dialog" as const,
               onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>): void => {
                 if (event.key === "Enter" || event.key === " ") {
@@ -1484,16 +1471,191 @@ function ToolCard({
           )}
         </Stack>
       </Paper>
-      {hasDetail && createPortal(
-        <Sheet
-          open={open}
-          onClose={(): void => setOpen(false)}
-          title="Tool details"
-          wide
-          forceSheet={!desktop}
-          cover={!desktop}
-        >
-          <Stack spacing={1.25} sx={{ pb: 1 }}>
+  );
+}
+
+type ToolItem = Extract<RenderItem, { kind: "tool" }>;
+
+function toolHasDetail(item: ToolItem): boolean {
+  return item.rawInput !== undefined || item.content !== undefined;
+}
+
+function scrollableAncestor(node: HTMLElement | null): HTMLElement | null {
+  let current = node?.parentElement ?? null;
+  while (current) {
+    const overflow = globalThis.getComputedStyle(current).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function ToolDetailsBrowser({
+  tools,
+  selectedKey,
+  desktop,
+  onSelect,
+  onClose,
+  onLocate,
+}: {
+  tools: ToolItem[];
+  selectedKey: string | null;
+  desktop: boolean;
+  onSelect: (key: string) => void;
+  onClose: () => void;
+  onLocate: (key: string) => void;
+}): React.JSX.Element | null {
+  const theme = useTheme();
+  const roomy = useMediaQuery(theme.breakpoints.up("sm"));
+  const index = selectedKey === null ? -1 : tools.findIndex((tool) => tool.key === selectedKey);
+  const item = index >= 0 ? tools[index] : undefined;
+  const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
+  const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const scrollByKey = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    if (!item) {
+      return undefined;
+    }
+    const id = globalThis.setTimeout(() => setDetailReadyKey(item.key), 320);
+    return () => globalThis.clearTimeout(id);
+  }, [item?.key]);
+
+  useLayoutEffect(() => {
+    if (detailReadyKey !== item?.key || !item) return;
+    const scroller = scrollableAncestor(bodyRef.current);
+    if (scroller) scroller.scrollTop = scrollByKey.current.get(item.key) ?? 0;
+  }, [detailReadyKey, item?.key]);
+
+  const select = (next: ToolItem | undefined): void => {
+    if (!next || !item) return;
+    const scroller = scrollableAncestor(bodyRef.current);
+    if (scroller) scrollByKey.current.set(item.key, scroller.scrollTop);
+    onSelect(next.key);
+  };
+
+  useEffect(() => {
+    if (!desktop || !item) return undefined;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "[") {
+        event.preventDefault();
+        select(tools[index - 1]);
+      } else if (event.key === "]") {
+        event.preventDefault();
+        select(tools[index + 1]);
+      }
+    };
+    globalThis.addEventListener("keydown", onKeyDown);
+    return () => globalThis.removeEventListener("keydown", onKeyDown);
+  }, [desktop, index, item, tools]);
+
+  if (!item) return null;
+  const raw = rawByKey[item.key] ?? false;
+  const running = item.status === "in_progress" || item.status === "pending";
+  const ctx: ToolCtx = {
+    toolName: item.toolName,
+    kind: item.toolKind,
+    title: item.title,
+    rawInput: item.rawInput && typeof item.rawInput === "object" && !Array.isArray(item.rawInput)
+      ? (item.rawInput as Record<string, unknown>)
+      : {},
+    content: item.content,
+    running,
+  };
+
+  const navigation = (
+    <Box
+      sx={{
+        width: "100%",
+        px: 0.75,
+        py: 0.5,
+        display: "grid",
+        gridTemplateColumns: "1fr auto 1fr auto",
+        alignItems: "center",
+        gap: 0.5,
+        bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
+        backdropFilter: "blur(30px) saturate(200%)",
+        WebkitBackdropFilter: "blur(30px) saturate(200%)",
+        borderTop: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        boxShadow: (theme) =>
+          `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
+      }}
+    >
+      {roomy
+        ? (
+          <Button
+            aria-label="Previous tool"
+            disabled={index === 0}
+            onClick={(): void => select(tools[index - 1])}
+            startIcon={<NavigateBefore />}
+            sx={{ minHeight: 40, justifySelf: "start", textTransform: "none" }}
+          >
+            Previous
+          </Button>
+        )
+        : (
+          <IconButton
+            aria-label="Previous tool"
+            disabled={index === 0}
+            onClick={(): void => select(tools[index - 1])}
+            sx={{ width: 44, height: 44, justifySelf: "start" }}
+          >
+            <NavigateBefore />
+          </IconButton>
+        )}
+      <Typography
+        aria-label={`Tool ${index + 1} of ${tools.length}`}
+        variant="caption"
+        sx={{ px: 0.75, fontWeight: 700, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
+      >
+        {index + 1} / {tools.length}
+      </Typography>
+      {roomy
+        ? (
+          <Button
+            aria-label="Next tool"
+            disabled={index >= tools.length - 1}
+            onClick={(): void => select(tools[index + 1])}
+            endIcon={<NavigateNext />}
+            sx={{ minHeight: 40, justifySelf: "end", textTransform: "none" }}
+          >
+            Next
+          </Button>
+        )
+        : (
+          <IconButton
+            aria-label="Next tool"
+            disabled={index >= tools.length - 1}
+            onClick={(): void => select(tools[index + 1])}
+            sx={{ width: 44, height: 44, justifySelf: "end" }}
+          >
+            <NavigateNext />
+          </IconButton>
+        )}
+      <Tooltip title="Locate in transcript">
+        <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)} sx={{ width: 44, height: 44 }}>
+          <MyLocation fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+
+  return createPortal(
+    <Sheet
+      open
+      onClose={onClose}
+      title="Tool details"
+      wide
+      forceSheet={!desktop}
+      cover={!desktop}
+      actions={navigation}
+    >
+      <Box ref={bodyRef}>
+        <Stack spacing={1.25}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
@@ -1528,9 +1690,12 @@ function ToolCard({
                 <Box
                   role="button"
                   tabIndex={0}
-                  onClick={(): void => setRaw((v) => !v)}
+                  onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: !raw }))}
                   onKeyDown={(e): void => {
-                    if (e.key === "Enter" || e.key === " ") setRaw((v) => !v);
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setRawByKey((state) => ({ ...state, [item.key]: !raw }));
+                    }
                   }}
                   sx={{
                     cursor: "pointer",
@@ -1546,7 +1711,7 @@ function ToolCard({
                   {raw ? "↩ Formatted" : "{ } Raw"}
                 </Box>
               </Stack>
-              {!detailReady
+              {detailReadyKey !== item.key
                 ? (
                   <Stack spacing={0.75} aria-label="Loading tool details">
                     <Skeleton animation="wave" width="92%" />
@@ -1584,10 +1749,9 @@ function ToolCard({
                 : <ToolBody ctx={ctx} />}
             </Box>
           </Stack>
-        </Sheet>,
-        document.body,
-      )}
-    </>
+      </Box>
+    </Sheet>,
+    document.body,
   );
 }
 
@@ -1646,6 +1810,8 @@ const ItemView = memo(function ItemView({
   streaming,
   provider,
   desktop,
+  selectedToolKey,
+  onOpenTool,
 }: {
   item: RenderItem;
   /** True when this item is the last assistant chunk-bearing item and the
@@ -1653,6 +1819,8 @@ const ItemView = memo(function ItemView({
   streaming?: boolean;
   provider: string;
   desktop: boolean;
+  selectedToolKey: string | null;
+  onOpenTool: (key: string) => void;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message":
@@ -1687,7 +1855,14 @@ const ItemView = memo(function ItemView({
         </Box>
       );
     case "tool":
-      return <ToolCard item={item} desktop={desktop} />;
+      return (
+        <ToolCard
+          item={item}
+          desktop={desktop}
+          selected={selectedToolKey === item.key}
+          onOpen={onOpenTool}
+        />
+      );
     case "permission":
       return <PermissionCard item={item} />;
     case "lifecycle": {
@@ -1991,6 +2166,25 @@ export function Transcript({
   // event — NOT on every scroll-driven re-render. Stable item identities also
   // let the `memo`'d `ItemView` rows skip re-rendering.
   const items = useMemo(() => derive(timeline), [timeline]);
+  const tools = useMemo(
+    () => items.filter((item): item is ToolItem => item.kind === "tool" && toolHasDetail(item)),
+    [items],
+  );
+  const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
+  const [locatedToolKey, setLocatedToolKey] = useState<string | null>(null);
+  const locateTimerRef = useRef<number | null>(null);
+  const openTool = useCallback((key: string): void => setSelectedToolKey(key), []);
+  const closeTool = useCallback((): void => setSelectedToolKey(null), []);
+
+  useEffect(() => {
+    if (selectedToolKey !== null && !tools.some((tool) => tool.key === selectedToolKey)) {
+      setSelectedToolKey(null);
+    }
+  }, [selectedToolKey, tools]);
+
+  useEffect(() => () => {
+    if (locateTimerRef.current !== null) globalThis.clearTimeout(locateTimerRef.current);
+  }, []);
   // Reader-comfort controls (Settings → Reading). The font-size SCALE is now a
   // GLOBAL app zoom on the root <html> font-size (useGlobalFontScale at the app
   // root), so chrome + prose scale together — it is NOT re-applied here. The
@@ -2162,6 +2356,26 @@ export function Transcript({
   // sessionId. Read it through a ref that tracks the latest prop.
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+  const locateTool = useCallback((key: string): void => {
+    setSelectedToolKey(null);
+    stick.current = false;
+    setSticky(sessionIdRef.current, false);
+    setLocatedToolKey(key);
+    if (locateTimerRef.current !== null) globalThis.clearTimeout(locateTimerRef.current);
+    // Let the cover sheet unmount before scrolling the transcript beneath it.
+    globalThis.setTimeout(() => {
+      const row = [...(parentRef.current?.querySelectorAll<HTMLElement>("[data-key]") ?? [])]
+        .find((candidate) => candidate.dataset["key"] === key);
+      // Tool history can be tens of thousands of pixels away. An animated
+      // journey delays the destination highlight until after it has already
+      // faded; jump atomically, then let the 1.4s highlight orient the reader.
+      row?.scrollIntoView({ block: "center", behavior: "auto" });
+      locateTimerRef.current = globalThis.setTimeout(() => {
+        setLocatedToolKey((current) => current === key ? null : current);
+        locateTimerRef.current = null;
+      }, 1400);
+    }, 40);
+  }, []);
   // Bumped by the composer toggle (requestStickToBottom) to ask us to scroll to
   // the bottom now; the effect below reacts to a change.
   const scrollNonce = useScrollNonce(sessionId);
@@ -2732,6 +2946,11 @@ export function Transcript({
                       // This does not size-contain the row: intrinsic Markdown and
                       // tool height still contribute normally to scrollHeight.
                       contain: "layout paint",
+                      color: locatedToolKey === item.key ? "primary.main" : undefined,
+                      animation: locatedToolKey === item.key
+                        ? `${toolLocateFlash} 1.4s ease-out`
+                        : undefined,
+                      borderRadius: locatedToolKey === item.key ? 1 : undefined,
                       // Do not use content-visibility here. iOS WebKit can retain the
                       // intrinsic height but skip painting a row when it is inside a
                       // column-reverse scroller, leaving a large blank hole until the
@@ -2744,12 +2963,22 @@ export function Transcript({
                       streaming={working && i === lastIdx}
                       provider={provider}
                       desktop={desktopNavigation}
+                      selectedToolKey={selectedToolKey}
+                      onOpenTool={openTool}
                     />
                   </Box>
                 ))}
             </>
           )}
       </Box>
+      <ToolDetailsBrowser
+        tools={tools}
+        selectedKey={selectedToolKey}
+        desktop={desktopNavigation}
+        onSelect={setSelectedToolKey}
+        onClose={closeTool}
+        onLocate={locateTool}
+      />
       {
         /* "Loading older history" — an ABSOLUTE overlay at the top (not in the
           scroll flow) so it gives feedback without adding height that would
