@@ -700,12 +700,13 @@ function TranscriptImage({ src, alt }: { src: string; alt: string }): React.JSX.
         loading="lazy"
         {...openTap}
         sx={{
-          maxWidth: "min(240px, 100%)",
-          maxHeight: 240,
-          objectFit: "cover",
+          maxWidth: "min(360px, 100%)",
+          maxHeight: "min(55vh, 480px)",
+          objectFit: "contain",
           display: "block",
           borderRadius: 1,
           my: 0.5,
+          mx: "auto",
           cursor: "zoom-in",
           touchAction: "manipulation",
         }}
@@ -913,8 +914,10 @@ function ThoughtSteps({
 const COLLAPSED_BUBBLE_PX = 200;
 function CollapsibleUserBody({
   children,
+  containsImage = false,
 }: {
   children: React.ReactNode;
+  containsImage?: boolean;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
@@ -935,7 +938,10 @@ function CollapsibleUserBody({
   }, []);
   // Cap from the first frame: short content is unaffected, while a long message
   // cannot flash fully expanded before the observer's initial delivery.
-  const clamp = !expanded;
+  // Images are already viewport-bounded thumbnails. Clamping their parent to
+  // the text-only 200px cap is what made a portrait screenshot look like it
+  // never expanded, so image messages keep their full preview.
+  const clamp = !expanded && !containsImage;
   return (
     <>
       <Box sx={{ position: "relative" }}>
@@ -958,7 +964,7 @@ function CollapsibleUserBody({
           />
         )}
       </Box>
-      {overflowing && (
+      {overflowing && !containsImage && (
         <Box sx={{ display: "flex", justifyContent: "center", mt: 0.25 }}>
           <Button
             size="small"
@@ -1201,7 +1207,9 @@ function MessageBubble({
         overflow: "hidden",
       }}
     >
-      <CollapsibleUserBody>{body}</CollapsibleUserBody>
+      <CollapsibleUserBody containsImage={chunks.some((chunk) => chunk.type === "image")}>
+        {body}
+      </CollapsibleUserBody>
     </Paper>
   );
 }
