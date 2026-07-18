@@ -81,6 +81,7 @@ import {
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import { ImageLightbox } from "./_shell";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 
@@ -689,6 +690,7 @@ function toolIcon(kind: string): React.ReactElement {
 // that need a frame.
 function TranscriptImage({ src, alt }: { src: string; alt: string }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const openTap = useReliableTouchTap<HTMLImageElement>(() => setOpen(true));
   return (
     <>
       <Box
@@ -696,7 +698,7 @@ function TranscriptImage({ src, alt }: { src: string; alt: string }): React.JSX.
         src={src}
         alt={alt}
         loading="lazy"
-        onClick={(): void => setOpen(true)}
+        {...openTap}
         sx={{
           maxWidth: "min(240px, 100%)",
           maxHeight: 240,
@@ -705,6 +707,7 @@ function TranscriptImage({ src, alt }: { src: string; alt: string }): React.JSX.
           borderRadius: 1,
           my: 0.5,
           cursor: "zoom-in",
+          touchAction: "manipulation",
         }}
       />
       <ImageLightbox
