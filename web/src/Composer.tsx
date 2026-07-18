@@ -242,6 +242,36 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+// Keep the reading optically balanced for one, two, and three digits. The text
+// lives in the same 26-unit SVG coordinate space as the gauge, so it scales
+// proportionally if the toolbar icon size changes instead of relying on a
+// viewport/root-font-dependent CSS size.
+function CompactReading({ value, muted = false }: { value: number; muted?: boolean }): React.JSX.Element {
+  const fontSize = value < 10 ? 13 : value < 100 ? 12 : 10;
+  return (
+    <Box
+      component="svg"
+      viewBox="0 0 26 26"
+      aria-hidden="true"
+      sx={{ width: "100%", height: "100%", color: muted ? "text.disabled" : "text.primary" }}
+    >
+      <text
+        x="13"
+        y="13"
+        textAnchor="middle"
+        dominantBaseline="central"
+        fill="currentColor"
+        fontFamily="inherit"
+        fontSize={fontSize}
+        fontWeight="700"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        {value}
+      </text>
+    </Box>
+  );
+}
+
 // Context-window fullness (agent-reported over ACP `usage_update`, used/size
 // tokens) drawn as a Zed-style ring around an integer 0–100 reading — so ONE
 // button both shows exactly how full the window is and compacts it. Colour still
@@ -277,14 +307,7 @@ export function CompactIcon(
           sx={{ color: "#D97757", position: "absolute", top: 0, left: 0 }}
         />
         {hasSize
-          ? (
-            <Typography
-              component="span"
-              sx={{ fontSize: pct === 100 ? 9 : 10, fontWeight: 700, lineHeight: 1, color: "text.disabled" }}
-            >
-              {pct}
-            </Typography>
-          )
+          ? <CompactReading value={pct} muted />
           : <Compress sx={{ fontSize: "1.05rem", color: "text.disabled" }} />}
       </Box>
     );
@@ -316,12 +339,7 @@ export function CompactIcon(
         thickness={3}
         sx={{ color, position: "absolute", top: 0, left: 0 }}
       />
-      <Typography
-        component="span"
-        sx={{ fontSize: pct === 100 ? 9 : 10, fontWeight: 700, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}
-      >
-        {pct}
-      </Typography>
+      <CompactReading value={pct} />
     </Box>
   );
 }
