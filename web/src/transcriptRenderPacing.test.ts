@@ -2,7 +2,6 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   markTranscriptScrollActivity,
   resetTranscriptScrollActivityForTest,
-  transcriptGeometryDelayMs,
   transcriptPresentationIntervalMs,
 } from "./transcriptRenderPacing.ts";
 
@@ -22,11 +21,4 @@ Deno.test("later scroll activity extends the pacing window", () => {
   markTranscriptScrollActivity(2_200);
   assertEquals(transcriptPresentationIntervalMs(2_300), 100);
   assertEquals(transcriptPresentationIntervalMs(2_440), 50);
-});
-
-Deno.test("transcript geometry coalesces animation frames and preserves the trailing update", () => {
-  assertEquals(transcriptGeometryDelayMs(10, 0), 0);
-  assertEquals(transcriptGeometryDelayMs(120, 100), 76);
-  assertEquals(transcriptGeometryDelayMs(196, 100), 0);
-  assertEquals(transcriptGeometryDelayMs(240, 100), 0);
 });

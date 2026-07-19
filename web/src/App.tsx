@@ -83,7 +83,6 @@ import {
     setSetting,
     useStoreSelector,
 } from "./store";
-import { transcriptGeometryDelayMs } from "./transcriptRenderPacing";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
@@ -1016,9 +1015,11 @@ export function App({
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
     // vars on the column. The glass follows every animation frame, while the
-    // transcript reservation is rate-limited below: changing padding-bottom on a
-    // long column-reverse transcript lays out every retained row, so mirroring a
-    // 200ms Collapse transition frame-for-frame wastes the mobile main thread.
+    // transcript reservation is frozen during disclosure transitions: changing
+    // padding-bottom on a long column-reverse transcript lays out every retained
+    // row, so mirroring a 200ms Collapse transition frame-for-frame wastes the
+    // mobile main thread and rate-limiting it merely turns motion into visible
+    // stair-steps. One final, non-animated alignment is both cheaper and calmer.
     //
     // Driven by CALLBACK refs + ONE persistent ResizeObserver, NOT a mount-time
     // effect. Why: the composer mounts only once the session list arrives and
@@ -1038,15 +1039,12 @@ export function App({
     const roRef = useRef<ResizeObserver | null>(null);
     const appBarElRef = useRef<HTMLElement | null>(null);
     const composerElRef = useRef<HTMLElement | null>(null);
-    const transcriptInsetTimerRef = useRef<number | null>(null);
-    const transcriptInsetLastRef = useRef(0);
+    const activeDisclosureTransitionsRef = useRef(new Set<EventTarget>());
     const pendingTranscriptInsetRef = useRef("0px");
     const publishTranscriptInset = useCallback((): void => {
         const col = columnRef.current;
         if (!col) return;
         col.style.setProperty("--transcript-composer-h", pendingTranscriptInsetRef.current);
-        transcriptInsetLastRef.current = performance.now();
-        transcriptInsetTimerRef.current = null;
     }, []);
     const measureGlass = useCallback((): void => {
         const col = columnRef.current;
@@ -1056,29 +1054,21 @@ export function App({
         col.style.setProperty("--navbar-h", navbarHeight);
         col.style.setProperty("--composer-h", composerHeight);
         pendingTranscriptInsetRef.current = composerHeight;
-
-        // At most one transcript reflow per ~6 frames, plus a trailing update
-        // after the Collapse settles. The glass itself remains frame-accurate,
-        // so the only temporary difference is a small amount of extra/less
-        // transcript clearance during motion; final geometry is exact.
-        const delay = transcriptGeometryDelayMs(
-            performance.now(),
-            transcriptInsetLastRef.current,
-        );
-        if (transcriptInsetLastRef.current === 0 || delay === 0) {
-            if (transcriptInsetTimerRef.current !== null) {
-                globalThis.clearTimeout(transcriptInsetTimerRef.current);
-            }
-            publishTranscriptInset();
-        } else {
-            if (transcriptInsetTimerRef.current !== null) {
-                globalThis.clearTimeout(transcriptInsetTimerRef.current);
-            }
-            transcriptInsetTimerRef.current = globalThis.setTimeout(
-                publishTranscriptInset,
-                delay,
-            );
+        if (activeDisclosureTransitionsRef.current.size === 0) publishTranscriptInset();
+    }, [publishTranscriptInset]);
+    const disclosureTransition = useCallback((event: TransitionEvent): void => {
+        const target = event.target;
+        if (
+            event.propertyName !== "height" ||
+            !(target instanceof HTMLElement) ||
+            !target.classList.contains("MuiCollapse-root")
+        ) return;
+        if (event.type === "transitionrun") {
+            activeDisclosureTransitionsRef.current.add(target);
+            return;
         }
+        activeDisclosureTransitionsRef.current.delete(target);
+        if (activeDisclosureTransitionsRef.current.size === 0) publishTranscriptInset();
     }, [publishTranscriptInset]);
     const observeGlass = useCallback(
         (slot: "appbar" | "composer", el: HTMLElement | null): void => {
@@ -1086,12 +1076,25 @@ export function App({
             const ro = roRef.current;
             const prev = slot === "appbar" ? appBarElRef.current : composerElRef.current;
             if (prev) ro.unobserve(prev);
+            if (slot === "composer" && prev) {
+                prev.removeEventListener("transitionrun", disclosureTransition, true);
+                prev.removeEventListener("transitionend", disclosureTransition, true);
+                prev.removeEventListener("transitioncancel", disclosureTransition, true);
+                activeDisclosureTransitionsRef.current.clear();
+            }
             if (slot === "appbar") appBarElRef.current = el;
             else composerElRef.current = el;
-            if (el) ro.observe(el);
+            if (el) {
+                ro.observe(el);
+                if (slot === "composer") {
+                    el.addEventListener("transitionrun", disclosureTransition, true);
+                    el.addEventListener("transitionend", disclosureTransition, true);
+                    el.addEventListener("transitioncancel", disclosureTransition, true);
+                }
+            }
             measureGlass();
         },
-        [measureGlass],
+        [disclosureTransition, measureGlass],
     );
     const appBarRef = useCallback(
         (el: HTMLDivElement | null): void => observeGlass("appbar", el),
@@ -1101,13 +1104,16 @@ export function App({
         (el: HTMLDivElement | null): void => observeGlass("composer", el),
         [observeGlass],
     );
-    // Disconnect the shared observer and pending coalesced work on unmount.
+    // Disconnect the shared observer and transition listeners on unmount.
     useEffect(() => (): void => {
         roRef.current?.disconnect();
-        if (transcriptInsetTimerRef.current !== null) {
-            globalThis.clearTimeout(transcriptInsetTimerRef.current);
+        const composer = composerElRef.current;
+        if (composer) {
+            composer.removeEventListener("transitionrun", disclosureTransition, true);
+            composer.removeEventListener("transitionend", disclosureTransition, true);
+            composer.removeEventListener("transitioncancel", disclosureTransition, true);
         }
-    }, []);
+    }, [disclosureTransition]);
     // Whether the transcript actually overflows (has content scrolling under the
     // floating composer glass). Gates the composer slab's up-shadow: an
     // empty/short conversation has nothing beneath the glass, so the "floating
