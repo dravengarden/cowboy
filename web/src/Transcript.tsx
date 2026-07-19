@@ -1601,6 +1601,8 @@ function ToolDetailsBrowser({
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
   const [edgeIntent, setEdgeIntent] = useState<"previous" | "next" | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const currentRef = useRef<HTMLDivElement>(null);
+  const anchorSpacerRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
   const edgeIntentRef = useRef<"previous" | "next" | null>(null);
   const edgeGestureRef = useRef<{ y: number; edge: "previous" | "next" | "both" } | null>(null);
@@ -1616,16 +1618,30 @@ function ToolDetailsBrowser({
   useLayoutEffect(() => {
     if (!item) return;
     const scroller = scrollableAncestor(bodyRef.current);
-    if (!scroller) return;
+    const current = currentRef.current;
+    const spacer = anchorSpacerRef.current;
+    if (!scroller || !current || !spacer) return;
     const saved = scrollByKey.current.get(item.key);
-    if (saved !== undefined) {
-      scroller.scrollTop = saved;
-      return;
-    }
-    // A tool page owns the prose AFTER it, up to the next tool. The same prose
-    // would otherwise be duplicated as the next page's "before" context. New
-    // pages therefore start at zero with the selected tool reliably in focus.
-    scroller.scrollTop = 0;
+    const align = (): void => {
+      // Keep BOTH context directions in normal scroll flow, but add only the
+      // trailing room needed for the selected tool to reach the top on a short
+      // page. This is layout compensation, not visible content: opening focuses
+      // the tool; scrolling upward reveals its preceding prose, downward reveals
+      // its following prose. Re-run after the sheet computes its cover height.
+      spacer.style.height = "0px";
+      const currentTop = scroller.scrollTop +
+        current.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      const maxWithoutSpacer = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      spacer.style.height = `${Math.max(0, currentTop - maxWithoutSpacer + 8)}px`;
+      scroller.scrollTop = saved ?? currentTop;
+    };
+    align();
+    const frame = globalThis.requestAnimationFrame(align);
+    const settled = globalThis.setTimeout(align, 340);
+    return () => {
+      globalThis.cancelAnimationFrame(frame);
+      globalThis.clearTimeout(settled);
+    };
   }, [item?.key]);
 
   const select = (next: ToolItem | undefined): void => {
@@ -1714,9 +1730,13 @@ function ToolDetailsBrowser({
   if (!item) return null;
   const raw = rawByKey[item.key] ?? false;
   const itemIndex = items.findIndex((candidate) => candidate.key === item.key);
+  const previousToolIndex = index > 0
+    ? items.findIndex((candidate) => candidate.key === tools[index - 1]?.key)
+    : -1;
   const nextToolIndex = index < tools.length - 1
     ? items.findIndex((candidate) => candidate.key === tools[index + 1]?.key)
     : items.length;
+  const before = items.slice(previousToolIndex + 1, itemIndex);
   const after = items.slice(itemIndex + 1, nextToolIndex);
   const running = item.status === "in_progress" || item.status === "pending";
   const ctx: ToolCtx = {
@@ -1862,7 +1882,8 @@ function ToolDetailsBrowser({
     >
       <Box ref={bodyRef}>
         <Stack spacing={1.25}>
-            <Stack direction="row" spacing={1} alignItems="flex-start">
+            <ToolTranscriptContext items={before} position="before" />
+            <Stack ref={currentRef} direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
               </Box>
@@ -1955,6 +1976,7 @@ function ToolDetailsBrowser({
                 : <ToolBody ctx={ctx} />}
             </Box>
             <ToolTranscriptContext items={after} position="after" />
+            <Box ref={anchorSpacerRef} aria-hidden />
           </Stack>
       </Box>
     </Sheet>,
