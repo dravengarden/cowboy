@@ -193,7 +193,16 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
         </Stack>
       )}
       {mode === "readable" && readable?.context && (
-        <Typography variant="caption" sx={{ display: "block", mb: 0.5, color: "text.disabled", fontFamily: "ui-monospace, monospace" }}>
+        <Typography
+          variant="caption"
+          sx={{
+            display: "block",
+            mb: 0.5,
+            color: "text.secondary",
+            fontFamily: "ui-monospace, monospace",
+            fontWeight: 600,
+          }}
+        >
           {readable.context}
         </Typography>
       )}

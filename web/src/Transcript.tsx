@@ -63,6 +63,7 @@ import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import { toolHeading, toolVariantLabel } from "./tools/presentation";
+import { formatShellForDisplay } from "./shellFormatter";
 import {
   COMPACTING_NOTICE,
   type ContentChunk,
@@ -1372,7 +1373,33 @@ function ToolCard({
   const running = item.status === "in_progress" || item.status === "pending";
   // The header shows only the first line of the title — a Bash title IS the whole
   // (possibly multi-line) command, which would otherwise blow up the row.
-  const headerTitle = (item.title || "").split("\n")[0] || item.title;
+  const fallbackTitle = (item.title || "").split("\n")[0] || item.title;
+  const [headerTitle, setHeaderTitle] = useState(fallbackTitle);
+  useEffect(() => {
+    setHeaderTitle(fallbackTitle);
+    if (item.toolKind !== "execute" || !item.rawInput || typeof item.rawInput !== "object") return;
+    const input = item.rawInput as Record<string, unknown>;
+    const raw = input["command"] ?? input["cmd"];
+    const command = typeof raw === "string"
+      ? raw
+      : Array.isArray(raw)
+      ? raw.map(String).join(" ")
+      : "";
+    // Only pay the async parser cost when the collapsed ACP title exposes a
+    // shell launcher. The mvdan/sh formatter unwraps the same launcher in Tool
+    // details; using its result here keeps summary and detail on one semantic
+    // layer without replacing useful titles for ordinary commands.
+    if (!/(?:^|[\s/])(?:ba|z)?sh\s+-[^\s]*c(?:\s|$)/u.test(command)) return;
+    let active = true;
+    void formatShellForDisplay(command, 88).then((display) => {
+      if (!active || !display?.context) return;
+      const firstLine = display.text.split("\n").find((line) => line.trim())?.trim();
+      if (firstLine) setHeaderTitle(`${display.context} · ${firstLine}`);
+    });
+    return () => {
+      active = false;
+    };
+  }, [fallbackTitle, item.rawInput, item.toolKind]);
   return (
     <Paper
         elevation={0}
