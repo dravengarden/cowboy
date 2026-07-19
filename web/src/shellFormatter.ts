@@ -74,7 +74,10 @@ export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): P
       ...frame,
       text: format(frame.text, {
         language: frame.dialect === "postgresql" ? "postgresql" : "sql",
-        keywordCase: "preserve",
+        // SQL keywords form the visual structure of a query. Uppercasing only
+        // those tokens makes nested SQL scan quickly while identifiers,
+        // functions, literals, Source mode, and copied bytes stay untouched.
+        keywordCase: "upper",
         dataTypeCase: "preserve",
         functionCase: "preserve",
         logicalOperatorNewline: "before",
