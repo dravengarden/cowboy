@@ -4,6 +4,7 @@ import { CheckRounded, ContentCopyRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
 import { copyText } from "../clipboard";
 import { Collapsible } from "./Collapsible";
+import { nestedMarkerColor } from "./nestedMarkerColors";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
 import { addShellPathBreaks, formatShellForDisplay } from "../shellFormatter";
@@ -278,8 +279,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             >
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
-              const markerPalette = ["#9b7cf8", "#55a7ff", "#55c98b", "#ee9b45", "#d5b83f", "#e86767", "#a7785b", "#b8bec9"];
-              const markerColor = markerPalette[(frame.color ?? 0) % markerPalette.length];
+              const markerColor = nestedMarkerColor(frame.marker, theme.palette.mode === "dark", frame.color);
               return (
               <Box
                 key={`${index}:${frame.launcher}`}
