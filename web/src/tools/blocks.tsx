@@ -274,8 +274,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
               const markerPalette = ["#9b7cf8", "#55a7ff", "#55c98b", "#ee9b45", "#d5b83f", "#e86767", "#a7785b", "#b8bec9"];
-              const markerNumber = Number.parseInt(frame.marker?.replace(/^\D+/u, "") ?? "1", 10);
-              const markerColor = markerPalette[(Number.isFinite(markerNumber) ? markerNumber - 1 : 0) % markerPalette.length];
+              const markerColor = markerPalette[(frame.color ?? 0) % markerPalette.length];
               return (
               <Box
                 key={`${index}:${frame.launcher}`}

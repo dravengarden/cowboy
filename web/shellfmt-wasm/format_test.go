@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"encoding/base64"
+	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -18,6 +23,96 @@ func TestFormatsShellStructure(t *testing.T) {
 func TestRejectsInvalidShell(t *testing.T) {
 	if _, err := formatShellSource("echo '"); err == nil {
 		t.Fatal("expected an incomplete quote to fail closed")
+	}
+}
+
+func TestNestedEmojiPaletteCoversFrameLimit(t *testing.T) {
+	if len(nestedShellMarkers) != maxShellFrames {
+		t.Fatalf("emoji palette must cover every allowed frame: markers=%d frames=%d", len(nestedShellMarkers), maxShellFrames)
+	}
+	seen := make(map[string]struct{}, len(nestedShellMarkers))
+	for _, marker := range nestedShellMarkers {
+		if _, duplicate := seen[marker]; duplicate {
+			t.Fatalf("nested emoji markers must be unique: %q", marker)
+		}
+		seen[marker] = struct{}{}
+	}
+}
+
+// TestHistoricalShellCorpus is an opt-in, read-only production-corpus audit.
+// The input is one base64-encoded command per line so multiline scripts remain
+// distinct. Normal unit tests skip it; operators can export a corpus without
+// checking commands or potentially sensitive arguments into Git.
+func TestHistoricalShellCorpus(t *testing.T) {
+	path := os.Getenv("COWBOY_SHELL_CORPUS")
+	if path == "" {
+		t.Skip("set COWBOY_SHELL_CORPUS to audit historical commands")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	total, formatted, fallback, nested, ssh, heredoc, multiline := 0, 0, 0, 0, 0, 0, 0
+	sshNested, sshFallback, shellCommand, shellCommandNested := 0, 0, 0, 0
+	maxFrames := 0
+	errorCounts := make(map[string]int)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		decoded, err := base64.StdEncoding.DecodeString(scanner.Text())
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := string(decoded)
+		total++
+		hasSSH := strings.Contains(command, "ssh ") || strings.HasPrefix(command, "ssh ")
+		if hasSSH {
+			ssh++
+		}
+		hasShellCommand := strings.Contains(command, "bash -c") || strings.Contains(command, "bash -lc") || strings.Contains(command, "sh -c") || strings.Contains(command, "sh -lc")
+		if hasShellCommand {
+			shellCommand++
+		}
+		if strings.Contains(command, "<<") {
+			heredoc++
+		}
+		if strings.Contains(command, "\n") {
+			multiline++
+		}
+		display, err := formatShellDisplay(command, 46)
+		if err != nil {
+			fallback++
+			if hasSSH {
+				sshFallback++
+			}
+			errorCounts[err.Error()]++
+			continue
+		}
+		formatted++
+		if len(display.Frames) > 1 {
+			nested++
+			if hasSSH {
+				sshNested++
+			}
+			if hasShellCommand {
+				shellCommandNested++
+			}
+		}
+		maxFrames = max(maxFrames, len(display.Frames))
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("commands=%d formatted=%d fallback=%d nested=%d ssh=%d heredoc=%d multiline=%d max_frames=%d", total, formatted, fallback, nested, ssh, heredoc, multiline, maxFrames)
+	t.Logf("ssh_nested=%d ssh_fallback=%d ssh_plain=%d shell_c=%d shell_c_nested=%d", sshNested, sshFallback, ssh-sshNested-sshFallback, shellCommand, shellCommandNested)
+	errors := make([]string, 0, len(errorCounts))
+	for message, count := range errorCounts {
+		errors = append(errors, message+" ["+strconv.Itoa(count)+"]")
+	}
+	sort.Strings(errors)
+	for _, summary := range errors {
+		t.Log("fallback:", summary)
 	}
 }
 
@@ -61,7 +156,7 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c '🟣1'" || display.Frames[1].Launcher == "" {
+	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c '🔮'" || display.Frames[1].Launcher == "" {
 		t.Fatalf("whole-file wrapper should be a parent skeleton followed by its payload: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[1].Text, "nix develop") {
@@ -83,10 +178,10 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 1 {
 		t.Fatalf("sibling payloads must retain the same depth: %#v", display.Frames)
 	}
-	if display.Frames[1].Marker != "🟣1" || display.Frames[2].Marker != "🔵2" {
+	if display.Frames[1].Marker != "🔮" || display.Frames[2].Marker != "🪐" {
 		t.Fatalf("sibling payloads need distinct paired markers: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[0].Text, "🟣") || !strings.Contains(display.Frames[0].Text, "🔵") {
+	if !strings.Contains(display.Frames[0].Text, "🔮") || !strings.Contains(display.Frames[0].Text, "🪐") {
 		t.Fatalf("parent payload slots must show matching markers: %#v", display.Frames)
 	}
 	if !strings.Contains(display.Frames[1].Text, "deno task check") || !strings.Contains(display.Frames[2].Text, "cargo test") {
@@ -105,11 +200,11 @@ func TestNestedMarkersRemainUniqueAcrossDepths(t *testing.T) {
 	if len(display.Frames) != 3 {
 		t.Fatalf("expected root, child, and grandchild frames: %#v", display.Frames)
 	}
-	if display.Frames[1].Depth != 1 || display.Frames[1].Marker != "🟣1" ||
-		display.Frames[2].Depth != 2 || display.Frames[2].Marker != "🔵2" {
+	if display.Frames[1].Depth != 1 || display.Frames[1].Marker != "🔮" ||
+		display.Frames[2].Depth != 2 || display.Frames[2].Marker != "🪐" {
 		t.Fatalf("nested references must remain unique across the tree: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[0].Text, "🟣1") || !strings.Contains(display.Frames[1].Text, "🔵2") {
+	if !strings.Contains(display.Frames[0].Text, "🔮") || !strings.Contains(display.Frames[1].Text, "🪐") {
 		t.Fatalf("each parent must contain its direct child's matching reference: %#v", display.Frames)
 	}
 }

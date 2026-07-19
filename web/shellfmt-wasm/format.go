@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -24,6 +23,7 @@ type shellFrame struct {
 	Text     string
 	Depth    int
 	Marker   string
+	Color    int
 }
 
 func formatShellDisplay(source string, columns int) (shellDisplay, error) {
@@ -56,12 +56,18 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 const maxShellFrameDepth = 6
 const maxShellFrames = 32
 
-var nestedShellMarkers = [...]string{"🟣", "🔵", "🟢", "🟠", "🟡", "🔴", "🟤", "⚪"}
+var nestedShellMarkers = [...]string{
+	"🔮", "🪐", "🌙", "⭐", "💎", "🧿", "🌀", "✨",
+	"🚀", "🛸", "🛰️", "☄️", "🌌", "🌈", "🔥", "⚡",
+	"🌊", "🍀", "🌸", "🍋", "🍊", "🍇", "🫐", "🥝",
+	"🦊", "🐳", "🦋", "🐙", "🐝", "🐢", "🦄", "🐬",
+}
 
-func nextNestedShellMarker(sequence *int) string {
+func nextNestedShellMarker(sequence *int) (string, int) {
 	*sequence++
 	index := *sequence
-	return nestedShellMarkers[(index-1)%len(nestedShellMarkers)] + strconv.Itoa(index)
+	paletteIndex := (index - 1) % len(nestedShellMarkers)
+	return nestedShellMarkers[paletteIndex], paletteIndex
 }
 
 // formatShellFrames projects nested shell payloads as independently parsed
@@ -79,7 +85,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 			}
 			extracted := make([]extraction, 0, len(nested))
 			for _, candidate := range nested {
-				marker := nextNestedShellMarker(markerSequence)
+				marker, color := nextNestedShellMarker(markerSequence)
 				innerFile, err := parseShell(candidate.payload)
 				if err != nil {
 					continue
@@ -90,6 +96,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				}
 				children[0].Launcher = candidate.launcher
 				children[0].Marker = marker
+				children[0].Color = color
 				extracted = append(extracted, extraction{nested: candidate, children: children})
 			}
 			if len(extracted) > 0 {
