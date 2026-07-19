@@ -122,6 +122,40 @@ function TerminalOutput({ text, running }: { text: string; running: boolean }): 
   );
 }
 
+function FileReadContent({
+  content,
+  language,
+}: {
+  content: unknown;
+  language: string;
+}): React.JSX.Element | null {
+  const text = terminalText(content);
+  const [wrapped, setWrapped] = useState(true);
+  if (!text) return null;
+  if (language === "markdown") return <OutputBlocks content={content} lang={language} />;
+  const control = (
+    <Box role="group" aria-label="File line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+      {([true, false] as const).map((value) => (
+        <ButtonBase
+          key={String(value)}
+          aria-pressed={wrapped === value}
+          onClick={(): void => setWrapped(value)}
+          sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+        >
+          {value ? "Wrap" : "Scroll"}
+        </ButtonBase>
+      ))}
+    </Box>
+  );
+  return (
+    <Labeled label={language ? "Source" : "Contents"} action={control}>
+      {language
+        ? <CodeView code={text} lang={language} maxHeight={420} wrap={wrapped} wrapControl={false} />
+        : <PreBlock text={text} maxHeight={420} wrap={wrapped} />}
+    </Labeled>
+  );
+}
+
 // --- kind renderers (provider-agnostic via the normalized ACP kind) ----------
 
 const executeTool: Renderer = ({ rawInput, content, running }) => {
@@ -171,7 +205,7 @@ const readTool: Renderer = ({ rawInput, content, running }) => {
           )}
         </Stack>
       )}
-      {has ? <OutputBlocks content={content} lang={lang} /> : running ? <RunningHint /> : <Empty />}
+      {has ? <FileReadContent content={content} language={lang} /> : running ? <RunningHint /> : <Empty />}
     </Stack>
   );
 };

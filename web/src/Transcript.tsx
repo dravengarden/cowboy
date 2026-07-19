@@ -1522,6 +1522,14 @@ type ToolContextBlock = {
   text: string;
 };
 
+type FollowingToolPhase = "settled" | "running" | "ready";
+
+const nextToolArrival = keyframes`
+  0% { background-color: transparent; }
+  35% { background-color: rgba(76, 175, 80, 0.13); }
+  100% { background-color: transparent; }
+`;
+
 function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
   const blocks: ToolContextBlock[] = [];
   for (const item of items) {
@@ -1554,13 +1562,16 @@ function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
 function ToolTranscriptContext({
   items,
   position,
+  phase = "settled",
 }: {
   items: RenderItem[];
   position: "before" | "after";
+  phase?: FollowingToolPhase;
 }): React.JSX.Element | null {
   const blocks = toolContextBlocks(items);
   const [open, setOpen] = useState(false);
-  if (blocks.length === 0) return null;
+  const activeFollowing = position === "after" && phase !== "settled";
+  if (blocks.length === 0 && !activeFollowing) return null;
   const label = position === "before" ? "Before this tool" : "After this tool";
   const preview = blocks
     .map((block) =>
@@ -1575,6 +1586,13 @@ function ToolTranscriptContext({
     )
     .filter(Boolean)
     .join(" · ");
+  const statusText = phase === "running"
+    ? "Working on the next step…"
+    : phase === "ready"
+    ? "Next tool ready"
+    : "";
+  const summary = preview || statusText;
+  const canExpand = blocks.length > 0;
   return (
     <Box
       aria-label={`${position === "before" ? "Previous" : "Following"} transcript context`}
@@ -1585,10 +1603,12 @@ function ToolTranscriptContext({
         borderRadius: 1.5,
         overflow: "hidden",
         transition: "background-color .18s ease, border-color .18s ease",
+        ...(phase === "ready" && { animation: `${nextToolArrival} .7s ease-out 1` }),
       }}
     >
       <ButtonBase
         aria-expanded={open}
+        disabled={!canExpand}
         onClick={(): void => setOpen((value) => !value)}
         sx={{
           width: "100%",
@@ -1607,9 +1627,13 @@ function ToolTranscriptContext({
         <Box sx={{ minWidth: 0 }}>
           <Typography
             variant="overline"
-            sx={{ display: "block", color: "text.disabled", lineHeight: 1.35 }}
+            sx={{ display: "flex", alignItems: "center", gap: 0.625, color: "text.disabled", lineHeight: 1.35 }}
           >
             {label}
+            {phase === "running" && <CircularProgress size={10} thickness={5} color="inherit" />}
+            {phase === "ready" && (
+              <Box component="span" aria-hidden sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "success.main" }} />
+            )}
           </Typography>
           {!open && (
             <Typography
@@ -1623,17 +1647,19 @@ function ToolTranscriptContext({
                 whiteSpace: "nowrap",
               }}
             >
-              {preview}
+              {summary}
             </Typography>
           )}
         </Box>
-        <ExpandMore
-          sx={{
-            color: "text.secondary",
-            transform: open ? "rotate(180deg)" : "none",
-            transition: "transform .2s cubic-bezier(.2,.8,.2,1)",
-          }}
-        />
+        {canExpand && (
+          <ExpandMore
+            sx={{
+              color: "text.secondary",
+              transform: open ? "rotate(180deg)" : "none",
+              transition: "transform .2s cubic-bezier(.2,.8,.2,1)",
+            }}
+          />
+        )}
       </ButtonBase>
       {open && (
         <Stack spacing={1} sx={{ px: 1.25, pb: 1.25, borderLeft: 2, borderColor: "primary.main" }}>
@@ -2080,7 +2106,12 @@ function ToolDetailsBrowser({
                   </Box>
                 )}
             </Box>
-            <ToolTranscriptContext key={`${item.key}-after`} items={after} position="after" />
+            <ToolTranscriptContext
+              key={`${item.key}-after`}
+              items={after}
+              position="after"
+              phase={running ? "running" : runIndex < runs.length - 1 ? "ready" : "settled"}
+            />
             <Box ref={anchorSpacerRef} aria-hidden />
           </Stack>
       </Box>
