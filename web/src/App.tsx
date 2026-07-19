@@ -117,6 +117,8 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
+import { horizontalSwipe, swipeCommits } from "./touchGestures";
+import { haptic } from "./haptic";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -987,6 +989,7 @@ export function App({
     // Conversation + rail), not a device label: Desktop spends horizontal space
     // on parallel context without squeezing the actual work panes into slivers.
     const mobile = surface === "touch";
+    const phone = useMediaQuery("(max-width:767.95px) and (pointer:coarse)");
     const compactDesktopWidth = useMediaQuery("(max-width:1099px)");
     const desktopNavCollapsed = surface === "desktop" && compactDesktopWidth;
     const sessionsInDrawer = mobile || desktopNavCollapsed;
@@ -1129,6 +1132,84 @@ export function App({
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+
+    // Mobile's session list is a spatial layer to the left of the conversation.
+    // A deliberate swipe from the left edge reveals it; requiring both an edge
+    // origin and a horizontal direction lock keeps transcript scrolling, code
+    // selection, composer editing, and iOS vertical momentum fully native.
+    useEffect(() => {
+        if (!mobile || !phone || drawerOpen || anySheetOpen) return undefined;
+        const surface = columnRef.current;
+        if (!surface) return undefined;
+        let gesture: { x: number; y: number; locked: boolean } | null = null;
+        let commit = false;
+        const settle = (): void => {
+            surface.style.transition = "transform 260ms cubic-bezier(0.22, 1, 0.36, 1)";
+            surface.style.transform = "translate3d(0, 0, 0)";
+            globalThis.setTimeout(() => {
+                surface.style.removeProperty("transition");
+                surface.style.removeProperty("transform");
+                surface.style.removeProperty("will-change");
+            }, 280);
+        };
+        const onTouchStart = (event: TouchEvent): void => {
+            const touch = event.touches[0];
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            if (!touch || touch.clientX > 32 || target?.closest("button, input, textarea, [role='button']")) {
+                gesture = null;
+                return;
+            }
+            gesture = { x: touch.clientX, y: touch.clientY, locked: false };
+            commit = false;
+        };
+        const onTouchMove = (event: TouchEvent): void => {
+            const touch = event.touches[0];
+            if (!gesture || !touch) return;
+            const deltaX = touch.clientX - gesture.x;
+            const deltaY = touch.clientY - gesture.y;
+            if (!gesture.locked && Math.abs(deltaY) >= 12 && Math.abs(deltaY) > Math.abs(deltaX) * 1.1) {
+                gesture = null;
+                return;
+            }
+            const swipe = gesture.locked
+                ? { direction: deltaX < 0 ? "left" as const : "right" as const, distance: Math.abs(deltaX) }
+                : horizontalSwipe(deltaX, deltaY);
+            if (!swipe || swipe.direction !== "right") return;
+            gesture.locked = true;
+            event.preventDefault();
+            const offset = Math.min(46, swipe.distance * 0.34);
+            surface.style.transition = "none";
+            surface.style.willChange = "transform";
+            surface.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
+            const nextCommit = swipeCommits(swipe.distance, surface.clientWidth);
+            if (nextCommit && !commit) haptic(12);
+            commit = nextCommit;
+        };
+        const onTouchEnd = (): void => {
+            if (!gesture) return;
+            const shouldOpen = commit;
+            gesture = null;
+            commit = false;
+            settle();
+            if (shouldOpen) globalThis.setTimeout(() => setDrawerOpen(true), 120);
+        };
+        const onTouchCancel = (): void => {
+            gesture = null;
+            commit = false;
+            settle();
+        };
+        surface.addEventListener("touchstart", onTouchStart, { passive: true });
+        surface.addEventListener("touchmove", onTouchMove, { passive: false });
+        surface.addEventListener("touchend", onTouchEnd, { passive: true });
+        surface.addEventListener("touchcancel", onTouchCancel, { passive: true });
+        return () => {
+            surface.removeEventListener("touchstart", onTouchStart);
+            surface.removeEventListener("touchmove", onTouchMove);
+            surface.removeEventListener("touchend", onTouchEnd);
+            surface.removeEventListener("touchcancel", onTouchCancel);
+            settle();
+        };
+    }, [anySheetOpen, drawerOpen, mobile, phone]);
     // Settings + Info are one merged sheet; this picks which tab it opens on.
     const [settingsTab, setSettingsTab] = useState<"settings" | "info">("settings");
     const openSettings = (tab: "settings" | "info"): void => {

@@ -86,6 +86,7 @@ import {
   useStoreSelector,
 } from "./store";
 import { haptic } from "./haptic";
+import { hasHorizontalScroller, horizontalSwipe, swipeCommits } from "./touchGestures";
 import { useReadingSettings } from "./readingSettings";
 import {
   requestStickToBottom,
@@ -1676,7 +1677,7 @@ function ToolDetailsBrowser({
   const edgeGestureRef = useRef<{
     x: number;
     y: number;
-    edge: "previous" | "next" | "both";
+    locked: boolean;
   } | null>(null);
   const pullHintRef = useRef<HTMLDivElement>(null);
 
@@ -1736,17 +1737,17 @@ function ToolDetailsBrowser({
       const offset = Math.min(52, distance * 0.32);
       body.style.transition = "none";
       body.style.willChange = "transform";
-      body.style.transform = `translate3d(0, ${String(direction === "previous" ? offset : -offset)}px, 0)`;
+      body.style.transform = `translate3d(${String(direction === "previous" ? offset : -offset)}px, 0, 0)`;
       const hint = pullHintRef.current;
       if (hint) {
         const available = direction === "previous" ? index > 0 : index < tools.length - 1;
         hint.textContent = available
           ? direction === "previous" ? "Previous tool" : "Next tool"
           : direction === "previous" ? "Beginning" : "End";
-        hint.style.top = direction === "previous" ? "-22px" : "auto";
-        hint.style.bottom = direction === "next" ? "-22px" : "auto";
+        hint.style.top = "-22px";
+        hint.style.bottom = "auto";
         hint.style.opacity = String(Math.min(1, distance / 72));
-        hint.style.transform = `translate(-50%, ${String(direction === "previous" ? -offset * 0.12 : offset * 0.12)}px)`;
+        hint.style.transform = `translate(calc(-50% + ${String(direction === "previous" ? offset * 0.12 : -offset * 0.12)}px), 0)`;
       }
     };
     const settlePull = (): void => {
@@ -1770,16 +1771,8 @@ function ToolDetailsBrowser({
     };
     const onTouchStart = (event: TouchEvent): void => {
       const touch = event.touches[0];
-      if (!touch) return;
-      const atTop = scroller.scrollTop <= 1;
-      const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1;
-      edgeGestureRef.current = atTop && atBottom
-        ? { x: touch.clientX, y: touch.clientY, edge: "both" }
-        : atTop
-        ? { x: touch.clientX, y: touch.clientY, edge: "previous" }
-        : atBottom
-        ? { x: touch.clientX, y: touch.clientY, edge: "next" }
-        : null;
+      if (!touch || hasHorizontalScroller(event.target, body)) return;
+      edgeGestureRef.current = { x: touch.clientX, y: touch.clientY, locked: false };
       edgeIntentRef.current = null;
       setEdgeIntent(null);
     };
@@ -1787,24 +1780,23 @@ function ToolDetailsBrowser({
       const gesture = edgeGestureRef.current;
       const touch = event.touches[0];
       if (!gesture || !touch) return;
-      const delta = touch.clientY - gesture.y;
-      const horizontal = Math.abs(touch.clientX - gesture.x);
-      if (horizontal > Math.abs(delta)) {
-        clearIntent();
-        settlePull();
+      const deltaX = touch.clientX - gesture.x;
+      const deltaY = touch.clientY - gesture.y;
+      if (!gesture.locked && Math.abs(deltaY) >= 12 && Math.abs(deltaY) > Math.abs(deltaX) * 1.1) {
+        edgeGestureRef.current = null;
         return;
       }
-      const direction = gesture.edge === "both"
-        ? delta >= 0 ? "previous" : "next"
-        : gesture.edge;
-      const distance = direction === "previous"
-        ? touch.clientY - gesture.y
-        : gesture.y - touch.clientY;
-      if (distance <= 0) return;
+      const swipe = gesture.locked
+        ? { direction: deltaX < 0 ? "left" as const : "right" as const, distance: Math.abs(deltaX) }
+        : horizontalSwipe(deltaX, deltaY);
+      if (!swipe) return;
+      gesture.locked = true;
+      const direction = swipe.direction === "right" ? "previous" : "next";
+      const distance = swipe.distance;
       event.preventDefault();
       paintPull(direction, distance);
       const available = direction === "previous" ? index > 0 : index < tools.length - 1;
-      const nextIntent = available && distance >= 84 ? direction : null;
+      const nextIntent = available && swipeCommits(distance, scroller.clientWidth) ? direction : null;
       if (edgeIntentRef.current === nextIntent) return;
       edgeIntentRef.current = nextIntent;
       setEdgeIntent(nextIntent);
@@ -1814,9 +1806,8 @@ function ToolDetailsBrowser({
       const intent = edgeIntentRef.current;
       settlePull();
       clearIntent();
-      // Let the rubber band visibly settle before replacing its content. This
-      // makes the transition read as one native pull action instead of a sudden
-      // page jump at finger-up.
+      // Settle before replacing content so the sideways page gesture reads as
+      // one native navigation action rather than a sudden content swap.
       if (intent === "previous") globalThis.setTimeout(() => select(tools[index - 1]), 150);
       if (intent === "next") globalThis.setTimeout(() => select(tools[index + 1]), 150);
     };
@@ -1932,7 +1923,7 @@ function ToolDetailsBrowser({
             fontWeight: 700,
           }}
         >
-          {edgeIntent === "previous" ? "Release for previous tool ↑" : "Release for next tool ↓"}
+          {edgeIntent === "previous" ? "Release for previous tool →" : "Release for next tool ←"}
         </Box>
       )}
       {roomy
