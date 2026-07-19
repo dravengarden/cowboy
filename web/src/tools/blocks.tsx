@@ -305,6 +305,29 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
               const markerColor = nestedMarkerColor(frame.marker, theme.palette.mode === "dark", frame.color);
+              // Every nested frame redraws the still-active ancestor rails in
+              // the same coordinate system. This makes a parent rail continue
+              // through its descendants instead of disappearing when the
+              // child adds another level of indentation.
+              const rails = Array.from({ length: depth }, (_, railIndex) => {
+                const level = railIndex + 1;
+                let owner = frame;
+                for (let candidateIndex = index; candidateIndex >= 0; candidateIndex -= 1) {
+                  const candidate = readable.frames[candidateIndex];
+                  if (!candidate) continue;
+                  const candidateDepth = candidate.depth ?? candidateIndex;
+                  if (candidateDepth < level) break;
+                  if (candidateDepth === level) {
+                    owner = candidate;
+                    break;
+                  }
+                }
+                return {
+                  level,
+                  color: nestedMarkerColor(owner.marker, theme.palette.mode === "dark", owner.color),
+                  current: level === depth,
+                };
+              });
               return (
               <Box
                 key={`${index}:${frame.launcher}`}
@@ -312,35 +335,42 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 data-shell-depth={depth}
                 sx={{
                   position: "relative",
-                  ml: depth === 0 ? 0 : 1.25 + Math.min(depth - 1, 2) * 0.75,
-                  pl: depth === 0 ? 0 : 1.125,
-                  ...(depth > 0 && {
-                    mt: 0.25,
-                    "&::before": {
-                      content: '""',
+                  pl: depth === 0 ? 0 : `${20 + (depth - 1) * 10}px`,
+                  py: depth === 0 ? 0 : 0.25,
+                }}
+              >
+                {rails.map((rail) => (
+                  <Box
+                    key={rail.level}
+                    aria-hidden="true"
+                    data-shell-rail={rail.level}
+                    sx={{
                       position: "absolute",
-                      left: 0,
-                      top: 8,
-                      bottom: 8,
+                      left: `${8 + (rail.level - 1) * 10}px`,
+                      top: rail.current ? 8 : 0,
+                      bottom: 0,
                       width: 2,
                       borderRadius: 999,
-                      bgcolor: markerColor,
-                      opacity: 0.58,
-                    },
-                    "&::after": {
-                      content: '""',
+                      bgcolor: rail.color,
+                      opacity: rail.current ? 0.72 : 0.48,
+                    }}
+                  />
+                ))}
+                {depth > 0 && (
+                  <Box
+                    aria-hidden="true"
+                    sx={{
                       position: "absolute",
-                      left: 0,
+                      left: `${8 + (depth - 1) * 10}px`,
                       top: 8,
-                      width: 10,
+                      width: 8,
                       height: 2,
                       borderRadius: 999,
                       bgcolor: markerColor,
-                      opacity: 0.58,
-                    },
-                  }),
-                }}
-              >
+                      opacity: 0.72,
+                    }}
+                  />
+                )}
                 {depth > 0 && frame.marker && (
                   <Box
                     component="span"
@@ -348,8 +378,8 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     sx={{
                       position: "absolute",
                       zIndex: 1,
-                      left: -8,
-                      top: -1,
+                      left: `${1 + (depth - 1) * 10}px`,
+                      top: 0,
                       display: "grid",
                       placeItems: "center",
                       minWidth: 18,
