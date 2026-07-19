@@ -341,7 +341,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 )}
                 {frame.text && (
                   <CodeView
-                    code={phone && frame.language !== "sql" ? addShellPathBreaks(frame.text) : frame.text}
+                    code={phone && (!frame.language || frame.language === "bash") ? addShellPathBreaks(frame.text) : frame.text}
                     lang={frame.language ?? "bash"}
                     // Nested mode is one semantic disclosure. Its outer fold
                     // owns expansion so a parent frame cannot collapse while

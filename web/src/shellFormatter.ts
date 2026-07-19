@@ -32,7 +32,7 @@ export interface ShellDisplay {
 export interface ShellFrame {
   launcher: string;
   text: string;
-  language?: "bash" | "sql";
+  language?: "bash" | "jq" | "sql";
   dialect?: "postgresql" | "sql";
   depth?: number;
   marker?: string;
@@ -49,6 +49,21 @@ export function addShellPathBreaks(source: string): string {
 const formatCache = new Map<string, Promise<ShellDisplay | null>>();
 
 export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): Promise<ShellFrame> {
+  if (frame.language === "jq") {
+    try {
+      // The parser/formatter is loaded only after a complex jq filter has been
+      // extracted from Bash. Its canonical output proves the entire program
+      // parsed; reflowJq then adds width-aware display breaks without touching
+      // quoted operators. Failure keeps the exact decoded filter.
+      const [{ format }, { reflowJq }] = await Promise.all([
+        import("@jq-tools/jq"),
+        import("./jqFormatter.ts"),
+      ]);
+      return { ...frame, text: reflowJq(format(frame.text).trimEnd(), columns) };
+    } catch {
+      return frame;
+    }
+  }
   if (frame.language !== "sql") return frame;
   try {
     // Kept behind the already-lazy shell formatter path: ordinary transcript

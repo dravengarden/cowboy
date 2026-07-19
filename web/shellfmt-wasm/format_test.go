@@ -469,3 +469,63 @@ func TestLeavesDynamicPsqlPayloadInShellFrame(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractsComplexJQProgramAsFormattedFrame(t *testing.T) {
+	source := `jq -er '.endpoints[] | select(.type == "tailscale" and (has("detour") | not) and .domain_resolver.server == "dns-direct") | .inbounds[] | select(.type == "tun") | .stack' "$tmp"`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var query *shellFrame
+	for index := range display.Frames {
+		if display.Frames[index].Language == "jq" {
+			query = &display.Frames[index]
+			break
+		}
+	}
+	if query == nil {
+		t.Fatalf("expected a nested jq frame: %#v", display.Frames)
+	}
+	if query.Launcher != "jq" {
+		t.Fatalf("expected jq metadata: %#v", query)
+	}
+	if strings.Contains(query.Text, `\"`) || !strings.Contains(query.Text, `"tailscale"`) {
+		t.Fatalf("jq must be decoded from Bash quoting before formatting: %q", query.Text)
+	}
+}
+
+func TestExtractsJQProgramAfterArgumentOptions(t *testing.T) {
+	display, err := formatShellDisplay(`jq --arg kind tailscale --argjson enabled true '.items[] | select(.type == $kind and .enabled == $enabled) | {id, type, enabled}' input.json`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) < 2 || display.Frames[1].Language != "jq" {
+		t.Fatalf("expected option values to be skipped before the jq program: %#v", display.Frames)
+	}
+}
+
+func TestKeepsSimpleAndDynamicJQProgramsInline(t *testing.T) {
+	for _, source := range []string{`jq -r '.remote_url' profile.json`, `jq "$FILTER" profile.json`, `jq -f filter.jq profile.json`} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range display.Frames {
+			if frame.Language == "jq" {
+				t.Fatalf("simple, dynamic, or file-backed jq must stay inline: source=%q frames=%#v", source, display.Frames)
+			}
+		}
+	}
+}
+
+func TestLeavesInvalidJQProgramInShellFrame(t *testing.T) {
+	display, err := formatShellDisplay(`jq '.items[] | select(' input.json`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range display.Frames {
+		if frame.Language == "jq" {
+			t.Fatalf("invalid jq must fail closed to Bash: %#v", display.Frames)
+		}
+	}
+}

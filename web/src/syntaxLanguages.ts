@@ -49,6 +49,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   mk: "makefile",
   plaintext: "text",
   txt: "text",
+  jq: "jq",
 };
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {

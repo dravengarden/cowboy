@@ -114,8 +114,8 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				marker, color := markers.nextMarker()
 				var children []shellFrame
 				var innerFile *syntax.File
-				if candidate.language == "sql" {
-					children = []shellFrame{{Text: candidate.payload, Language: "sql", Dialect: candidate.dialect, Depth: depth + 1}}
+				if candidate.language != "" {
+					children = []shellFrame{{Text: candidate.payload, Language: candidate.language, Dialect: candidate.dialect, Depth: depth + 1}}
 				} else {
 					var err error
 					innerFile, err = parseShell(candidate.payload)
@@ -133,7 +133,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				// it saves. Structural shell complexity, multiple source lines, or a
 				// genuinely long command justify a frame. A child which found deeper
 				// frames must also remain so that the execution hierarchy is intact.
-				if candidate.language != "sql" && len(children) == 1 && !nestedShellNeedsFrame(candidate.payload, innerFile) {
+				if candidate.language == "" && len(children) == 1 && !nestedShellNeedsFrame(candidate.payload, innerFile) {
 					continue
 				}
 				children[0].Launcher = candidate.launcher
@@ -223,7 +223,7 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 	found := make([]nestedPayload, 0, 4)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		call, isCall := node.(*syntax.CallExpr)
-		if !isCall || len(call.Args) < 3 {
+		if !isCall || len(call.Args) < 2 {
 			return true
 		}
 		// OpenSSH sends every argument after the destination to a remote shell.
@@ -238,6 +238,10 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 		}
 		if sql, ok := sqlClientPayload(call); ok {
 			found = append(found, sql)
+			return false
+		}
+		if query, ok := jqClientPayload(call); ok {
+			found = append(found, query)
 			return false
 		}
 		for index := 0; index+2 < len(call.Args); index++ {
@@ -283,6 +287,117 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 	})
 	sort.Slice(found, func(i, j int) bool { return found[i].start < found[j].start })
 	return found
+}
+
+var jqOptionsWithTwoValues = map[string]struct{}{
+	"--arg": {}, "--argjson": {}, "--argfile": {}, "--rawfile": {}, "--slurpfile": {},
+}
+
+var jqOptionsWithOneValue = map[string]struct{}{
+	"--indent": {}, "--library-path": {}, "-L": {},
+}
+
+// jqClientPayload extracts a static jq program from its shell argument. The
+// shell AST remains the authority for quote and escape decoding; jqfmt then
+// parses the decoded program before any display-only formatting is accepted.
+// Small filters stay inline because a second visual frame would cost more
+// attention than it saves.
+func jqClientPayload(call *syntax.CallExpr) (nestedPayload, bool) {
+	command, static := staticWord(call.Args[0])
+	if !static || filepath.Base(command) != "jq" {
+		return nestedPayload{}, false
+	}
+	for index := 1; index < len(call.Args); index++ {
+		value, ok := staticWord(call.Args[index])
+		if !ok {
+			return nestedPayload{}, false
+		}
+		if value == "--" {
+			index++
+			if index >= len(call.Args) {
+				return nestedPayload{}, false
+			}
+			return formattedJQPayload(call.Args[index])
+		}
+		if value == "-f" || value == "--from-file" || strings.HasPrefix(value, "--from-file=") {
+			return nestedPayload{}, false
+		}
+		if _, consumes := jqOptionsWithTwoValues[value]; consumes {
+			index += 2
+			if index >= len(call.Args) {
+				return nestedPayload{}, false
+			}
+			continue
+		}
+		if _, consumes := jqOptionsWithOneValue[value]; consumes {
+			index++
+			if index >= len(call.Args) {
+				return nestedPayload{}, false
+			}
+			continue
+		}
+		if strings.HasPrefix(value, "--arg=") || strings.HasPrefix(value, "--argjson=") ||
+			strings.HasPrefix(value, "--indent=") || strings.HasPrefix(value, "--library-path=") {
+			continue
+		}
+		if strings.HasPrefix(value, "-") && value != "-" {
+			continue
+		}
+		return formattedJQPayload(call.Args[index])
+	}
+	return nestedPayload{}, false
+}
+
+func formattedJQPayload(word *syntax.Word) (nestedPayload, bool) {
+	source, static := staticWord(word)
+	if !static || !jqNeedsFrame(source) {
+		return nestedPayload{}, false
+	}
+	return nestedPayload{
+		start: int(word.Pos().Offset()), end: int(word.End().Offset()),
+		launcher: "jq", payload: strings.TrimSpace(source), language: "jq",
+	}, true
+}
+
+// jqNeedsFrame is intentionally viewport-independent. Structural operators
+// and nesting raise the score faster than raw length, while one short selector
+// remains ordinary shell even on a phone.
+func jqNeedsFrame(source string) bool {
+	trimmed := strings.TrimSpace(source)
+	if strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 64 {
+		return true
+	}
+	depth, maxDepth, operators := 0, 0, 0
+	inString, escaped := false, false
+	for index := 0; index < len(trimmed); index++ {
+		char := trimmed[index]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch char {
+		case '"':
+			inString = true
+		case '(', '[', '{':
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case '|', ',':
+			operators++
+		}
+	}
+	return operators >= 2 || maxDepth >= 2
 }
 
 // sqlClientPayload extracts decoded SQL from PostgreSQL's client. staticWord

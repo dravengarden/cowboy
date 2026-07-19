@@ -21,6 +21,7 @@
     "@fontsource/atkinson-hyperlegible": "^5.2.8",
     "@fontsource/noto-sans-sc": "^5.2.9",
     "@fontsource/noto-serif-sc": "^5.2.9",
+    "@jq-tools/jq": "^0.0.11",
     "@lezer/common": "^1.2.0",
     "@lezer/highlight": "^1.2.0",
     "@lezer/markdown": "^1.6.0",
