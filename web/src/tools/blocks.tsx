@@ -273,6 +273,9 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           >
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
+              const markerPalette = ["#9b7cf8", "#55a7ff", "#55c98b", "#ee9b45", "#d5b83f", "#e86767", "#a7785b", "#b8bec9"];
+              const markerNumber = Number.parseInt(frame.marker?.replace(/^\D+/u, "") ?? "1", 10);
+              const markerColor = markerPalette[(Number.isFinite(markerNumber) ? markerNumber - 1 : 0) % markerPalette.length];
               return (
               <Box
                 key={`${index}:${frame.launcher}`}
@@ -292,7 +295,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                       bottom: 8,
                       width: 2,
                       borderRadius: 999,
-                      bgcolor: "primary.main",
+                      bgcolor: markerColor,
                       opacity: 0.58,
                     },
                     "&::after": {
@@ -303,7 +306,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                       width: 10,
                       height: 2,
                       borderRadius: 999,
-                      bgcolor: "primary.main",
+                      bgcolor: markerColor,
                       opacity: 0.58,
                     },
                   }),
@@ -316,15 +319,16 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     sx={{
                       position: "absolute",
                       zIndex: 1,
-                      left: -5,
-                      top: 1,
+                      left: -8,
+                      top: -1,
                       display: "grid",
                       placeItems: "center",
-                      width: 13,
-                      height: 13,
+                      minWidth: 18,
+                      height: 16,
+                      px: 0.25,
                       borderRadius: "50%",
                       bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
-                      fontSize: 9,
+                      fontSize: 8,
                       lineHeight: 1,
                     }}
                   >

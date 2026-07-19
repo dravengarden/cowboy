@@ -61,7 +61,7 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c '🟣'" || display.Frames[1].Launcher == "" {
+	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c '🟣1'" || display.Frames[1].Launcher == "" {
 		t.Fatalf("whole-file wrapper should be a parent skeleton followed by its payload: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[1].Text, "nix develop") {
@@ -83,7 +83,7 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 1 {
 		t.Fatalf("sibling payloads must retain the same depth: %#v", display.Frames)
 	}
-	if display.Frames[1].Marker != "🟣" || display.Frames[2].Marker != "🔵" {
+	if display.Frames[1].Marker != "🟣1" || display.Frames[2].Marker != "🔵2" {
 		t.Fatalf("sibling payloads need distinct paired markers: %#v", display.Frames)
 	}
 	if !strings.Contains(display.Frames[0].Text, "🟣") || !strings.Contains(display.Frames[0].Text, "🔵") {
@@ -94,6 +94,23 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	}
 	if strings.Contains(display.Frames[0].Text, "deno task") || strings.Contains(display.Frames[0].Text, "cargo test") {
 		t.Fatalf("parent skeleton must not duplicate extracted payloads: %#v", display.Frames)
+	}
+}
+
+func TestNestedMarkersRemainUniqueAcrossDepths(t *testing.T) {
+	display, err := formatShellDisplay(`bash -c 'printf outer; bash -c "printf inner"'`, 54)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 3 {
+		t.Fatalf("expected root, child, and grandchild frames: %#v", display.Frames)
+	}
+	if display.Frames[1].Depth != 1 || display.Frames[1].Marker != "🟣1" ||
+		display.Frames[2].Depth != 2 || display.Frames[2].Marker != "🔵2" {
+		t.Fatalf("nested references must remain unique across the tree: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[0].Text, "🟣1") || !strings.Contains(display.Frames[1].Text, "🔵2") {
+		t.Fatalf("each parent must contain its direct child's matching reference: %#v", display.Frames)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -34,7 +35,8 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 	if err != nil {
 		return shellDisplay{}, err
 	}
-	frames, err := formatShellFrames(source, file, columns, 0)
+	markerSequence := 0
+	frames, err := formatShellFrames(source, file, columns, 0, &markerSequence)
 	if err != nil {
 		return shellDisplay{}, err
 	}
@@ -54,14 +56,20 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 const maxShellFrameDepth = 6
 const maxShellFrames = 32
 
-var nestedShellMarkers = [...]string{"🟣", "🔵", "🟢", "🟠"}
+var nestedShellMarkers = [...]string{"🟣", "🔵", "🟢", "🟠", "🟡", "🔴", "🟤", "⚪"}
+
+func nextNestedShellMarker(sequence *int) string {
+	*sequence++
+	index := *sequence
+	return nestedShellMarkers[(index-1)%len(nestedShellMarkers)] + strconv.Itoa(index)
+}
 
 // formatShellFrames projects nested shell payloads as independently parsed
 // source frames. The parent retains its execution skeleton with a compact
 // colored payload reference; the child repeats that reference on its nesting
 // rail. Each launcher therefore appears once while sibling payloads remain
 // unambiguous and receive Bash highlighting instead of one quoted-string token.
-func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]shellFrame, error) {
+func formatShellFrames(source string, file *syntax.File, columns, depth int, markerSequence *int) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
 		nested := nestedShells(source, file)
 		if len(nested) > 0 && len(nested) < maxShellFrames {
@@ -70,17 +78,18 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]
 				children []shellFrame
 			}
 			extracted := make([]extraction, 0, len(nested))
-			for index, candidate := range nested {
+			for _, candidate := range nested {
+				marker := nextNestedShellMarker(markerSequence)
 				innerFile, err := parseShell(candidate.payload)
 				if err != nil {
 					continue
 				}
-				children, err := formatShellFrames(candidate.payload, innerFile, columns, depth+1)
+				children, err := formatShellFrames(candidate.payload, innerFile, columns, depth+1, markerSequence)
 				if err != nil || len(children) == 0 {
 					continue
 				}
 				children[0].Launcher = candidate.launcher
-				children[0].Marker = nestedShellMarkers[index%len(nestedShellMarkers)]
+				children[0].Marker = marker
 				extracted = append(extracted, extraction{nested: candidate, children: children})
 			}
 			if len(extracted) > 0 {
