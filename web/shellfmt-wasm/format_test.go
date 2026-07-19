@@ -236,6 +236,43 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	}
 }
 
+func TestSeparatesIndependentCommandsInsideNestedFrames(t *testing.T) {
+	display, err := formatShellDisplay(`/nix/store/hash-bash-interactive-5.3p9/bin/bash-interactive-5.3p9 -lc "sed -n '120,270p' manager.go; sed -n '110,200p' overlay.go"`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 {
+		t.Fatalf("expected an interpreter skeleton and one nested payload: %#v", display.Frames)
+	}
+	child := display.Frames[1].Text
+	if !strings.Contains(child, "manager.go\n\nsed") {
+		t.Fatalf("independent commands inside a nested payload need the same quiet separator: %q", child)
+	}
+}
+
+func TestNestedGroupingPreservesExecutionUnits(t *testing.T) {
+	source := `bash -lc 'prepare | validate
+if ready; then
+  deploy && verify
+  report
+fi
+cleanup'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 {
+		t.Fatalf("expected one nested payload: %#v", display.Frames)
+	}
+	child := display.Frames[1].Text
+	if strings.Contains(child, "|\n\n") || strings.Contains(child, "deploy &&\n\n") || strings.Contains(child, "verify\n\n  report") {
+		t.Fatalf("pipelines, boolean chains, and compound bodies must stay visually contiguous: %q", child)
+	}
+	if !strings.Contains(child, "fi\n\ncleanup") {
+		t.Fatalf("the next independent top-level command should be separated: %q", child)
+	}
+}
+
 func TestNestedMarkersRemainUniqueAcrossDepths(t *testing.T) {
 	display, err := formatShellDisplay(`bash -c 'printf outer; bash -c "printf inner; printf detail"'`, 54)
 	if err != nil {
