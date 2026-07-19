@@ -1,6 +1,8 @@
-import { type ReactNode } from "react";
-import { Box, Chip, Stack, Typography } from "@mui/material";
+import { type ReactNode, useCallback, useState } from "react";
+import { Box, Chip, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import { CheckRounded, ContentCopyRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
+import { copyText } from "../clipboard";
 import { Collapsible } from "./Collapsible";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
@@ -18,14 +20,51 @@ export function langFromPath(path: string): string {
 }
 
 /** A small caption above a block (Input / Output / Command …). */
-export function Labeled({ label, children }: { label: string; children: ReactNode }): React.JSX.Element {
+export function Labeled({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: ReactNode;
+  children: ReactNode;
+}): React.JSX.Element {
   return (
     <Box sx={{ "& + &": { mt: 1 } }}>
-      <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600, display: "block", mb: 0.25 }}>
-        {label}
-      </Typography>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ minHeight: action ? 36 : 0, mb: 0.25 }}>
+        <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600 }}>
+          {label}
+        </Typography>
+        {action}
+      </Stack>
       {children}
     </Box>
+  );
+}
+
+/** Compact semantic copy action for a labelled value. The icon is visually
+ * small while retaining a 44px touch target on mobile. */
+export function CopyTextButton({ text, label }: { text: string; label: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(() => {
+    void copyText(text).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      globalThis.setTimeout(() => setCopied(false), 1400);
+    });
+  }, [text]);
+  return (
+    <Tooltip title={copied ? "Copied" : `Copy ${label.toLowerCase()}`}>
+      <IconButton
+        aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()}`}
+        onClick={onCopy}
+        sx={{ width: 44, height: 36, mr: -0.75 }}
+      >
+        {copied
+          ? <CheckRounded color="success" sx={{ fontSize: 18 }} />
+          : <ContentCopyRounded sx={{ fontSize: 18 }} />}
+      </IconButton>
+    </Tooltip>
   );
 }
 

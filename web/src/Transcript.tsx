@@ -2064,17 +2064,19 @@ function ToolDetailsBrowser({
               >
                 {heading}
               </Typography>
-              <Tooltip title={copiedKey === item.key ? "Copied" : "Copy tool details"}>
-                <IconButton
-                  aria-label={copiedKey === item.key ? "Tool details copied" : "Copy tool details"}
-                  onClick={copyTool}
-                  sx={{ width: 44, height: 44, flexShrink: 0 }}
-                >
-                  {copiedKey === item.key
-                    ? <CheckRounded color="success" fontSize="small" />
-                    : <ContentCopyRounded fontSize="small" />}
-                </IconButton>
-              </Tooltip>
+              {item.toolKind !== "execute" && (
+                <Tooltip title={copiedKey === item.key ? "Copied" : "Copy tool details"}>
+                  <IconButton
+                    aria-label={copiedKey === item.key ? "Tool details copied" : "Copy tool details"}
+                    onClick={copyTool}
+                    sx={{ width: 44, height: 44, flexShrink: 0 }}
+                  >
+                    {copiedKey === item.key
+                      ? <CheckRounded color="success" fontSize="small" />
+                      : <ContentCopyRounded fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
+              )}
               <Chip
                 size="small"
                 color={toolColor(item.status)}

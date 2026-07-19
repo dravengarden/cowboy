@@ -5,6 +5,7 @@ import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUnchecke
 import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
 import {
   CodeView,
+  CopyTextButton,
   FileChip,
   hasDiff,
   KeyValues,
@@ -81,8 +82,8 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
         </Typography>
       )}
       {cmd && (
-        <Labeled label="Command">
-          <CodeView code={cmd} lang="bash" maxHeight={180} centerCopy />
+        <Labeled label="Command" action={<CopyTextButton text={cmd} label="Command" />}>
+          <CodeView code={cmd} lang="bash" maxHeight={180} />
         </Labeled>
       )}
       <Labeled label="Output">
