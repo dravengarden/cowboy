@@ -27,13 +27,30 @@ func TestRejectsInvalidShell(t *testing.T) {
 }
 
 func TestNestedEmojiPaletteCoversFrameLimit(t *testing.T) {
-	if len(nestedShellMarkers) != maxShellFrames {
+	if len(nestedShellMarkers) < maxShellFrames {
 		t.Fatalf("emoji palette must cover every allowed frame: markers=%d frames=%d", len(nestedShellMarkers), maxShellFrames)
 	}
 	seen := make(map[string]struct{}, len(nestedShellMarkers))
 	for _, marker := range nestedShellMarkers {
 		if _, duplicate := seen[marker]; duplicate {
 			t.Fatalf("nested emoji markers must be unique: %q", marker)
+		}
+		seen[marker] = struct{}{}
+	}
+}
+
+func TestNestedEmojiAllocationIsStableAndUnique(t *testing.T) {
+	first := newNestedShellMarkerAllocator("nix develop -c bash -c 'cargo test'")
+	again := newNestedShellMarkerAllocator("nix develop -c bash -c 'cargo test'")
+	seen := make(map[string]struct{}, maxShellFrames)
+	for range maxShellFrames {
+		marker, color := first.nextMarker()
+		againMarker, againColor := again.nextMarker()
+		if marker != againMarker || color != againColor {
+			t.Fatalf("the same command must retain stable markers: %q/%d != %q/%d", marker, color, againMarker, againColor)
+		}
+		if _, duplicate := seen[marker]; duplicate {
+			t.Fatalf("a command tree must not repeat markers: %q", marker)
 		}
 		seen[marker] = struct{}{}
 	}
@@ -156,8 +173,12 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c '🔮'" || display.Frames[1].Launcher == "" {
+	if len(display.Frames) != 2 || display.Frames[1].Launcher == "" {
 		t.Fatalf("whole-file wrapper should be a parent skeleton followed by its payload: %#v", display.Frames)
+	}
+	expectedParent := "nix develop -c bash -c '" + display.Frames[1].Marker + "'"
+	if strings.TrimSpace(display.Frames[0].Text) != expectedParent {
+		t.Fatalf("parent skeleton should reference its stable child marker: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[1].Text, "nix develop") {
 		t.Fatalf("child frame must not repeat its launcher: %#v", display.Frames)
@@ -178,10 +199,10 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 1 {
 		t.Fatalf("sibling payloads must retain the same depth: %#v", display.Frames)
 	}
-	if display.Frames[1].Marker != "🔮" || display.Frames[2].Marker != "🪐" {
+	if display.Frames[1].Marker == "" || display.Frames[2].Marker == "" || display.Frames[1].Marker == display.Frames[2].Marker {
 		t.Fatalf("sibling payloads need distinct paired markers: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[0].Text, "🔮") || !strings.Contains(display.Frames[0].Text, "🪐") {
+	if !strings.Contains(display.Frames[0].Text, display.Frames[1].Marker) || !strings.Contains(display.Frames[0].Text, display.Frames[2].Marker) {
 		t.Fatalf("parent payload slots must show matching markers: %#v", display.Frames)
 	}
 	if !strings.Contains(display.Frames[1].Text, "deno task check") || !strings.Contains(display.Frames[2].Text, "cargo test") {
@@ -200,11 +221,12 @@ func TestNestedMarkersRemainUniqueAcrossDepths(t *testing.T) {
 	if len(display.Frames) != 3 {
 		t.Fatalf("expected root, child, and grandchild frames: %#v", display.Frames)
 	}
-	if display.Frames[1].Depth != 1 || display.Frames[1].Marker != "🔮" ||
-		display.Frames[2].Depth != 2 || display.Frames[2].Marker != "🪐" {
+	if display.Frames[1].Depth != 1 || display.Frames[1].Marker == "" ||
+		display.Frames[2].Depth != 2 || display.Frames[2].Marker == "" ||
+		display.Frames[1].Marker == display.Frames[2].Marker {
 		t.Fatalf("nested references must remain unique across the tree: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[0].Text, "🔮") || !strings.Contains(display.Frames[1].Text, "🪐") {
+	if !strings.Contains(display.Frames[0].Text, display.Frames[1].Marker) || !strings.Contains(display.Frames[1].Text, display.Frames[2].Marker) {
 		t.Fatalf("each parent must contain its direct child's matching reference: %#v", display.Frames)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"hash/fnv"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,8 +36,8 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 	if err != nil {
 		return shellDisplay{}, err
 	}
-	markerSequence := 0
-	frames, err := formatShellFrames(source, file, columns, 0, &markerSequence)
+	markers := newNestedShellMarkerAllocator(source)
+	frames, err := formatShellFrames(source, file, columns, 0, &markers)
 	if err != nil {
 		return shellDisplay{}, err
 	}
@@ -61,12 +62,34 @@ var nestedShellMarkers = [...]string{
 	"🚀", "🛸", "🛰️", "☄️", "🌌", "🌈", "🔥", "⚡",
 	"🌊", "🍀", "🌸", "🍋", "🍊", "🍇", "🫐", "🥝",
 	"🦊", "🐳", "🦋", "🐙", "🐝", "🐢", "🦄", "🐬",
+	"🎯", "🎲", "🎮", "🕹️", "🎸", "🎹", "🎺", "🥁",
+	"🧩", "🪄", "🎈", "🎨", "🧸", "🎁", "🎪", "🎭",
+	"🍄", "🌵", "🌻", "🌺", "🪷", "🌴", "🌲", "🍁",
+	"🐉", "🐈", "🦜", "🦩", "🐡", "🦀", "🐞", "🐧",
 }
 
-func nextNestedShellMarker(sequence *int) (string, int) {
-	*sequence++
-	index := *sequence
-	paletteIndex := (index - 1) % len(nestedShellMarkers)
+type nestedShellMarkerAllocator struct {
+	next   int
+	stride int
+}
+
+func newNestedShellMarkerAllocator(source string) nestedShellMarkerAllocator {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(source))
+	sum := hash.Sum64()
+	// The 64-entry palette and an odd stride are coprime, so every marker is
+	// visited exactly once before repetition. The command-derived start and
+	// stride make different trees feel varied while remaining stable across
+	// renders, reloads, and devices.
+	return nestedShellMarkerAllocator{
+		next:   int(sum % uint64(len(nestedShellMarkers))),
+		stride: int((sum>>8)%uint64(len(nestedShellMarkers)/2))*2 + 1,
+	}
+}
+
+func (allocator *nestedShellMarkerAllocator) nextMarker() (string, int) {
+	paletteIndex := allocator.next
+	allocator.next = (allocator.next + allocator.stride) % len(nestedShellMarkers)
 	return nestedShellMarkers[paletteIndex], paletteIndex
 }
 
@@ -75,7 +98,7 @@ func nextNestedShellMarker(sequence *int) (string, int) {
 // colored payload reference; the child repeats that reference on its nesting
 // rail. Each launcher therefore appears once while sibling payloads remain
 // unambiguous and receive Bash highlighting instead of one quoted-string token.
-func formatShellFrames(source string, file *syntax.File, columns, depth int, markerSequence *int) ([]shellFrame, error) {
+func formatShellFrames(source string, file *syntax.File, columns, depth int, markers *nestedShellMarkerAllocator) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
 		nested := nestedShells(source, file)
 		if len(nested) > 0 && len(nested) < maxShellFrames {
@@ -85,12 +108,12 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 			}
 			extracted := make([]extraction, 0, len(nested))
 			for _, candidate := range nested {
-				marker, color := nextNestedShellMarker(markerSequence)
+				marker, color := markers.nextMarker()
 				innerFile, err := parseShell(candidate.payload)
 				if err != nil {
 					continue
 				}
-				children, err := formatShellFrames(candidate.payload, innerFile, columns, depth+1, markerSequence)
+				children, err := formatShellFrames(candidate.payload, innerFile, columns, depth+1, markers)
 				if err != nil || len(children) == 0 {
 					continue
 				}
