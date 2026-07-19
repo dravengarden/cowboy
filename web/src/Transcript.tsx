@@ -1393,8 +1393,8 @@ function ToolCard({
     let active = true;
     void formatShellForDisplay(command, 88).then((display) => {
       if (!active || !display?.context) return;
-      const firstLine = display.text.split("\n").find((line) => line.trim())?.trim();
-      if (firstLine) setHeaderTitle(`${display.context} · ${firstLine}`);
+      const summary = display.summary || display.text.split("\n").find((line) => line.trim())?.trim();
+      if (summary) setHeaderTitle(summary);
     });
     return () => {
       active = false;

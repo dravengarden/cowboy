@@ -2,6 +2,8 @@ interface ShellFormatResult {
   ok: boolean;
   text: string;
   context: string;
+  frames?: ShellFrame[];
+  summary?: string;
   error: string;
 }
 
@@ -21,6 +23,13 @@ let runtimePromise: Promise<(source: string, columns: number) => ShellFormatResu
 export interface ShellDisplay {
   text: string;
   context: string;
+  frames: ShellFrame[];
+  summary: string;
+}
+
+export interface ShellFrame {
+  launcher: string;
+  text: string;
 }
 
 /** Add display-only soft opportunities at path separators. The copy action and
@@ -87,7 +96,14 @@ export function formatShellForDisplay(source: string, columns = 80): Promise<She
     .then((format) => {
       const result = format(source, columns);
       return result.ok && result.text.trim()
-        ? { text: result.text.trimEnd(), context: result.context }
+        ? {
+          text: result.text.trimEnd(),
+          context: result.context,
+          frames: result.frames?.map((frame) => ({ ...frame, text: frame.text.trimEnd() })) ?? [
+            { launcher: result.context, text: result.text.trimEnd() },
+          ],
+          summary: result.summary ?? "",
+        }
         : null;
     })
     .catch(() => null);

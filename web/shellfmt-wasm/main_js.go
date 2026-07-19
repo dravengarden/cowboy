@@ -19,7 +19,14 @@ func formatShell(_ js.Value, args []js.Value) any {
 }
 
 func mapResult(display shellDisplay, err error) map[string]any {
-	result := map[string]any{"text": display.Text, "context": display.Context}
+	frames := make([]any, len(display.Frames))
+	for index, frame := range display.Frames {
+		frames[index] = map[string]any{"launcher": frame.Launcher, "text": frame.Text}
+	}
+	result := map[string]any{
+		"text": display.Text, "context": display.Context,
+		"frames": frames, "summary": display.Summary,
+	}
 	if err != nil {
 		result["ok"] = false
 		result["error"] = err.Error()

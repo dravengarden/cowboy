@@ -207,7 +207,8 @@ export function CodeView({
 export function ShellCommandView({ command }: { command: string }): React.JSX.Element {
   const touch = useMediaQuery("(hover:none), (pointer:coarse)");
   const phone = useMediaQuery("(max-width:600px)");
-  const [readable, setReadable] = useState<{ text: string; context: string } | null | undefined>(undefined);
+  const theme = useTheme();
+  const [readable, setReadable] = useState<Awaited<ReturnType<typeof formatShellForDisplay>> | undefined>(undefined);
   const [mode, setMode] = useState<"readable" | "source">("source");
 
   useEffect(() => {
@@ -248,35 +249,76 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           </Box>
         </Stack>
       )}
-      {mode === "readable" && readable?.context && (
-        <Typography
-          variant="caption"
-          sx={{
-            display: "block",
-            mb: 0.5,
-            color: "text.secondary",
-            fontFamily: "ui-monospace, monospace",
-            fontWeight: 600,
-          }}
-        >
-          {readable.context}
-        </Typography>
-      )}
-      <CodeView
-        key={mode}
-        code={mode === "readable" && readable
-          ? (phone ? addShellPathBreaks(readable.text) : readable.text)
-          : command}
-        lang="bash"
-        // A phone sheet has enough vertical room for roughly five more shell
-        // lines before disclosure is useful. Keep Desktop compact, where Tool
-        // details may share the screen with other work.
-        maxHeight={touch ? 260 : 180}
-        touchWrap={mode === "readable"}
-        tokenSafeWrap={mode === "readable"}
-        wrapControl={false}
-        hideCopy
-      />
+      {mode === "readable" && readable
+        ? (
+          <Stack
+            data-shell-frame-count={readable.frames.length}
+            sx={{
+              gap: 0.25,
+              borderRadius: 1,
+              overflow: "hidden",
+              bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
+            }}
+          >
+            {readable.frames.map((frame, index) => (
+              <Box
+                key={`${index}:${frame.launcher}`}
+                data-shell-frame={index}
+                sx={{
+                  position: "relative",
+                  pl: index === 0 ? 0 : Math.min(index, 3) * 1.125,
+                  ...(index > 0 && {
+                    borderLeft: "2px solid",
+                    borderColor: "primary.main",
+                    ml: 1.25,
+                    pt: 0.5,
+                  }),
+                }}
+              >
+                {frame.launcher && (
+                  <Typography
+                    component="div"
+                    variant="caption"
+                    sx={{
+                      px: 1.5,
+                      pb: 0.125,
+                      color: "primary.light",
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      fontWeight: 650,
+                      letterSpacing: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {index > 0 ? "└─ " : ""}{frame.launcher}
+                  </Typography>
+                )}
+                {frame.text && (
+                  <CodeView
+                    code={phone ? addShellPathBreaks(frame.text) : frame.text}
+                    lang="bash"
+                    maxHeight={touch ? (readable.frames.length > 1 ? 220 : 260) : 180}
+                    touchWrap
+                    tokenSafeWrap
+                    wrapControl={false}
+                    hideCopy
+                  />
+                )}
+              </Box>
+            ))}
+          </Stack>
+        )
+        : (
+          <CodeView
+            key={mode}
+            code={command}
+            lang="bash"
+            maxHeight={touch ? 260 : 180}
+            wrapControl={false}
+            hideCopy
+          />
+        )}
     </Box>
   );
 }

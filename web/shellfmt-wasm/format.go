@@ -13,6 +13,13 @@ import (
 type shellDisplay struct {
 	Text    string
 	Context string
+	Frames  []shellFrame
+	Summary string
+}
+
+type shellFrame struct {
+	Launcher string
+	Text     string
 }
 
 func formatShellDisplay(source string, columns int) (shellDisplay, error) {
@@ -20,14 +27,142 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 	if err != nil {
 		return shellDisplay{}, err
 	}
-	if inner, context, ok := wrappedShell(file); ok {
-		text, err := formatParsedShell(inner, columns)
-		if err == nil {
-			return shellDisplay{Text: text, Context: context}, nil
+	frames, err := formatShellFrames(source, file, columns, 0)
+	if err != nil {
+		return shellDisplay{}, err
+	}
+	display := shellDisplay{Frames: frames}
+	if len(frames) > 0 {
+		display.Text = frames[len(frames)-1].Text
+		for _, frame := range frames {
+			if frame.Launcher != "" {
+				display.Context = frame.Launcher
+			}
+		}
+		display.Summary = summarizeFrames(frames)
+	}
+	return display, nil
+}
+
+const maxShellFrameDepth = 6
+
+// formatShellFrames projects nested shell payloads as independently parsed
+// source frames. The parent retains its execution skeleton with a literal
+// ellipsis where the child script was, while the child gets Bash highlighting
+// instead of being painted as one giant quoted string.
+func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]shellFrame, error) {
+	if depth < maxShellFrameDepth {
+		if nested, ok := firstNestedShell(source, file); ok {
+			outer := source[:nested.start] + "'…'" + source[nested.end:]
+			outerFile, err := parseShell(outer)
+			if err == nil {
+				outerText, err := formatParsedFile(outerFile, columns)
+				if err == nil {
+					innerFile, err := parseShell(nested.payload)
+					if err == nil {
+						children, err := formatShellFrames(nested.payload, innerFile, columns, depth+1)
+						if err == nil {
+							if nested.wholeFile {
+								return append([]shellFrame{{Launcher: nested.launcher}}, children...), nil
+							}
+							frames := []shellFrame{{Text: outerText}, {Launcher: nested.launcher}}
+							return append(frames, children...), nil
+						}
+					}
+				}
+			}
 		}
 	}
 	text, err := formatParsedFile(file, columns)
-	return shellDisplay{Text: text}, err
+	if err != nil {
+		return nil, err
+	}
+	return []shellFrame{{Text: text}}, nil
+}
+
+type nestedShell struct {
+	start     int
+	end       int
+	launcher  string
+	payload   string
+	wholeFile bool
+}
+
+func firstNestedShell(source string, file *syntax.File) (found nestedShell, ok bool) {
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if ok {
+			return false
+		}
+		call, isCall := node.(*syntax.CallExpr)
+		if !isCall || len(call.Args) < 3 {
+			return true
+		}
+		for index := 0; index+2 < len(call.Args); index++ {
+			shellWord, shellStatic := staticWord(call.Args[index])
+			if !shellStatic {
+				continue
+			}
+			shell := filepath.Base(shellWord)
+			if shell != "bash" && shell != "sh" && shell != "zsh" {
+				continue
+			}
+			option, optionStatic := staticWord(call.Args[index+1])
+			payloadValue, payloadStatic := staticWord(call.Args[index+2])
+			if !optionStatic || !payloadStatic {
+				continue
+			}
+			if !strings.HasPrefix(option, "-") || !strings.Contains(option[1:], "c") {
+				continue
+			}
+			payload := call.Args[index+2]
+			launcherArgs := make([]string, 0, index+2)
+			for _, word := range call.Args[:index+2] {
+				value, static := staticWord(word)
+				if !static {
+					value = source[int(word.Pos().Offset()):int(word.End().Offset())]
+				}
+				launcherArgs = append(launcherArgs, value)
+			}
+			// Nix store and toolchain wrappers commonly invoke Bash by an
+			// immutable absolute path. The Source view retains that evidence;
+			// the compact execution frame names the actual interpreter without
+			// spending the phone width on a store hash.
+			launcherArgs[index] = filepath.Base(launcherArgs[index])
+			found = nestedShell{
+				start:     int(payload.Pos().Offset()),
+				end:       int(payload.End().Offset()),
+				launcher:  strings.Join(launcherArgs, " "),
+				payload:   payloadValue,
+				wholeFile: len(file.Stmts) == 1 && len(file.Stmts[0].Redirs) == 0 && file.Stmts[0].Cmd == call,
+			}
+			ok = true
+			return false
+		}
+		return true
+	})
+	return found, ok
+}
+
+func summarizeFrames(frames []shellFrame) string {
+	parts := make([]string, 0, len(frames)+1)
+	for _, frame := range frames {
+		if frame.Launcher != "" {
+			parts = append(parts, frame.Launcher)
+		}
+	}
+	if len(frames) > 0 {
+		for _, line := range strings.Split(frames[len(frames)-1].Text, "\n") {
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\\"))
+			for _, operator := range []string{"&&", "||", "|"} {
+				line = strings.TrimSpace(strings.TrimSuffix(line, operator))
+			}
+			if line != "" {
+				parts = append(parts, line)
+				break
+			}
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 func formatShellSource(source string) (string, error) {
@@ -157,40 +292,6 @@ func optionShaped(word string) bool {
 
 func leadingIndent(line string) string {
 	return line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-}
-
-func wrappedShell(file *syntax.File) (inner, context string, ok bool) {
-	if len(file.Stmts) != 1 || len(file.Stmts[0].Redirs) > 0 {
-		return "", "", false
-	}
-	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Args) < 3 {
-		return "", "", false
-	}
-	args := make([]string, len(call.Args))
-	for index, word := range call.Args {
-		value, static := staticWord(word)
-		if !static {
-			return "", "", false
-		}
-		args[index] = value
-	}
-	for index := 0; index+2 < len(args); index++ {
-		shell := filepath.Base(args[index])
-		if shell != "bash" && shell != "sh" && shell != "zsh" {
-			continue
-		}
-		option := args[index+1]
-		if !strings.HasPrefix(option, "-") || !strings.Contains(option[1:], "c") {
-			continue
-		}
-		label := strings.ToUpper(shell[:1]) + shell[1:] + " " + option
-		if index >= 2 && args[0] == "nix" && args[1] == "develop" {
-			label = "Nix develop → " + label
-		}
-		return args[index+2], label, true
-	}
-	return "", "", false
 }
 
 func staticWord(word *syntax.Word) (string, bool) {
