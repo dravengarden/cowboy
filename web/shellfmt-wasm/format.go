@@ -217,31 +217,101 @@ func staticWord(word *syntax.Word) (string, bool) {
 }
 
 func insertStructuralBreaks(source string, file *syntax.File) string {
-	breaks := make([]int, 0, 8)
-	syntax.Walk(file, func(node syntax.Node) bool {
-		switch node := node.(type) {
-		case *syntax.BinaryCmd:
-			breaks = append(breaks, int(node.OpPos.Offset())+len(node.Op.String()))
-		case *syntax.Stmt:
-			if node.Semicolon.IsValid() && !node.Background {
-				breaks = append(breaks, int(node.Semicolon.Offset())+1)
+	type edit struct {
+		start int
+		end   int
+		text  string
+	}
+	edits := make([]edit, 0, 12)
+	indentAt := func(offset int) string {
+		lineStart := strings.LastIndex(source[:offset], "\n") + 1
+		return leadingIndent(source[lineStart:])
+	}
+	addEdit := func(next edit) {
+		for _, existing := range edits {
+			if existing.start == next.start && existing.end == next.end {
+				return
 			}
 		}
-		return true
-	})
-	sort.Sort(sort.Reverse(sort.IntSlice(breaks)))
-	for _, offset := range breaks {
+		edits = append(edits, next)
+	}
+	breakAfter := func(offset, extraIndent int) {
 		if offset <= 0 || offset > len(source) || source[offset-1] == '\n' {
-			continue
+			return
 		}
 		end := offset
 		for end < len(source) && (source[end] == ' ' || source[end] == '\t') {
 			end++
 		}
-		if end < len(source) && source[end] == '\n' {
-			continue
+		if end < len(source) && source[end] != '\n' {
+			addEdit(edit{
+				start: offset,
+				end:   end,
+				text:  "\n" + indentAt(offset) + strings.Repeat(" ", extraIndent),
+			})
 		}
-		source = source[:offset] + "\n" + source[end:]
+	}
+	breakBefore := func(offset int, indent string) {
+		if offset <= 0 || offset > len(source) {
+			return
+		}
+		start := offset
+		for start > 0 && (source[start-1] == ' ' || source[start-1] == '\t') {
+			start--
+		}
+		if start > 0 && source[start-1] == '\n' {
+			return
+		}
+		// A semicolon immediately before a closing compound keyword is only a
+		// grammar separator. Drop it when expanding the body; leaving `;\nfi`
+		// is syntactically valid but visually looks like a detached statement.
+		if start > 0 && source[start-1] == ';' {
+			start--
+		}
+		addEdit(edit{start: start, end: offset, text: "\n" + indent})
+	}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch node := node.(type) {
+		case *syntax.BinaryCmd:
+			breakAfter(int(node.OpPos.Offset())+len(node.Op.String()), 2)
+		case *syntax.Stmt:
+			if node.Semicolon.IsValid() && !node.Background {
+				offset := int(node.Semicolon.Offset()) + 1
+				rest := strings.TrimLeft(source[offset:], " \t")
+				// `; then`, `; do`, and closing keywords belong to their compound
+				// syntax. Their owning AST node below decides whether to expand the
+				// body; treating them as ordinary statement separators caused the
+				// detached `then` shown on mobile.
+				structural := false
+				for _, keyword := range []string{"then", "do", "fi", "done", "else", "elif", "esac"} {
+					if rest == keyword || strings.HasPrefix(rest, keyword+" ") || strings.HasPrefix(rest, keyword+"\n") {
+						structural = true
+						break
+					}
+				}
+				if !structural {
+					breakAfter(offset, 0)
+				}
+			}
+		case *syntax.IfClause:
+			if node.ThenPos.IsValid() {
+				breakAfter(int(node.ThenPos.Offset())+len("then"), 2)
+			}
+			breakBefore(int(node.FiPos.Offset()), indentAt(int(node.Position.Offset())))
+		case *syntax.WhileClause:
+			breakAfter(int(node.DoPos.Offset())+len("do"), 2)
+			breakBefore(int(node.DonePos.Offset()), indentAt(int(node.WhilePos.Offset())))
+		case *syntax.ForClause:
+			if !node.Braces {
+				breakAfter(int(node.DoPos.Offset())+len("do"), 2)
+				breakBefore(int(node.DonePos.Offset()), indentAt(int(node.ForPos.Offset())))
+			}
+		}
+		return true
+	})
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+	for _, edit := range edits {
+		source = source[:edit.start] + edit.text + source[edit.end:]
 	}
 	return source
 }

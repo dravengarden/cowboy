@@ -57,3 +57,18 @@ func TestKeepsAssignmentValueAtomic(t *testing.T) {
 		t.Fatalf("assignment value must not be separated from its name: %q", formatted)
 	}
 }
+
+func TestExpandsInlineIfBodyWithoutDetachingThen(t *testing.T) {
+	formatted, err := formatShellSource(`for attempt in 1 2; do
+  if test "$revision" = 16 && test "$state" = connected; then exit 0; fi
+done`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(formatted, ";\n  then") || strings.Contains(formatted, ";\nthen") {
+		t.Fatalf("then must remain attached to its condition, got %q", formatted)
+	}
+	if !strings.Contains(formatted, "then\n    exit 0\n  fi") {
+		t.Fatalf("expected an indented multiline if body, got %q", formatted)
+	}
+}
