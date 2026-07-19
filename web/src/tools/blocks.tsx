@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
-import { CheckRounded, ContentCopyRounded } from "@mui/icons-material";
+import { CheckRounded, ContentCopyRounded, SwapHorizRounded, WrapTextRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
 import { copyText } from "../clipboard";
 import { Collapsible } from "./Collapsible";
@@ -235,8 +235,8 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   const nested = !!readable && readable.frames.length > 1;
   return (
     <Box>
-      {(readable === undefined || enhanced) && (
-        <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
+      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
+        {(readable === undefined || enhanced) && (
           <Box role="group" aria-label="Shell command presentation" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
             <ButtonBase
               aria-pressed={mode === "readable"}
@@ -263,21 +263,31 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
               Source
             </ButtonBase>
           </Box>
-        </Stack>
-      )}
-      <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
-        <Box role="group" aria-label="Shell command line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
-          {([true, false] as const).map((value) => (
+        )}
+        <Tooltip title={wrapped ? "Use horizontal scrolling" : "Wrap long lines"}>
+          <span>
             <ButtonBase
-              key={String(value)}
-              aria-pressed={wrapped === value}
-              onClick={(): void => setWrapped(value)}
-              sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+              aria-label={wrapped ? "Use horizontal scrolling" : "Wrap long lines"}
+              aria-pressed={wrapped}
+              onClick={(): void => setWrapped((value) => !value)}
+              sx={{
+                minHeight: 32,
+                px: 0.875,
+                gap: 0.375,
+                borderRadius: 1,
+                fontSize: "0.6875rem",
+                color: "text.secondary",
+                bgcolor: "action.hover",
+                "&:active": { bgcolor: "action.selected" },
+              }}
             >
-              {value ? "Wrap" : "Scroll"}
+              {wrapped
+                ? <WrapTextRounded sx={{ fontSize: "1.25em" }} />
+                : <SwapHorizRounded sx={{ fontSize: "1.25em" }} />}
+              {wrapped ? "Wrap" : "Scroll"}
             </ButtonBase>
-          ))}
-        </Box>
+          </span>
+        </Tooltip>
       </Stack>
       {mode === "nested" && readable
         ? (
