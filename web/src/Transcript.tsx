@@ -1599,9 +1599,11 @@ function ToolDetailsBrowser({
   const item = index >= 0 ? tools[index] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
+  const [edgeIntent, setEdgeIntent] = useState<"previous" | "next" | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const currentRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
+  const edgeIntentRef = useRef<"previous" | "next" | null>(null);
+  const edgeGestureRef = useRef<{ y: number; edge: "previous" | "next" | "both" } | null>(null);
 
   useEffect(() => {
     if (!item) {
@@ -1612,7 +1614,7 @@ function ToolDetailsBrowser({
   }, [item?.key]);
 
   useLayoutEffect(() => {
-    if (detailReadyKey !== item?.key || !item) return;
+    if (!item) return;
     const scroller = scrollableAncestor(bodyRef.current);
     if (!scroller) return;
     const saved = scrollByKey.current.get(item.key);
@@ -1620,11 +1622,11 @@ function ToolDetailsBrowser({
       scroller.scrollTop = saved;
       return;
     }
-    // Context before the selected tool stays available by scrolling upward,
-    // while a newly opened detail sheet begins with the requested tool in focus.
-    const current = currentRef.current;
-    if (current) scroller.scrollTop = Math.max(0, current.offsetTop - 8);
-  }, [detailReadyKey, item?.key]);
+    // A tool page owns the prose AFTER it, up to the next tool. The same prose
+    // would otherwise be duplicated as the next page's "before" context. New
+    // pages therefore start at zero with the selected tool reliably in focus.
+    scroller.scrollTop = 0;
+  }, [item?.key]);
 
   const select = (next: ToolItem | undefined): void => {
     if (!next || !item) return;
@@ -1632,6 +1634,66 @@ function ToolDetailsBrowser({
     if (scroller) scrollByKey.current.set(item.key, scroller.scrollTop);
     onSelect(next.key);
   };
+
+  useEffect(() => {
+    if (desktop || !item) return undefined;
+    const scroller = scrollableAncestor(bodyRef.current);
+    if (!scroller) return undefined;
+    const clearIntent = (): void => {
+      edgeGestureRef.current = null;
+      edgeIntentRef.current = null;
+      setEdgeIntent(null);
+    };
+    const onTouchStart = (event: TouchEvent): void => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      const atTop = scroller.scrollTop <= 1;
+      const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1;
+      edgeGestureRef.current = atTop && atBottom
+        ? { y: touch.clientY, edge: "both" }
+        : atTop
+        ? { y: touch.clientY, edge: "previous" }
+        : atBottom
+        ? { y: touch.clientY, edge: "next" }
+        : null;
+      edgeIntentRef.current = null;
+      setEdgeIntent(null);
+    };
+    const onTouchMove = (event: TouchEvent): void => {
+      const gesture = edgeGestureRef.current;
+      const touch = event.touches[0];
+      if (!gesture || !touch) return;
+      const delta = touch.clientY - gesture.y;
+      const direction = gesture.edge === "both"
+        ? delta >= 0 ? "previous" : "next"
+        : gesture.edge;
+      const distance = direction === "previous"
+        ? touch.clientY - gesture.y
+        : gesture.y - touch.clientY;
+      const available = direction === "previous" ? index > 0 : index < tools.length - 1;
+      const nextIntent = available && distance >= 72 ? direction : null;
+      if (edgeIntentRef.current === nextIntent) return;
+      edgeIntentRef.current = nextIntent;
+      setEdgeIntent(nextIntent);
+      if (nextIntent) haptic(12);
+    };
+    const onTouchEnd = (): void => {
+      const intent = edgeIntentRef.current;
+      clearIntent();
+      if (intent === "previous") select(tools[index - 1]);
+      if (intent === "next") select(tools[index + 1]);
+    };
+    scroller.addEventListener("touchstart", onTouchStart, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+    scroller.addEventListener("touchend", onTouchEnd, { passive: true });
+    scroller.addEventListener("touchcancel", clearIntent, { passive: true });
+    return () => {
+      scroller.removeEventListener("touchstart", onTouchStart);
+      scroller.removeEventListener("touchmove", onTouchMove);
+      scroller.removeEventListener("touchend", onTouchEnd);
+      scroller.removeEventListener("touchcancel", clearIntent);
+    };
+  }, [desktop, index, item, tools]);
 
   useEffect(() => {
     if (!desktop || !item) return undefined;
@@ -1652,13 +1714,9 @@ function ToolDetailsBrowser({
   if (!item) return null;
   const raw = rawByKey[item.key] ?? false;
   const itemIndex = items.findIndex((candidate) => candidate.key === item.key);
-  const previousToolIndex = index > 0
-    ? items.findIndex((candidate) => candidate.key === tools[index - 1]?.key)
-    : -1;
   const nextToolIndex = index < tools.length - 1
     ? items.findIndex((candidate) => candidate.key === tools[index + 1]?.key)
     : items.length;
-  const before = items.slice(previousToolIndex + 1, itemIndex);
   const after = items.slice(itemIndex + 1, nextToolIndex);
   const running = item.status === "in_progress" || item.status === "pending";
   const ctx: ToolCtx = {
@@ -1675,6 +1733,7 @@ function ToolDetailsBrowser({
   const navigation = (
     <Box
       sx={{
+        position: "relative",
         width: "100%",
         px: 0.75,
         py: 0.5,
@@ -1692,6 +1751,28 @@ function ToolDetailsBrowser({
           `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
       }}
     >
+      {edgeIntent && (
+        <Box
+          role="status"
+          sx={{
+            position: "absolute",
+            left: "50%",
+            bottom: "calc(100% + 8px)",
+            transform: "translateX(-50%)",
+            whiteSpace: "nowrap",
+            px: 1.25,
+            py: 0.625,
+            borderRadius: 99,
+            bgcolor: "background.paper",
+            color: "primary.main",
+            boxShadow: 3,
+            fontSize: "0.78rem",
+            fontWeight: 700,
+          }}
+        >
+          {edgeIntent === "previous" ? "Release for previous tool ↑" : "Release for next tool ↓"}
+        </Box>
+      )}
       {roomy
         ? (
           <Button
@@ -1781,8 +1862,6 @@ function ToolDetailsBrowser({
     >
       <Box ref={bodyRef}>
         <Stack spacing={1.25}>
-            <ToolTranscriptContext items={before} position="before" />
-            <Box ref={currentRef} />
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
