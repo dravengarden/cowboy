@@ -33,6 +33,7 @@ export interface ShellFrame {
   launcher: string;
   text: string;
   depth?: number;
+  marker?: string;
 }
 
 /** Add display-only soft opportunities at path separators. The copy action and

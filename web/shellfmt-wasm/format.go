@@ -22,6 +22,7 @@ type shellFrame struct {
 	Launcher string
 	Text     string
 	Depth    int
+	Marker   string
 }
 
 func formatShellDisplay(source string, columns int) (shellDisplay, error) {
@@ -53,11 +54,13 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 const maxShellFrameDepth = 6
 const maxShellFrames = 32
 
+var nestedShellMarkers = [...]string{"🟣", "🔵", "🟢", "🟠"}
+
 // formatShellFrames projects nested shell payloads as independently parsed
-// source frames. The parent retains its execution skeleton without inventing a
-// textual placeholder; the UI's colored nesting rail is the payload slot. Each
-// launcher therefore appears once, in its parent frame, while the child gets
-// Bash highlighting instead of being painted as one giant quoted string.
+// source frames. The parent retains its execution skeleton with a compact
+// colored payload reference; the child repeats that reference on its nesting
+// rail. Each launcher therefore appears once while sibling payloads remain
+// unambiguous and receive Bash highlighting instead of one quoted-string token.
 func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
 		nested := nestedShells(source, file)
@@ -67,7 +70,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]
 				children []shellFrame
 			}
 			extracted := make([]extraction, 0, len(nested))
-			for _, candidate := range nested {
+			for index, candidate := range nested {
 				innerFile, err := parseShell(candidate.payload)
 				if err != nil {
 					continue
@@ -77,13 +80,18 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]
 					continue
 				}
 				children[0].Launcher = candidate.launcher
+				children[0].Marker = nestedShellMarkers[index%len(nestedShellMarkers)]
 				extracted = append(extracted, extraction{nested: candidate, children: children})
 			}
 			if len(extracted) > 0 {
 				outer := source
 				for index := len(extracted) - 1; index >= 0; index-- {
 					child := extracted[index].nested
-					outer = outer[:child.start] + outer[child.end:]
+					marker := extracted[index].children[0].Marker
+					// A quoted emoji is a valid, inert display payload. It preserves
+					// the launcher's argument slot and pairs it with the matching
+					// child rail without inventing prose or changing copied source.
+					outer = outer[:child.start] + "'" + marker + "'" + outer[child.end:]
 				}
 				outerFile, err := parseShell(outer)
 				if err == nil {

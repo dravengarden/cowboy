@@ -61,7 +61,7 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c" || display.Frames[1].Launcher == "" {
+	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c '🟣'" || display.Frames[1].Launcher == "" {
 		t.Fatalf("whole-file wrapper should be a parent skeleton followed by its payload: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[1].Text, "nix develop") {
@@ -82,6 +82,12 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 	}
 	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 1 {
 		t.Fatalf("sibling payloads must retain the same depth: %#v", display.Frames)
+	}
+	if display.Frames[1].Marker != "🟣" || display.Frames[2].Marker != "🔵" {
+		t.Fatalf("sibling payloads need distinct paired markers: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[0].Text, "🟣") || !strings.Contains(display.Frames[0].Text, "🔵") {
+		t.Fatalf("parent payload slots must show matching markers: %#v", display.Frames)
 	}
 	if !strings.Contains(display.Frames[1].Text, "deno task check") || !strings.Contains(display.Frames[2].Text, "cargo test") {
 		t.Fatalf("both sibling payloads must remain visible: %#v", display.Frames)

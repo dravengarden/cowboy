@@ -309,6 +309,28 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                   }),
                 }}
               >
+                {depth > 0 && frame.marker && (
+                  <Box
+                    component="span"
+                    aria-label={`Nested shell ${frame.marker}`}
+                    sx={{
+                      position: "absolute",
+                      zIndex: 1,
+                      left: -5,
+                      top: 1,
+                      display: "grid",
+                      placeItems: "center",
+                      width: 13,
+                      height: 13,
+                      borderRadius: "50%",
+                      bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
+                      fontSize: 9,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {frame.marker}
+                  </Box>
+                )}
                 {frame.text && (
                   <CodeView
                     code={phone ? addShellPathBreaks(frame.text) : frame.text}
