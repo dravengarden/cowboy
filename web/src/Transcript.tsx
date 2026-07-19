@@ -1525,9 +1525,8 @@ type ToolContextBlock = {
 type FollowingToolPhase = "settled" | "running" | "ready";
 
 const nextToolArrival = keyframes`
-  0% { background-color: transparent; }
-  35% { background-color: rgba(76, 175, 80, 0.13); }
-  100% { background-color: transparent; }
+  0% { opacity: .68; transform: translateY(3px); }
+  100% { opacity: 1; transform: translateY(0); }
 `;
 
 function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
@@ -1603,7 +1602,7 @@ function ToolTranscriptContext({
         borderRadius: 1.5,
         overflow: "hidden",
         transition: "background-color .18s ease, border-color .18s ease",
-        ...(phase === "ready" && { animation: `${nextToolArrival} .7s ease-out 1` }),
+        ...(phase === "ready" && { animation: `${nextToolArrival} .28s cubic-bezier(.2,.8,.2,1) 1` }),
       }}
     >
       <ButtonBase
@@ -1631,9 +1630,6 @@ function ToolTranscriptContext({
           >
             {label}
             {phase === "running" && <CircularProgress size={10} thickness={5} color="inherit" />}
-            {phase === "ready" && (
-              <Box component="span" aria-hidden sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "success.main" }} />
-            )}
           </Typography>
           {!open && (
             <Typography
