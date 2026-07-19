@@ -272,6 +272,25 @@ func TestCompactsAbsoluteShellLauncherWithoutChangingSource(t *testing.T) {
 	}
 }
 
+func TestRecognizesVersionedNixShellInterpreters(t *testing.T) {
+	source := `/nix/store/hash-bash-interactive-5.3p9/bin/bash-interactive-5.3p9 -lc "sed -n '1,190p' web/shellfmt-wasm/format_test.go; rg -n 'Frames|Context|Marker' web/shellfmt-wasm/format_test.go"`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 || display.Frames[1].Launcher != "bash -lc" {
+		t.Fatalf("expected the Nix interpreter to expose its complex payload: %#v", display.Frames)
+	}
+}
+
+func TestShellInterpreterNamesRejectLookalikes(t *testing.T) {
+	for _, path := range []string{"BASH", "bash-language-server", "sh-syntax", "mybash"} {
+		if name, ok := shellInterpreterName(path); ok {
+			t.Fatalf("lookalike %q must not be recognized as %q", path, name)
+		}
+	}
+}
+
 func TestFindsNestedPayloadWithDynamicTrailingArguments(t *testing.T) {
 	display, err := formatShellDisplay(`nix develop -c env TOKEN="$TOKEN" bash -c 'prepare "$1" && exec worker "$1"' _ "$root"`, 80)
 	if err != nil {

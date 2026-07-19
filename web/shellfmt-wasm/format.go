@@ -230,8 +230,8 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 			if !shellStatic {
 				continue
 			}
-			shell := filepath.Base(shellWord)
-			if shell != "bash" && shell != "sh" && shell != "zsh" {
+			shell, isShell := shellInterpreterName(shellWord)
+			if !isShell {
 				continue
 			}
 			option, optionStatic := staticWord(call.Args[index+1])
@@ -255,7 +255,7 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 			// immutable absolute path. The Source view retains that evidence;
 			// the compact execution frame names the actual interpreter without
 			// spending the phone width on a store hash.
-			launcherArgs[index] = filepath.Base(launcherArgs[index])
+			launcherArgs[index] = shell
 			found = append(found, nestedShell{
 				start:    int(payload.Pos().Offset()),
 				end:      int(payload.End().Offset()),
@@ -268,6 +268,28 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 	})
 	sort.Slice(found, func(i, j int) bool { return found[i].start < found[j].start })
 	return found
+}
+
+// shellInterpreterName recognizes real interpreter binary naming conventions,
+// including Nix's versioned bash-interactive and wrapped executables, without
+// treating every program whose name merely contains "bash" as a shell.
+func shellInterpreterName(path string) (string, bool) {
+	base := filepath.Base(path)
+	for _, shell := range []string{"bash", "zsh"} {
+		if base == shell || base == "."+shell+"-wrapped" || base == shell+"-wrapped" {
+			return shell, true
+		}
+		version := strings.TrimPrefix(base, shell+"-")
+		if version != base && version != "" {
+			if shell == "bash" {
+				version = strings.TrimPrefix(version, "interactive-")
+			}
+			if version != "" && version[0] >= '0' && version[0] <= '9' {
+				return shell, true
+			}
+		}
+	}
+	return "sh", base == "sh" || base == ".sh-wrapped" || base == "sh-wrapped"
 }
 
 var sshOptionsWithValue = map[string]struct{}{
