@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery } from "@mui/material";
+import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
 import { CheckRounded, ContentCopyRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
 import { copyText } from "../clipboard";
@@ -7,6 +7,11 @@ import { Collapsible } from "./Collapsible";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
 import { addShellPathBreaks, formatShellForDisplay } from "../shellFormatter";
+import {
+  chunkCodeForRendering,
+  previewCodeForRendering,
+  shouldUseLightweightCode,
+} from "../codeRendering";
 
 // Reusable presentational primitives for tool cards. They compose the existing
 // lazy `Markdown` (which wraps react-syntax-highlighter) for all syntax
@@ -90,7 +95,25 @@ export function CodeView({
   hideCopy?: boolean;
 }): React.JSX.Element {
   const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
+  const theme = useTheme();
   const [wrapped, setWrapped] = useState((touchWrap || tokenSafeWrap) && coarse);
+  const lightweight = shouldUseLightweightCode(code);
+  const lightweightWrap = (touchWrap || tokenSafeWrap) && coarse;
+  const lightweightSx = {
+    m: 0,
+    p: 1.5,
+    maxWidth: "100%",
+    overflowX: lightweightWrap ? "hidden" : "auto",
+    whiteSpace: lightweightWrap ? "pre-wrap" : "pre",
+    overflowWrap: lightweightWrap ? "anywhere" : "normal",
+    wordBreak: lightweightWrap ? "break-word" : "normal",
+    bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
+    color: theme.palette.mode === "dark" ? "#abb2bf" : "#383a42",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "0.8em",
+    lineHeight: 1.5,
+    WebkitOverflowScrolling: "touch",
+  } as const;
   return (
     <Box
       sx={{
@@ -135,13 +158,46 @@ export function CodeView({
           </Box>
         </Stack>
       )}
-      <Collapsible maxHeight={maxHeight ?? 280}>
-        <Markdown
-          text={"```" + (lang ?? "") + "\n" + code + "\n```"}
-          centerCopy={centerCopy}
-          touchWrap={false}
-        />
-      </Collapsible>
+      {lightweight
+        ? (
+          <Box sx={{ position: "relative", "&:hover .cowboy-copy-btn": { opacity: 1 } }}>
+            <Collapsible
+              maxHeight={maxHeight ?? 280}
+              forceOverflow
+              collapsedChildren={
+                <Box component="pre" data-code-renderer="lightweight-preview" sx={lightweightSx}>
+                  {previewCodeForRendering(code)}
+                </Box>
+              }
+            >
+              <Box component="pre" data-code-renderer="lightweight" sx={lightweightSx}>
+                {chunkCodeForRendering(code).map((chunk, index) => (
+                  <Box
+                    component="span"
+                    key={index}
+                    sx={{ display: "block", contentVisibility: "auto", containIntrinsicSize: "auto 1920px" }}
+                  >
+                    {chunk}
+                  </Box>
+                ))}
+              </Box>
+            </Collapsible>
+            {!hideCopy && (
+              <Box className="cowboy-copy-btn" sx={{ position: "absolute", top: 2, right: 4 }}>
+                <CopyTextButton text={code} label="Code" />
+              </Box>
+            )}
+          </Box>
+        )
+        : (
+          <Collapsible maxHeight={maxHeight ?? 280}>
+            <Markdown
+              text={"```" + (lang ?? "") + "\n" + code + "\n```"}
+              centerCopy={centerCopy}
+              touchWrap={false}
+            />
+          </Collapsible>
+        )}
     </Box>
   );
 }
@@ -281,9 +337,13 @@ export function DiffView({
           −{removed}
         </Typography>
       </Stack>
-      <Collapsible maxHeight={320}>
-        <Markdown text={"```" + (sourceLanguage ? `diff-${sourceLanguage}` : "diff") + "\n" + text + "\n```"} />
-      </Collapsible>
+      <CodeView
+        code={text}
+        lang={sourceLanguage ? `diff-${sourceLanguage}` : "diff"}
+        maxHeight={320}
+        touchWrap
+        wrapControl={false}
+      />
     </Box>
   );
 }

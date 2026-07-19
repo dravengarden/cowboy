@@ -4,10 +4,14 @@
 // prefixes) so the existing Markdown ```diff fence can syntax-highlight it the
 // same way it highlights any other code — no extra dependency, no diff widget.
 //
-// The algorithm is a textbook LCS over lines (Hunt–McIlroy), which is plenty for
-// the small regions an edit tool reports. We don't do hunk headers / context
-// trimming — the region is already the "hunk", and showing it whole reads better
-// in a chat card than `@@` math.
+// Most providers send a small changed region, but some send the entire file.
+// Strip common edges before LCS and bound the remaining matrix: a one-line edit
+// in an 11k-line file must not allocate/visit ~121 million cells on the UI
+// thread. The display keeps a compact amount of surrounding context while the
+// original old/new text remains available to Raw/copy paths.
+
+const CONTEXT_LINES = 4;
+const MAX_LCS_CELLS = 250_000;
 
 /** Longest-common-subsequence table → the aligned ` `/`-`/`+` line list. */
 function lcsLines(a: string[], b: string[]): { sign: " " | "-" | "+"; text: string }[] {
@@ -54,7 +58,37 @@ export function unifiedDiff(oldText: string, newText: string): DiffResult {
   // strip ONE trailing newline first so the diff doesn't show a spurious change.
   const a = oldText.replace(/\n$/, "").split("\n");
   const b = newText.replace(/\n$/, "").split("\n");
-  const lines = lcsLines(a, b);
+  let prefix = 0;
+  while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < a.length - prefix &&
+    suffix < b.length - prefix &&
+    a[a.length - 1 - suffix] === b[b.length - 1 - suffix]
+  ) suffix++;
+
+  const oldMiddle = a.slice(prefix, a.length - suffix);
+  const newMiddle = b.slice(prefix, b.length - suffix);
+  const middle = oldMiddle.length * newMiddle.length <= MAX_LCS_CELLS
+    ? lcsLines(oldMiddle, newMiddle)
+    : [
+      ...oldMiddle.map((text) => ({ sign: "-" as const, text })),
+      ...newMiddle.map((text) => ({ sign: "+" as const, text })),
+    ];
+  const lines: { sign: " " | "-" | "+"; text: string }[] = [];
+  const prefixStart = Math.max(0, prefix - CONTEXT_LINES);
+  if (prefixStart > 0) lines.push({ sign: " ", text: `… ${prefixStart} unchanged lines …` });
+  for (let index = prefixStart; index < prefix; index++) {
+    lines.push({ sign: " ", text: a[index]! });
+  }
+  lines.push(...middle);
+  const suffixShown = Math.min(CONTEXT_LINES, suffix);
+  for (let index = 0; index < suffixShown; index++) {
+    lines.push({ sign: " ", text: a[a.length - suffix + index]! });
+  }
+  if (suffix > suffixShown) {
+    lines.push({ sign: " ", text: `… ${suffix - suffixShown} unchanged lines …` });
+  }
   let added = 0;
   let removed = 0;
   for (const l of lines) {

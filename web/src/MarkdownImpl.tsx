@@ -27,12 +27,18 @@ import remarkGfm from "remark-gfm";
 import { ImageLightbox } from "./_shell";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { copyText } from "./clipboard";
+import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   oneDark,
   oneLight,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { normalizeSyntaxLanguage } from "./syntaxLanguages";
+import {
+  chunkCodeForRendering,
+  previewCodeForRendering,
+  shouldUseLightweightCode,
+} from "./codeRendering";
 
 // Markdown images in document order, so the `img` override can find a clicked
 // thumbnail's index and the lightbox can page through the whole message's
@@ -110,6 +116,24 @@ function CodeBlock({
   const highlightedCode = sourceAwareDiff
     ? diffLines.map((line) => line.slice(1)).join("\n")
     : code;
+  const lightweight = shouldUseLightweightCode(code);
+  const lightweightChunks = lightweight ? chunkCodeForRendering(code) : [];
+  const lightweightPreview = lightweight ? previewCodeForRendering(code) : "";
+  const lightweightSx = {
+    m: 0,
+    p: 1.5,
+    maxWidth: "100%",
+    overflowX: wrapOnTouch ? "hidden" : "auto",
+    whiteSpace: wrapOnTouch ? "pre-wrap" : "pre",
+    overflowWrap: wrapOnTouch ? "anywhere" : "normal",
+    wordBreak: wrapOnTouch ? "break-word" : "normal",
+    bgcolor: dark ? "#282c34" : "#fafafa",
+    color: dark ? "#abb2bf" : "#383a42",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "0.8em",
+    lineHeight: 1.5,
+    WebkitOverflowScrolling: "touch",
+  } as const;
   // Tool details reuses this component while stepping between transcript
   // entries. A native horizontally scrolled <pre> otherwise keeps its old
   // scrollLeft and makes the next file/diff appear clipped from the left.
@@ -156,47 +180,84 @@ function CodeBlock({
         }),
       }}
     >
-      <SyntaxHighlighter
-        language={syntaxLanguage}
-        style={codeTheme}
-        // overflowX on the inline customStyle (highest specificity) so it wins
-        // over the prism theme's own pre style — the long-line scroll must not
-        // depend on the emotion class losing/winning the cascade.
-        customStyle={{
-          margin: 0,
-          padding: 12,
-          overflowX: wrapOnTouch ? "hidden" : "auto",
-          maxWidth: "100%",
-        }}
-        wrapLongLines={wrapOnTouch}
-        wrapLines={sourceAwareDiff}
-        // RSH only supplies an actual row index to `lineProps` when line
-        // numbers are enabled. Keep that indexing contract, but hide the
-        // number gutter: the diff prefix itself is the useful marker here.
-        showLineNumbers={sourceAwareDiff}
-        lineNumberStyle={sourceAwareDiff ? { display: "none" } : undefined}
-        lineProps={sourceAwareDiff
-          ? (lineNumber: number): HTMLAttributes<HTMLElement> & { "data-diff-sign": string } => {
-            const sign = diffSigns[lineNumber - 1] ?? " ";
-            return {
-              "data-diff-sign": sign,
-              style: {
-                display: "block",
-                marginInline: -12,
-                paddingInline: 12,
-                background: sign === "+"
-                  ? dark ? "rgba(46, 160, 67, 0.15)" : "rgba(46, 160, 67, 0.09)"
-                  : sign === "-"
-                  ? dark ? "rgba(248, 81, 73, 0.15)" : "rgba(248, 81, 73, 0.09)"
-                  : "transparent",
-              },
-            };
-          }
-          : undefined}
-        PreTag="pre"
-      >
-        {highlightedCode}
-      </SyntaxHighlighter>
+      {lightweight
+        ? (
+          <Collapsible
+            maxHeight={280}
+            forceOverflow
+            collapsedChildren={
+              <Box component="pre" data-code-renderer="lightweight-preview" sx={lightweightSx}>
+                {lightweightPreview}
+              </Box>
+            }
+          >
+          <Box
+            component="pre"
+            data-code-renderer="lightweight"
+            sx={lightweightSx}
+          >
+            {lightweightChunks.map((chunk, index) => (
+              <Box
+                component="span"
+                key={index}
+                sx={{
+                  display: "block",
+                  // The browser lays out only chunks near the sheet viewport.
+                  // The intrinsic height keeps the parent fold measurable while
+                  // thousands of off-screen lines remain out of the render path.
+                  contentVisibility: "auto",
+                  containIntrinsicSize: "auto 1920px",
+                }}
+              >
+                {chunk}
+              </Box>
+            ))}
+          </Box>
+          </Collapsible>
+        )
+        : (
+          <SyntaxHighlighter
+            language={syntaxLanguage}
+            style={codeTheme}
+            // overflowX on the inline customStyle (highest specificity) so it wins
+            // over the prism theme's own pre style — the long-line scroll must not
+            // depend on the emotion class losing/winning the cascade.
+            customStyle={{
+              margin: 0,
+              padding: 12,
+              overflowX: wrapOnTouch ? "hidden" : "auto",
+              maxWidth: "100%",
+            }}
+            wrapLongLines={wrapOnTouch}
+            wrapLines={sourceAwareDiff}
+            // RSH only supplies an actual row index to `lineProps` when line
+            // numbers are enabled. Keep that indexing contract, but hide the
+            // number gutter: the diff prefix itself is the useful marker here.
+            showLineNumbers={sourceAwareDiff}
+            lineNumberStyle={sourceAwareDiff ? { display: "none" } : undefined}
+            lineProps={sourceAwareDiff
+              ? (lineNumber: number): HTMLAttributes<HTMLElement> & { "data-diff-sign": string } => {
+                const sign = diffSigns[lineNumber - 1] ?? " ";
+                return {
+                  "data-diff-sign": sign,
+                  style: {
+                    display: "block",
+                    marginInline: -12,
+                    paddingInline: 12,
+                    background: sign === "+"
+                      ? dark ? "rgba(46, 160, 67, 0.15)" : "rgba(46, 160, 67, 0.09)"
+                      : sign === "-"
+                      ? dark ? "rgba(248, 81, 73, 0.15)" : "rgba(248, 81, 73, 0.09)"
+                      : "transparent",
+                  },
+                };
+              }
+              : undefined}
+            PreTag="pre"
+          >
+            {highlightedCode}
+          </SyntaxHighlighter>
+        )}
       <IconButton
         className="cowboy-copy-btn"
         onClick={onCopy}

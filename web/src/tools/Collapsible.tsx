@@ -12,12 +12,16 @@ import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 
 export function Collapsible({
   children,
+  collapsedChildren,
+  forceOverflow = false,
   maxHeight = 280,
   // The surface the fade blends into — the tool body is `background.paper`, so
   // the gradient ends opaque on exactly that colour (no visible seam).
   startOpen = false,
 }: {
   children: ReactNode;
+  collapsedChildren?: ReactNode;
+  forceOverflow?: boolean;
   maxHeight?: number;
   startOpen?: boolean;
 }): React.JSX.Element {
@@ -33,12 +37,12 @@ export function Collapsible({
   useEffect(() => {
     const el = innerRef.current;
     if (!el) return undefined;
-    const check = (): void => setOverflows(el.scrollHeight > maxHeight + 4);
+    const check = (): void => setOverflows(forceOverflow || el.scrollHeight > maxHeight + 4);
     check();
     const ro = new ResizeObserver(check);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [maxHeight]);
+  }, [forceOverflow, maxHeight]);
 
   const clamped = overflows && !open;
   const paper = theme.palette.background.paper;
@@ -128,7 +132,7 @@ export function Collapsible({
           overflow: "hidden",
         }}
       >
-        {children}
+        {!open && collapsedChildren !== undefined ? collapsedChildren : children}
       </Box>
       {clamped && (
         // Fade only the clipped edge; the compact affordance floats inside the
