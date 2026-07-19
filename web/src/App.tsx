@@ -83,6 +83,7 @@ import {
     setSetting,
     useStoreSelector,
 } from "./store";
+import { transcriptGeometryDelayMs } from "./transcriptRenderPacing";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
@@ -1014,9 +1015,10 @@ export function App({
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
-    // vars on the column so the transcript reserves exactly that much bottom space
-    // (its `bottomInset`) AND the single frosted slab behind the panel is sized to
-    // it; keep both accurate as the panel grows/shrinks.
+    // vars on the column. The glass follows every animation frame, while the
+    // transcript reservation is rate-limited below: changing padding-bottom on a
+    // long column-reverse transcript lays out every retained row, so mirroring a
+    // 200ms Collapse transition frame-for-frame wastes the mobile main thread.
     //
     // Driven by CALLBACK refs + ONE persistent ResizeObserver, NOT a mount-time
     // effect. Why: the composer mounts only once the session list arrives and
@@ -1036,12 +1038,48 @@ export function App({
     const roRef = useRef<ResizeObserver | null>(null);
     const appBarElRef = useRef<HTMLElement | null>(null);
     const composerElRef = useRef<HTMLElement | null>(null);
+    const transcriptInsetTimerRef = useRef<number | null>(null);
+    const transcriptInsetLastRef = useRef(0);
+    const pendingTranscriptInsetRef = useRef("0px");
+    const publishTranscriptInset = useCallback((): void => {
+        const col = columnRef.current;
+        if (!col) return;
+        col.style.setProperty("--transcript-composer-h", pendingTranscriptInsetRef.current);
+        transcriptInsetLastRef.current = performance.now();
+        transcriptInsetTimerRef.current = null;
+    }, []);
     const measureGlass = useCallback((): void => {
         const col = columnRef.current;
         if (!col) return;
-        col.style.setProperty("--navbar-h", `${appBarElRef.current?.offsetHeight ?? 0}px`);
-        col.style.setProperty("--composer-h", `${composerElRef.current?.offsetHeight ?? 0}px`);
-    }, []);
+        const navbarHeight = `${appBarElRef.current?.offsetHeight ?? 0}px`;
+        const composerHeight = `${composerElRef.current?.offsetHeight ?? 0}px`;
+        col.style.setProperty("--navbar-h", navbarHeight);
+        col.style.setProperty("--composer-h", composerHeight);
+        pendingTranscriptInsetRef.current = composerHeight;
+
+        // At most one transcript reflow per ~6 frames, plus a trailing update
+        // after the Collapse settles. The glass itself remains frame-accurate,
+        // so the only temporary difference is a small amount of extra/less
+        // transcript clearance during motion; final geometry is exact.
+        const delay = transcriptGeometryDelayMs(
+            performance.now(),
+            transcriptInsetLastRef.current,
+        );
+        if (transcriptInsetLastRef.current === 0 || delay === 0) {
+            if (transcriptInsetTimerRef.current !== null) {
+                globalThis.clearTimeout(transcriptInsetTimerRef.current);
+            }
+            publishTranscriptInset();
+        } else {
+            if (transcriptInsetTimerRef.current !== null) {
+                globalThis.clearTimeout(transcriptInsetTimerRef.current);
+            }
+            transcriptInsetTimerRef.current = globalThis.setTimeout(
+                publishTranscriptInset,
+                delay,
+            );
+        }
+    }, [publishTranscriptInset]);
     const observeGlass = useCallback(
         (slot: "appbar" | "composer", el: HTMLElement | null): void => {
             roRef.current ??= new ResizeObserver((): void => measureGlass());
@@ -1063,8 +1101,13 @@ export function App({
         (el: HTMLDivElement | null): void => observeGlass("composer", el),
         [observeGlass],
     );
-    // Disconnect the shared observer on unmount.
-    useEffect(() => (): void => roRef.current?.disconnect(), []);
+    // Disconnect the shared observer and pending coalesced work on unmount.
+    useEffect(() => (): void => {
+        roRef.current?.disconnect();
+        if (transcriptInsetTimerRef.current !== null) {
+            globalThis.clearTimeout(transcriptInsetTimerRef.current);
+        }
+    }, []);
     // Whether the transcript actually overflows (has content scrolling under the
     // floating composer glass). Gates the composer slab's up-shadow: an
     // empty/short conversation has nothing beneath the glass, so the "floating
@@ -1947,8 +1990,8 @@ export function App({
                                 // mode (the navbar is reserved at the top instead).
                                 bottomInset={
                                     navbarAtBottom
-                                        ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
-                                        : "var(--composer-h, 0px)"
+                                        ? "calc(var(--transcript-composer-h, 0px) + var(--navbar-h, 0px))"
+                                        : "var(--transcript-composer-h, 0px)"
                                 }
                             />
                         </Box>
