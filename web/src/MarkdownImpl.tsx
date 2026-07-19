@@ -54,12 +54,14 @@ function CodeBlock({
   codeTheme,
   dark,
   centerCopy,
+  touchWrap,
 }: {
   code: string;
   lang: string;
   codeTheme: typeof oneDark;
   dark: boolean;
   centerCopy: boolean;
+  touchWrap: boolean;
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const onCopy = useCallback(() => {
@@ -113,6 +115,16 @@ function CodeBlock({
           color: "currentColor",
           fontWeight: 700,
         },
+        ...(touchWrap && {
+          "@media (hover: none), (pointer: coarse)": {
+            "& pre, & code": {
+              whiteSpace: "pre-wrap !important",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+              overflowX: "hidden !important",
+            },
+          },
+        }),
       }}
     >
       <SyntaxHighlighter
@@ -251,6 +263,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
   text,
   invert = false,
   centerCopy = false,
+  touchWrap = false,
 }: {
   /** Raw markdown source. */
   text: string;
@@ -258,6 +271,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
    *  messages). Switches code-block theme to light-on-dark inverse. */
   invert?: boolean;
   centerCopy?: boolean;
+  touchWrap?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
   const dark = theme.palette.mode === "dark" || invert;
@@ -324,7 +338,16 @@ const MarkdownImpl = memo(function MarkdownImpl({
         );
       }
       const lang = className?.replace("language-", "") ?? "";
-      return <CodeBlock code={text} lang={lang} codeTheme={codeTheme} dark={dark} centerCopy={centerCopy} />;
+      return (
+        <CodeBlock
+          code={text}
+          lang={lang}
+          codeTheme={codeTheme}
+          dark={dark}
+          centerCopy={centerCopy}
+          touchWrap={touchWrap}
+        />
+      );
     },
     // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
     // above already renders its own scrollable container (the highlighter's

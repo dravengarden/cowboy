@@ -13,11 +13,14 @@ export const Markdown = memo(function Markdown({
   text,
   invert = false,
   centerCopy = false,
+  touchWrap = false,
 }: {
   text: string;
   invert?: boolean;
   /** Vertically center the copy control in compact single-line code cards. */
   centerCopy?: boolean;
+  /** Soft-wrap fenced code on touch surfaces. */
+  touchWrap?: boolean;
 }): React.JSX.Element {
   return (
     <Suspense
@@ -37,7 +40,7 @@ export const Markdown = memo(function Markdown({
         </Box>
       }
     >
-      <MarkdownImpl text={text} invert={invert} centerCopy={centerCopy} />
+      <MarkdownImpl text={text} invert={invert} centerCopy={centerCopy} touchWrap={touchWrap} />
     </Suspense>
   );
 });

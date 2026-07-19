@@ -74,15 +74,21 @@ export function CodeView({
   lang,
   maxHeight,
   centerCopy = false,
+  touchWrap = false,
 }: {
   code: string;
   lang?: string;
   maxHeight?: number;
   centerCopy?: boolean;
+  touchWrap?: boolean;
 }): React.JSX.Element {
   return (
     <Collapsible maxHeight={maxHeight ?? 280}>
-      <Markdown text={"```" + (lang ?? "") + "\n" + code + "\n```"} centerCopy={centerCopy} />
+      <Markdown
+        text={"```" + (lang ?? "") + "\n" + code + "\n```"}
+        centerCopy={centerCopy}
+        touchWrap={touchWrap}
+      />
     </Collapsible>
   );
 }
@@ -104,7 +110,14 @@ export function PreBlock({ text, maxHeight }: { text: string; maxHeight?: number
           lineHeight: 1.5,
           whiteSpace: "pre",
           overflowX: "auto",
+          overscrollBehaviorX: "contain",
           WebkitOverflowScrolling: "touch",
+          "@media (hover: none), (pointer: coarse)": {
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+            overflowX: "hidden",
+          },
         }}
       >
         {text || "—"}
