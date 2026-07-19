@@ -1,5 +1,5 @@
-import { Component, type ReactNode } from "react";
-import { Box, Skeleton, Stack, Typography } from "@mui/material";
+import { Component, type ReactNode, useEffect, useState } from "react";
+import { Box, ButtonBase, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
 import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
@@ -17,6 +17,7 @@ import {
   textOfContent,
 } from "./blocks";
 import { mcpIdentity } from "./presentation";
+import { outputPrefersHorizontalScroll } from "./outputLayout";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
 // both leaning on the provider-agnostic primitives in blocks.tsx:
@@ -69,6 +70,32 @@ function terminalText(content: unknown): string {
   return fenced?.[1] ?? text;
 }
 
+function TerminalOutput({ text, running }: { text: string; running: boolean }): React.JSX.Element {
+  const [wrapped, setWrapped] = useState(() => !outputPrefersHorizontalScroll(text));
+  useEffect(() => setWrapped(!outputPrefersHorizontalScroll(text)), [text]);
+  const control = text
+    ? (
+      <Box role="group" aria-label="Output line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+        {([true, false] as const).map((value) => (
+          <ButtonBase
+            key={String(value)}
+            aria-pressed={wrapped === value}
+            onClick={(): void => setWrapped(value)}
+            sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+          >
+            {value ? "Wrap" : "Scroll"}
+          </ButtonBase>
+        ))}
+      </Box>
+    )
+    : undefined;
+  return (
+    <Labeled label="Output" action={control}>
+      {text ? <PreBlock text={text} wrap={wrapped} /> : running ? <RunningHint /> : <Empty />}
+    </Labeled>
+  );
+}
+
 // --- kind renderers (provider-agnostic via the normalized ACP kind) ----------
 
 const executeTool: Renderer = ({ rawInput, content, running }) => {
@@ -87,9 +114,7 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
           <ShellCommandView command={cmd} />
         </Labeled>
       )}
-      <Labeled label="Output">
-        {out ? <PreBlock text={out} /> : running ? <RunningHint /> : <Empty />}
-      </Labeled>
+      <TerminalOutput text={out} running={running} />
     </>
   );
 };

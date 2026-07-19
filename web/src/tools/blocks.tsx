@@ -379,7 +379,16 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
 
 /** Plain monospace output (command stdout, generic text) — NOT a language, so a
  *  lightweight scrollable <pre> rather than the highlighter. Folded if long. */
-export function PreBlock({ text, maxHeight }: { text: string; maxHeight?: number }): React.JSX.Element {
+export function PreBlock({
+  text,
+  maxHeight,
+  wrap,
+}: {
+  text: string;
+  maxHeight?: number;
+  wrap?: boolean;
+}): React.JSX.Element {
+  const explicitLayout = wrap !== undefined;
   return (
     <Collapsible maxHeight={maxHeight ?? 240}>
       <Box
@@ -392,15 +401,19 @@ export function PreBlock({ text, maxHeight }: { text: string; maxHeight?: number
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
           fontSize: "0.8em",
           lineHeight: 1.5,
-          whiteSpace: "pre",
-          overflowX: "auto",
+          whiteSpace: wrap ? "pre-wrap" : "pre",
+          overflowWrap: wrap ? "anywhere" : "normal",
+          wordBreak: wrap ? "break-word" : "normal",
+          overflowX: wrap ? "hidden" : "auto",
           overscrollBehaviorX: "contain",
           WebkitOverflowScrolling: "touch",
           "@media (hover: none), (pointer: coarse)": {
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-            wordBreak: "break-word",
-            overflowX: "hidden",
+            ...(!explicitLayout && {
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+              overflowX: "hidden",
+            }),
           },
         }}
       >
