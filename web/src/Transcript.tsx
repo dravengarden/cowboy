@@ -1757,7 +1757,17 @@ function ToolDetailsBrowser({
   const select = (next: ToolItem | undefined): void => {
     if (!next || !item) return;
     const scroller = scrollableAncestor(bodyRef.current);
-    if (scroller) scrollByKey.current.set(item.key, scroller.scrollTop);
+    if (scroller) {
+      scrollByKey.current.set(item.key, scroller.scrollTop);
+      if (run?.tools.some((tool) => tool.key === next.key)) {
+        // A continuous MCP run is one browser page. Selecting one of its rows
+        // swaps the page's active call in place: retain the run list's viewport
+        // and skip the delayed-detail skeleton. Only cross-run navigation gets
+        // the normal focus/anchor alignment performed by the layout effect.
+        scrollByKey.current.set(next.key, scroller.scrollTop);
+        setDetailReadyKey(next.key);
+      }
+    }
     onSelect(next.key);
   };
 
