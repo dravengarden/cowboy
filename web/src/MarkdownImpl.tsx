@@ -20,7 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, IconButton, Link, useTheme } from "@mui/material";
+import { Box, IconButton, Link, useMediaQuery, useTheme } from "@mui/material";
 import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -74,6 +74,7 @@ function CodeBlock({
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
   const onCopy = useCallback(() => {
     void copyText(code).then((ok) => {
       if (!ok) return;
@@ -92,6 +93,14 @@ function CodeBlock({
   const sourceAwareDiff = Boolean(diffLanguage) &&
     diffLines.some((line) => line.startsWith("+") || line.startsWith("-")) &&
     diffLines.every((line) => line === "" || /^[ +-]/u.test(line));
+  // A horizontally panned diff loses both its line prefix and the left edge of
+  // every changed row. That is especially easy to trigger while vertically
+  // scrolling a sheet on a phone, and leaves the coloured row backgrounds
+  // looking detached from their text. Keep ordinary code user-selectable, but
+  // make structured diffs wrap by default on touch surfaces: the +/- and full
+  // statement remain visible together, while Desktop retains exact-line
+  // horizontal scrolling.
+  const wrapOnTouch = touchWrap || (sourceAwareDiff && coarse);
   const diffSigns = sourceAwareDiff ? diffLines.map((line) => line[0] ?? " ") : [];
   // A source-aware diff needs two independent layers: Prism should tokenize
   // the underlying file language, while the row keeps its +/- diff meaning.
@@ -109,7 +118,7 @@ function CodeBlock({
   useLayoutEffect(() => {
     const pre = rootRef.current?.querySelector("pre");
     if (pre) pre.scrollLeft = 0;
-  }, [highlightedCode, syntaxLanguage]);
+  }, [highlightedCode, syntaxLanguage, wrapOnTouch]);
   return (
     <Box
       ref={rootRef}
@@ -135,7 +144,7 @@ function CodeBlock({
           color: "currentColor",
           fontWeight: 700,
         },
-        ...(touchWrap && {
+        ...(wrapOnTouch && {
           "@media (hover: none), (pointer: coarse)": {
             "& pre, & code": {
               whiteSpace: "pre-wrap !important",
@@ -153,8 +162,13 @@ function CodeBlock({
         // overflowX on the inline customStyle (highest specificity) so it wins
         // over the prism theme's own pre style — the long-line scroll must not
         // depend on the emotion class losing/winning the cascade.
-        customStyle={{ margin: 0, padding: 12, overflowX: "auto", maxWidth: "100%" }}
-        wrapLongLines={false}
+        customStyle={{
+          margin: 0,
+          padding: 12,
+          overflowX: wrapOnTouch ? "hidden" : "auto",
+          maxWidth: "100%",
+        }}
+        wrapLongLines={wrapOnTouch}
         wrapLines={sourceAwareDiff}
         // RSH only supplies an actual row index to `lineProps` when line
         // numbers are enabled. Keep that indexing contract, but hide the
