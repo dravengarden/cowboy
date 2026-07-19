@@ -21,6 +21,15 @@ dev-web:
 build-web:
     cd web && deno task build
 
+# Rebuild the project-owned browser bridge around mvdan/sh's core parser.
+shellfmt-wasm:
+    cd web/shellfmt-wasm && go test ./...
+    cd web/shellfmt-wasm && GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o ../public/shellfmt.wasm .
+    chmod 0644 web/public/shellfmt.wasm
+    rm -f web/public/wasm_exec.js
+    cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" web/public/wasm_exec.js
+    chmod u+w web/public/wasm_exec.js
+
 # Build both release artifacts for local use.
 build: build-web
     cargo build --release --locked

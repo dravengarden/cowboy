@@ -9,7 +9,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes, which is what triggers the
 // auto-reload onto the fresh bundle.
-const VERSION = "cowboy-v449";
+const VERSION = "cowboy-v450";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Cowboy serves the independently switched
 // frontend on the same origin as the API/WS, so when the daemon is down (e.g. a
@@ -80,6 +80,25 @@ self.addEventListener("fetch", (event) => {
           if (resp.ok && resp.type === "basic") {
             const copy = resp.clone();
             void caches.open(ASSET_CACHE).then((c) => c.put(request, copy));
+          }
+          return resp;
+        });
+      }),
+    );
+    return;
+  }
+
+  // The optional mvdan/sh formatter is a lazy, versioned application asset.
+  // Cache it after first use so the relatively large WASM parser is paid for
+  // once per release, never on startup and never on every Tool details open.
+  if (url.pathname === "/shellfmt.wasm" || url.pathname === "/wasm_exec.js") {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((resp) => {
+          if (resp.ok && resp.type === "basic") {
+            const copy = resp.clone();
+            void caches.open(ASSET_CACHE).then((cache) => cache.put(request, copy));
           }
           return resp;
         });

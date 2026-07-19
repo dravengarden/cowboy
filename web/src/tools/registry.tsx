@@ -13,6 +13,7 @@ import {
   langFromPath,
   OutputBlocks,
   PreBlock,
+  ShellCommandView,
   textOfContent,
 } from "./blocks";
 import { mcpIdentity } from "./presentation";
@@ -83,7 +84,7 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
       )}
       {cmd && (
         <Labeled label="Command" action={<CopyTextButton text={cmd} label="Command" />}>
-          <CodeView code={cmd} lang="bash" maxHeight={180} touchWrap hideCopy />
+          <ShellCommandView command={cmd} />
         </Labeled>
       )}
       <Labeled label="Output">

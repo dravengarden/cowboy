@@ -1,11 +1,12 @@
-import { type ReactNode, useCallback, useState } from "react";
-import { Box, ButtonBase, Chip, IconButton, Stack, Tooltip, Typography, useMediaQuery } from "@mui/material";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { Box, ButtonBase, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography, useMediaQuery } from "@mui/material";
 import { CheckRounded, ContentCopyRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
 import { copyText } from "../clipboard";
 import { Collapsible } from "./Collapsible";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
+import { formatShellForDisplay } from "../shellFormatter";
 
 // Reusable presentational primitives for tool cards. They compose the existing
 // lazy `Markdown` (which wraps react-syntax-highlighter) for all syntax
@@ -125,6 +126,68 @@ export function CodeView({
           touchWrap={false}
         />
       </Collapsible>
+    </Box>
+  );
+}
+
+/** A shell-aware, display-only view. mvdan/sh is loaded only when this component
+ * is opened; parser failure leaves the exact source view untouched. */
+export function ShellCommandView({ command }: { command: string }): React.JSX.Element {
+  const [readable, setReadable] = useState<{ text: string; context: string } | null | undefined>(undefined);
+  const [mode, setMode] = useState<"readable" | "source">("source");
+
+  useEffect(() => {
+    let active = true;
+    setReadable(undefined);
+    setMode("source");
+    void formatShellForDisplay(command).then((formatted) => {
+      if (!active) return;
+      setReadable(formatted);
+      if (formatted) setMode("readable");
+    });
+    return () => {
+      active = false;
+    };
+  }, [command]);
+
+  const enhanced = readable != null;
+  return (
+    <Box>
+      {(readable === undefined || enhanced) && (
+        <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
+          <Box role="group" aria-label="Shell command presentation" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+            <ButtonBase
+              aria-pressed={mode === "readable"}
+              disabled={!enhanced}
+              onClick={(): void => setMode("readable")}
+              sx={{ minHeight: 28, minWidth: 70, px: 0.875, borderRadius: 0.75, fontSize: 11, color: mode === "readable" ? "text.primary" : "text.disabled", bgcolor: mode === "readable" ? "background.paper" : "transparent", boxShadow: mode === "readable" ? 1 : 0 }}
+            >
+              {readable === undefined ? <CircularProgress size={13} /> : "Readable"}
+            </ButtonBase>
+            <ButtonBase
+              aria-pressed={mode === "source"}
+              onClick={(): void => setMode("source")}
+              sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: mode === "source" ? "text.primary" : "text.disabled", bgcolor: mode === "source" ? "background.paper" : "transparent", boxShadow: mode === "source" ? 1 : 0 }}
+            >
+              Source
+            </ButtonBase>
+          </Box>
+        </Stack>
+      )}
+      {mode === "readable" && readable?.context && (
+        <Typography variant="caption" sx={{ display: "block", mb: 0.5, color: "text.disabled", fontFamily: "ui-monospace, monospace" }}>
+          {readable.context}
+        </Typography>
+      )}
+      <CodeView
+        key={mode}
+        code={mode === "readable" && readable ? readable.text : command}
+        lang="bash"
+        maxHeight={180}
+        touchWrap={mode === "readable"}
+        wrapControl={false}
+        hideCopy
+      />
     </Box>
   );
 }

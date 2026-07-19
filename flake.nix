@@ -166,6 +166,7 @@
           cargo-deny
           cargo-machete
           just
+          go
           nodejs_24
         ] ++ [ shared.deno ];
 
