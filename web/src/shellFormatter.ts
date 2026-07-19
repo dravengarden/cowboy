@@ -13,14 +13,21 @@ interface GoRuntime {
 declare global {
   interface Window {
     Go?: new () => GoRuntime;
-    cowboyFormatShell?: (source: string) => ShellFormatResult;
+    cowboyFormatShell?: (source: string, columns: number) => ShellFormatResult;
   }
 }
 
-let runtimePromise: Promise<(source: string) => ShellFormatResult> | undefined;
+let runtimePromise: Promise<(source: string, columns: number) => ShellFormatResult> | undefined;
 export interface ShellDisplay {
   text: string;
   context: string;
+}
+
+/** Add display-only soft opportunities at path separators. The copy action and
+ * Source mode retain the original bytes; this merely makes long assignment
+ * values and URLs prefer `/` over an arbitrary mid-token phone wrap. */
+export function addShellPathBreaks(source: string): string {
+  return source.replaceAll(/\/(?=[^/\s])/gu, "/\u200b");
 }
 
 const formatCache = new Map<string, Promise<ShellDisplay | null>>();
@@ -53,7 +60,7 @@ async function instantiate(go: GoRuntime): Promise<WebAssembly.Instance> {
   }
 }
 
-function runtime(): Promise<(source: string) => ShellFormatResult> {
+function runtime(): Promise<(source: string, columns: number) => ShellFormatResult> {
   runtimePromise ??= (async () => {
     await loadScript("/wasm_exec.js");
     if (!window.Go) throw new Error("Go WASM runtime unavailable");
@@ -71,18 +78,19 @@ function runtime(): Promise<(source: string) => ShellFormatResult> {
 
 /** Format a display-only copy with mvdan/sh. Failure is intentionally null so
  * callers preserve the exact source without surfacing parser errors as UI. */
-export function formatShellForDisplay(source: string): Promise<ShellDisplay | null> {
+export function formatShellForDisplay(source: string, columns = 80): Promise<ShellDisplay | null> {
   if (source.length > 64 * 1024) return Promise.resolve(null);
-  const cached = formatCache.get(source);
+  const cacheKey = `${columns}\u0000${source}`;
+  const cached = formatCache.get(cacheKey);
   if (cached) return cached;
   const pending = runtime()
     .then((format) => {
-      const result = format(source);
+      const result = format(source, columns);
       return result.ok && result.text.trim()
         ? { text: result.text.trimEnd(), context: result.context }
         : null;
     })
     .catch(() => null);
-  formatCache.set(source, pending);
+  formatCache.set(cacheKey, pending);
   return pending;
 }

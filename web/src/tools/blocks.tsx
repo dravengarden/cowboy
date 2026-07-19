@@ -6,7 +6,7 @@ import { copyText } from "../clipboard";
 import { Collapsible } from "./Collapsible";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
-import { formatShellForDisplay } from "../shellFormatter";
+import { addShellPathBreaks, formatShellForDisplay } from "../shellFormatter";
 
 // Reusable presentational primitives for tool cards. They compose the existing
 // lazy `Markdown` (which wraps react-syntax-highlighter) for all syntax
@@ -150,6 +150,7 @@ export function CodeView({
  * is opened; parser failure leaves the exact source view untouched. */
 export function ShellCommandView({ command }: { command: string }): React.JSX.Element {
   const touch = useMediaQuery("(hover:none), (pointer:coarse)");
+  const phone = useMediaQuery("(max-width:600px)");
   const [readable, setReadable] = useState<{ text: string; context: string } | null | undefined>(undefined);
   const [mode, setMode] = useState<"readable" | "source">("source");
 
@@ -157,7 +158,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
     let active = true;
     setReadable(undefined);
     setMode("source");
-    void formatShellForDisplay(command).then((formatted) => {
+    void formatShellForDisplay(command, phone ? 46 : 88).then((formatted) => {
       if (!active) return;
       setReadable(formatted);
       if (formatted) setMode("readable");
@@ -165,7 +166,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
     return () => {
       active = false;
     };
-  }, [command]);
+  }, [command, phone]);
 
   const enhanced = readable != null;
   return (
@@ -198,7 +199,9 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
       )}
       <CodeView
         key={mode}
-        code={mode === "readable" && readable ? readable.text : command}
+        code={mode === "readable" && readable
+          ? (phone ? addShellPathBreaks(readable.text) : readable.text)
+          : command}
         lang="bash"
         // A phone sheet has enough vertical room for roughly five more shell
         // lines before disclosure is useful. Keep Desktop compact, where Tool

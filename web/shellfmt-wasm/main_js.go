@@ -11,10 +11,10 @@ import (
 )
 
 func formatShell(_ js.Value, args []js.Value) any {
-	if len(args) != 1 || args[0].Type() != js.TypeString {
-		return mapResult(shellDisplay{}, fmt.Errorf("expected one string argument"))
+	if len(args) != 2 || args[0].Type() != js.TypeString || args[1].Type() != js.TypeNumber {
+		return mapResult(shellDisplay{}, fmt.Errorf("expected source and column width"))
 	}
-	display, err := formatShellDisplay(args[0].String())
+	display, err := formatShellDisplay(args[0].String(), args[1].Int())
 	return mapResult(display, err)
 }
 

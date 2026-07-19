@@ -22,7 +22,7 @@ func TestRejectsInvalidShell(t *testing.T) {
 }
 
 func TestExtractsNixBashCommandPayload(t *testing.T) {
-	display, err := formatShellDisplay("nix develop -c bash -lc 'cargo fmt --check && cargo test'")
+	display, err := formatShellDisplay("nix develop -c bash -lc 'cargo fmt --check && cargo test'", 80)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,5 +31,29 @@ func TestExtractsNixBashCommandPayload(t *testing.T) {
 	}
 	if strings.Contains(display.Text, "nix develop") || !strings.Contains(display.Text, "&&\n") {
 		t.Fatalf("expected readable inner script, got %q", display.Text)
+	}
+}
+
+func TestWrapsLongCallsAtShellWordBoundaries(t *testing.T) {
+	display, err := formatShellDisplay("psql 'postgresql://cowboy?host=/run/postgresql-cowboy&port=5433&user=cowboy' -P pager=off -F $'\\t' -A -c 'select id, title from sessions order by updated_at desc'", 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := display.Text
+	if !strings.Contains(formatted, " \\\n  -P pager=off") {
+		t.Fatalf("expected a shell continuation before arguments, got %q", formatted)
+	}
+	if _, err := parseShell(formatted); err != nil {
+		t.Fatalf("readable layout must remain valid shell: %v", err)
+	}
+}
+
+func TestKeepsAssignmentValueAtomic(t *testing.T) {
+	formatted, err := formatShellSource("BRIDGE=/home/draven/columbus/machines/hawk/nixos/.agents/skills/chrome-debug-bridge/helpers/bridge.sh; $BRIDGE up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(formatted, "BRIDGE= \\") {
+		t.Fatalf("assignment value must not be separated from its name: %q", formatted)
 	}
 }
