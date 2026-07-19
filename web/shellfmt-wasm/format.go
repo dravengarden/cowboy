@@ -22,6 +22,8 @@ type shellDisplay struct {
 type shellFrame struct {
 	Launcher string
 	Text     string
+	Language string
+	Dialect  string
 	Depth    int
 	Marker   string
 	Color    int
@@ -101,22 +103,29 @@ func (allocator *nestedShellMarkerAllocator) nextMarker() (string, int) {
 // unambiguous and receive Bash highlighting instead of one quoted-string token.
 func formatShellFrames(source string, file *syntax.File, columns, depth int, markers *nestedShellMarkerAllocator) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
-		nested := nestedShells(source, file)
+		nested := nestedPayloads(source, file)
 		if len(nested) > 0 && len(nested) < maxShellFrames {
 			type extraction struct {
-				nested   nestedShell
+				nested   nestedPayload
 				children []shellFrame
 			}
 			extracted := make([]extraction, 0, len(nested))
 			for _, candidate := range nested {
 				marker, color := markers.nextMarker()
-				innerFile, err := parseShell(candidate.payload)
-				if err != nil {
-					continue
-				}
-				children, err := formatShellFrames(candidate.payload, innerFile, columns, depth+1, markers)
-				if err != nil || len(children) == 0 {
-					continue
+				var children []shellFrame
+				var innerFile *syntax.File
+				if candidate.language == "sql" {
+					children = []shellFrame{{Text: candidate.payload, Language: "sql", Dialect: candidate.dialect, Depth: depth + 1}}
+				} else {
+					var err error
+					innerFile, err = parseShell(candidate.payload)
+					if err != nil {
+						continue
+					}
+					children, err = formatShellFrames(candidate.payload, innerFile, columns, depth+1, markers)
+					if err != nil || len(children) == 0 {
+						continue
+					}
 				}
 				// A nested frame earns its extra visual hierarchy. Keep tiny leaf
 				// payloads such as `true`, `echo ok`, or one short remote probe in
@@ -124,7 +133,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				// it saves. Structural shell complexity, multiple source lines, or a
 				// genuinely long command justify a frame. A child which found deeper
 				// frames must also remain so that the execution hierarchy is intact.
-				if len(children) == 1 && !nestedShellNeedsFrame(candidate.payload, innerFile) {
+				if candidate.language != "sql" && len(children) == 1 && !nestedShellNeedsFrame(candidate.payload, innerFile) {
 					continue
 				}
 				children[0].Launcher = candidate.launcher
@@ -201,15 +210,17 @@ func nestedShellNeedsFrame(source string, file *syntax.File) bool {
 	return false
 }
 
-type nestedShell struct {
+type nestedPayload struct {
 	start    int
 	end      int
 	launcher string
 	payload  string
+	language string
+	dialect  string
 }
 
-func nestedShells(source string, file *syntax.File) []nestedShell {
-	found := make([]nestedShell, 0, 4)
+func nestedPayloads(source string, file *syntax.File) []nestedPayload {
+	found := make([]nestedPayload, 0, 4)
 	syntax.Walk(file, func(node syntax.Node) bool {
 		call, isCall := node.(*syntax.CallExpr)
 		if !isCall || len(call.Args) < 3 {
@@ -223,6 +234,10 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 		// becomes another ordinary nested frame instead of a special UI case.
 		if remote, ok := sshRemoteShell(source, call); ok {
 			found = append(found, remote)
+			return false
+		}
+		if sql, ok := sqlClientPayload(call); ok {
+			found = append(found, sql)
 			return false
 		}
 		for index := 0; index+2 < len(call.Args); index++ {
@@ -256,7 +271,7 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 			// the compact execution frame names the actual interpreter without
 			// spending the phone width on a store hash.
 			launcherArgs[index] = shell
-			found = append(found, nestedShell{
+			found = append(found, nestedPayload{
 				start:    int(payload.Pos().Offset()),
 				end:      int(payload.End().Offset()),
 				launcher: strings.Join(launcherArgs, " "),
@@ -268,6 +283,33 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 	})
 	sort.Slice(found, func(i, j int) bool { return found[i].start < found[j].start })
 	return found
+}
+
+// sqlClientPayload extracts decoded SQL from PostgreSQL's client. staticWord
+// is the authority for shell quote removal; dynamic payloads stay as Bash.
+func sqlClientPayload(call *syntax.CallExpr) (nestedPayload, bool) {
+	if len(call.Args) < 3 {
+		return nestedPayload{}, false
+	}
+	command, static := staticWord(call.Args[0])
+	if !static || filepath.Base(command) != "psql" {
+		return nestedPayload{}, false
+	}
+	for index := 1; index+1 < len(call.Args); index++ {
+		option, ok := staticWord(call.Args[index])
+		if !ok || (option != "-c" && option != "--command") {
+			continue
+		}
+		value, ok := staticWord(call.Args[index+1])
+		if !ok || strings.TrimSpace(value) == "" {
+			return nestedPayload{}, false
+		}
+		return nestedPayload{
+			start: int(call.Args[index+1].Pos().Offset()), end: int(call.Args[index+1].End().Offset()),
+			launcher: "psql " + option, payload: value, language: "sql", dialect: "postgresql",
+		}, true
+	}
+	return nestedPayload{}, false
 }
 
 // shellInterpreterName recognizes real interpreter binary naming conventions,
@@ -299,20 +341,20 @@ var sshOptionsWithValue = map[string]struct{}{
 	"-R": {}, "-S": {}, "-W": {}, "-w": {},
 }
 
-func sshRemoteShell(source string, call *syntax.CallExpr) (nestedShell, bool) {
+func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) {
 	command, static := staticWord(call.Args[0])
 	if !static || filepath.Base(command) != "ssh" {
-		return nestedShell{}, false
+		return nestedPayload{}, false
 	}
 	destination := -1
 	for index := 1; index < len(call.Args); index++ {
 		value, ok := staticWord(call.Args[index])
 		if !ok {
-			return nestedShell{}, false
+			return nestedPayload{}, false
 		}
 		if value == "--" {
 			if index+1 >= len(call.Args) {
-				return nestedShell{}, false
+				return nestedPayload{}, false
 			}
 			destination = index + 1
 			break
@@ -325,7 +367,7 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedShell, bool) {
 			if _, consumesValue := sshOptionsWithValue[option]; consumesValue && len(value) == 2 {
 				index++
 				if index >= len(call.Args) {
-					return nestedShell{}, false
+					return nestedPayload{}, false
 				}
 			}
 			continue
@@ -335,19 +377,19 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedShell, bool) {
 	}
 	remoteStart := destination + 1
 	if destination < 0 || remoteStart >= len(call.Args) {
-		return nestedShell{}, false
+		return nestedPayload{}, false
 	}
 	remoteArgs := make([]string, 0, len(call.Args)-remoteStart)
 	for _, word := range call.Args[remoteStart:] {
 		value, ok := staticWord(word)
 		if !ok {
-			return nestedShell{}, false
+			return nestedPayload{}, false
 		}
 		remoteArgs = append(remoteArgs, value)
 	}
 	payload := strings.Join(remoteArgs, " ")
 	if _, err := parseShell(payload); err != nil {
-		return nestedShell{}, false
+		return nestedPayload{}, false
 	}
 	launcherArgs := make([]string, 0, remoteStart)
 	for _, word := range call.Args[:remoteStart] {
@@ -355,7 +397,7 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedShell, bool) {
 		launcherArgs = append(launcherArgs, value)
 	}
 	launcherArgs[0] = filepath.Base(launcherArgs[0])
-	return nestedShell{
+	return nestedPayload{
 		start:    int(call.Args[remoteStart].Pos().Offset()),
 		end:      int(call.Args[len(call.Args)-1].End().Offset()),
 		launcher: strings.Join(launcherArgs, " "),

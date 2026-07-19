@@ -400,7 +400,7 @@ func TestWrapsLongCallsAtShellWordBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	formatted := display.Text
+	formatted := display.Frames[0].Text
 	if !strings.Contains(formatted, " \\\n  -P pager=off") {
 		t.Fatalf("expected a shell continuation before arguments, got %q", formatted)
 	}
@@ -431,5 +431,41 @@ done`)
 	}
 	if !strings.Contains(formatted, "then\n    exit 0\n  fi") {
 		t.Fatalf("expected an indented multiline if body, got %q", formatted)
+	}
+}
+
+func TestExtractsPsqlCommandAsPostgresqlFrame(t *testing.T) {
+	source := `psql "postgresql://cowboy?host=/run/postgresql-cowboy&port=5433" -X -At -c "select replace(encode(convert_to(payload->>'command', 'UTF8'), 'base64'), chr(10), '') from events where payload->>'sessionUpdate'='tool_call'" | go test ./web/shellfmt-wasm`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql *shellFrame
+	for index := range display.Frames {
+		if display.Frames[index].Language == "sql" {
+			sql = &display.Frames[index]
+			break
+		}
+	}
+	if sql == nil {
+		t.Fatalf("expected a nested SQL frame: %#v", display.Frames)
+	}
+	if sql.Dialect != "postgresql" || sql.Launcher != "psql -c" {
+		t.Fatalf("expected PostgreSQL metadata: %#v", sql)
+	}
+	if strings.Contains(sql.Text, `\'`) || !strings.Contains(sql.Text, "payload->>'command'") {
+		t.Fatalf("SQL must be decoded from Bash quoting before formatting: %q", sql.Text)
+	}
+}
+
+func TestLeavesDynamicPsqlPayloadInShellFrame(t *testing.T) {
+	display, err := formatShellDisplay(`psql database -c "$QUERY"`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range display.Frames {
+		if frame.Language == "sql" {
+			t.Fatalf("dynamic SQL cannot be safely extracted: %#v", display.Frames)
+		}
 	}
 }

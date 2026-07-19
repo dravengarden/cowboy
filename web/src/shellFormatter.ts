@@ -32,6 +32,8 @@ export interface ShellDisplay {
 export interface ShellFrame {
   launcher: string;
   text: string;
+  language?: "bash" | "sql";
+  dialect?: "postgresql" | "sql";
   depth?: number;
   marker?: string;
   color?: number;
@@ -45,6 +47,30 @@ export function addShellPathBreaks(source: string): string {
 }
 
 const formatCache = new Map<string, Promise<ShellDisplay | null>>();
+
+export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): Promise<ShellFrame> {
+  if (frame.language !== "sql") return frame;
+  try {
+    // Kept behind the already-lazy shell formatter path: ordinary transcript
+    // rendering never downloads the SQL formatter. The AST-decoded SQL is a
+    // display copy only; failure preserves the exact decoded payload.
+    const { format } = await import("sql-formatter");
+    return {
+      ...frame,
+      text: format(frame.text, {
+        language: frame.dialect === "postgresql" ? "postgresql" : "sql",
+        keywordCase: "preserve",
+        dataTypeCase: "preserve",
+        functionCase: "preserve",
+        logicalOperatorNewline: "before",
+        expressionWidth: Math.max(36, columns - 8),
+        linesBetweenQueries: 1,
+      }).trimEnd(),
+    };
+  } catch {
+    return frame;
+  }
+}
 
 function loadScript(source: string): Promise<void> {
   const existing = document.querySelector<HTMLScriptElement>(`script[src="${source}"]`);
@@ -98,19 +124,20 @@ export function formatShellForDisplay(source: string, columns = 80): Promise<She
   const cached = formatCache.get(cacheKey);
   if (cached) return cached;
   const pending = runtime()
-    .then((format) => {
+    .then(async (format) => {
       const result = format(source, columns);
-      return result.ok && result.text.trim()
-        ? {
+      if (!result.ok || !result.text.trim()) return null;
+      const frames = await Promise.all(
+        (result.frames ?? [{ launcher: result.context, text: result.text }])
+          .map((frame) => formatEmbeddedFrame({ ...frame, text: frame.text.trimEnd() }, columns)),
+      );
+      return {
           text: result.text.trimEnd(),
           flatText: (result.flatText ?? result.text).trimEnd(),
           context: result.context,
-          frames: result.frames?.map((frame) => ({ ...frame, text: frame.text.trimEnd() })) ?? [
-            { launcher: result.context, text: result.text.trimEnd() },
-          ],
+          frames,
           summary: result.summary ?? "",
-        }
-        : null;
+        };
     })
     .catch(() => null);
   formatCache.set(cacheKey, pending);
