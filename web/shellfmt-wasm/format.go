@@ -236,11 +236,12 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 			found = append(found, remote)
 			return false
 		}
-		if sql, ok := sqlClientPayload(call); ok {
+		clientArgs := unwrappedClientArgs(call.Args)
+		if sql, ok := sqlClientPayload(clientArgs); ok {
 			found = append(found, sql)
 			return false
 		}
-		if query, ok := jqClientPayload(call); ok {
+		if query, ok := jqClientPayload(clientArgs); ok {
 			found = append(found, query)
 			return false
 		}
@@ -297,41 +298,116 @@ var jqOptionsWithOneValue = map[string]struct{}{
 	"--indent": {}, "--library-path": {}, "-L": {},
 }
 
+var sudoOptionsWithOneValue = map[string]struct{}{
+	"-C": {}, "--close-from": {}, "-D": {}, "--chdir": {}, "-g": {}, "--group": {},
+	"-h": {}, "--host": {}, "-p": {}, "--prompt": {}, "-R": {}, "--chroot": {},
+	"-T": {}, "--command-timeout": {}, "-u": {}, "--user": {},
+}
+
+// unwrappedClientArgs follows transparent command launchers without reparsing
+// strings. Word positions still refer to the original shell source, so an
+// extracted jq/SQL frame can replace only its payload while Source stays exact.
+func unwrappedClientArgs(args []*syntax.Word) []*syntax.Word {
+	for depth := 0; depth < 4 && len(args) > 1; depth++ {
+		command, static := staticWord(args[0])
+		if !static {
+			return args
+		}
+		switch filepath.Base(command) {
+		case "sudo":
+			index := 1
+			for index < len(args) {
+				value, ok := staticWord(args[index])
+				if !ok {
+					return args
+				}
+				if value == "--" {
+					index++
+					break
+				}
+				if _, consumes := sudoOptionsWithOneValue[value]; consumes {
+					index += 2
+					continue
+				}
+				if strings.HasPrefix(value, "--user=") || strings.HasPrefix(value, "--group=") ||
+					strings.HasPrefix(value, "--host=") || strings.HasPrefix(value, "--chdir=") ||
+					strings.HasPrefix(value, "--chroot=") || strings.HasPrefix(value, "--prompt=") ||
+					strings.HasPrefix(value, "--close-from=") || strings.HasPrefix(value, "--command-timeout=") {
+					index++
+					continue
+				}
+				if strings.HasPrefix(value, "-") && value != "-" {
+					index++
+					continue
+				}
+				if strings.Contains(value, "=") {
+					index++
+					continue
+				}
+				break
+			}
+			if index >= len(args) {
+				return args
+			}
+			args = args[index:]
+		case "command", "builtin", "nohup":
+			index := 1
+			for index < len(args) {
+				value, ok := staticWord(args[index])
+				if !ok || !strings.HasPrefix(value, "-") || value == "-" {
+					break
+				}
+				index++
+			}
+			if index >= len(args) {
+				return args
+			}
+			args = args[index:]
+		default:
+			return args
+		}
+	}
+	return args
+}
+
 // jqClientPayload extracts a static jq program from its shell argument. The
 // shell AST remains the authority for quote and escape decoding; jqfmt then
 // parses the decoded program before any display-only formatting is accepted.
 // Small filters stay inline because a second visual frame would cost more
 // attention than it saves.
-func jqClientPayload(call *syntax.CallExpr) (nestedPayload, bool) {
-	command, static := staticWord(call.Args[0])
+func jqClientPayload(args []*syntax.Word) (nestedPayload, bool) {
+	if len(args) < 2 {
+		return nestedPayload{}, false
+	}
+	command, static := staticWord(args[0])
 	if !static || filepath.Base(command) != "jq" {
 		return nestedPayload{}, false
 	}
-	for index := 1; index < len(call.Args); index++ {
-		value, ok := staticWord(call.Args[index])
+	for index := 1; index < len(args); index++ {
+		value, ok := staticWord(args[index])
 		if !ok {
 			return nestedPayload{}, false
 		}
 		if value == "--" {
 			index++
-			if index >= len(call.Args) {
+			if index >= len(args) {
 				return nestedPayload{}, false
 			}
-			return formattedJQPayload(call.Args[index])
+			return formattedJQPayload(args[index])
 		}
 		if value == "-f" || value == "--from-file" || strings.HasPrefix(value, "--from-file=") {
 			return nestedPayload{}, false
 		}
 		if _, consumes := jqOptionsWithTwoValues[value]; consumes {
 			index += 2
-			if index >= len(call.Args) {
+			if index >= len(args) {
 				return nestedPayload{}, false
 			}
 			continue
 		}
 		if _, consumes := jqOptionsWithOneValue[value]; consumes {
 			index++
-			if index >= len(call.Args) {
+			if index >= len(args) {
 				return nestedPayload{}, false
 			}
 			continue
@@ -343,7 +419,7 @@ func jqClientPayload(call *syntax.CallExpr) (nestedPayload, bool) {
 		if strings.HasPrefix(value, "-") && value != "-" {
 			continue
 		}
-		return formattedJQPayload(call.Args[index])
+		return formattedJQPayload(args[index])
 	}
 	return nestedPayload{}, false
 }
@@ -402,25 +478,25 @@ func jqNeedsFrame(source string) bool {
 
 // sqlClientPayload extracts decoded SQL from PostgreSQL's client. staticWord
 // is the authority for shell quote removal; dynamic payloads stay as Bash.
-func sqlClientPayload(call *syntax.CallExpr) (nestedPayload, bool) {
-	if len(call.Args) < 3 {
+func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
+	if len(args) < 3 {
 		return nestedPayload{}, false
 	}
-	command, static := staticWord(call.Args[0])
+	command, static := staticWord(args[0])
 	if !static || filepath.Base(command) != "psql" {
 		return nestedPayload{}, false
 	}
-	for index := 1; index+1 < len(call.Args); index++ {
-		option, ok := staticWord(call.Args[index])
+	for index := 1; index+1 < len(args); index++ {
+		option, ok := staticWord(args[index])
 		if !ok || (option != "-c" && option != "--command") {
 			continue
 		}
-		value, ok := staticWord(call.Args[index+1])
+		value, ok := staticWord(args[index+1])
 		if !ok || strings.TrimSpace(value) == "" {
 			return nestedPayload{}, false
 		}
 		return nestedPayload{
-			start: int(call.Args[index+1].Pos().Offset()), end: int(call.Args[index+1].End().Offset()),
+			start: int(args[index+1].Pos().Offset()), end: int(args[index+1].End().Offset()),
 			launcher: "psql " + option, payload: value, language: "sql", dialect: "postgresql",
 		}, true
 	}

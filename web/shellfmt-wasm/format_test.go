@@ -377,6 +377,22 @@ func TestKeepsTrivialNestedPayloadsInline(t *testing.T) {
 	}
 }
 
+func TestExtractsJQThroughTransparentCommandWrappers(t *testing.T) {
+	for _, source := range []string{
+		`sudo jq '{revision,profile:{outbounds:[.profile.outbounds[]? | select(.type=="tailscale") | {type,tag,server_url}]}}' state.json`,
+		`sudo -u operator -- jq -r '.items[] | select(.ready) | [.id,.name] | @tsv' state.json`,
+		`command jq '.items[] | select(.ready) | {id,name}' state.json`,
+	} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatalf("%q: %v", source, err)
+		}
+		if len(display.Frames) != 2 || display.Frames[1].Language != "jq" {
+			t.Fatalf("transparent wrapper should expose jq payload for %q: %#v", source, display.Frames)
+		}
+	}
+}
+
 func TestExtractsNestedPayloadByGeneralComplexity(t *testing.T) {
 	longArgument := strings.Repeat("segment/", 10)
 	for _, source := range []string{
