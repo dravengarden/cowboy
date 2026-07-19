@@ -92,8 +92,9 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
   );
 };
 
-const editTool: Renderer = ({ content, running }) => {
-  const out = <OutputBlocks content={content} />;
+const editTool: Renderer = ({ rawInput, content, running }) => {
+  const fallbackPath = String(rawInput["file_path"] ?? rawInput["path"] ?? "");
+  const out = <OutputBlocks content={content} fallbackPath={fallbackPath} />;
   if (out && (hasDiff(content) || textOfContent(content))) return out;
   return running ? <RunningHint /> : <Empty />;
 };

@@ -10,7 +10,7 @@
 // Heavy stuff (Prism, language defs) is dynamic-imported by RSH on first
 // use so the initial page load stays light.
 
-import { memo, type ReactNode, useCallback, useMemo, useState } from "react";
+import { type HTMLAttributes, memo, type ReactNode, useCallback, useMemo, useState } from "react";
 import { Box, IconButton, Link, useTheme } from "@mui/material";
 import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -18,44 +18,12 @@ import remarkGfm from "remark-gfm";
 import { ImageLightbox } from "./_shell";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { copyText } from "./clipboard";
-import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   oneDark,
   oneLight,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
-import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
-import diff from "react-syntax-highlighter/dist/esm/languages/prism/diff";
-import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
-import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import jsx from "react-syntax-highlighter/dist/esm/languages/prism/jsx";
-import markdown from "react-syntax-highlighter/dist/esm/languages/prism/markdown";
-import python from "react-syntax-highlighter/dist/esm/languages/prism/python";
-import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
-import toml from "react-syntax-highlighter/dist/esm/languages/prism/toml";
-import tsx from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
-import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
-import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
-
-SyntaxHighlighter.registerLanguage("bash", bash);
-SyntaxHighlighter.registerLanguage("sh", bash);
-SyntaxHighlighter.registerLanguage("shell", bash);
-SyntaxHighlighter.registerLanguage("diff", diff);
-SyntaxHighlighter.registerLanguage("javascript", javascript);
-SyntaxHighlighter.registerLanguage("js", javascript);
-SyntaxHighlighter.registerLanguage("json", json);
-SyntaxHighlighter.registerLanguage("jsx", jsx);
-SyntaxHighlighter.registerLanguage("markdown", markdown);
-SyntaxHighlighter.registerLanguage("md", markdown);
-SyntaxHighlighter.registerLanguage("python", python);
-SyntaxHighlighter.registerLanguage("py", python);
-SyntaxHighlighter.registerLanguage("rust", rust);
-SyntaxHighlighter.registerLanguage("rs", rust);
-SyntaxHighlighter.registerLanguage("toml", toml);
-SyntaxHighlighter.registerLanguage("tsx", tsx);
-SyntaxHighlighter.registerLanguage("typescript", typescript);
-SyntaxHighlighter.registerLanguage("ts", typescript);
-SyntaxHighlighter.registerLanguage("yaml", yaml);
-SyntaxHighlighter.registerLanguage("yml", yaml);
+import { normalizeSyntaxLanguage } from "./syntaxLanguages";
 
 // Markdown images in document order, so the `img` override can find a clicked
 // thumbnail's index and the lightbox can page through the whole message's
@@ -101,6 +69,26 @@ function CodeBlock({
       globalThis.setTimeout(() => setCopied(false), 1500);
     });
   }, [code]);
+  const diffLanguage = lang.startsWith("diff-")
+    ? normalizeSyntaxLanguage(lang.slice("diff-".length))
+    : "";
+  const syntaxLanguage = diffLanguage || normalizeSyntaxLanguage(lang) || "text";
+  const diffLines = diffLanguage ? code.split("\n") : [];
+  // Only apply diff row treatment to a real prefixed patch. This also makes a
+  // hand-written ```diff-typescript fence degrade safely if it contains plain
+  // source rather than the structured diff format Cowboy emits.
+  const sourceAwareDiff = Boolean(diffLanguage) &&
+    diffLines.some((line) => line.startsWith("+") || line.startsWith("-")) &&
+    diffLines.every((line) => line === "" || /^[ +-]/u.test(line));
+  const diffSigns = sourceAwareDiff ? diffLines.map((line) => line[0] ?? " ") : [];
+  // A source-aware diff needs two independent layers: Prism should tokenize
+  // the underlying file language, while the row keeps its +/- diff meaning.
+  // Feeding the prefix into (for example) TypeScript makes the first token on
+  // every changed line invalid, so remove it for tokenization and paint it back
+  // with a row pseudo-element. Copy still uses the untouched `code` above.
+  const highlightedCode = sourceAwareDiff
+    ? diffLines.map((line) => line.slice(1)).join("\n")
+    : code;
   return (
     <Box
       sx={{
@@ -118,19 +106,50 @@ function CodeBlock({
           maxWidth: "100%",
           WebkitOverflowScrolling: "touch",
         },
+        "& code > [data-diff-sign]::before": {
+          content: "attr(data-diff-sign)",
+          display: "inline-block",
+          width: "1ch",
+          color: "currentColor",
+          fontWeight: 700,
+        },
       }}
     >
       <SyntaxHighlighter
-        language={lang || "text"}
+        language={syntaxLanguage}
         style={codeTheme}
         // overflowX on the inline customStyle (highest specificity) so it wins
         // over the prism theme's own pre style — the long-line scroll must not
         // depend on the emotion class losing/winning the cascade.
         customStyle={{ margin: 0, padding: 12, overflowX: "auto", maxWidth: "100%" }}
         wrapLongLines={false}
+        wrapLines={sourceAwareDiff}
+        // RSH only supplies an actual row index to `lineProps` when line
+        // numbers are enabled. Keep that indexing contract, but hide the
+        // number gutter: the diff prefix itself is the useful marker here.
+        showLineNumbers={sourceAwareDiff}
+        lineNumberStyle={sourceAwareDiff ? { display: "none" } : undefined}
+        lineProps={sourceAwareDiff
+          ? (lineNumber: number): HTMLAttributes<HTMLElement> & { "data-diff-sign": string } => {
+            const sign = diffSigns[lineNumber - 1] ?? " ";
+            return {
+              "data-diff-sign": sign,
+              style: {
+                display: "block",
+                marginInline: -12,
+                paddingInline: 12,
+                background: sign === "+"
+                  ? dark ? "rgba(46, 160, 67, 0.15)" : "rgba(46, 160, 67, 0.09)"
+                  : sign === "-"
+                  ? dark ? "rgba(248, 81, 73, 0.15)" : "rgba(248, 81, 73, 0.09)"
+                  : "transparent",
+              },
+            };
+          }
+          : undefined}
         PreTag="pre"
       >
-        {code}
+        {highlightedCode}
       </SyntaxHighlighter>
       <IconButton
         className="cowboy-copy-btn"

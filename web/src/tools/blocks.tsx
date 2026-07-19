@@ -3,6 +3,7 @@ import { Box, Chip, Stack, Typography } from "@mui/material";
 import { Markdown } from "../Markdown";
 import { Collapsible } from "./Collapsible";
 import { unifiedDiff } from "./diff";
+import { languageFromPath } from "../syntaxLanguages";
 
 // Reusable presentational primitives for tool cards. They compose the existing
 // lazy `Markdown` (which wraps react-syntax-highlighter) for all syntax
@@ -12,32 +13,8 @@ import { unifiedDiff } from "./diff";
 // long is wrapped in `Collapsible`. Provider adapters (registry.tsx) reference
 // these; they hold no provider knowledge themselves.
 
-// File extension → a Prism language id the Markdown highlighter has registered
-// (see MarkdownImpl). Unregistered extensions fall through to plaintext, which
-// renders fine (just uncoloured), so the map only needs the common ones.
-const LANG_BY_EXT: Record<string, string> = {
-  ts: "typescript",
-  tsx: "tsx",
-  js: "javascript",
-  jsx: "jsx",
-  mjs: "javascript",
-  cjs: "javascript",
-  json: "json",
-  py: "python",
-  rs: "rust",
-  toml: "toml",
-  yaml: "yaml",
-  yml: "yaml",
-  md: "markdown",
-  markdown: "markdown",
-  sh: "bash",
-  bash: "bash",
-  zsh: "bash",
-};
-
 export function langFromPath(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  return LANG_BY_EXT[ext] ?? "";
+  return languageFromPath(path);
 }
 
 /** A small caption above a block (Input / Output / Command …). */
@@ -99,8 +76,17 @@ export function PreBlock({ text, maxHeight }: { text: string; maxHeight?: number
 
 /** A unified diff (old → new) coloured by the Markdown ```diff fence, with a
  *  compact +adds / −removes stat. Folded if long. */
-export function DiffView({ oldText, newText }: { oldText: string; newText: string }): React.JSX.Element {
+export function DiffView({
+  oldText,
+  newText,
+  path,
+}: {
+  oldText: string;
+  newText: string;
+  path?: string | undefined;
+}): React.JSX.Element {
   const { text, added, removed } = unifiedDiff(oldText, newText);
+  const sourceLanguage = path ? languageFromPath(path) : "";
   return (
     <Box>
       <Stack direction="row" spacing={0.75} sx={{ mb: 0.5 }}>
@@ -112,7 +98,7 @@ export function DiffView({ oldText, newText }: { oldText: string; newText: strin
         </Typography>
       </Stack>
       <Collapsible maxHeight={320}>
-        <Markdown text={"```diff\n" + text + "\n```"} />
+        <Markdown text={"```" + (sourceLanguage ? `diff-${sourceLanguage}` : "diff") + "\n" + text + "\n```"} />
       </Collapsible>
     </Box>
   );
@@ -216,13 +202,28 @@ function withFenceLang(text: string, lang?: string): string {
 /** Render a tool's `content` array. Diff blocks → DiffView; text blocks → the
  *  agent's markdown (verbatim, lang injected for a bare code fence); anything else
  *  is skipped (the Raw escape hatch in the shell still shows it verbatim). */
-export function OutputBlocks({ content, lang }: { content: unknown; lang?: string }): React.JSX.Element | null {
+export function OutputBlocks({
+  content,
+  lang,
+  fallbackPath,
+}: {
+  content: unknown;
+  lang?: string;
+  fallbackPath?: string;
+}): React.JSX.Element | null {
   const blocks = asBlocks(content);
   const rendered: ReactNode[] = [];
   blocks.forEach((b, i) => {
     if (b.type === "diff") {
       const d = b as DiffBlock;
-      rendered.push(<DiffView key={i} oldText={d.oldText ?? ""} newText={d.newText ?? ""} />);
+      rendered.push(
+        <DiffView
+          key={i}
+          oldText={d.oldText ?? ""}
+          newText={d.newText ?? ""}
+          path={d.path ?? fallbackPath}
+        />,
+      );
       return;
     }
     if (b.type === "raw_output") {
@@ -232,9 +233,10 @@ export function OutputBlocks({ content, lang }: { content: unknown; lang?: strin
     }
     const text = b.type === "content" ? (b as TextBlock).content?.text ?? "" : (b as { text?: string }).text ?? "";
     if (text) {
+      const source = lang && !text.trimStart().startsWith("```");
       rendered.push(
         <Collapsible key={i} maxHeight={300}>
-          <Markdown text={withFenceLang(text, lang)} />
+          <Markdown text={source ? "```" + lang + "\n" + text + "\n```" : withFenceLang(text, lang)} />
         </Collapsible>,
       );
     }
