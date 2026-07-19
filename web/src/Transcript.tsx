@@ -84,7 +84,6 @@ import {
   useStoreSelector,
 } from "./store";
 import { haptic } from "./haptic";
-import { hasHorizontalScroller, horizontalSwipe, swipeCommits } from "./touchGestures";
 import { useReadingSettings } from "./readingSettings";
 import {
   requestStickToBottom,
@@ -1665,18 +1664,10 @@ function ToolDetailsBrowser({
   const item = index >= 0 ? tools[index] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
-  const [edgeIntent, setEdgeIntent] = useState<"previous" | "next" | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLDivElement>(null);
   const anchorSpacerRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
-  const edgeIntentRef = useRef<"previous" | "next" | null>(null);
-  const edgeGestureRef = useRef<{
-    x: number;
-    y: number;
-    locked: boolean;
-  } | null>(null);
-  const pullHintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!item) {
@@ -1721,109 +1712,6 @@ function ToolDetailsBrowser({
     if (scroller) scrollByKey.current.set(item.key, scroller.scrollTop);
     onSelect(next.key);
   };
-
-  useEffect(() => {
-    if (desktop || !item) return undefined;
-    const scroller = scrollableAncestor(bodyRef.current);
-    const body = bodyRef.current;
-    if (!scroller || !body) return undefined;
-    const paintPull = (direction: "previous" | "next", distance: number): void => {
-      // iOS-style rubber-band resistance: the surface follows the finger closely
-      // at first, then increasingly resists. The capped compositor-only transform
-      // keeps even a large pull calm and never re-renders the tool body.
-      const offset = Math.min(52, distance * 0.32);
-      body.style.transition = "none";
-      body.style.willChange = "transform";
-      body.style.transform = `translate3d(${String(direction === "previous" ? offset : -offset)}px, 0, 0)`;
-      const hint = pullHintRef.current;
-      if (hint) {
-        const available = direction === "previous" ? index > 0 : index < tools.length - 1;
-        hint.textContent = available
-          ? direction === "previous" ? "Previous tool" : "Next tool"
-          : direction === "previous" ? "Beginning" : "End";
-        hint.style.top = "-22px";
-        hint.style.bottom = "auto";
-        hint.style.opacity = String(Math.min(1, distance / 72));
-        hint.style.transform = `translate(calc(-50% + ${String(direction === "previous" ? offset * 0.12 : -offset * 0.12)}px), 0)`;
-      }
-    };
-    const settlePull = (): void => {
-      body.style.transition = "transform 260ms cubic-bezier(0.22, 1, 0.36, 1)";
-      body.style.transform = "translate3d(0, 0, 0)";
-      const hint = pullHintRef.current;
-      if (hint) {
-        hint.style.opacity = "0";
-        hint.style.transform = "translate(-50%, 0)";
-      }
-      globalThis.setTimeout(() => {
-        body.style.removeProperty("transition");
-        body.style.removeProperty("transform");
-        body.style.removeProperty("will-change");
-      }, 280);
-    };
-    const clearIntent = (): void => {
-      edgeGestureRef.current = null;
-      edgeIntentRef.current = null;
-      setEdgeIntent(null);
-    };
-    const onTouchStart = (event: TouchEvent): void => {
-      const touch = event.touches[0];
-      if (!touch || hasHorizontalScroller(event.target, body)) return;
-      edgeGestureRef.current = { x: touch.clientX, y: touch.clientY, locked: false };
-      edgeIntentRef.current = null;
-      setEdgeIntent(null);
-    };
-    const onTouchMove = (event: TouchEvent): void => {
-      const gesture = edgeGestureRef.current;
-      const touch = event.touches[0];
-      if (!gesture || !touch) return;
-      const deltaX = touch.clientX - gesture.x;
-      const deltaY = touch.clientY - gesture.y;
-      if (!gesture.locked && Math.abs(deltaY) >= 12 && Math.abs(deltaY) > Math.abs(deltaX) * 1.1) {
-        edgeGestureRef.current = null;
-        return;
-      }
-      const swipe = gesture.locked
-        ? { direction: deltaX < 0 ? "left" as const : "right" as const, distance: Math.abs(deltaX) }
-        : horizontalSwipe(deltaX, deltaY);
-      if (!swipe) return;
-      gesture.locked = true;
-      const direction = swipe.direction === "right" ? "previous" : "next";
-      const distance = swipe.distance;
-      event.preventDefault();
-      paintPull(direction, distance);
-      const available = direction === "previous" ? index > 0 : index < tools.length - 1;
-      const nextIntent = available && swipeCommits(distance, scroller.clientWidth) ? direction : null;
-      if (edgeIntentRef.current === nextIntent) return;
-      edgeIntentRef.current = nextIntent;
-      setEdgeIntent(nextIntent);
-      if (nextIntent) haptic(12);
-    };
-    const onTouchEnd = (): void => {
-      const intent = edgeIntentRef.current;
-      settlePull();
-      clearIntent();
-      // Settle before replacing content so the sideways page gesture reads as
-      // one native navigation action rather than a sudden content swap.
-      if (intent === "previous") globalThis.setTimeout(() => select(tools[index - 1]), 150);
-      if (intent === "next") globalThis.setTimeout(() => select(tools[index + 1]), 150);
-    };
-    const onTouchCancel = (): void => {
-      settlePull();
-      clearIntent();
-    };
-    scroller.addEventListener("touchstart", onTouchStart, { passive: true });
-    scroller.addEventListener("touchmove", onTouchMove, { passive: false });
-    scroller.addEventListener("touchend", onTouchEnd, { passive: true });
-    scroller.addEventListener("touchcancel", onTouchCancel, { passive: true });
-    return () => {
-      scroller.removeEventListener("touchstart", onTouchStart);
-      scroller.removeEventListener("touchmove", onTouchMove);
-      scroller.removeEventListener("touchend", onTouchEnd);
-      scroller.removeEventListener("touchcancel", onTouchCancel);
-      settlePull();
-    };
-  }, [desktop, index, item, tools]);
 
   useEffect(() => {
     if (!desktop || !item) return undefined;
@@ -1893,28 +1781,6 @@ function ToolDetailsBrowser({
           `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
       }}
     >
-      {edgeIntent && (
-        <Box
-          role="status"
-          sx={{
-            position: "absolute",
-            left: "50%",
-            bottom: "calc(100% + 8px)",
-            transform: "translateX(-50%)",
-            whiteSpace: "nowrap",
-            px: 1.25,
-            py: 0.625,
-            borderRadius: 99,
-            bgcolor: "background.paper",
-            color: "primary.main",
-            boxShadow: 3,
-            fontSize: "0.78rem",
-            fontWeight: 700,
-          }}
-        >
-          {edgeIntent === "previous" ? "Release for previous tool →" : "Release for next tool ←"}
-        </Box>
-      )}
       {roomy
         ? (
           <Button
@@ -2003,29 +1869,6 @@ function ToolDetailsBrowser({
       actions={navigation}
     >
       <Box ref={bodyRef} sx={{ position: "relative" }}>
-        <Box
-          ref={pullHintRef}
-          aria-hidden
-          sx={{
-            position: "absolute",
-            left: "50%",
-            top: -22,
-            zIndex: 2,
-            opacity: 0,
-            transform: "translate(-50%, 0)",
-            transition: "opacity .12s linear",
-            px: 1.25,
-            py: 0.5,
-            borderRadius: 99,
-            bgcolor: "background.paper",
-            color: "text.secondary",
-            boxShadow: 2,
-            fontSize: 11,
-            fontWeight: 700,
-            whiteSpace: "nowrap",
-            pointerEvents: "none",
-          }}
-        />
         <Stack spacing={1.25}>
             <ToolTranscriptContext key={`${item.key}-before`} items={before} position="before" />
             <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
