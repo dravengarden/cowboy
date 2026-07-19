@@ -382,6 +382,21 @@ impl Store {
         Ok(())
     }
 
+    /// Persist a migrated session cwd and, when supplied, its untouched default
+    /// title in one statement so the list cannot observe a half-retargeted row.
+    pub async fn update_cwd(&self, session_id: &str, cwd: &str, title: Option<&str>) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET cwd = $1, title = COALESCE($2, title), updated_at = now() WHERE id = $3",
+        )
+        .bind(cwd)
+        .bind(title.map(strip_nul_str))
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE session cwd {session_id}"))?;
+        Ok(())
+    }
+
     /// Persist a session's auto-resume OVERRIDE (`None` = inherit the global
     /// default, `Some(true/false)` = force). Mirrors `update_status` — only this
     /// column + `updated_at` move.

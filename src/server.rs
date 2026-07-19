@@ -516,6 +516,11 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
         StoreWrite::UpdateTitle { session_id, title } => {
             store.update_title(session_id, title).await
         }
+        StoreWrite::UpdateCwd {
+            session_id,
+            cwd,
+            title,
+        } => store.update_cwd(session_id, cwd, title.as_deref()).await,
         StoreWrite::SetAgentSessionId {
             session_id,
             agent_session_id,
@@ -788,6 +793,10 @@ async fn serve_axum(
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/sessions", post(api_new_session))
+        .route(
+            "/api/sessions/reconcile-project",
+            post(api_reconcile_project_sessions),
+        )
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
@@ -1095,23 +1104,11 @@ fn projected_work_items(columbus: &std::path::Path) -> Vec<WorkspaceWorkItem> {
     serde_json::from_slice(&output.stdout).unwrap_or_default()
 }
 
-/// Resolve a registered project's session cwd from its on-disk layout:
-/// `projects/<name>/main` for an external worktree, else `projects/<name>`
-/// itself for a subdir project. `None` for a registered-but-not-checked-out
-/// project (no `main` worktree and nothing on disk but a bare clone).
+/// Resolve a registered project's current stable checkout through Columbus,
+/// with a registry-backed fallback when the harness CLI is not on `PATH`.
+/// Returns `None` for a registered project whose checkout has not been cloned.
 fn project_worktree(columbus: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    let proj = columbus.join("projects").join(name);
-    let main = proj.join("main");
-    if main.is_dir() {
-        return Some(main);
-    }
-    // Subdir project: the dir itself holds the checkout. Skip a dir that is
-    // only a bare clone (`.bare` with no worktree, e.g. an uncloned external).
-    let has_content = std::fs::read_dir(&proj)
-        .ok()?
-        .filter_map(Result::ok)
-        .any(|e| e.file_name() != ".bare");
-    has_content.then_some(proj)
+    crate::workspace::current_project_checkout(columbus, name)
 }
 
 /// `GET /api/workspaces` — the selectable session roots for the New Session
@@ -1241,6 +1238,52 @@ struct NewSessionRequest {
 #[derive(Debug, Serialize)]
 struct NewSessionResponse {
     session_id: String,
+}
+
+/// Request body used by a Columbus checkout migration after the replacement
+/// checkout has reached its stable path and before old worktree storage is
+/// removed.
+#[derive(Debug, Deserialize)]
+struct ReconcileProjectSessionsRequest {
+    project: String,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ReconcileProjectSessionsResponse {
+    session_ids: Vec<String>,
+    native_thread_ids: HashMap<String, String>,
+}
+
+async fn api_reconcile_project_sessions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReconcileProjectSessionsRequest>,
+) -> Response {
+    let project = req.project.trim();
+    if project.is_empty() {
+        return (StatusCode::BAD_REQUEST, "project cannot be empty").into_response();
+    }
+    match state
+        .supervisor
+        .reconcile_project_sessions(project, req.dry_run)
+    {
+        Ok(session_ids) => {
+            let native_thread_ids = state
+                .hub
+                .session_list()
+                .into_iter()
+                .filter(|meta| session_ids.contains(&meta.id))
+                .filter_map(|meta| meta.agent_session_id.map(|thread| (meta.id, thread)))
+                .collect();
+            Json(ReconcileProjectSessionsResponse {
+                session_ids,
+                native_thread_ids,
+            })
+            .into_response()
+        }
+        Err(message) => (StatusCode::CONFLICT, message).into_response(),
+    }
 }
 
 async fn api_new_session(
@@ -1924,12 +1967,14 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             Ok(())
         }
         Inbound::ResumeTurn { session_id } => {
-            state.hub.resume_turn(&session_id);
-            Ok(())
+            state.supervisor.prepare_session(&session_id).map(|_| {
+                state.hub.resume_turn(&session_id);
+            })
         }
         Inbound::RetryTurn { session_id } => {
-            state.hub.retry_turn(&session_id);
-            Ok(())
+            state.supervisor.prepare_session(&session_id).map(|_| {
+                state.hub.retry_turn(&session_id);
+            })
         }
         Inbound::SetSetting { key, value } => {
             state.hub.set_setting(key, value);

@@ -753,8 +753,9 @@ async fn run_session(
     // `session/load` when (a) we were handed its prior id and (b) the agent
     // advertises load support; otherwise open a fresh `session/new`. On a
     // fresh start, persist the agent's assigned id so a later revive can
-    // resume it. A failed load degrades gracefully to fresh (context lost, but
-    // the session stays usable) — matching Zed's always-resumable thread.
+    // resume it. A requested resume is strict: silently falling back to
+    // session/new would preserve the Cowboy row while losing the native Codex
+    // thread, which is worse than an actionable crashed state.
     let mut acp_id: Option<SessionId> = None;
     let mut modes = None;
     // Agents may return their initial config options (mode / model / effort) IN the
@@ -762,7 +763,13 @@ async fn run_session(
     // `config_option_update` notification (claude does that). We capture + surface
     // both, so codex's Model / approval chips render like claude's.
     let mut config_options = None;
-    if let Some(resume_id) = resume.filter(|_| agent_can_load) {
+    if resume.is_some() && !agent_can_load {
+        return Err(anyhow::anyhow!(
+            "agent does not support session/load; refusing to replace the existing native thread"
+        )
+        .into());
+    }
+    if let Some(resume_id) = resume {
         let load_id = SessionId::new(resume_id.as_str());
         state.suppress_updates.store(true, Ordering::SeqCst);
         let loaded = cx
@@ -778,7 +785,8 @@ async fn run_session(
                 config_options = resp.config_options;
             }
             Err(e) => {
-                tracing::warn!(session = %session_id, error = ?e, "session/load failed; starting fresh");
+                tracing::error!(session = %session_id, error = ?e, "session/load failed; preserving native thread identity");
+                return Err(e);
             }
         }
     }

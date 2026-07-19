@@ -143,6 +143,30 @@ impl RemoteRuntime {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(hub: Hub, workers: Vec<WorkerSnapshot>) -> Arc<Self> {
+        let (left, _right) = UnixStream::pair().expect("test runtime socket pair");
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers,
+            buffered: Vec::new(),
+        };
+        Self::new(
+            hub,
+            &bootstrap,
+            "test-generation".to_owned(),
+            Some("/bin/false".to_owned()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_for_test(&self) -> Vec<CoreCommand> {
+        self.shared.pending.lock().values().cloned().collect()
+    }
+
     /// Start the reconnecting I/O pump after Hub restore and all side-effect
     /// consumers (dispatcher/scheduler) are wired.
     pub fn start(self: &Arc<Self>, bootstrap: RemoteBootstrap) {
@@ -583,18 +607,23 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         .iter()
         .map(|(key, command)| (key.clone(), command.clone()))
         .collect();
-    commands.sort_by_key(|(_, command)| {
-        if matches!(command, CoreCommand::EnsureSession { .. }) {
-            0
-        } else {
-            1
-        }
-    });
+    commands.sort_by_key(|(_, command)| command_priority(command));
     for (key, command) in commands {
         write_frame(writer, &Frame::CoreCommand { command }).await?;
         shared.sent.lock().insert(key);
     }
     Ok(())
+}
+
+fn command_priority(command: &CoreCommand) -> u8 {
+    match command {
+        CoreCommand::EnsureSession { .. } => 0,
+        CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => 1,
+        // Agentd handles a reset stop synchronously. Prompts sent after it are
+        // queued for the replacement worker instead of reaching the old worker
+        // and being cleared by reset_session.
+        _ => 2,
+    }
 }
 
 async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
@@ -718,6 +747,11 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 );
             }
             if !accepted {
+                if reason.as_deref().is_some_and(|message| {
+                    message.starts_with("session workspace was replaced or removed:")
+                }) {
+                    reset_after_workspace_replacement(shared, &session_id);
+                }
                 handle_rejected_command(&shared.hub, &session_id, command, reason);
             }
         }
@@ -1052,6 +1086,55 @@ fn handle_rejected_command(
     hub.broadcast_error(Some(session_id.to_owned()), reason);
 }
 
+fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
+    let Some(mut session) = shared
+        .declarations
+        .lock()
+        .get(session_id)
+        .cloned()
+        .or_else(|| {
+            shared
+                .workers
+                .lock()
+                .get(session_id)
+                .and_then(|worker| worker.launch.clone())
+        })
+    else {
+        shared.hub.set_status(
+            session_id,
+            Status::Crashed,
+            Some("workspace changed but no replacement launch metadata is available".to_owned()),
+        );
+        return;
+    };
+    session.adopt_only = false;
+    if session.generation.is_empty() {
+        session.generation.clone_from(&shared.desired_generation);
+    }
+    shared.resetting.lock().insert(session_id.to_owned());
+    shared
+        .declarations
+        .lock()
+        .insert(session_id.to_owned(), session.clone());
+    let ensure_key = format!("ensure:{session_id}");
+    shared.sent.lock().remove(&ensure_key);
+    shared
+        .pending
+        .lock()
+        .insert(ensure_key, CoreCommand::EnsureSession { session });
+    let value = shared.command_counter.fetch_add(1, Ordering::Relaxed);
+    let command_id = format!("reset-{}-{value}", std::process::id());
+    shared.pending.lock().insert(
+        command_id.clone(),
+        CoreCommand::StopSession {
+            session_id: session_id.to_owned(),
+            command_id,
+        },
+    );
+    shared.hub.set_status(session_id, Status::Starting, None);
+    let _ = shared.notify.send(());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1096,6 +1179,32 @@ mod tests {
             "currentValue": "agent"
         }])));
         assert!(!codex_config_is_full_access(&serde_json::json!([])));
+    }
+
+    #[test]
+    fn reset_stop_is_always_ordered_before_prompt() {
+        let stop = CoreCommand::StopSession {
+            session_id: "s".to_owned(),
+            command_id: "reset-1".to_owned(),
+        };
+        let prompt = CoreCommand::Prompt {
+            session_id: "s".to_owned(),
+            command_id: "prompt-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            content: vec![serde_json::json!({"type": "text", "text": "continue"})],
+            cmid: Some("retry-1".to_owned()),
+        };
+        for mut commands in [
+            vec![prompt.clone(), stop.clone()],
+            vec![stop.clone(), prompt.clone()],
+        ] {
+            commands.sort_by_key(command_priority);
+            assert!(matches!(
+                commands.as_slice(),
+                [CoreCommand::StopSession { command_id, .. }, CoreCommand::Prompt { .. }]
+                    if command_id.starts_with("reset-")
+            ));
+        }
     }
 
     #[tokio::test]
@@ -1252,6 +1361,95 @@ mod tests {
         .expect("reset acknowledgement");
         assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
+    }
+
+    #[tokio::test]
+    async fn workspace_reset_keeps_native_thread_and_uses_replacement_cwd() {
+        let hub = Hub::new();
+        hub.create_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/old/checkout".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.set_agent_session_id("s", "codex-thread-1".to_owned());
+        let (left, _right) = UnixStream::pair().expect("socket pair");
+        let (reader, writer) = left.into_split();
+        let bootstrap = RemoteBootstrap {
+            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            reader: FrameReader::new(reader),
+            writer,
+            workers: vec![snapshot("s")],
+            buffered: Vec::new(),
+        };
+        let runtime = RemoteRuntime::new(
+            hub.clone(),
+            &bootstrap,
+            "gen-1".to_owned(),
+            Some("/bin/worker".to_owned()),
+        );
+        let mut replacement = snapshot("s").launch.expect("launch metadata");
+        replacement.cwd = "/new/checkout".to_owned();
+        replacement.agent_session_id = Some("codex-thread-1".to_owned());
+
+        runtime.reset(replacement);
+
+        let pending = runtime.shared.pending.lock();
+        assert!(pending.values().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session }
+                    if session.cwd == "/new/checkout"
+                        && session.agent_session_id.as_deref() == Some("codex-thread-1")
+            )
+        }));
+        assert!(pending.values().any(|command| {
+            matches!(
+                command,
+                CoreCommand::StopSession { command_id, .. }
+                    if command_id.starts_with("reset-")
+            )
+        }));
+        assert_eq!(
+            hub.session_info("s")
+                .expect("session")
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("codex-thread-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_rejection_automatically_queues_worker_reset() {
+        let hub = Hub::new();
+        hub.create_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.set_agent_session_id("s", "agent-1".to_owned());
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
+
+        reset_after_workspace_replacement(&runtime.shared, "s");
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| matches!(
+            command,
+            CoreCommand::EnsureSession { session }
+                if session.agent_session_id.as_deref() == Some("agent-1")
+        )));
+        assert!(pending.iter().any(|command| matches!(
+            command,
+            CoreCommand::StopSession { command_id, .. }
+                if command_id.starts_with("reset-")
+        )));
+        assert_eq!(hub.status("s"), Some(Status::Starting));
     }
 
     #[tokio::test]

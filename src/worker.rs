@@ -5,6 +5,7 @@
 //! keeps an in-flight prompt and pending permission responders alive.
 
 use std::collections::{BTreeMap, HashSet};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -51,9 +52,30 @@ struct Shared {
     notify: mpsc::UnboundedSender<()>,
     seen_commands: Mutex<HashSet<String>>,
     done: AtomicBool,
+    workspace_path: PathBuf,
+    workspace_identity: Option<WorkspaceIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkspaceIdentity {
+    device: u64,
+    inode: u64,
+}
+
+fn workspace_identity(path: &std::path::Path) -> Option<WorkspaceIdentity> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(WorkspaceIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
 }
 
 impl Shared {
+    fn workspace_is_current(&self) -> bool {
+        self.workspace_identity.is_some()
+            && workspace_identity(&self.workspace_path) == self.workspace_identity
+    }
+
     fn emit(&self, event: RuntimeEvent) -> u64 {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         self.apply_snapshot_event(seq, &event);
@@ -292,6 +314,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         adopt_only: false,
     };
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
+    let expected_workspace_identity = workspace_identity(&args.cwd);
     let shared = Arc::new(Shared {
         session_id: args.session_id.clone(),
         worker_epoch: epoch.clone(),
@@ -321,6 +344,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         notify: notify_tx,
         seen_commands: Mutex::new(HashSet::new()),
         done: AtomicBool::new(false),
+        workspace_path: args.cwd.clone(),
+        workspace_identity: expected_workspace_identity,
     });
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
@@ -526,6 +551,17 @@ fn handle_command(
                 content,
                 cmid,
             } => {
+                if !shared.workspace_is_current() {
+                    let message = format!(
+                        "session workspace was replaced or removed: {}; retry after Cowboy recycles this worker",
+                        shared.workspace_path.display()
+                    );
+                    shared.emit(RuntimeEvent::Status {
+                        state: WorkerState::Crashed,
+                        detail: Some(message.clone()),
+                    });
+                    return command_ack(shared, command_id, false, Some(message));
+                }
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
                 }
@@ -653,6 +689,8 @@ mod tests {
 
     fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
         let (tx, rx) = mpsc::unbounded_channel();
+        let workspace_path = std::env::current_dir().expect("current dir");
+        let expected_workspace_identity = workspace_identity(&workspace_path);
         (
             Arc::new(Shared {
                 session_id: "sess-1".to_owned(),
@@ -683,6 +721,8 @@ mod tests {
                 notify: tx,
                 seen_commands: Mutex::new(HashSet::new()),
                 done: AtomicBool::new(false),
+                workspace_path,
+                workspace_identity: expected_workspace_identity,
             }),
             rx,
         )
@@ -723,5 +763,21 @@ mod tests {
         );
         assert!(matches!(rx.try_recv(), Ok(AgentCommand::Cancel)));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn workspace_identity_detects_same_path_replacement() {
+        let root =
+            std::env::temp_dir().join(format!("cowboy-worker-workspace-{}", generated_epoch()));
+        let stable = root.join("main");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&stable).expect("stable");
+        let original = workspace_identity(&stable).expect("original identity");
+
+        std::fs::rename(&stable, &backup).expect("move original");
+        std::fs::create_dir_all(&stable).expect("replacement");
+
+        assert_ne!(workspace_identity(&stable), Some(original));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -49,6 +49,8 @@ mod supervisor;
 mod usage;
 #[cfg(feature = "full")]
 pub mod worker;
+#[cfg(feature = "full")]
+mod workspace;
 
 #[cfg(all(test, feature = "full"))]
 mod migration_policy;

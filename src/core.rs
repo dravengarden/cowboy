@@ -918,6 +918,11 @@ pub enum StoreWrite {
         session_id: String,
         title: String,
     },
+    UpdateCwd {
+        session_id: String,
+        cwd: String,
+        title: Option<String>,
+    },
     SetAgentSessionId {
         session_id: String,
         agent_session_id: String,
@@ -1544,6 +1549,15 @@ impl Hub {
     pub fn session_is_system(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).is_some_and(|s| s.meta.system)
+    }
+
+    #[must_use]
+    pub fn session_has_in_flight_prompt(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|session| session.in_flight)
     }
 
     /// Total events held in memory across all live sessions — the event-count
@@ -2524,6 +2538,38 @@ impl Hub {
         }
     }
 
+    /// Retarget a Cowboy session to a replacement checkout while preserving its
+    /// transcript, queue, Cowboy id, and native agent session id. A creation-time
+    /// default title follows the cwd; user-authored and auto-derived titles do not.
+    pub fn update_session_cwd(&self, session_id: &str, cwd: String) -> Result<(), String> {
+        let title = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+            if session.meta.cwd == cwd {
+                return Ok(());
+            }
+            let default_title = format!("{} · {}", session.meta.provider, session.meta.cwd);
+            let title = (session.meta.title == default_title)
+                .then(|| format!("{} · {cwd}", session.meta.provider));
+            session.meta.cwd.clone_from(&cwd);
+            if let Some(title) = &title {
+                session.meta.title.clone_from(title);
+            }
+            title
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateCwd {
+                session_id: session_id.to_owned(),
+                cwd,
+                title,
+            });
+        }
+        self.broadcast_sessions();
+        Ok(())
+    }
+
     /// Forget a session's resumable agent id so the NEXT spawn starts a fresh
     /// `session/new` (a clean agent context) instead of `session/load`. The
     /// "clear conversation" reset (see [`Inbound::ResetSession`]) calls this
@@ -3213,13 +3259,37 @@ impl Hub {
     /// Overlay "Retry" for an errored/crashed turn: re-run the last user prompt
     /// (reviving the session). No-op if there's no prior prompt.
     pub fn retry_turn(&self, session_id: &str) {
-        let (prompt, status) = {
+        let (prompt, status, retry_cmid, already_queued) = {
             let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
                 tracing::warn!(session = %session_id, "retry_turn: unknown session — no-op");
                 return;
             };
-            (last_turn_texts(&s.log).0, s.meta.status)
+            let Some(last_user_seq) = s.log.iter().rev().find_map(|envelope| {
+                let Event::Update { update } = &envelope.event else {
+                    return None;
+                };
+                (update
+                    .get("sessionUpdate")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("user_message_chunk"))
+                .then_some(envelope.seq)
+            }) else {
+                tracing::warn!(session = %session_id, "retry_turn: no prior user event — no-op");
+                return;
+            };
+            let retry_cmid = format!("cowboy-retry:{session_id}:{last_user_seq}");
+            let prompt = last_turn_texts(&s.log).0;
+            if s.in_flight
+                || s.queue
+                    .iter()
+                    .any(|message| message.cmid.as_deref() == Some(retry_cmid.as_str()))
+            {
+                tracing::info!(session = %session_id, "retry_turn: identical retry already pending — no-op");
+                return;
+            }
+            let already_queued = s.queue.iter().any(|message| message.text == prompt);
+            (prompt, s.meta.status, retry_cmid, already_queued)
         };
         if prompt.trim().is_empty() {
             // The "no response" report points here first: a crashed turn whose
@@ -3227,8 +3297,13 @@ impl Hub {
             tracing::warn!(session = %session_id, ?status, "retry_turn: no prior prompt to retry — no-op");
             return;
         }
+        if already_queued {
+            tracing::info!(session = %session_id, "retry_turn: rejected prompt already queued — draining without duplication");
+            self.drain_head(session_id, true, true);
+            return;
+        }
         tracing::info!(session = %session_id, ?status, prompt_len = prompt.len(), "retry_turn: re-submitting last prompt");
-        let _ = self.force_submit(session_id, prompt, Vec::new(), None, true);
+        let _ = self.force_submit(session_id, prompt, Vec::new(), Some(retry_cmid), true);
         // force_submit DISPATCHES only when the queue is empty AND the session is
         // ready; with messages already queued — or a crashed/exited session — it
         // just parks the prompt at the queue FRONT and emits pending. That left
@@ -3995,6 +4070,110 @@ mod confirm_hold_tests {
         assert_eq!(
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
+        );
+    }
+
+    #[test]
+    fn session_cwd_retarget_preserves_native_thread_and_transcript() {
+        let hub = hub_with_session("migrated");
+        hub.set_agent_session_id("migrated", "codex-thread-1".to_owned());
+        hub.push(
+            "migrated",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"text": "preserved"}
+                }),
+            },
+        );
+        let before = hub.snapshot("migrated").expect("snapshot").0;
+
+        hub.update_session_cwd("migrated", "/new/checkout".to_owned())
+            .expect("retarget");
+
+        let meta = hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == "migrated")
+            .expect("session");
+        assert_eq!(meta.cwd, "/new/checkout");
+        assert_eq!(meta.agent_session_id.as_deref(), Some("codex-thread-1"));
+        let after = hub.snapshot("migrated").expect("snapshot").0;
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].seq, before[0].seq);
+        assert_eq!(
+            serde_json::to_value(&after[0].event).expect("serialize after"),
+            serde_json::to_value(&before[0].event).expect("serialize before")
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_retry_dispatches_original_prompt_once() {
+        let hub = hub_with_session("retry-once");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.push(
+            "retry-once",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"text": "do the thing"}
+                }),
+            },
+        );
+        hub.set_status("retry-once", Status::Crashed, Some("boom".to_owned()));
+
+        hub.retry_turn("retry-once");
+        hub.retry_turn("retry-once");
+
+        let first = rx.recv().await.expect("first retry");
+        assert_eq!(first.text, "do the thing");
+        assert!(
+            first
+                .cmid
+                .as_deref()
+                .is_some_and(|id| id.starts_with("cowboy-retry:"))
+        );
+        assert!(rx.try_recv().is_err(), "duplicate retry was dispatched");
+    }
+
+    #[tokio::test]
+    async fn retry_drains_rejected_prompt_without_enqueuing_a_copy() {
+        let hub = hub_with_session("retry-requeued");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.push(
+            "retry-requeued",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"text": "preserve this prompt"}
+                }),
+            },
+        );
+        hub.set_status(
+            "retry-requeued",
+            Status::Crashed,
+            Some("stale cwd".to_owned()),
+        );
+        hub.requeue_prompt(
+            "retry-requeued",
+            "preserve this prompt".to_owned(),
+            vec![serde_json::json!({"type": "text", "text": "preserve this prompt"})],
+            Some("original-cmid".to_owned()),
+        );
+
+        hub.retry_turn("retry-requeued");
+
+        let dispatched = rx.recv().await.expect("requeued prompt");
+        assert_eq!(dispatched.text, "preserve this prompt");
+        assert_eq!(dispatched.cmid.as_deref(), Some("original-cmid"));
+        assert!(rx.try_recv().is_err(), "retry inserted a duplicate prompt");
+        assert_eq!(
+            hub.session_info("retry-requeued")
+                .expect("session")
+                .queue_count,
+            0
         );
     }
 
