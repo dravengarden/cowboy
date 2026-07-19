@@ -423,10 +423,38 @@ func formatParsedFile(file *syntax.File, columns int) (string, error) {
 		return "", err
 	}
 	readable := insertReadableBreaks(structured, structuredFile, columns)
-	if _, err := parseShell(readable); err != nil {
+	readableFile, err := parseShell(readable)
+	if err != nil {
 		return "", err
 	}
-	return readable, nil
+	return separateTopLevelStatements(readable, readableFile), nil
+}
+
+// separateTopLevelStatements gives independent execution units one quiet line
+// of breathing room. Pipelines, &&/|| chains, loops, conditions, and nested
+// bodies remain internally contiguous because they belong to one top-level
+// statement. This makes the visual grouping follow Bash semantics instead of
+// command names or incidental wrapping.
+func separateTopLevelStatements(source string, file *syntax.File) string {
+	if len(file.Stmts) < 2 {
+		return source
+	}
+	breaks := make([]int, 0, len(file.Stmts)-1)
+	for index := 0; index+1 < len(file.Stmts); index++ {
+		end := int(file.Stmts[index].End().Offset())
+		next := int(file.Stmts[index+1].Pos().Offset())
+		if end < 0 || next < end || next > len(source) {
+			continue
+		}
+		if strings.Count(source[end:next], "\n") < 2 {
+			breaks = append(breaks, end)
+		}
+	}
+	for index := len(breaks) - 1; index >= 0; index-- {
+		at := breaks[index]
+		source = source[:at] + "\n" + source[at:]
+	}
+	return source
 }
 
 // insertReadableBreaks lays out any long simple command by shell-word

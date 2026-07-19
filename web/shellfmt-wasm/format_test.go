@@ -20,6 +20,29 @@ func TestFormatsShellStructure(t *testing.T) {
 	}
 }
 
+func TestSeparatesIndependentTopLevelCommands(t *testing.T) {
+	formatted, err := formatShellSource("git ls-files apps/device | head; git remote get-url origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(formatted, "head\n\ngit remote") {
+		t.Fatalf("independent execution units need a quiet separator: %q", formatted)
+	}
+	if strings.Contains(formatted, "|\n\n") {
+		t.Fatalf("a pipeline must remain one execution unit: %q", formatted)
+	}
+}
+
+func TestKeepsCompoundBodiesVisuallyTogether(t *testing.T) {
+	formatted, err := formatShellSource("for item in a b; do\n  prepare $item\n  verify $item\ndone\necho complete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(formatted, "prepare $item\n\n") || !strings.Contains(formatted, "done\n\necho complete") {
+		t.Fatalf("only top-level execution units should be separated: %q", formatted)
+	}
+}
+
 func TestRejectsInvalidShell(t *testing.T) {
 	if _, err := formatShellSource("echo '"); err == nil {
 		t.Fatal("expected an incomplete quote to fail closed")

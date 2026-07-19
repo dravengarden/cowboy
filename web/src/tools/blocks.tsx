@@ -265,16 +265,17 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
       )}
       {mode === "nested" && readable
         ? (
-          <Stack
-            data-shell-frame-count={readable.frames.length}
-            sx={{
-              gap: 0,
-              pb: readable.frames.length > 1 ? 0.625 : 0,
-              borderRadius: 1,
-              overflow: "hidden",
-              bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
-            }}
-          >
+          <Collapsible maxHeight={touch ? 360 : 320}>
+            <Stack
+              data-shell-frame-count={readable.frames.length}
+              sx={{
+                gap: 0,
+                pb: readable.frames.length > 1 ? 0.625 : 0,
+                borderRadius: 1,
+                overflow: "hidden",
+                bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
+              }}
+            >
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
               const markerPalette = ["#9b7cf8", "#55a7ff", "#55c98b", "#ee9b45", "#d5b83f", "#e86767", "#a7785b", "#b8bec9"];
@@ -342,7 +343,10 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                   <CodeView
                     code={phone ? addShellPathBreaks(frame.text) : frame.text}
                     lang="bash"
-                    maxHeight={touch ? (readable.frames.length > 1 ? 220 : 260) : 180}
+                    // Nested mode is one semantic disclosure. Its outer fold
+                    // owns expansion so a parent frame cannot collapse while
+                    // its children remain floating below it.
+                    maxHeight={100000}
                     touchWrap
                     tokenSafeWrap
                     wrapControl={false}
@@ -352,7 +356,8 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
               </Box>
               );
             })}
-          </Stack>
+            </Stack>
+          </Collapsible>
         )
         : mode === "readable" && readable
         ? (
