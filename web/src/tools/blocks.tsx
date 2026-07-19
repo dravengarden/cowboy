@@ -271,15 +271,18 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
               bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
             }}
           >
-            {readable.frames.map((frame, index) => (
+            {readable.frames.map((frame, index) => {
+              const depth = frame.depth ?? index;
+              return (
               <Box
                 key={`${index}:${frame.launcher}`}
                 data-shell-frame={index}
+                data-shell-depth={depth}
                 sx={{
                   position: "relative",
-                  ml: index === 0 ? 0 : 1.25 + Math.min(index - 1, 2) * 0.75,
-                  pl: index === 0 ? 0 : 1.125,
-                  ...(index > 0 && {
+                  ml: depth === 0 ? 0 : 1.25 + Math.min(depth - 1, 2) * 0.75,
+                  pl: depth === 0 ? 0 : 1.125,
+                  ...(depth > 0 && {
                     mt: 0.25,
                     "&::before": {
                       content: '""',
@@ -318,7 +321,8 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                   />
                 )}
               </Box>
-            ))}
+              );
+            })}
           </Stack>
         )
         : mode === "readable" && readable

@@ -42,8 +42,11 @@ func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 	if len(display.Frames) != 3 {
 		t.Fatalf("expected two launcher skeletons and leaf source, got %#v", display.Frames)
 	}
-	if display.Frames[0].Launcher != "nix develop -c bash -lc" || display.Frames[1].Launcher != "ssh host sh -c" {
+	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host sh -c" {
 		t.Fatalf("unexpected launchers %#v", display.Frames)
+	}
+	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 {
+		t.Fatalf("expected a real parent/child depth chain: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[0].Text, "…") || !strings.Contains(display.Frames[0].Text, "nix develop -c bash -lc") {
 		t.Fatalf("outer script must use its execution skeleton without a textual placeholder: %#v", display.Frames)
@@ -58,7 +61,7 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c" || display.Frames[0].Launcher == "" {
+	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c" || display.Frames[1].Launcher == "" {
 		t.Fatalf("whole-file wrapper should be a parent skeleton followed by its payload: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[1].Text, "nix develop") {
@@ -66,6 +69,25 @@ func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
 	}
 	if !strings.Contains(display.FlatText, "nix develop") || !strings.Contains(display.FlatText, "deno task test") {
 		t.Fatalf("ordinary readable mode must retain the complete command: %q", display.FlatText)
+	}
+}
+
+func TestProjectsEverySiblingNestedShell(t *testing.T) {
+	display, err := formatShellDisplay(`git diff --check && nix develop -c bash -c 'cd web && deno task check' && nix develop -c bash -c 'cd api && cargo test'`, 54)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 3 {
+		t.Fatalf("expected one parent and both sibling payloads, got %#v", display.Frames)
+	}
+	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 1 {
+		t.Fatalf("sibling payloads must retain the same depth: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[1].Text, "deno task check") || !strings.Contains(display.Frames[2].Text, "cargo test") {
+		t.Fatalf("both sibling payloads must remain visible: %#v", display.Frames)
+	}
+	if strings.Contains(display.Frames[0].Text, "deno task") || strings.Contains(display.Frames[0].Text, "cargo test") {
+		t.Fatalf("parent skeleton must not duplicate extracted payloads: %#v", display.Frames)
 	}
 }
 

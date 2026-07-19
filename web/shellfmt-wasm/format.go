@@ -21,6 +21,7 @@ type shellDisplay struct {
 type shellFrame struct {
 	Launcher string
 	Text     string
+	Depth    int
 }
 
 func formatShellDisplay(source string, columns int) (shellDisplay, error) {
@@ -50,6 +51,7 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 }
 
 const maxShellFrameDepth = 6
+const maxShellFrames = 32
 
 // formatShellFrames projects nested shell payloads as independently parsed
 // source frames. The parent retains its execution skeleton without inventing a
@@ -58,17 +60,41 @@ const maxShellFrameDepth = 6
 // Bash highlighting instead of being painted as one giant quoted string.
 func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
-		if nested, ok := firstNestedShell(source, file); ok {
-			outer := source[:nested.start] + source[nested.end:]
-			outerFile, err := parseShell(outer)
-			if err == nil {
-				outerText, err := formatParsedFile(outerFile, columns)
+		nested := nestedShells(source, file)
+		if len(nested) > 0 && len(nested) < maxShellFrames {
+			type extraction struct {
+				nested   nestedShell
+				children []shellFrame
+			}
+			extracted := make([]extraction, 0, len(nested))
+			for _, candidate := range nested {
+				innerFile, err := parseShell(candidate.payload)
+				if err != nil {
+					continue
+				}
+				children, err := formatShellFrames(candidate.payload, innerFile, columns, depth+1)
+				if err != nil || len(children) == 0 {
+					continue
+				}
+				children[0].Launcher = candidate.launcher
+				extracted = append(extracted, extraction{nested: candidate, children: children})
+			}
+			if len(extracted) > 0 {
+				outer := source
+				for index := len(extracted) - 1; index >= 0; index-- {
+					child := extracted[index].nested
+					outer = outer[:child.start] + outer[child.end:]
+				}
+				outerFile, err := parseShell(outer)
 				if err == nil {
-					innerFile, err := parseShell(nested.payload)
+					outerText, err := formatParsedFile(outerFile, columns)
 					if err == nil {
-						children, err := formatShellFrames(nested.payload, innerFile, columns, depth+1)
-						if err == nil {
-							return append([]shellFrame{{Launcher: nested.launcher, Text: outerText}}, children...), nil
+						frames := []shellFrame{{Text: outerText, Depth: depth}}
+						for _, child := range extracted {
+							frames = append(frames, child.children...)
+						}
+						if len(frames) <= maxShellFrames {
+							return frames, nil
 						}
 					}
 				}
@@ -79,7 +105,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]
 	if err != nil {
 		return nil, err
 	}
-	return []shellFrame{{Text: text}}, nil
+	return []shellFrame{{Text: text, Depth: depth}}, nil
 }
 
 type nestedShell struct {
@@ -89,11 +115,9 @@ type nestedShell struct {
 	payload  string
 }
 
-func firstNestedShell(source string, file *syntax.File) (found nestedShell, ok bool) {
+func nestedShells(source string, file *syntax.File) []nestedShell {
+	found := make([]nestedShell, 0, 4)
 	syntax.Walk(file, func(node syntax.Node) bool {
-		if ok {
-			return false
-		}
 		call, isCall := node.(*syntax.CallExpr)
 		if !isCall || len(call.Args) < 3 {
 			return true
@@ -129,18 +153,18 @@ func firstNestedShell(source string, file *syntax.File) (found nestedShell, ok b
 			// the compact execution frame names the actual interpreter without
 			// spending the phone width on a store hash.
 			launcherArgs[index] = filepath.Base(launcherArgs[index])
-			found = nestedShell{
+			found = append(found, nestedShell{
 				start:    int(payload.Pos().Offset()),
 				end:      int(payload.End().Offset()),
 				launcher: strings.Join(launcherArgs, " "),
 				payload:  payloadValue,
-			}
-			ok = true
+			})
 			return false
 		}
 		return true
 	})
-	return found, ok
+	sort.Slice(found, func(i, j int) bool { return found[i].start < found[j].start })
+	return found
 }
 
 func summarizeFrames(frames []shellFrame) string {
@@ -202,7 +226,11 @@ func formatParsedFile(file *syntax.File, columns int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return insertReadableBreaks(structured, structuredFile, columns), nil
+	readable := insertReadableBreaks(structured, structuredFile, columns)
+	if _, err := parseShell(readable); err != nil {
+		return "", err
+	}
+	return readable, nil
 }
 
 // insertReadableBreaks lays out any long simple command by shell-word
