@@ -63,6 +63,7 @@ import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import { toolHeading, toolVariantLabel } from "./tools/presentation";
+import { toolRuns, type ToolItem, type ToolRun } from "./tools/runs";
 import { formatShellForDisplay } from "./shellFormatter";
 import {
   COMPACTING_NOTICE,
@@ -1505,12 +1506,6 @@ function ToolCard({
   );
 }
 
-type ToolItem = Extract<RenderItem, { kind: "tool" }>;
-
-function toolHasDetail(item: ToolItem): boolean {
-  return item.rawInput !== undefined || item.content !== undefined;
-}
-
 function scrollableAncestor(node: HTMLElement | null): HTMLElement | null {
   let current = node?.parentElement ?? null;
   while (current) {
@@ -1668,7 +1663,7 @@ function ToolTranscriptContext({
 
 function ToolDetailsBrowser({
   items,
-  tools,
+  runs,
   selectedKey,
   desktop,
   provider,
@@ -1677,7 +1672,7 @@ function ToolDetailsBrowser({
   onLocate,
 }: {
   items: RenderItem[];
-  tools: ToolItem[];
+  runs: ToolRun[];
   selectedKey: string | null;
   desktop: boolean;
   provider: string;
@@ -1687,8 +1682,12 @@ function ToolDetailsBrowser({
 }): React.JSX.Element | null {
   const theme = useTheme();
   const roomy = useMediaQuery(theme.breakpoints.up("sm"));
-  const index = selectedKey === null ? -1 : tools.findIndex((tool) => tool.key === selectedKey);
-  const item = index >= 0 ? tools[index] : undefined;
+  const runIndex = selectedKey === null
+    ? -1
+    : runs.findIndex((candidate) => candidate.tools.some((tool) => tool.key === selectedKey));
+  const run = runIndex >= 0 ? runs[runIndex] : undefined;
+  const itemIndex = run?.tools.findIndex((tool) => tool.key === selectedKey) ?? -1;
+  const item = itemIndex >= 0 ? run?.tools[itemIndex] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -1746,27 +1745,28 @@ function ToolDetailsBrowser({
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "[") {
         event.preventDefault();
-        select(tools[index - 1]);
+        select(runs[runIndex - 1]?.tools.at(-1));
       } else if (event.key === "]") {
         event.preventDefault();
-        select(tools[index + 1]);
+        select(runs[runIndex + 1]?.tools[0]);
       }
     };
     globalThis.addEventListener("keydown", onKeyDown);
     return () => globalThis.removeEventListener("keydown", onKeyDown);
-  }, [desktop, index, item, tools]);
+  }, [desktop, runIndex, item, runs]);
 
   if (!item) return null;
   const raw = rawByKey[item.key] ?? false;
-  const itemIndex = items.findIndex((candidate) => candidate.key === item.key);
-  const previousToolIndex = index > 0
-    ? items.findIndex((candidate) => candidate.key === tools[index - 1]?.key)
+  const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
+  const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
+  const previousToolIndex = runIndex > 0
+    ? items.findIndex((candidate) => candidate.key === runs[runIndex - 1]?.tools.at(-1)?.key)
     : -1;
-  const nextToolIndex = index < tools.length - 1
-    ? items.findIndex((candidate) => candidate.key === tools[index + 1]?.key)
+  const nextToolIndex = runIndex < runs.length - 1
+    ? items.findIndex((candidate) => candidate.key === runs[runIndex + 1]?.tools[0]?.key)
     : items.length;
-  const before = items.slice(previousToolIndex + 1, itemIndex);
-  const after = items.slice(itemIndex + 1, nextToolIndex);
+  const before = items.slice(previousToolIndex + 1, firstRunItemIndex);
+  const after = items.slice(lastRunItemIndex + 1, nextToolIndex);
   const running = item.status === "in_progress" || item.status === "pending";
   const ctx: ToolCtx = {
     provider,
@@ -1786,6 +1786,9 @@ function ToolDetailsBrowser({
     title: item.title,
     rawInput: item.rawInput,
   });
+  const runTitle = run?.server
+    ? run.server.split(/[-_]/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
+    : null;
 
   const navigation = (
     <Box
@@ -1811,9 +1814,9 @@ function ToolDetailsBrowser({
       {roomy
         ? (
           <Button
-            aria-label="Previous tool"
-            disabled={index === 0}
-            onClick={(): void => select(tools[index - 1])}
+            aria-label="Previous tool run"
+            disabled={runIndex === 0}
+            onClick={(): void => select(runs[runIndex - 1]?.tools.at(-1))}
             startIcon={<NavigateBefore />}
             sx={{ minHeight: 40, justifySelf: "start", textTransform: "none" }}
           >
@@ -1822,27 +1825,27 @@ function ToolDetailsBrowser({
         )
         : (
           <IconButton
-            aria-label="Previous tool"
-            disabled={index === 0}
-            onClick={(): void => select(tools[index - 1])}
+            aria-label="Previous tool run"
+            disabled={runIndex === 0}
+            onClick={(): void => select(runs[runIndex - 1]?.tools.at(-1))}
             sx={{ width: 44, height: 44, justifySelf: "start" }}
           >
             <NavigateBefore />
           </IconButton>
         )}
       <Typography
-        aria-label={`Tool ${index + 1} of ${tools.length}`}
+        aria-label={`Tool run ${runIndex + 1} of ${runs.length}`}
         variant="caption"
         sx={{ px: 0.75, fontWeight: 700, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
       >
-        {index + 1} / {tools.length}
+        {runIndex + 1} / {runs.length}
       </Typography>
       {roomy
         ? (
           <Button
-            aria-label="Next tool"
-            disabled={index >= tools.length - 1}
-            onClick={(): void => select(tools[index + 1])}
+            aria-label="Next tool run"
+            disabled={runIndex >= runs.length - 1}
+            onClick={(): void => select(runs[runIndex + 1]?.tools[0])}
             endIcon={<NavigateNext />}
             sx={{ minHeight: 40, justifySelf: "end", textTransform: "none" }}
           >
@@ -1851,9 +1854,9 @@ function ToolDetailsBrowser({
         )
         : (
           <IconButton
-            aria-label="Next tool"
-            disabled={index >= tools.length - 1}
-            onClick={(): void => select(tools[index + 1])}
+            aria-label="Next tool run"
+            disabled={runIndex >= runs.length - 1}
+            onClick={(): void => select(runs[runIndex + 1]?.tools[0])}
             sx={{ width: 44, height: 44, justifySelf: "end" }}
           >
             <NavigateNext />
@@ -1898,6 +1901,83 @@ function ToolDetailsBrowser({
       <Box ref={bodyRef} sx={{ position: "relative" }}>
         <Stack spacing={1.25}>
             <ToolTranscriptContext key={`${item.key}-before`} items={before} position="before" />
+            {run && run.tools.length > 1 && (
+              <Box
+                aria-label={`${runTitle ?? "MCP"} run with ${run.tools.length} calls`}
+                sx={{
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 1.5,
+                  overflow: "hidden",
+                  bgcolor: "action.hover",
+                }}
+              >
+                <Stack
+                  direction="row"
+                  alignItems="baseline"
+                  justifyContent="space-between"
+                  sx={{ px: 1.25, pt: 0.875, pb: 0.5 }}
+                >
+                  <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>
+                    {runTitle}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: "text.disabled", fontVariantNumeric: "tabular-nums" }}>
+                    {itemIndex + 1} / {run.tools.length} calls
+                  </Typography>
+                </Stack>
+                <Stack sx={{ pb: 0.375 }}>
+                  {run.tools.map((tool, callIndex) => {
+                    const selected = tool.key === item.key;
+                    const callHeading = toolHeading({
+                      provider,
+                      toolName: tool.toolName,
+                      kind: tool.toolKind,
+                      title: tool.title,
+                      rawInput: tool.rawInput,
+                    });
+                    return (
+                      <ButtonBase
+                        key={tool.key}
+                        aria-current={selected ? "step" : undefined}
+                        onClick={(): void => select(tool)}
+                        sx={{
+                          width: "100%",
+                          minHeight: 42,
+                          px: 1.25,
+                          display: "grid",
+                          gridTemplateColumns: "20px minmax(0, 1fr) auto",
+                          gap: 0.75,
+                          alignItems: "center",
+                          textAlign: "left",
+                          bgcolor: selected ? "action.selected" : "transparent",
+                          borderLeft: 2,
+                          borderColor: selected ? "primary.main" : "transparent",
+                        }}
+                      >
+                        <Typography variant="caption" sx={{ color: selected ? "primary.main" : "text.disabled", fontWeight: 700 }}>
+                          {callIndex + 1}
+                        </Typography>
+                        <Typography variant="body2" noWrap sx={{ fontWeight: selected ? 700 : 500 }}>
+                          {callHeading}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: tool.status === "failed"
+                              ? "error.main"
+                              : tool.status === "in_progress" || tool.status === "pending"
+                              ? "warning.main"
+                              : "text.disabled",
+                          }}
+                        >
+                          {tool.status === "in_progress" ? "running" : tool.status}
+                        </Typography>
+                      </ButtonBase>
+                    );
+                  })}
+                </Stack>
+              </Box>
+            )}
             <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
@@ -2420,10 +2500,8 @@ export function Transcript({
   // event — NOT on every scroll-driven re-render. Stable item identities also
   // let the `memo`'d `ItemView` rows skip re-rendering.
   const items = useMemo(() => derive(timeline), [timeline]);
-  const tools = useMemo(
-    () => items.filter((item): item is ToolItem => item.kind === "tool" && toolHasDetail(item)),
-    [items],
-  );
+  const runs = useMemo(() => toolRuns(items), [items]);
+  const tools = useMemo(() => runs.flatMap((run) => run.tools), [runs]);
   const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
   const [locatedToolKey, setLocatedToolKey] = useState<string | null>(null);
   const locateTimerRef = useRef<number | null>(null);
@@ -3227,7 +3305,7 @@ export function Transcript({
       </Box>
       <ToolDetailsBrowser
         items={items}
-        tools={tools}
+        runs={runs}
         selectedKey={selectedToolKey}
         desktop={desktopNavigation}
         provider={provider}
