@@ -45,6 +45,7 @@ import {
   ExpandMore,
   Folder,
   LightbulbOutlined,
+  KeyboardArrowDown,
   MyLocation,
   NavigateBefore,
   NavigateNext,
@@ -1490,7 +1491,93 @@ function scrollableAncestor(node: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
+type ToolContextBlock = {
+  key: string;
+  tone: "prose" | "thought" | "user";
+  text: string;
+};
+
+function toolContextBlocks(items: RenderItem[]): ToolContextBlock[] {
+  const blocks: ToolContextBlock[] = [];
+  for (const item of items) {
+    let tone: ToolContextBlock["tone"] | null = null;
+    let text = "";
+    if (item.kind === "message") {
+      tone = item.role === "user" ? "user" : "prose";
+      text = item.chunks
+        .filter((chunk): chunk is Extract<ContentChunk, { type: "text" }> => chunk.type === "text")
+        .map((chunk) => chunk.text)
+        .join("\n\n");
+    } else if (item.kind === "thought") {
+      tone = "thought";
+      text = item.sections.join("\n\n");
+    } else if (item.kind === "lifecycle" && item.detail) {
+      tone = "thought";
+      text = item.detail;
+    }
+    if (!tone || !text.trim()) continue;
+    const previous = blocks.at(-1);
+    if (previous?.tone === tone) {
+      previous.text += `\n\n${text}`;
+    } else {
+      blocks.push({ key: item.key, tone, text });
+    }
+  }
+  return blocks;
+}
+
+function ToolTranscriptContext({
+  items,
+  position,
+}: {
+  items: RenderItem[];
+  position: "before" | "after";
+}): React.JSX.Element | null {
+  const blocks = toolContextBlocks(items);
+  if (blocks.length === 0) return null;
+  return (
+    <Box
+      aria-label={`${position === "before" ? "Previous" : "Following"} transcript context`}
+      sx={{
+        borderLeft: 2,
+        borderColor: "divider",
+        pl: 1.25,
+        py: 0.25,
+        color: "text.secondary",
+      }}
+    >
+      <Typography
+        variant="overline"
+        sx={{ display: "block", mb: 0.5, color: "text.disabled", lineHeight: 1.4 }}
+      >
+        {position === "before" ? "Before this tool" : "After this tool"}
+      </Typography>
+      <Stack spacing={1}>
+        {blocks.map((block) => (
+          <Box
+            key={block.key}
+            sx={block.tone === "user"
+              ? {
+                bgcolor: "action.hover",
+                borderRadius: 1.25,
+                px: 1,
+                py: 0.5,
+                color: "text.primary",
+              }
+              : block.tone === "thought"
+              ? { fontSize: "0.88em", color: "text.secondary" }
+              : { color: "text.primary" }}
+          >
+            <Markdown text={block.text} />
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 function ToolDetailsBrowser({
+  items,
   tools,
   selectedKey,
   desktop,
@@ -1498,6 +1585,7 @@ function ToolDetailsBrowser({
   onClose,
   onLocate,
 }: {
+  items: RenderItem[];
   tools: ToolItem[];
   selectedKey: string | null;
   desktop: boolean;
@@ -1512,6 +1600,7 @@ function ToolDetailsBrowser({
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const currentRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
 
   useEffect(() => {
@@ -1525,7 +1614,16 @@ function ToolDetailsBrowser({
   useLayoutEffect(() => {
     if (detailReadyKey !== item?.key || !item) return;
     const scroller = scrollableAncestor(bodyRef.current);
-    if (scroller) scroller.scrollTop = scrollByKey.current.get(item.key) ?? 0;
+    if (!scroller) return;
+    const saved = scrollByKey.current.get(item.key);
+    if (saved !== undefined) {
+      scroller.scrollTop = saved;
+      return;
+    }
+    // Context before the selected tool stays available by scrolling upward,
+    // while a newly opened detail sheet begins with the requested tool in focus.
+    const current = currentRef.current;
+    if (current) scroller.scrollTop = Math.max(0, current.offsetTop - 8);
   }, [detailReadyKey, item?.key]);
 
   const select = (next: ToolItem | undefined): void => {
@@ -1553,6 +1651,15 @@ function ToolDetailsBrowser({
 
   if (!item) return null;
   const raw = rawByKey[item.key] ?? false;
+  const itemIndex = items.findIndex((candidate) => candidate.key === item.key);
+  const previousToolIndex = index > 0
+    ? items.findIndex((candidate) => candidate.key === tools[index - 1]?.key)
+    : -1;
+  const nextToolIndex = index < tools.length - 1
+    ? items.findIndex((candidate) => candidate.key === tools[index + 1]?.key)
+    : items.length;
+  const before = items.slice(previousToolIndex + 1, itemIndex);
+  const after = items.slice(itemIndex + 1, nextToolIndex);
   const running = item.status === "in_progress" || item.status === "pending";
   const ctx: ToolCtx = {
     toolName: item.toolName,
@@ -1572,7 +1679,7 @@ function ToolDetailsBrowser({
         px: 0.75,
         py: 0.5,
         display: "grid",
-        gridTemplateColumns: "1fr auto 1fr auto",
+        gridTemplateColumns: "1fr auto 1fr auto auto",
         alignItems: "center",
         gap: 0.5,
         bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
@@ -1641,6 +1748,24 @@ function ToolDetailsBrowser({
           <MyLocation fontSize="small" />
         </IconButton>
       </Tooltip>
+      {roomy
+        ? (
+          <Button
+            aria-label="Close tool details"
+            onClick={onClose}
+            endIcon={<KeyboardArrowDown />}
+            sx={{ minHeight: 40, textTransform: "none" }}
+          >
+            Close
+          </Button>
+        )
+        : (
+          <Tooltip title="Close details">
+            <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44 }}>
+              <KeyboardArrowDown fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
     </Box>
   );
 
@@ -1656,6 +1781,8 @@ function ToolDetailsBrowser({
     >
       <Box ref={bodyRef}>
         <Stack spacing={1.25}>
+            <ToolTranscriptContext items={before} position="before" />
+            <Box ref={currentRef} />
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
@@ -1748,6 +1875,7 @@ function ToolDetailsBrowser({
                 )
                 : <ToolBody ctx={ctx} />}
             </Box>
+            <ToolTranscriptContext items={after} position="after" />
           </Stack>
       </Box>
     </Sheet>,
@@ -2972,6 +3100,7 @@ export function Transcript({
           )}
       </Box>
       <ToolDetailsBrowser
+        items={items}
         tools={tools}
         selectedKey={selectedToolKey}
         desktop={desktopNavigation}
