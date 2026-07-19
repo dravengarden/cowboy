@@ -81,3 +81,9 @@ export function terminalHighlightSegments(text: string): TerminalHighlightSegmen
   if (cursor < text.length) segments.push({ text: text.slice(cursor) });
   return segments.length > 1 ? segments : [{ text }];
 }
+
+/** Rendering may separate structured islands into cards; whitespace-only
+ * separators must not become empty cards between them. */
+export function terminalDisplaySegments(text: string): TerminalHighlightSegment[] {
+  return terminalHighlightSegments(text).filter((segment) => segment.text.trim().length > 0);
+}

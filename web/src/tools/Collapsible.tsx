@@ -69,7 +69,7 @@ export function Collapsible({
         width: "100%",
         gap: 0.375,
         color: "primary.main",
-        fontSize: 13,
+        fontSize: "0.8125rem",
         fontWeight: 650,
         whiteSpace: "nowrap",
         "&:hover": { backgroundColor: alpha(theme.palette.primary.main, 0.035) },
@@ -77,7 +77,7 @@ export function Collapsible({
       }}
     >
       Expand
-      <ExpandMoreRounded sx={{ fontSize: 17 }} />
+      <ExpandMoreRounded sx={{ fontSize: "1.0625rem" }} />
     </ButtonBase>
   );
 
@@ -121,7 +121,7 @@ export function Collapsible({
               "&:hover": { backgroundColor: "transparent", color: "primary.main" },
             }}
           >
-            <ExpandLessRounded sx={{ position: "relative", fontSize: 18 }} />
+            <ExpandLessRounded sx={{ position: "relative", fontSize: "1.125rem" }} />
           </IconButton>
         </Box>
       )}

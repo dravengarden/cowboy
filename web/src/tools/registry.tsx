@@ -18,7 +18,7 @@ import {
 } from "./blocks";
 import { mcpIdentity } from "./presentation";
 import { outputPrefersHorizontalScroll } from "./outputLayout";
-import { terminalHighlightSegments } from "./terminalHighlight";
+import { terminalDisplaySegments } from "./terminalHighlight";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
 // both leaning on the provider-agnostic primitives in blocks.tsx:
@@ -73,7 +73,7 @@ function terminalText(content: unknown): string {
 
 function TerminalOutput({ text, running }: { text: string; running: boolean }): React.JSX.Element {
   const [wrapped, setWrapped] = useState(() => !outputPrefersHorizontalScroll(text));
-  const segments = useMemo(() => terminalHighlightSegments(text), [text]);
+  const segments = useMemo(() => terminalDisplaySegments(text), [text]);
   useEffect(() => setWrapped(!outputPrefersHorizontalScroll(text)), [text]);
   const control = text
     ? (
@@ -83,7 +83,7 @@ function TerminalOutput({ text, running }: { text: string; running: boolean }): 
             key={String(value)}
             aria-pressed={wrapped === value}
             onClick={(): void => setWrapped(value)}
-            sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+            sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
           >
             {value ? "Wrap" : "Scroll"}
           </ButtonBase>
@@ -97,7 +97,7 @@ function TerminalOutput({ text, running }: { text: string; running: boolean }): 
         ? segments.some((segment) => segment.language)
           ? (
             <Stack spacing={0.5} data-terminal-structured-output>
-              {segments.filter((segment) => segment.text).map((segment, index) =>
+              {segments.map((segment, index) =>
                 segment.language
                   ? (
                     <CodeView
@@ -140,7 +140,7 @@ function FileReadContent({
           key={String(value)}
           aria-pressed={wrapped === value}
           onClick={(): void => setWrapped(value)}
-          sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+          sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
         >
           {value ? "Wrap" : "Scroll"}
         </ButtonBase>

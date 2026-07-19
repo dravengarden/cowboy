@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { terminalHighlightSegments } from "./terminalHighlight.ts";
+import { terminalDisplaySegments, terminalHighlightSegments } from "./terminalHighlight.ts";
 
 Deno.test("whole JSON output is highlighted", () => {
   assertEquals(terminalHighlightSegments('{"ok":true}'), [{ text: '{"ok":true}', language: "json" }]);
@@ -27,4 +27,10 @@ Deno.test("truncated JSON and ordinary logs stay plain", () => {
 Deno.test("diff and SQL output use deterministic languages", () => {
   assertEquals(terminalHighlightSegments("@@ -1 +1 @@\n-old\n+new")[0]?.language, "diff");
   assertEquals(terminalHighlightSegments("SELECT id FROM sessions;")[0]?.language, "sql");
+});
+
+Deno.test("display segments omit whitespace-only cards between JSON values", () => {
+  const segments = terminalDisplaySegments('{"first":1}\n\n{"second":2}');
+  assertEquals(segments.map((segment) => segment.language), ["json", "json"]);
+  assertEquals(segments.some((segment) => segment.text.trim() === ""), false);
 });

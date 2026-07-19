@@ -2054,7 +2054,7 @@ function ToolDetailsBrowser({
                           minHeight: 32,
                           px: 1,
                           borderRadius: 1,
-                          fontSize: 11,
+                          fontSize: "0.6875rem",
                           fontWeight: raw === isRaw ? 700 : 500,
                           color: raw === isRaw ? "text.primary" : "text.disabled",
                           bgcolor: raw === isRaw ? "background.paper" : "transparent",

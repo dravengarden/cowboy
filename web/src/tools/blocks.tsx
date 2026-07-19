@@ -154,7 +154,7 @@ export function CodeView({
                 key={String(value)}
                 aria-pressed={wrapped === value}
                 onClick={(): void => setLocalWrapped(value)}
-                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
               >
                 {value ? "Wrap" : "Scroll"}
               </ButtonBase>
@@ -240,15 +240,15 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
               aria-pressed={mode === "readable"}
               disabled={!enhanced}
               onClick={(): void => setMode("readable")}
-              sx={{ minHeight: 28, minWidth: 70, px: 0.875, borderRadius: 0.75, fontSize: 11, color: mode === "readable" ? "text.primary" : "text.disabled", bgcolor: mode === "readable" ? "background.paper" : "transparent", boxShadow: mode === "readable" ? 1 : 0 }}
+              sx={{ minHeight: 28, minWidth: 70, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "readable" ? "text.primary" : "text.disabled", bgcolor: mode === "readable" ? "background.paper" : "transparent", boxShadow: mode === "readable" ? 1 : 0 }}
             >
-              {readable === undefined ? <CircularProgress size={13} /> : "Readable"}
+              {readable === undefined ? <CircularProgress size="0.8125rem" /> : "Readable"}
             </ButtonBase>
             {nested && (
               <ButtonBase
                 aria-pressed={mode === "nested"}
                 onClick={(): void => setMode("nested")}
-                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: mode === "nested" ? "text.primary" : "text.disabled", bgcolor: mode === "nested" ? "background.paper" : "transparent", boxShadow: mode === "nested" ? 1 : 0 }}
+                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "nested" ? "text.primary" : "text.disabled", bgcolor: mode === "nested" ? "background.paper" : "transparent", boxShadow: mode === "nested" ? 1 : 0 }}
               >
                 Nested
               </ButtonBase>
@@ -256,7 +256,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             <ButtonBase
               aria-pressed={mode === "source"}
               onClick={(): void => setMode("source")}
-              sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: mode === "source" ? "text.primary" : "text.disabled", bgcolor: mode === "source" ? "background.paper" : "transparent", boxShadow: mode === "source" ? 1 : 0 }}
+              sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "source" ? "text.primary" : "text.disabled", bgcolor: mode === "source" ? "background.paper" : "transparent", boxShadow: mode === "source" ? 1 : 0 }}
             >
               Source
             </ButtonBase>
@@ -471,7 +471,7 @@ export function FileChip({ path }: { path: string }): React.JSX.Element {
       title={path}
       sx={{
         height: 20,
-        fontSize: 11,
+        fontSize: "0.6875rem",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         "& .MuiChip-label": { px: 0.75 },
       }}
