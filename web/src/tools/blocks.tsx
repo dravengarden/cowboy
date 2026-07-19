@@ -254,7 +254,8 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           <Stack
             data-shell-frame-count={readable.frames.length}
             sx={{
-              gap: 0.25,
+              gap: 0,
+              pb: readable.frames.length > 1 ? 0.625 : 0,
               borderRadius: 1,
               overflow: "hidden",
               bgcolor: theme.palette.mode === "dark" ? "#282c34" : "#fafafa",
@@ -266,12 +267,21 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 data-shell-frame={index}
                 sx={{
                   position: "relative",
-                  pl: index === 0 ? 0 : Math.min(index, 3) * 1.125,
+                  ml: index === 0 ? 0 : 1.25 + Math.min(index - 1, 2) * 0.75,
+                  pl: index === 0 ? 0 : 1.125,
                   ...(index > 0 && {
-                    borderLeft: "2px solid",
-                    borderColor: "primary.main",
-                    ml: 1.25,
-                    pt: 0.5,
+                    mt: frame.launcher ? 0.375 : 0,
+                    "&::before": {
+                      content: '""',
+                      position: "absolute",
+                      left: 0,
+                      top: frame.launcher ? 12 : 8,
+                      bottom: 8,
+                      width: 2,
+                      borderRadius: 999,
+                      bgcolor: "primary.main",
+                      opacity: 0.58,
+                    },
                   }),
                 }}
               >
@@ -280,18 +290,40 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     component="div"
                     variant="caption"
                     sx={{
-                      px: 1.5,
-                      pb: 0.125,
+                      display: "flex",
+                      alignItems: "center",
+                      minWidth: 0,
+                      pr: 1.5,
+                      pb: 0.25,
                       color: "primary.light",
                       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      fontWeight: 650,
+                      fontWeight: 600,
                       letterSpacing: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      opacity: index > 0 ? 0.9 : 0.82,
+                      ...(index === 0
+                        ? { px: 1.5 }
+                        : {
+                          "&::before": {
+                            content: '""',
+                            flex: "0 0 auto",
+                            alignSelf: "flex-start",
+                            width: 9,
+                            height: 9,
+                            mt: "0.3em",
+                            mr: 0.75,
+                            ml: -1.125,
+                            borderLeft: "2px solid",
+                            borderBottom: "2px solid",
+                            borderColor: "primary.main",
+                            borderBottomLeftRadius: 4,
+                            opacity: 0.72,
+                          },
+                        }),
                     }}
                   >
-                    {index > 0 ? "└─ " : ""}{frame.launcher}
+                    <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {frame.launcher}
+                    </Box>
                   </Typography>
                 )}
                 {frame.text && (
