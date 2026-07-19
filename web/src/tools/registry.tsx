@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useEffect, useState } from "react";
+import { Component, type ReactNode, useEffect, useMemo, useState } from "react";
 import { Box, ButtonBase, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
@@ -18,6 +18,7 @@ import {
 } from "./blocks";
 import { mcpIdentity } from "./presentation";
 import { outputPrefersHorizontalScroll } from "./outputLayout";
+import { terminalHighlightSegments } from "./terminalHighlight";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
 // both leaning on the provider-agnostic primitives in blocks.tsx:
@@ -72,6 +73,7 @@ function terminalText(content: unknown): string {
 
 function TerminalOutput({ text, running }: { text: string; running: boolean }): React.JSX.Element {
   const [wrapped, setWrapped] = useState(() => !outputPrefersHorizontalScroll(text));
+  const segments = useMemo(() => terminalHighlightSegments(text), [text]);
   useEffect(() => setWrapped(!outputPrefersHorizontalScroll(text)), [text]);
   const control = text
     ? (
@@ -91,7 +93,31 @@ function TerminalOutput({ text, running }: { text: string; running: boolean }): 
     : undefined;
   return (
     <Labeled label="Output" action={control}>
-      {text ? <PreBlock text={text} wrap={wrapped} /> : running ? <RunningHint /> : <Empty />}
+      {text
+        ? segments.some((segment) => segment.language)
+          ? (
+            <Stack spacing={0.5} data-terminal-structured-output>
+              {segments.filter((segment) => segment.text).map((segment, index) =>
+                segment.language
+                  ? (
+                    <CodeView
+                      key={index}
+                      code={segment.text}
+                      lang={segment.language}
+                      maxHeight={240}
+                      wrap={wrapped}
+                      wrapControl={false}
+                      hideCopy
+                    />
+                  )
+                  : <PreBlock key={index} text={segment.text} wrap={wrapped} />
+              )}
+            </Stack>
+          )
+          : <PreBlock text={text} wrap={wrapped} />
+        : running
+        ? <RunningHint />
+        : <Empty />}
     </Labeled>
   );
 }

@@ -84,6 +84,7 @@ export function CodeView({
   tokenSafeWrap = false,
   wrapControl = true,
   hideCopy = false,
+  wrap,
 }: {
   code: string;
   lang?: string;
@@ -93,12 +94,15 @@ export function CodeView({
   tokenSafeWrap?: boolean;
   wrapControl?: boolean;
   hideCopy?: boolean;
+  /** Optional parent-controlled line layout (for mixed terminal output). */
+  wrap?: boolean;
 }): React.JSX.Element {
   const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
   const theme = useTheme();
-  const [wrapped, setWrapped] = useState((touchWrap || tokenSafeWrap) && coarse);
+  const [localWrapped, setLocalWrapped] = useState((touchWrap || tokenSafeWrap) && coarse);
+  const wrapped = wrap ?? localWrapped;
   const lightweight = shouldUseLightweightCode(code);
-  const lightweightWrap = (touchWrap || tokenSafeWrap) && coarse;
+  const lightweightWrap = wrapped;
   const lightweightSx = {
     m: 0,
     p: 1.5,
@@ -149,7 +153,7 @@ export function CodeView({
               <ButtonBase
                 key={String(value)}
                 aria-pressed={wrapped === value}
-                onClick={(): void => setWrapped(value)}
+                onClick={(): void => setLocalWrapped(value)}
                 sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
               >
                 {value ? "Wrap" : "Scroll"}
