@@ -5,7 +5,7 @@ import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 // A reusable fold for any potentially-long tool content (command output, a read
 // file, a diff, raw JSON). It clips to `maxHeight` when collapsed, with a bottom
 // fade into the card surface so it reads as "there's more below", and a single
-// pill toggle. The toggle + fade only appear when the content actually overflows
+// edge toggle. The toggle + fade only appear when the content actually overflows
 // (measured) — short output stays plain with no chrome. This is the "不拥挤"
 // mechanism: every block defaults compact, the user opens only what they want.
 
@@ -60,15 +60,16 @@ export function Collapsible({
       aria-expanded={expanded}
       onClick={toggle}
       sx={{
-        minHeight: 44,
-        px: 1,
-        borderRadius: 999,
+        minHeight: 40,
+        width: expanded ? "auto" : "100%",
+        px: 1.5,
+        borderRadius: expanded ? "8px" : 0,
         gap: 0.25,
         color: "primary.main",
         fontSize: 12,
         fontWeight: 600,
         whiteSpace: "nowrap",
-        "&:hover": { textDecoration: "underline" },
+        "&:hover": { backgroundColor: alpha(theme.palette.primary.main, 0.06) },
         "&:focus-visible": { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 },
       }}
     >
@@ -99,7 +100,7 @@ export function Collapsible({
           <Box
             sx={{
               pointerEvents: "auto",
-              borderRadius: 999,
+              borderRadius: "8px",
               backgroundColor: alpha(paper, 0.92),
               backdropFilter: "blur(8px)",
               boxShadow: `0 1px 4px ${alpha(theme.palette.common.black, 0.16)}`,
@@ -138,22 +139,24 @@ export function Collapsible({
         <Box
           sx={{
             position: "absolute",
-            left: "50%",
-            bottom: 4,
+            left: 0,
+            right: 0,
+            bottom: 0,
             zIndex: 1,
-            transform: "translateX(-50%)",
             pointerEvents: "none",
+            display: "flex",
+            justifyContent: "center",
           }}
         >
           <Box
             sx={{
               pointerEvents: "auto",
-              borderRadius: 999,
-              backgroundColor: alpha(paper, 0.94),
-              backdropFilter: "blur(8px)",
-              border: 1,
-              borderColor: alpha(theme.palette.primary.main, 0.22),
-              boxShadow: `0 2px 8px ${alpha(theme.palette.common.black, 0.18)}`,
+              width: "100%",
+              borderRadius: 0,
+              backgroundColor: alpha(paper, 0.9),
+              backdropFilter: "blur(10px)",
+              borderTop: 1,
+              borderColor: alpha(theme.palette.primary.main, 0.16),
             }}
           >
             {toggleButton(false)}

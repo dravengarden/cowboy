@@ -14,13 +14,12 @@ import {
   PreBlock,
   textOfContent,
 } from "./blocks";
+import { mcpIdentity } from "./presentation";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
 // both leaning on the provider-agnostic primitives in blocks.tsx:
 //
-//  1. `BY_TOOL` — keyed by the upstream tool NAME (claude-code `Bash`/`Edit`/…,
-//     codex `shell`/`apply_patch`/…; the name already encodes the provider, so a
-//     flat map IS the provider-adaptation layer). Only tools that need bespoke
+//  1. `BY_TOOL` — keyed by provider + upstream tool name. Only tools that need bespoke
 //     rendering beyond their ACP kind live here (e.g. TodoWrite → a checklist).
 //  2. `BY_KIND` — keyed by the ACP `kind`, which the adapters NORMALIZE across
 //     providers (codex `shell`→execute, `apply_patch`→edit, …). This is where the
@@ -31,6 +30,8 @@ import {
 // whatever these return and is always one tap away.
 
 export interface ToolCtx {
+  /** Session provider; tool names and argument shapes differ across adapters. */
+  provider: string;
   /** Upstream tool name (`_meta.<provider>.toolName`), or "" if absent. */
   toolName: string;
   /** ACP kind: read | edit | execute | search | fetch | think | other | … */
@@ -60,13 +61,25 @@ function commandText(raw: Record<string, unknown>): string {
   return "";
 }
 
+function terminalText(content: unknown): string {
+  const text = textOfContent(content);
+  const fenced = text.match(/^```[^\n]*\n([\s\S]*?)\n```\s*$/);
+  return fenced?.[1] ?? text;
+}
+
 // --- kind renderers (provider-agnostic via the normalized ACP kind) ----------
 
 const executeTool: Renderer = ({ rawInput, content, running }) => {
   const cmd = commandText(rawInput);
-  const out = textOfContent(content);
+  const out = terminalText(content);
+  const cwd = typeof rawInput["cwd"] === "string" ? rawInput["cwd"] : "";
   return (
     <>
+      {cwd && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.75 }}>
+          {cwd}
+        </Typography>
+      )}
       {cmd && (
         <Labeled label="Command">
           <CodeView code={cmd} lang="bash" maxHeight={180} centerCopy />
@@ -128,6 +141,66 @@ const genericTool: Renderer = ({ rawInput, content, running }) => {
   );
 };
 
+interface McpWidget {
+  primary: string;
+  label: string;
+  language?: string;
+}
+
+// Only tool-specific presentation belongs here. Identity parsing, the argument
+// frame, results, loading and failure behavior remain shared across ACPs and MCP
+// servers. New MCPs therefore get a useful generic view before a tailored
+// primary field is added to this small registry.
+const MCP_WIDGETS: Record<string, McpWidget> = {
+  "chrome-devtools:evaluate_script": { primary: "function", label: "Script", language: "javascript" },
+  "chrome-devtools:navigate_page": { primary: "url", label: "Destination" },
+  "chrome-devtools:new_page": { primary: "url", label: "Destination" },
+  "openaiDeveloperDocs:search_openai_docs": { primary: "query", label: "Query" },
+  "openaiDeveloperDocs:fetch_openai_doc": { primary: "url", label: "Document" },
+};
+
+const mcpTool: Renderer = (ctx) => {
+  const mcp = mcpIdentity(ctx.toolName, ctx.rawInput, ctx.title);
+  if (!mcp) return genericTool(ctx);
+  const args = { ...mcp.arguments };
+  const widget = MCP_WIDGETS[`${mcp.server}:${mcp.tool}`] ??
+    (typeof args.function === "string"
+      ? { primary: "function", label: "Script", language: "javascript" }
+      : typeof args.query === "string"
+      ? { primary: "query", label: "Query" }
+      : typeof args.url === "string"
+      ? { primary: "url", label: "URL" }
+      : undefined);
+  const primary = widget && typeof args[widget.primary] === "string" ? String(args[widget.primary]) : "";
+  if (widget) delete args[widget.primary];
+  const hasResult = Boolean(textOfContent(ctx.content) || hasDiff(ctx.content));
+  return (
+    <Stack spacing={1}>
+      {primary && widget && (
+        <Labeled label={widget.label}>
+          {widget.language
+            ? <CodeView code={primary} lang={widget.language} maxHeight={260} />
+            : (
+              <Typography sx={{ overflowWrap: "anywhere", fontFamily: widget.primary === "url" ? "ui-monospace, monospace" : undefined }}>
+                {primary}
+              </Typography>
+            )}
+        </Labeled>
+      )}
+      {Object.keys(args).length > 0 && (
+        <Labeled label="Arguments">
+          <KeyValues data={args} />
+        </Labeled>
+      )}
+      {hasResult
+        ? <Labeled label="Result"><OutputBlocks content={ctx.content} /></Labeled>
+        : ctx.running
+        ? <RunningHint />
+        : <Empty />}
+    </Stack>
+  );
+};
+
 function Empty(): React.JSX.Element {
   return <Typography variant="caption" color="text.disabled">No output</Typography>;
 }
@@ -175,8 +248,7 @@ const todoTool: Renderer = (ctx) => {
 };
 
 const BY_TOOL: Record<string, Renderer> = {
-  // claude-code
-  TodoWrite: todoTool,
+  "claude-code:TodoWrite": todoTool,
   // codex / others can add bespoke renderers here; everything else flows through
   // the kind layer, which already covers shell/apply_patch/read/etc.
 };
@@ -203,7 +275,9 @@ class ToolBoundary extends Component<{ children: ReactNode }, { failed: boolean 
 
 /** Render a tool call's expanded body — the public entry the card shell calls. */
 export function ToolBody({ ctx }: { ctx: ToolCtx }): React.JSX.Element {
-  const renderer = BY_TOOL[ctx.toolName] ?? BY_KIND[ctx.kind] ?? genericTool;
+  const renderer = BY_TOOL[`${ctx.provider}:${ctx.toolName}`] ??
+    (mcpIdentity(ctx.toolName, ctx.rawInput, ctx.title) ? mcpTool : undefined) ??
+    BY_KIND[ctx.kind] ?? genericTool;
   return (
     <Box>
       <ToolBoundary>{renderer(ctx)}</ToolBoundary>

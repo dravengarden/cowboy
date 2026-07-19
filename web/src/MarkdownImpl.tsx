@@ -17,6 +17,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ImageLightbox } from "./_shell";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
+import { copyText } from "./clipboard";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   oneDark,
@@ -71,36 +72,6 @@ function parseImages(md: string): { src: string; alt: string }[] {
     if (src) out.push({ src, alt });
   }
   return out;
-}
-
-// Copy to the clipboard, with a legacy fallback. The async Clipboard API needs
-// a SECURE context: it's present over the https tailnet (what phones/desktop
-// actually use) but ABSENT over the plain http LAN IP (the dev bridge), so the
-// hidden-textarea execCommand path keeps copy working there too. Returns success.
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (globalThis.navigator?.clipboard?.writeText) {
-      await globalThis.navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // secure-context denial / not-focused → fall through to the legacy path
-  }
-  try {
-    const doc = globalThis.document;
-    const ta = doc.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    doc.body.appendChild(ta);
-    ta.select();
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- only non-secure-context copy path
-    const ok = doc.execCommand("copy");
-    ta.remove();
-    return ok;
-  } catch {
-    return false;
-  }
 }
 
 // A fenced code block + a top-right copy button. The button sits ABSOLUTELY in

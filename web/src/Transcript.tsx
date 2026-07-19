@@ -20,6 +20,7 @@ import { createPortal } from "react-dom";
 import {
   Box,
   Button,
+  ButtonBase,
   Chip,
   CircularProgress,
   IconButton,
@@ -55,11 +56,15 @@ import {
   Terminal,
   UnfoldLess,
   WarningAmberRounded,
+  ContentCopyRounded,
+  CheckRounded,
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { ToolBody, type ToolCtx } from "./tools/registry";
+import { copyText } from "./clipboard";
+import { toolCopyText, toolHeading, toolVariantLabel } from "./tools/presentation";
 import {
   COMPACTING_NOTICE,
   type ContentChunk,
@@ -1581,6 +1586,7 @@ function ToolDetailsBrowser({
   tools,
   selectedKey,
   desktop,
+  provider,
   onSelect,
   onClose,
   onLocate,
@@ -1589,6 +1595,7 @@ function ToolDetailsBrowser({
   tools: ToolItem[];
   selectedKey: string | null;
   desktop: boolean;
+  provider: string;
   onSelect: (key: string) => void;
   onClose: () => void;
   onLocate: (key: string) => void;
@@ -1598,6 +1605,7 @@ function ToolDetailsBrowser({
   const index = selectedKey === null ? -1 : tools.findIndex((tool) => tool.key === selectedKey);
   const item = index >= 0 ? tools[index] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
   const [edgeIntent, setEdgeIntent] = useState<"previous" | "next" | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -1740,6 +1748,7 @@ function ToolDetailsBrowser({
   const after = items.slice(itemIndex + 1, nextToolIndex);
   const running = item.status === "in_progress" || item.status === "pending";
   const ctx: ToolCtx = {
+    provider,
     toolName: item.toolName,
     kind: item.toolKind,
     title: item.title,
@@ -1748,6 +1757,21 @@ function ToolDetailsBrowser({
       : {},
     content: item.content,
     running,
+  };
+  const heading = toolHeading({
+    provider,
+    toolName: item.toolName,
+    kind: item.toolKind,
+    title: item.title,
+    rawInput: item.rawInput,
+  });
+
+  const copyTool = (): void => {
+    void copyText(toolCopyText(item)).then((copied) => {
+      if (!copied) return;
+      setCopiedKey(item.key);
+      globalThis.setTimeout(() => setCopiedKey((key) => key === item.key ? null : key), 1400);
+    });
   };
 
   const navigation = (
@@ -1883,7 +1907,7 @@ function ToolDetailsBrowser({
       <Box ref={bodyRef}>
         <Stack spacing={1.25}>
             <ToolTranscriptContext items={before} position="before" />
-            <Stack ref={currentRef} direction="row" spacing={1} alignItems="flex-start">
+            <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
               </Box>
@@ -1897,8 +1921,19 @@ function ToolDetailsBrowser({
                     : "var(--cowboy-reading-font, inherit)",
                 }}
               >
-                {item.title}
+                {heading}
               </Typography>
+              <Tooltip title={copiedKey === item.key ? "Copied" : "Copy tool details"}>
+                <IconButton
+                  aria-label={copiedKey === item.key ? "Tool details copied" : "Copy tool details"}
+                  onClick={copyTool}
+                  sx={{ width: 44, height: 44, flexShrink: 0 }}
+                >
+                  {copiedKey === item.key
+                    ? <CheckRounded color="success" fontSize="small" />
+                    : <ContentCopyRounded fontSize="small" />}
+                </IconButton>
+              </Tooltip>
               <Chip
                 size="small"
                 color={toolColor(item.status)}
@@ -1908,34 +1943,40 @@ function ToolDetailsBrowser({
               />
             </Stack>
             <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-              {
-                /* Formatted ⇄ Raw toggle (top-right) — friendly view by default, the
-              verbatim JSON one tap away for when the structured render hides a
-              detail. */
-              }
-              <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.5 }}>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
+                <Typography variant="caption" color="text.disabled">
+                  {toolVariantLabel({
+                    provider,
+                    toolName: item.toolName,
+                    kind: item.toolKind,
+                    title: item.title,
+                    rawInput: item.rawInput,
+                  })}
+                </Typography>
                 <Box
-                  role="button"
-                  tabIndex={0}
-                  onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: !raw }))}
-                  onKeyDown={(e): void => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setRawByKey((state) => ({ ...state, [item.key]: !raw }));
-                    }
-                  }}
-                  sx={{
-                    cursor: "pointer",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: raw ? "primary.main" : "text.disabled",
-                    fontFamily: "ui-monospace, monospace",
-                    userSelect: "none",
-                    px: 0.5,
-                    "&:hover": { color: "primary.main" },
-                  }}
+                  role="group"
+                  aria-label="Tool detail view"
+                  sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
                 >
-                  {raw ? "↩ Formatted" : "{ } Raw"}
+                  {[false, true].map((isRaw) => (
+                    <ButtonBase
+                      key={String(isRaw)}
+                      aria-pressed={raw === isRaw}
+                      onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
+                      sx={{
+                        minHeight: 32,
+                        px: 1,
+                        borderRadius: 1,
+                        fontSize: 11,
+                        fontWeight: raw === isRaw ? 700 : 500,
+                        color: raw === isRaw ? "text.primary" : "text.disabled",
+                        bgcolor: raw === isRaw ? "background.paper" : "transparent",
+                        boxShadow: raw === isRaw ? 1 : 0,
+                      }}
+                    >
+                      {isRaw ? "Raw" : "Formatted"}
+                    </ButtonBase>
+                  ))}
                 </Box>
               </Stack>
               {detailReadyKey !== item.key
@@ -1973,7 +2014,11 @@ function ToolDetailsBrowser({
                     )}
                   </>
                 )
-                : <ToolBody ctx={ctx} />}
+                : (
+                  <Box sx={{ "& .cowboy-copy-btn": { display: "none" } }}>
+                    <ToolBody ctx={ctx} />
+                  </Box>
+                )}
             </Box>
             <ToolTranscriptContext items={after} position="after" />
             <Box ref={anchorSpacerRef} aria-hidden />
@@ -3205,6 +3250,7 @@ export function Transcript({
         tools={tools}
         selectedKey={selectedToolKey}
         desktop={desktopNavigation}
+        provider={provider}
         onSelect={setSelectedToolKey}
         onClose={closeTool}
         onLocate={locateTool}
