@@ -39,17 +39,33 @@ func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 4 {
-		t.Fatalf("expected root, two launchers, and leaf source, got %#v", display.Frames)
+	if len(display.Frames) != 3 {
+		t.Fatalf("expected two launcher skeletons and leaf source, got %#v", display.Frames)
 	}
-	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host sh -c" {
+	if display.Frames[0].Launcher != "nix develop -c bash -lc" || display.Frames[1].Launcher != "ssh host sh -c" {
 		t.Fatalf("unexpected launchers %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[0].Text, "'…'") {
-		t.Fatalf("outer script must retain a compact payload placeholder: %#v", display.Frames)
+	if strings.Contains(display.Frames[0].Text, "…") || !strings.Contains(display.Frames[0].Text, "nix develop -c bash -lc") {
+		t.Fatalf("outer script must use its execution skeleton without a textual placeholder: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[3].Text, "printf ok") || !strings.Contains(display.Summary, "ssh host sh -c") {
+	if !strings.Contains(display.Frames[2].Text, "printf ok") || !strings.Contains(display.Summary, "ssh host sh -c") {
 		t.Fatalf("deepest source and compact summary missing: %#v", display)
+	}
+}
+
+func TestWholeFileWrapperUsesTheSameParentFrameShape(t *testing.T) {
+	display, err := formatShellDisplay("nix develop -c bash -c 'cd web && deno task test'", 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 || strings.TrimSpace(display.Frames[0].Text) != "nix develop -c bash -c" || display.Frames[0].Launcher == "" {
+		t.Fatalf("whole-file wrapper should be a parent skeleton followed by its payload: %#v", display.Frames)
+	}
+	if strings.Contains(display.Frames[1].Text, "nix develop") {
+		t.Fatalf("child frame must not repeat its launcher: %#v", display.Frames)
+	}
+	if !strings.Contains(display.FlatText, "nix develop") || !strings.Contains(display.FlatText, "deno task test") {
+		t.Fatalf("ordinary readable mode must retain the complete command: %q", display.FlatText)
 	}
 }
 

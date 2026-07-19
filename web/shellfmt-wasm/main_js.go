@@ -24,7 +24,7 @@ func mapResult(display shellDisplay, err error) map[string]any {
 		frames[index] = map[string]any{"launcher": frame.Launcher, "text": frame.Text}
 	}
 	result := map[string]any{
-		"text": display.Text, "context": display.Context,
+		"text": display.Text, "flatText": display.FlatText, "context": display.Context,
 		"frames": frames, "summary": display.Summary,
 	}
 	if err != nil {

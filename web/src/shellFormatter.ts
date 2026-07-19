@@ -1,6 +1,7 @@
 interface ShellFormatResult {
   ok: boolean;
   text: string;
+  flatText?: string;
   context: string;
   frames?: ShellFrame[];
   summary?: string;
@@ -22,6 +23,7 @@ declare global {
 let runtimePromise: Promise<(source: string, columns: number) => ShellFormatResult> | undefined;
 export interface ShellDisplay {
   text: string;
+  flatText: string;
   context: string;
   frames: ShellFrame[];
   summary: string;
@@ -98,6 +100,7 @@ export function formatShellForDisplay(source: string, columns = 80): Promise<She
       return result.ok && result.text.trim()
         ? {
           text: result.text.trimEnd(),
+          flatText: (result.flatText ?? result.text).trimEnd(),
           context: result.context,
           frames: result.frames?.map((frame) => ({ ...frame, text: frame.text.trimEnd() })) ?? [
             { launcher: result.context, text: result.text.trimEnd() },

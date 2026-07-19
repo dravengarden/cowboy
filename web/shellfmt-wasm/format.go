@@ -11,10 +11,11 @@ import (
 )
 
 type shellDisplay struct {
-	Text    string
-	Context string
-	Frames  []shellFrame
-	Summary string
+	Text     string
+	FlatText string
+	Context  string
+	Frames   []shellFrame
+	Summary  string
 }
 
 type shellFrame struct {
@@ -27,11 +28,15 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 	if err != nil {
 		return shellDisplay{}, err
 	}
+	flatText, err := formatParsedFile(file, columns)
+	if err != nil {
+		return shellDisplay{}, err
+	}
 	frames, err := formatShellFrames(source, file, columns, 0)
 	if err != nil {
 		return shellDisplay{}, err
 	}
-	display := shellDisplay{Frames: frames}
+	display := shellDisplay{FlatText: flatText, Frames: frames}
 	if len(frames) > 0 {
 		display.Text = frames[len(frames)-1].Text
 		for _, frame := range frames {
@@ -47,13 +52,14 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 const maxShellFrameDepth = 6
 
 // formatShellFrames projects nested shell payloads as independently parsed
-// source frames. The parent retains its execution skeleton with a literal
-// ellipsis where the child script was, while the child gets Bash highlighting
-// instead of being painted as one giant quoted string.
+// source frames. The parent retains its execution skeleton without inventing a
+// textual placeholder; the UI's colored nesting rail is the payload slot. Each
+// launcher therefore appears once, in its parent frame, while the child gets
+// Bash highlighting instead of being painted as one giant quoted string.
 func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
 		if nested, ok := firstNestedShell(source, file); ok {
-			outer := source[:nested.start] + "'…'" + source[nested.end:]
+			outer := source[:nested.start] + source[nested.end:]
 			outerFile, err := parseShell(outer)
 			if err == nil {
 				outerText, err := formatParsedFile(outerFile, columns)
@@ -62,11 +68,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]
 					if err == nil {
 						children, err := formatShellFrames(nested.payload, innerFile, columns, depth+1)
 						if err == nil {
-							if nested.wholeFile {
-								return append([]shellFrame{{Launcher: nested.launcher}}, children...), nil
-							}
-							frames := []shellFrame{{Text: outerText}, {Launcher: nested.launcher}}
-							return append(frames, children...), nil
+							return append([]shellFrame{{Launcher: nested.launcher, Text: outerText}}, children...), nil
 						}
 					}
 				}
@@ -81,11 +83,10 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int) ([]
 }
 
 type nestedShell struct {
-	start     int
-	end       int
-	launcher  string
-	payload   string
-	wholeFile bool
+	start    int
+	end      int
+	launcher string
+	payload  string
 }
 
 func firstNestedShell(source string, file *syntax.File) (found nestedShell, ok bool) {
@@ -129,11 +130,10 @@ func firstNestedShell(source string, file *syntax.File) (found nestedShell, ok b
 			// spending the phone width on a store hash.
 			launcherArgs[index] = filepath.Base(launcherArgs[index])
 			found = nestedShell{
-				start:     int(payload.Pos().Offset()),
-				end:       int(payload.End().Offset()),
-				launcher:  strings.Join(launcherArgs, " "),
-				payload:   payloadValue,
-				wholeFile: len(file.Stmts) == 1 && len(file.Stmts[0].Redirs) == 0 && file.Stmts[0].Cmd == call,
+				start:    int(payload.Pos().Offset()),
+				end:      int(payload.End().Offset()),
+				launcher: strings.Join(launcherArgs, " "),
+				payload:  payloadValue,
 			}
 			ok = true
 			return false

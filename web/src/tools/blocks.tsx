@@ -209,7 +209,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   const phone = useMediaQuery("(max-width:600px)");
   const theme = useTheme();
   const [readable, setReadable] = useState<Awaited<ReturnType<typeof formatShellForDisplay>> | undefined>(undefined);
-  const [mode, setMode] = useState<"readable" | "source">("source");
+  const [mode, setMode] = useState<"readable" | "nested" | "source">("source");
 
   useEffect(() => {
     let active = true;
@@ -218,7 +218,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
     void formatShellForDisplay(command, phone ? 46 : 88).then((formatted) => {
       if (!active) return;
       setReadable(formatted);
-      if (formatted) setMode("readable");
+      if (formatted) setMode(formatted.frames.length > 1 ? "nested" : "readable");
     });
     return () => {
       active = false;
@@ -226,6 +226,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   }, [command, phone]);
 
   const enhanced = readable != null;
+  const nested = !!readable && readable.frames.length > 1;
   return (
     <Box>
       {(readable === undefined || enhanced) && (
@@ -239,6 +240,15 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             >
               {readable === undefined ? <CircularProgress size={13} /> : "Readable"}
             </ButtonBase>
+            {nested && (
+              <ButtonBase
+                aria-pressed={mode === "nested"}
+                onClick={(): void => setMode("nested")}
+                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: mode === "nested" ? "text.primary" : "text.disabled", bgcolor: mode === "nested" ? "background.paper" : "transparent", boxShadow: mode === "nested" ? 1 : 0 }}
+              >
+                Nested
+              </ButtonBase>
+            )}
             <ButtonBase
               aria-pressed={mode === "source"}
               onClick={(): void => setMode("source")}
@@ -249,7 +259,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           </Box>
         </Stack>
       )}
-      {mode === "readable" && readable
+      {mode === "nested" && readable
         ? (
           <Stack
             data-shell-frame-count={readable.frames.length}
@@ -270,14 +280,25 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                   ml: index === 0 ? 0 : 1.25 + Math.min(index - 1, 2) * 0.75,
                   pl: index === 0 ? 0 : 1.125,
                   ...(index > 0 && {
-                    mt: frame.launcher ? 0.375 : 0,
+                    mt: 0.25,
                     "&::before": {
                       content: '""',
                       position: "absolute",
                       left: 0,
-                      top: frame.launcher ? 12 : 8,
+                      top: 8,
                       bottom: 8,
                       width: 2,
+                      borderRadius: 999,
+                      bgcolor: "primary.main",
+                      opacity: 0.58,
+                    },
+                    "&::after": {
+                      content: '""',
+                      position: "absolute",
+                      left: 0,
+                      top: 8,
+                      width: 10,
+                      height: 2,
                       borderRadius: 999,
                       bgcolor: "primary.main",
                       opacity: 0.58,
@@ -285,47 +306,6 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                   }),
                 }}
               >
-                {frame.launcher && (
-                  <Typography
-                    component="div"
-                    variant="caption"
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      minWidth: 0,
-                      pr: 1.5,
-                      pb: 0.25,
-                      color: "primary.light",
-                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      fontWeight: 600,
-                      letterSpacing: 0,
-                      opacity: index > 0 ? 0.9 : 0.82,
-                      ...(index === 0
-                        ? { px: 1.5 }
-                        : {
-                          "&::before": {
-                            content: '""',
-                            flex: "0 0 auto",
-                            alignSelf: "flex-start",
-                            width: 9,
-                            height: 9,
-                            mt: "0.3em",
-                            mr: 0.75,
-                            ml: -1.125,
-                            borderLeft: "2px solid",
-                            borderBottom: "2px solid",
-                            borderColor: "primary.main",
-                            borderBottomLeftRadius: 4,
-                            opacity: 0.72,
-                          },
-                        }),
-                    }}
-                  >
-                    <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {frame.launcher}
-                    </Box>
-                  </Typography>
-                )}
                 {frame.text && (
                   <CodeView
                     code={phone ? addShellPathBreaks(frame.text) : frame.text}
@@ -340,6 +320,19 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
               </Box>
             ))}
           </Stack>
+        )
+        : mode === "readable" && readable
+        ? (
+          <CodeView
+            key={mode}
+            code={phone ? addShellPathBreaks(readable.flatText) : readable.flatText}
+            lang="bash"
+            maxHeight={touch ? 260 : 180}
+            touchWrap
+            tokenSafeWrap
+            wrapControl={false}
+            hideCopy
+          />
         )
         : (
           <CodeView
