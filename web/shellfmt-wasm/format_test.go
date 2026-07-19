@@ -39,19 +39,19 @@ func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 3 {
-		t.Fatalf("expected two launcher skeletons and leaf source, got %#v", display.Frames)
+	if len(display.Frames) != 4 {
+		t.Fatalf("expected local bash, ssh transport, remote sh, and leaf source, got %#v", display.Frames)
 	}
-	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host sh -c" {
+	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host" || display.Frames[3].Launcher != "sh -c" {
 		t.Fatalf("unexpected launchers %#v", display.Frames)
 	}
-	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 {
+	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 || display.Frames[3].Depth != 3 {
 		t.Fatalf("expected a real parent/child depth chain: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[0].Text, "…") || !strings.Contains(display.Frames[0].Text, "nix develop -c bash -lc") {
 		t.Fatalf("outer script must use its execution skeleton without a textual placeholder: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[2].Text, "printf ok") || !strings.Contains(display.Summary, "ssh host sh -c") {
+	if !strings.Contains(display.Frames[3].Text, "printf") || !strings.Contains(display.Summary, "ssh host") {
 		t.Fatalf("deepest source and compact summary missing: %#v", display)
 	}
 }
@@ -111,6 +111,27 @@ func TestNestedMarkersRemainUniqueAcrossDepths(t *testing.T) {
 	}
 	if !strings.Contains(display.Frames[0].Text, "🟣1") || !strings.Contains(display.Frames[1].Text, "🔵2") {
 		t.Fatalf("each parent must contain its direct child's matching reference: %#v", display.Frames)
+	}
+}
+
+func TestProjectsQuotedSSHRemoteScript(t *testing.T) {
+	source := `ssh -o BatchMode=yes macbook-air 'bash -lc '"'"'printf ok | tail -1; test -f "/tmp/a b" && cat "/tmp/a b" || true'"'"''`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 3 {
+		t.Fatalf("expected ssh transport, remote bash, and decoded script frames: %#v", display.Frames)
+	}
+	if display.Frames[1].Launcher != "ssh -o BatchMode=yes macbook-air" || display.Frames[2].Launcher != "bash -lc" {
+		t.Fatalf("unexpected ssh nesting launchers: %#v", display.Frames)
+	}
+	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 ||
+		display.Frames[1].Marker == display.Frames[2].Marker {
+		t.Fatalf("ssh and its remote shell need distinct nested references: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[2].Text, `test -f "/tmp/a b"`) {
+		t.Fatalf("decoded remote script was not preserved: %#v", display.Frames)
 	}
 }
 

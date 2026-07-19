@@ -139,6 +139,16 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 		if !isCall || len(call.Args) < 3 {
 			return true
 		}
+		// OpenSSH sends every argument after the destination to a remote shell.
+		// Locally that script is only a Word (often assembled with the standard
+		// `'”'”'` quote bridge), so it has no nested CallExpr until decoded.
+		// Project the complete remote argv as one payload, then feed it back into
+		// this same parser recursively. An explicit remote `bash -c` therefore
+		// becomes another ordinary nested frame instead of a special UI case.
+		if remote, ok := sshRemoteShell(source, call); ok {
+			found = append(found, remote)
+			return false
+		}
 		for index := 0; index+2 < len(call.Args); index++ {
 			shellWord, shellStatic := staticWord(call.Args[index])
 			if !shellStatic {
@@ -182,6 +192,77 @@ func nestedShells(source string, file *syntax.File) []nestedShell {
 	})
 	sort.Slice(found, func(i, j int) bool { return found[i].start < found[j].start })
 	return found
+}
+
+var sshOptionsWithValue = map[string]struct{}{
+	"-B": {}, "-b": {}, "-c": {}, "-D": {}, "-E": {}, "-e": {},
+	"-F": {}, "-I": {}, "-i": {}, "-J": {}, "-L": {}, "-l": {},
+	"-m": {}, "-O": {}, "-o": {}, "-P": {}, "-p": {}, "-Q": {},
+	"-R": {}, "-S": {}, "-W": {}, "-w": {},
+}
+
+func sshRemoteShell(source string, call *syntax.CallExpr) (nestedShell, bool) {
+	command, static := staticWord(call.Args[0])
+	if !static || filepath.Base(command) != "ssh" {
+		return nestedShell{}, false
+	}
+	destination := -1
+	for index := 1; index < len(call.Args); index++ {
+		value, ok := staticWord(call.Args[index])
+		if !ok {
+			return nestedShell{}, false
+		}
+		if value == "--" {
+			if index+1 >= len(call.Args) {
+				return nestedShell{}, false
+			}
+			destination = index + 1
+			break
+		}
+		if strings.HasPrefix(value, "-") && value != "-" {
+			option := value
+			if len(option) > 2 {
+				option = option[:2]
+			}
+			if _, consumesValue := sshOptionsWithValue[option]; consumesValue && len(value) == 2 {
+				index++
+				if index >= len(call.Args) {
+					return nestedShell{}, false
+				}
+			}
+			continue
+		}
+		destination = index
+		break
+	}
+	remoteStart := destination + 1
+	if destination < 0 || remoteStart >= len(call.Args) {
+		return nestedShell{}, false
+	}
+	remoteArgs := make([]string, 0, len(call.Args)-remoteStart)
+	for _, word := range call.Args[remoteStart:] {
+		value, ok := staticWord(word)
+		if !ok {
+			return nestedShell{}, false
+		}
+		remoteArgs = append(remoteArgs, value)
+	}
+	payload := strings.Join(remoteArgs, " ")
+	if _, err := parseShell(payload); err != nil {
+		return nestedShell{}, false
+	}
+	launcherArgs := make([]string, 0, remoteStart)
+	for _, word := range call.Args[:remoteStart] {
+		value, _ := staticWord(word)
+		launcherArgs = append(launcherArgs, value)
+	}
+	launcherArgs[0] = filepath.Base(launcherArgs[0])
+	return nestedShell{
+		start:    int(call.Args[remoteStart].Pos().Offset()),
+		end:      int(call.Args[len(call.Args)-1].End().Offset()),
+		launcher: strings.Join(launcherArgs, " "),
+		payload:  payload,
+	}, true
 }
 
 func summarizeFrames(frames []shellFrame) string {
