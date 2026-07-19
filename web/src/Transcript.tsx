@@ -56,15 +56,13 @@ import {
   Terminal,
   UnfoldLess,
   WarningAmberRounded,
-  ContentCopyRounded,
-  CheckRounded,
 } from "@mui/icons-material";
 import { CLAUDE_VERBS } from "./claudeVerbs";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
+import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { copyText } from "./clipboard";
-import { toolCopyText, toolHeading, toolVariantLabel } from "./tools/presentation";
+import { toolHeading, toolVariantLabel } from "./tools/presentation";
 import {
   COMPACTING_NOTICE,
   type ContentChunk,
@@ -1666,7 +1664,6 @@ function ToolDetailsBrowser({
   const index = selectedKey === null ? -1 : tools.findIndex((tool) => tool.key === selectedKey);
   const item = index >= 0 ? tools[index] : undefined;
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [detailReadyKey, setDetailReadyKey] = useState<string | null>(null);
   const [edgeIntent, setEdgeIntent] = useState<"previous" | "next" | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -1875,14 +1872,6 @@ function ToolDetailsBrowser({
     rawInput: item.rawInput,
   });
 
-  const copyTool = (): void => {
-    void copyText(toolCopyText(item)).then((copied) => {
-      if (!copied) return;
-      setCopiedKey(item.key);
-      globalThis.setTimeout(() => setCopiedKey((key) => key === item.key ? null : key), 1400);
-    });
-  };
-
   const navigation = (
     <Box
       sx={{
@@ -2055,19 +2044,6 @@ function ToolDetailsBrowser({
               >
                 {heading}
               </Typography>
-              {item.toolKind !== "execute" && (
-                <Tooltip title={copiedKey === item.key ? "Copied" : "Copy tool details"}>
-                  <IconButton
-                    aria-label={copiedKey === item.key ? "Tool details copied" : "Copy tool details"}
-                    onClick={copyTool}
-                    sx={{ width: 44, height: 44, flexShrink: 0 }}
-                  >
-                    {copiedKey === item.key
-                      ? <CheckRounded color="success" fontSize="small" />
-                      : <ContentCopyRounded fontSize="small" />}
-                  </IconButton>
-                </Tooltip>
-              )}
               <Chip
                 size="small"
                 color={toolColor(item.status)}
@@ -2087,31 +2063,33 @@ function ToolDetailsBrowser({
                     rawInput: item.rawInput,
                   })}
                 </Typography>
-                <Box
-                  role="group"
-                  aria-label="Tool detail view"
-                  sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
-                >
-                  {[false, true].map((isRaw) => (
-                    <ButtonBase
-                      key={String(isRaw)}
-                      aria-pressed={raw === isRaw}
-                      onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
-                      sx={{
-                        minHeight: 32,
-                        px: 1,
-                        borderRadius: 1,
-                        fontSize: 11,
-                        fontWeight: raw === isRaw ? 700 : 500,
-                        color: raw === isRaw ? "text.primary" : "text.disabled",
-                        bgcolor: raw === isRaw ? "background.paper" : "transparent",
-                        boxShadow: raw === isRaw ? 1 : 0,
-                      }}
-                    >
-                      {isRaw ? "Raw" : "Formatted"}
-                    </ButtonBase>
-                  ))}
-                </Box>
+                <Stack direction="row" alignItems="center" spacing={0.25}>
+                  <Box
+                    role="group"
+                    aria-label="Tool detail view"
+                    sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
+                  >
+                    {[false, true].map((isRaw) => (
+                      <ButtonBase
+                        key={String(isRaw)}
+                        aria-pressed={raw === isRaw}
+                        onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
+                        sx={{
+                          minHeight: 32,
+                          px: 1,
+                          borderRadius: 1,
+                          fontSize: 11,
+                          fontWeight: raw === isRaw ? 700 : 500,
+                          color: raw === isRaw ? "text.primary" : "text.disabled",
+                          bgcolor: raw === isRaw ? "background.paper" : "transparent",
+                          boxShadow: raw === isRaw ? 1 : 0,
+                        }}
+                      >
+                        {isRaw ? "Raw" : "Formatted"}
+                      </ButtonBase>
+                    ))}
+                  </Box>
+                </Stack>
               </Stack>
               {detailReadyKey !== item.key
                 ? (
@@ -2123,33 +2101,31 @@ function ToolDetailsBrowser({
                 )
                 : raw
                 ? (
-                  <>
+                  <Stack spacing={1}>
                     {item.rawInput !== undefined && (
-                      <>
-                        <Typography variant="caption" color="text.secondary">
-                          Input
-                        </Typography>
-                        <Markdown
-                          text={"```json\n" +
-                            JSON.stringify(item.rawInput, null, 2) + "\n```"}
+                      <Labeled label="Input">
+                        <CodeView
+                          code={JSON.stringify(item.rawInput, null, 2) ?? String(item.rawInput)}
+                          lang="json"
+                          maxHeight={360}
+                          touchWrap
                         />
-                      </>
+                      </Labeled>
                     )}
                     {item.content !== undefined && (
-                      <>
-                        <Typography variant="caption" color="text.secondary">
-                          Output
-                        </Typography>
-                        <Markdown
-                          text={"```json\n" +
-                            JSON.stringify(item.content, null, 2) + "\n```"}
+                      <Labeled label="Output">
+                        <CodeView
+                          code={JSON.stringify(item.content, null, 2) ?? String(item.content)}
+                          lang="json"
+                          maxHeight={360}
+                          touchWrap
                         />
-                      </>
+                      </Labeled>
                     )}
-                  </>
+                  </Stack>
                 )
                 : (
-                  <Box sx={{ "& .cowboy-copy-btn": { display: "none" } }}>
+                  <Box>
                     <ToolBody ctx={ctx} />
                   </Box>
                 )}

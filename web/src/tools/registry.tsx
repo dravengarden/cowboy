@@ -83,7 +83,7 @@ const executeTool: Renderer = ({ rawInput, content, running }) => {
       )}
       {cmd && (
         <Labeled label="Command" action={<CopyTextButton text={cmd} label="Command" />}>
-          <CodeView code={cmd} lang="bash" maxHeight={180} touchWrap />
+          <CodeView code={cmd} lang="bash" maxHeight={180} touchWrap hideCopy />
         </Labeled>
       )}
       <Labeled label="Output">
@@ -143,6 +143,38 @@ const genericTool: Renderer = ({ rawInput, content, running }) => {
   );
 };
 
+const searchTool: Renderer = ({ rawInput, content, running }) => {
+  const action = rawInput["action"] && typeof rawInput["action"] === "object"
+    ? rawInput["action"] as Record<string, unknown>
+    : {};
+  const query = typeof rawInput["query"] === "string"
+    ? rawInput["query"]
+    : typeof action["query"] === "string"
+    ? action["query"]
+    : "";
+  const details = Object.fromEntries(
+    Object.entries(rawInput).filter(([key]) => !["type", "id", "query", "action"].includes(key)),
+  );
+  const hasResult = Boolean(textOfContent(content) || hasDiff(content));
+  return (
+    <Stack spacing={1}>
+      {query && (
+        <Labeled label="Query" action={<CopyTextButton text={query} label="Query" />}>
+          <CodeView code={query} lang="text" maxHeight={160} touchWrap hideCopy />
+        </Labeled>
+      )}
+      {Object.keys(details).length > 0 && (
+        <Labeled label="Options"><KeyValues data={details} /></Labeled>
+      )}
+      {hasResult
+        ? <Labeled label="Result"><OutputBlocks content={content} /></Labeled>
+        : running
+        ? <RunningHint />
+        : null}
+    </Stack>
+  );
+};
+
 interface McpWidget {
   primary: string;
   label: string;
@@ -179,14 +211,14 @@ const mcpTool: Renderer = (ctx) => {
   return (
     <Stack spacing={1}>
       {primary && widget && (
-        <Labeled label={widget.label}>
-          {widget.language
-            ? <CodeView code={primary} lang={widget.language} maxHeight={260} />
-            : (
-              <Typography sx={{ overflowWrap: "anywhere", fontFamily: widget.primary === "url" ? "ui-monospace, monospace" : undefined }}>
-                {primary}
-              </Typography>
-            )}
+        <Labeled label={widget.label} action={<CopyTextButton text={primary} label={widget.label} />}>
+          <CodeView
+            code={primary}
+            lang={widget.language ?? (widget.primary === "query" ? "text" : "uri")}
+            maxHeight={260}
+            touchWrap={widget.primary !== "function"}
+            hideCopy
+          />
         </Labeled>
       )}
       {Object.keys(args).length > 0 && (
@@ -211,6 +243,7 @@ const BY_KIND: Record<string, Renderer> = {
   execute: executeTool,
   edit: editTool,
   read: readTool,
+  search: searchTool,
   // search / fetch / think / delete / move / other → the generic args+result.
 };
 

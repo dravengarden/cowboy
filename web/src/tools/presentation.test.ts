@@ -56,6 +56,16 @@ Deno.test("tool headings adapt Codex and Claude execute variants", () => {
   assertEquals(toolTypeName("claude-code", "Bash", "execute"), "Bash");
 });
 
+Deno.test("search headings do not repeat the full query", () => {
+  assertEquals(toolHeading({
+    provider: "codex",
+    toolName: "",
+    kind: "search",
+    title: "Web search: a very long query",
+    rawInput: { query: "a very long query" },
+  }), "Web search");
+});
+
 Deno.test("tool copy uses command input and normalized output", () => {
   assertEquals(toolCopyText({
     title: "fallback",

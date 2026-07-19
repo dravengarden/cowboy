@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useState } from "react";
-import { Box, Chip, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, ButtonBase, Chip, IconButton, Stack, Tooltip, Typography, useMediaQuery } from "@mui/material";
 import { CheckRounded, ContentCopyRounded } from "@mui/icons-material";
 import { Markdown } from "../Markdown";
 import { copyText } from "../clipboard";
@@ -75,21 +75,57 @@ export function CodeView({
   maxHeight,
   centerCopy = false,
   touchWrap = false,
+  wrapControl = true,
+  hideCopy = false,
 }: {
   code: string;
   lang?: string;
   maxHeight?: number;
   centerCopy?: boolean;
   touchWrap?: boolean;
+  wrapControl?: boolean;
+  hideCopy?: boolean;
 }): React.JSX.Element {
+  const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
+  const [wrapped, setWrapped] = useState(touchWrap && coarse);
   return (
-    <Collapsible maxHeight={maxHeight ?? 280}>
-      <Markdown
-        text={"```" + (lang ?? "") + "\n" + code + "\n```"}
-        centerCopy={centerCopy}
-        touchWrap={touchWrap}
-      />
-    </Collapsible>
+    <Box
+      sx={{
+        ...(wrapped && {
+          "& pre, & code": {
+            whiteSpace: "pre-wrap !important",
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+            overflowX: "hidden !important",
+          },
+        }),
+        ...(hideCopy && { "& .cowboy-copy-btn": { display: "none" } }),
+      }}
+    >
+      {wrapControl && (
+        <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
+          <Box role="group" aria-label="Code line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+            {([false, true] as const).map((value) => (
+              <ButtonBase
+                key={String(value)}
+                aria-pressed={wrapped === value}
+                onClick={(): void => setWrapped(value)}
+                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: 11, color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+              >
+                {value ? "Wrap" : "Scroll"}
+              </ButtonBase>
+            ))}
+          </Box>
+        </Stack>
+      )}
+      <Collapsible maxHeight={maxHeight ?? 280}>
+        <Markdown
+          text={"```" + (lang ?? "") + "\n" + code + "\n```"}
+          centerCopy={centerCopy}
+          touchWrap={false}
+        />
+      </Collapsible>
+    </Box>
   );
 }
 
@@ -182,7 +218,8 @@ export function KeyValues({ data }: { data: Record<string, unknown> }): React.JS
   return (
     <Stack spacing={0.5}>
       {entries.map(([k, v]) => {
-        const str = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+        const structured = typeof v !== "string";
+        const str = structured ? JSON.stringify(v, null, 2) ?? String(v) : v;
         const multiline = str.includes("\n") || str.length > 80;
         return (
           <Box key={k} sx={multiline ? {} : { display: "flex", gap: 1, alignItems: "baseline", minWidth: 0 }}>
@@ -193,7 +230,9 @@ export function KeyValues({ data }: { data: Record<string, unknown> }): React.JS
               {k}
             </Typography>
             {multiline
-              ? <PreBlock text={str} maxHeight={160} />
+              ? structured
+                ? <CodeView code={str} lang="json" maxHeight={200} touchWrap />
+                : <PreBlock text={str} maxHeight={160} />
               : (
                 <Typography
                   variant="caption"

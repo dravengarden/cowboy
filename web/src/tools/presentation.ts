@@ -72,6 +72,7 @@ export function toolHeading({ provider, toolName, kind, title, rawInput }: {
   const input = rawInput && typeof rawInput === "object" ? rawInput as Record<string, unknown> : {};
   const mcp = mcpIdentity(toolName, rawInput, title);
   if (mcp) return humanize(mcp.tool);
+  if (kind === "search") return "Web search";
   if (kind === "execute") {
     if (provider === "claude-code" && typeof input.description === "string" && input.description.trim()) {
       return input.description.trim();
