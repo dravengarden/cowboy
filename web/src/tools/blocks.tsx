@@ -411,10 +411,21 @@ export function OutputBlocks({
     }
     const text = b.type === "content" ? (b as TextBlock).content?.text ?? "" : (b as { text?: string }).text ?? "";
     if (text) {
-      const source = lang && !text.trimStart().startsWith("```");
+      // Markdown files are documents, not source-code samples. Feed them to
+      // the existing GFM renderer directly; Raw mode remains the exact-source
+      // escape hatch in Tool details. Other known file languages stay fenced
+      // for syntax highlighting.
+      const markdownDocument = lang === "markdown";
+      const source = !markdownDocument && lang && !text.trimStart().startsWith("```");
       rendered.push(
         <Collapsible key={i} maxHeight={300}>
-          <Markdown text={source ? "```" + lang + "\n" + text + "\n```" : withFenceLang(text, lang)} />
+          <Markdown
+            text={markdownDocument
+              ? text
+              : source
+              ? "```" + lang + "\n" + text + "\n```"
+              : withFenceLang(text, lang)}
+          />
         </Collapsible>,
       );
     }

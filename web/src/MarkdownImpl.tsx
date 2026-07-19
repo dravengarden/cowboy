@@ -10,7 +10,16 @@
 // Heavy stuff (Prism, language defs) is dynamic-imported by RSH on first
 // use so the initial page load stays light.
 
-import { type HTMLAttributes, memo, type ReactNode, useCallback, useMemo, useState } from "react";
+import {
+  type HTMLAttributes,
+  memo,
+  type ReactNode,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Box, IconButton, Link, useTheme } from "@mui/material";
 import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -64,6 +73,7 @@ function CodeBlock({
   touchWrap: boolean;
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const onCopy = useCallback(() => {
     void copyText(code).then((ok) => {
       if (!ok) return;
@@ -91,8 +101,18 @@ function CodeBlock({
   const highlightedCode = sourceAwareDiff
     ? diffLines.map((line) => line.slice(1)).join("\n")
     : code;
+  // Tool details reuses this component while stepping between transcript
+  // entries. A native horizontally scrolled <pre> otherwise keeps its old
+  // scrollLeft and makes the next file/diff appear clipped from the left.
+  // Reset only when the underlying block changes; ordinary reading scrolls are
+  // left untouched.
+  useLayoutEffect(() => {
+    const pre = rootRef.current?.querySelector("pre");
+    if (pre) pre.scrollLeft = 0;
+  }, [highlightedCode, syntaxLanguage]);
   return (
     <Box
+      ref={rootRef}
       sx={{
         my: 1,
         maxWidth: "100%",
