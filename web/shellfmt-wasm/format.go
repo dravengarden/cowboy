@@ -56,6 +56,7 @@ func formatShellDisplay(source string, columns int) (shellDisplay, error) {
 
 const maxShellFrameDepth = 6
 const maxShellFrames = 32
+const nestedShellLongLineRunes = 72
 
 var nestedShellMarkers = [...]string{
 	"🔮", "🪐", "🌙", "⭐", "💎", "🧿", "🌀", "✨",
@@ -117,6 +118,15 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				if err != nil || len(children) == 0 {
 					continue
 				}
+				// A nested frame earns its extra visual hierarchy. Keep tiny leaf
+				// payloads such as `true`, `echo ok`, or one short remote probe in
+				// their parent command; extracting those costs more attention than
+				// it saves. Structural shell complexity, multiple source lines, or a
+				// genuinely long command justify a frame. A child which found deeper
+				// frames must also remain so that the execution hierarchy is intact.
+				if len(children) == 1 && !nestedShellNeedsFrame(candidate.payload, innerFile) {
+					continue
+				}
 				children[0].Launcher = candidate.launcher
 				children[0].Marker = marker
 				children[0].Color = color
@@ -153,6 +163,42 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 		return nil, err
 	}
 	return []shellFrame{{Text: text, Depth: depth}}, nil
+}
+
+// nestedShellNeedsFrame measures information density rather than matching
+// command names. The fixed source-width threshold keeps the same command in
+// the same mode on phone, tablet, and desktop; viewport columns only affect
+// line layout after the hierarchy has been chosen.
+func nestedShellNeedsFrame(source string, file *syntax.File) bool {
+	statements := 0
+	compound := false
+	joins := 0
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch node.(type) {
+		case *syntax.Stmt:
+			statements++
+		case *syntax.BinaryCmd:
+			joins++
+		case *syntax.IfClause, *syntax.ForClause, *syntax.WhileClause,
+			*syntax.CaseClause, *syntax.FuncDecl:
+			compound = true
+		}
+		return true
+	})
+	if compound || joins > 0 || statements >= 2 {
+		return true
+	}
+
+	lines := strings.Split(strings.TrimSpace(source), "\n")
+	if len(lines) >= 2 {
+		return true
+	}
+	for _, line := range lines {
+		if utf8.RuneCountInString(strings.TrimSpace(line)) >= nestedShellLongLineRunes {
+			return true
+		}
+	}
+	return false
 }
 
 type nestedShell struct {

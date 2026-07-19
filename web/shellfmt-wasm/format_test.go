@@ -151,19 +151,19 @@ func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 4 {
-		t.Fatalf("expected local bash, ssh transport, remote sh, and leaf source, got %#v", display.Frames)
+	if len(display.Frames) != 3 {
+		t.Fatalf("expected local bash, ssh transport, and remote script frames, got %#v", display.Frames)
 	}
-	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host" || display.Frames[3].Launcher != "sh -c" {
+	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host" {
 		t.Fatalf("unexpected launchers %#v", display.Frames)
 	}
-	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 || display.Frames[3].Depth != 3 {
+	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 {
 		t.Fatalf("expected a real parent/child depth chain: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[0].Text, "…") || !strings.Contains(display.Frames[0].Text, "nix develop -c bash -lc") {
 		t.Fatalf("outer script must use its execution skeleton without a textual placeholder: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[3].Text, "printf") || !strings.Contains(display.Summary, "ssh host") {
+	if !strings.Contains(display.Frames[2].Text, "printf") || !strings.Contains(display.Summary, "ssh host") {
 		t.Fatalf("deepest source and compact summary missing: %#v", display)
 	}
 }
@@ -214,7 +214,7 @@ func TestProjectsEverySiblingNestedShell(t *testing.T) {
 }
 
 func TestNestedMarkersRemainUniqueAcrossDepths(t *testing.T) {
-	display, err := formatShellDisplay(`bash -c 'printf outer; bash -c "printf inner"'`, 54)
+	display, err := formatShellDisplay(`bash -c 'printf outer; bash -c "printf inner; printf detail"'`, 54)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestPreservesLauncherCase(t *testing.T) {
 }
 
 func TestCompactsAbsoluteShellLauncherWithoutChangingSource(t *testing.T) {
-	display, err := formatShellDisplay("/nix/store/hash-bash/bin/bash -lc 'sed -n 1,2p file'", 80)
+	display, err := formatShellDisplay("/nix/store/hash-bash/bin/bash -lc 'sed -n 1,2p file && grep ok file'", 80)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,12 +273,46 @@ func TestCompactsAbsoluteShellLauncherWithoutChangingSource(t *testing.T) {
 }
 
 func TestFindsNestedPayloadWithDynamicTrailingArguments(t *testing.T) {
-	display, err := formatShellDisplay(`nix develop -c env TOKEN="$TOKEN" bash -c 'exec worker "$1"' _ "$root"`, 80)
+	display, err := formatShellDisplay(`nix develop -c env TOKEN="$TOKEN" bash -c 'prepare "$1" && exec worker "$1"' _ "$root"`, 80)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if display.Context != `nix develop -c env TOKEN="$TOKEN" bash -c` || !strings.Contains(display.Text, `exec worker "$1"`) {
 		t.Fatalf("expected nested payload despite dynamic argv, got %#v", display)
+	}
+}
+
+func TestKeepsTrivialNestedPayloadsInline(t *testing.T) {
+	for _, source := range []string{
+		`bash -lc 'true'`,
+		`bash -lc 'echo ok'`,
+		`ssh host 'sudo systemctl reboot'`,
+	} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatalf("%q: %v", source, err)
+		}
+		if len(display.Frames) != 1 {
+			t.Fatalf("trivial payload should stay inline for %q: %#v", source, display.Frames)
+		}
+	}
+}
+
+func TestExtractsNestedPayloadByGeneralComplexity(t *testing.T) {
+	longArgument := strings.Repeat("segment/", 10)
+	for _, source := range []string{
+		`bash -lc 'prepare && verify'`,
+		"bash -lc 'first\nsecond'",
+		`bash -lc 'if ready; then deploy; fi'`,
+		`bash -lc 'cat /` + longArgument + `artifact'`,
+	} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatalf("%q: %v", source, err)
+		}
+		if len(display.Frames) < 2 {
+			t.Fatalf("complex payload should earn a nested frame for %q: %#v", source, display.Frames)
+		}
 	}
 }
 
