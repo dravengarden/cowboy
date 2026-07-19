@@ -1539,44 +1539,104 @@ function ToolTranscriptContext({
   position: "before" | "after";
 }): React.JSX.Element | null {
   const blocks = toolContextBlocks(items);
+  const [open, setOpen] = useState(false);
   if (blocks.length === 0) return null;
+  const label = position === "before" ? "Before this tool" : "After this tool";
+  const preview = blocks
+    .map((block) =>
+      block.text
+        .replace(/```[\s\S]*?```/gu, "Code")
+        .replace(/[*_~`>#]/gu, "")
+        .replaceAll("[", "")
+        .replaceAll("]", "")
+        .replace(/^[-+]\s+/gu, "")
+        .replace(/\s+/gu, " ")
+        .trim()
+    )
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Box
       aria-label={`${position === "before" ? "Previous" : "Following"} transcript context`}
       sx={{
-        borderLeft: 2,
-        borderColor: "divider",
-        pl: 1.25,
-        py: 0.25,
-        color: "text.secondary",
+        border: 1,
+        borderColor: open ? "divider" : "transparent",
+        bgcolor: open ? "action.hover" : "transparent",
+        borderRadius: 1.5,
+        overflow: "hidden",
+        transition: "background-color .18s ease, border-color .18s ease",
       }}
     >
-      <Typography
-        variant="overline"
-        sx={{ display: "block", mb: 0.5, color: "text.disabled", lineHeight: 1.4 }}
+      <ButtonBase
+        aria-expanded={open}
+        onClick={(): void => setOpen((value) => !value)}
+        sx={{
+          width: "100%",
+          minHeight: 48,
+          px: 1.25,
+          py: 0.75,
+          display: "grid",
+          gridTemplateColumns: "1fr auto",
+          columnGap: 1,
+          textAlign: "left",
+          alignItems: "center",
+          borderLeft: 2,
+          borderColor: open ? "primary.main" : "divider",
+        }}
       >
-        {position === "before" ? "Before this tool" : "After this tool"}
-      </Typography>
-      <Stack spacing={1}>
-        {blocks.map((block) => (
-          <Box
-            key={block.key}
-            sx={block.tone === "user"
-              ? {
-                bgcolor: "action.hover",
-                borderRadius: 1.25,
-                px: 1,
-                py: 0.5,
-                color: "text.primary",
-              }
-              : block.tone === "thought"
-              ? { fontSize: "0.88em", color: "text.secondary" }
-              : { color: "text.primary" }}
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            variant="overline"
+            sx={{ display: "block", color: "text.disabled", lineHeight: 1.35 }}
           >
-            <Markdown text={block.text} />
-          </Box>
-        ))}
-      </Stack>
+            {label}
+          </Typography>
+          {!open && (
+            <Typography
+              variant="body2"
+              sx={{
+                mt: 0.25,
+                color: "text.secondary",
+                fontWeight: 600,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {preview}
+            </Typography>
+          )}
+        </Box>
+        <ExpandMore
+          sx={{
+            color: "text.secondary",
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform .2s cubic-bezier(.2,.8,.2,1)",
+          }}
+        />
+      </ButtonBase>
+      {open && (
+        <Stack spacing={1} sx={{ px: 1.25, pb: 1.25, borderLeft: 2, borderColor: "primary.main" }}>
+          {blocks.map((block) => (
+            <Box
+              key={block.key}
+              sx={block.tone === "user"
+                ? {
+                  bgcolor: "action.selected",
+                  borderRadius: 1.25,
+                  px: 1,
+                  py: 0.5,
+                  color: "text.primary",
+                }
+                : block.tone === "thought"
+                ? { fontSize: "0.88em", color: "text.secondary" }
+                : { color: "text.primary" }}
+            >
+              <Markdown text={block.text} />
+            </Box>
+          ))}
+        </Stack>
+      )}
     </Box>
   );
 }
@@ -1613,7 +1673,12 @@ function ToolDetailsBrowser({
   const anchorSpacerRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
   const edgeIntentRef = useRef<"previous" | "next" | null>(null);
-  const edgeGestureRef = useRef<{ y: number; edge: "previous" | "next" | "both" } | null>(null);
+  const edgeGestureRef = useRef<{
+    x: number;
+    y: number;
+    edge: "previous" | "next" | "both";
+  } | null>(null);
+  const pullHintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!item) {
@@ -1662,7 +1727,42 @@ function ToolDetailsBrowser({
   useEffect(() => {
     if (desktop || !item) return undefined;
     const scroller = scrollableAncestor(bodyRef.current);
-    if (!scroller) return undefined;
+    const body = bodyRef.current;
+    if (!scroller || !body) return undefined;
+    const paintPull = (direction: "previous" | "next", distance: number): void => {
+      // iOS-style rubber-band resistance: the surface follows the finger closely
+      // at first, then increasingly resists. The capped compositor-only transform
+      // keeps even a large pull calm and never re-renders the tool body.
+      const offset = Math.min(52, distance * 0.32);
+      body.style.transition = "none";
+      body.style.willChange = "transform";
+      body.style.transform = `translate3d(0, ${String(direction === "previous" ? offset : -offset)}px, 0)`;
+      const hint = pullHintRef.current;
+      if (hint) {
+        const available = direction === "previous" ? index > 0 : index < tools.length - 1;
+        hint.textContent = available
+          ? direction === "previous" ? "Previous tool" : "Next tool"
+          : direction === "previous" ? "Beginning" : "End";
+        hint.style.top = direction === "previous" ? "-22px" : "auto";
+        hint.style.bottom = direction === "next" ? "-22px" : "auto";
+        hint.style.opacity = String(Math.min(1, distance / 72));
+        hint.style.transform = `translate(-50%, ${String(direction === "previous" ? -offset * 0.12 : offset * 0.12)}px)`;
+      }
+    };
+    const settlePull = (): void => {
+      body.style.transition = "transform 260ms cubic-bezier(0.22, 1, 0.36, 1)";
+      body.style.transform = "translate3d(0, 0, 0)";
+      const hint = pullHintRef.current;
+      if (hint) {
+        hint.style.opacity = "0";
+        hint.style.transform = "translate(-50%, 0)";
+      }
+      globalThis.setTimeout(() => {
+        body.style.removeProperty("transition");
+        body.style.removeProperty("transform");
+        body.style.removeProperty("will-change");
+      }, 280);
+    };
     const clearIntent = (): void => {
       edgeGestureRef.current = null;
       edgeIntentRef.current = null;
@@ -1674,11 +1774,11 @@ function ToolDetailsBrowser({
       const atTop = scroller.scrollTop <= 1;
       const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1;
       edgeGestureRef.current = atTop && atBottom
-        ? { y: touch.clientY, edge: "both" }
+        ? { x: touch.clientX, y: touch.clientY, edge: "both" }
         : atTop
-        ? { y: touch.clientY, edge: "previous" }
+        ? { x: touch.clientX, y: touch.clientY, edge: "previous" }
         : atBottom
-        ? { y: touch.clientY, edge: "next" }
+        ? { x: touch.clientX, y: touch.clientY, edge: "next" }
         : null;
       edgeIntentRef.current = null;
       setEdgeIntent(null);
@@ -1688,14 +1788,23 @@ function ToolDetailsBrowser({
       const touch = event.touches[0];
       if (!gesture || !touch) return;
       const delta = touch.clientY - gesture.y;
+      const horizontal = Math.abs(touch.clientX - gesture.x);
+      if (horizontal > Math.abs(delta)) {
+        clearIntent();
+        settlePull();
+        return;
+      }
       const direction = gesture.edge === "both"
         ? delta >= 0 ? "previous" : "next"
         : gesture.edge;
       const distance = direction === "previous"
         ? touch.clientY - gesture.y
         : gesture.y - touch.clientY;
+      if (distance <= 0) return;
+      event.preventDefault();
+      paintPull(direction, distance);
       const available = direction === "previous" ? index > 0 : index < tools.length - 1;
-      const nextIntent = available && distance >= 72 ? direction : null;
+      const nextIntent = available && distance >= 84 ? direction : null;
       if (edgeIntentRef.current === nextIntent) return;
       edgeIntentRef.current = nextIntent;
       setEdgeIntent(nextIntent);
@@ -1703,19 +1812,28 @@ function ToolDetailsBrowser({
     };
     const onTouchEnd = (): void => {
       const intent = edgeIntentRef.current;
+      settlePull();
       clearIntent();
-      if (intent === "previous") select(tools[index - 1]);
-      if (intent === "next") select(tools[index + 1]);
+      // Let the rubber band visibly settle before replacing its content. This
+      // makes the transition read as one native pull action instead of a sudden
+      // page jump at finger-up.
+      if (intent === "previous") globalThis.setTimeout(() => select(tools[index - 1]), 150);
+      if (intent === "next") globalThis.setTimeout(() => select(tools[index + 1]), 150);
+    };
+    const onTouchCancel = (): void => {
+      settlePull();
+      clearIntent();
     };
     scroller.addEventListener("touchstart", onTouchStart, { passive: true });
-    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: false });
     scroller.addEventListener("touchend", onTouchEnd, { passive: true });
-    scroller.addEventListener("touchcancel", clearIntent, { passive: true });
+    scroller.addEventListener("touchcancel", onTouchCancel, { passive: true });
     return () => {
       scroller.removeEventListener("touchstart", onTouchStart);
       scroller.removeEventListener("touchmove", onTouchMove);
       scroller.removeEventListener("touchend", onTouchEnd);
-      scroller.removeEventListener("touchcancel", clearIntent);
+      scroller.removeEventListener("touchcancel", onTouchCancel);
+      settlePull();
     };
   }, [desktop, index, item, tools]);
 
@@ -1904,9 +2022,32 @@ function ToolDetailsBrowser({
       cover={!desktop}
       actions={navigation}
     >
-      <Box ref={bodyRef}>
+      <Box ref={bodyRef} sx={{ position: "relative" }}>
+        <Box
+          ref={pullHintRef}
+          aria-hidden
+          sx={{
+            position: "absolute",
+            left: "50%",
+            top: -22,
+            zIndex: 2,
+            opacity: 0,
+            transform: "translate(-50%, 0)",
+            transition: "opacity .12s linear",
+            px: 1.25,
+            py: 0.5,
+            borderRadius: 99,
+            bgcolor: "background.paper",
+            color: "text.secondary",
+            boxShadow: 2,
+            fontSize: 11,
+            fontWeight: 700,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+          }}
+        />
         <Stack spacing={1.25}>
-            <ToolTranscriptContext items={before} position="before" />
+            <ToolTranscriptContext key={`${item.key}-before`} items={before} position="before" />
             <Stack ref={currentRef} direction="row" spacing={1} alignItems="center">
               <Box sx={{ pt: 0.25, color: "text.secondary" }}>
                 {toolIcon(item.toolKind)}
@@ -2020,7 +2161,7 @@ function ToolDetailsBrowser({
                   </Box>
                 )}
             </Box>
-            <ToolTranscriptContext items={after} position="after" />
+            <ToolTranscriptContext key={`${item.key}-after`} items={after} position="after" />
             <Box ref={anchorSpacerRef} aria-hidden />
           </Stack>
       </Box>
