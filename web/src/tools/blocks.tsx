@@ -149,6 +149,7 @@ export function CodeView({
 /** A shell-aware, display-only view. mvdan/sh is loaded only when this component
  * is opened; parser failure leaves the exact source view untouched. */
 export function ShellCommandView({ command }: { command: string }): React.JSX.Element {
+  const touch = useMediaQuery("(hover:none), (pointer:coarse)");
   const [readable, setReadable] = useState<{ text: string; context: string } | null | undefined>(undefined);
   const [mode, setMode] = useState<"readable" | "source">("source");
 
@@ -199,7 +200,10 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
         key={mode}
         code={mode === "readable" && readable ? readable.text : command}
         lang="bash"
-        maxHeight={180}
+        // A phone sheet has enough vertical room for roughly five more shell
+        // lines before disclosure is useful. Keep Desktop compact, where Tool
+        // details may share the screen with other work.
+        maxHeight={touch ? 260 : 180}
         touchWrap={mode === "readable"}
         tokenSafeWrap={mode === "readable"}
         wrapControl={false}
