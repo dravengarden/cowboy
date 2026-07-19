@@ -11,6 +11,7 @@
 // use so the initial page load stays light.
 
 import {
+  Component,
   type HTMLAttributes,
   memo,
   type ReactNode,
@@ -24,6 +25,7 @@ import { Box, IconButton, Link, useMediaQuery, useTheme } from "@mui/material";
 import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkFrontmatter from "remark-frontmatter";
 import { ImageLightbox } from "./_shell";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { copyText } from "./clipboard";
@@ -323,6 +325,45 @@ function CodeBlock({
   );
 }
 
+class MarkdownCodeBoundary extends Component<
+  { children: ReactNode; code: string; dark: boolean },
+  { failed: boolean }
+> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch(error: Error): void {
+    console.warn("Markdown code highlighting fell back to source", error);
+  }
+
+  override render(): ReactNode {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <Box
+        component="pre"
+        data-markdown-code-fallback
+        sx={{
+          m: 0,
+          p: 1.5,
+          maxWidth: "100%",
+          overflowX: "auto",
+          bgcolor: this.props.dark ? "#282c34" : "#fafafa",
+          color: this.props.dark ? "#abb2bf" : "#383a42",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: "0.8em",
+          lineHeight: 1.5,
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        {this.props.code}
+      </Box>
+    );
+  }
+}
+
 // Build a heading component renderer at a given em size + line-height. Kept at
 // module scope so the `components` map below stays declarative; `mt`/`mb` are
 // uniform so consecutive headings/paragraphs keep an even rhythm.
@@ -434,14 +475,16 @@ const MarkdownImpl = memo(function MarkdownImpl({
       }
       const lang = className?.replace("language-", "") ?? "";
       return (
-        <CodeBlock
-          code={text}
-          lang={lang}
-          codeTheme={codeTheme}
-          dark={dark}
-          centerCopy={centerCopy}
-          touchWrap={touchWrap}
-        />
+        <MarkdownCodeBoundary key={`${lang}:${text}`} code={text} dark={dark}>
+          <CodeBlock
+            code={text}
+            lang={lang}
+            codeTheme={codeTheme}
+            dark={dark}
+            centerCopy={centerCopy}
+            touchWrap={touchWrap}
+          />
+        </MarkdownCodeBoundary>
       );
     },
     // ReactMarkdown wraps a fenced block in `<pre><code>`. The `code` override
@@ -575,7 +618,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
           "& :last-child": { mb: 0 },
         }}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkFrontmatter, remarkGfm]} components={components}>
           {text}
         </ReactMarkdown>
       </Box>

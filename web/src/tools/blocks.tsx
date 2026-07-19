@@ -611,7 +611,17 @@ export function OutputBlocks({
     }
     if (b.type === "raw_output") {
       const text = typeof b.text === "string" ? b.text : "";
-      if (text) rendered.push(<PreBlock key={i} text={text} maxHeight={420} />);
+      if (text) {
+        // Codex Read events expose file bytes as rawOutput.formatted_output,
+        // which derive normalizes to raw_output. "Raw" describes the ACP
+        // transport shape, not the file's presentation: a known Markdown file
+        // should still use the document renderer in Formatted mode.
+        rendered.push(
+          lang === "markdown"
+            ? <Collapsible key={i} maxHeight={300}><Markdown text={text} /></Collapsible>
+            : <PreBlock key={i} text={text} maxHeight={420} />,
+        );
+      }
       return;
     }
     const text = b.type === "content" ? (b as TextBlock).content?.text ?? "" : (b as { text?: string }).text ?? "";

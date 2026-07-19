@@ -39,6 +39,7 @@
     "npm:react-markdown@^10.1.0": "10.1.0_@types+react@19.2.15_react@19.2.6",
     "npm:react-syntax-highlighter@^16.1.1": "16.1.1_react@19.2.6",
     "npm:react@19": "19.2.6",
+    "npm:remark-frontmatter@5": "5.0.0",
     "npm:remark-gfm@^4.0.1": "4.0.1",
     "npm:sql-formatter@^15.8.2": "15.8.2",
     "npm:typescript@^5.7.0": "5.9.3",
@@ -1335,6 +1336,12 @@
         "format"
       ]
     },
+    "fault@2.0.1": {
+      "integrity": "sha512-WtySTkS4OKev5JtpHXnib4Gxiurzh5NCGvWrFaZ34m6JehfTUhKZvn9njTfw48t6JumVQOmrKqpmGcdwxnhqBQ==",
+      "dependencies": [
+        "format"
+      ]
+    },
     "fdir@6.5.0_picomatch@4.0.4": {
       "integrity": "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==",
       "dependencies": [
@@ -1492,7 +1499,7 @@
     "lowlight@1.20.0": {
       "integrity": "sha512-8Ktj+prEb1RoCPkEOrPMYUN/nCggB7qAWe3a7OpMjWQkh3l2RD5wKRQ+o8Q8YuI9RG/xs95waaI/E6ym/7NsTw==",
       "dependencies": [
-        "fault",
+        "fault@1.0.4",
         "highlight.js"
       ]
     },
@@ -1529,6 +1536,17 @@
         "micromark-util-symbol",
         "micromark-util-types",
         "unist-util-stringify-position"
+      ]
+    },
+    "mdast-util-frontmatter@2.0.1": {
+      "integrity": "sha512-LRqI9+wdgC25P0URIJY9vwocIzCcksduHQ9OF2joxQoyTNVduwLAFUzjoopuRJbJAReaKrNQKAZKL3uCMugWJA==",
+      "dependencies": [
+        "@types/mdast",
+        "devlop",
+        "escape-string-regexp@5.0.0",
+        "mdast-util-from-markdown",
+        "mdast-util-to-markdown",
+        "micromark-extension-frontmatter"
       ]
     },
     "mdast-util-gfm-autolink-literal@2.0.1": {
@@ -1687,6 +1705,15 @@
         "micromark-util-normalize-identifier",
         "micromark-util-resolve-all",
         "micromark-util-subtokenize",
+        "micromark-util-symbol",
+        "micromark-util-types"
+      ]
+    },
+    "micromark-extension-frontmatter@2.0.0": {
+      "integrity": "sha512-C4AkuM3dA58cgZha7zVnuVxBhDsbttIMiytjgsM2XbHAB2faRVaHRle40558FBN+DJcrLNCoqG5mlrpdU4cRtg==",
+      "dependencies": [
+        "fault@2.0.1",
+        "micromark-util-character",
         "micromark-util-symbol",
         "micromark-util-types"
       ]
@@ -2102,6 +2129,15 @@
         "parse-entities"
       ]
     },
+    "remark-frontmatter@5.0.0": {
+      "integrity": "sha512-XTFYvNASMe5iPN0719nPrdItC9aU0ssC4v14mH1BCi1u0n1gAocqcujWUrByftZTbLhRtiKRyjYTSIOcr69UVQ==",
+      "dependencies": [
+        "@types/mdast",
+        "mdast-util-frontmatter",
+        "micromark-extension-frontmatter",
+        "unified"
+      ]
+    },
     "remark-gfm@4.0.1": {
       "integrity": "sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==",
       "dependencies": [
@@ -2404,6 +2440,7 @@
         "npm:react-markdown@^10.1.0",
         "npm:react-syntax-highlighter@^16.1.1",
         "npm:react@19",
+        "npm:remark-frontmatter@5",
         "npm:remark-gfm@^4.0.1",
         "npm:sql-formatter@^15.8.2",
         "npm:typescript@^5.7.0",

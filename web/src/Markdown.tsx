@@ -4,10 +4,53 @@
 // raw markdown text in a monospace pre so streaming still feels live during
 // the (one-time) chunk fetch.
 
-import { lazy, memo, Suspense } from "react";
+import { Component, type ErrorInfo, lazy, memo, type ReactNode, Suspense } from "react";
 import { Box } from "@mui/material";
 
 const MarkdownImpl = lazy(() => import("./MarkdownImpl"));
+
+class MarkdownBoundary extends Component<
+  { children: ReactNode; text: string; invert: boolean },
+  { failed: boolean }
+> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.warn("Markdown rendering fell back to source", error, info.componentStack);
+  }
+
+  override componentDidUpdate(previous: Readonly<{ children: ReactNode; text: string; invert: boolean }>): void {
+    if (this.state.failed && previous.text !== this.props.text) this.setState({ failed: false });
+  }
+
+  override render(): ReactNode {
+    if (!this.state.failed) return this.props.children;
+    return <MarkdownSourceFallback text={this.props.text} invert={this.props.invert} />;
+  }
+}
+
+function MarkdownSourceFallback({ text, invert }: { text: string; invert: boolean }): React.JSX.Element {
+  return (
+    <Box
+      component="pre"
+      data-markdown-fallback
+      sx={{
+        m: 0,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "0.875rem",
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+        opacity: invert ? 1 : 0.85,
+      }}
+    >
+      {text}
+    </Box>
+  );
+}
 
 export const Markdown = memo(function Markdown({
   text,
@@ -23,24 +66,10 @@ export const Markdown = memo(function Markdown({
   touchWrap?: boolean;
 }): React.JSX.Element {
   return (
-    <Suspense
-      fallback={
-        <Box
-          component="pre"
-          sx={{
-            m: 0,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: "0.875rem",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            opacity: invert ? 1 : 0.85,
-          }}
-        >
-          {text}
-        </Box>
-      }
-    >
-      <MarkdownImpl text={text} invert={invert} centerCopy={centerCopy} touchWrap={touchWrap} />
-    </Suspense>
+    <MarkdownBoundary text={text} invert={invert}>
+      <Suspense fallback={<MarkdownSourceFallback text={text} invert={invert} />}>
+        <MarkdownImpl text={text} invert={invert} centerCopy={centerCopy} touchWrap={touchWrap} />
+      </Suspense>
+    </MarkdownBoundary>
   );
 });
