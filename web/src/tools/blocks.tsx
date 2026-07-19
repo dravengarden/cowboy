@@ -76,6 +76,7 @@ export function CodeView({
   maxHeight,
   centerCopy = false,
   touchWrap = false,
+  tokenSafeWrap = false,
   wrapControl = true,
   hideCopy = false,
 }: {
@@ -84,21 +85,36 @@ export function CodeView({
   maxHeight?: number;
   centerCopy?: boolean;
   touchWrap?: boolean;
+  tokenSafeWrap?: boolean;
   wrapControl?: boolean;
   hideCopy?: boolean;
 }): React.JSX.Element {
   const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
-  const [wrapped, setWrapped] = useState(touchWrap && coarse);
+  const [wrapped, setWrapped] = useState((touchWrap || tokenSafeWrap) && coarse);
   return (
     <Box
       sx={{
         ...(wrapped && {
           "& pre, & code": {
             whiteSpace: "pre-wrap !important",
-            overflowWrap: "anywhere",
-            wordBreak: "break-word",
-            overflowX: "hidden !important",
+            // Readable shell keeps each parsed token intact. Ordinary spaces
+            // remain wrap opportunities, while a truly viewport-wide token
+            // scrolls instead of being rendered as misleading fragments such
+            // as `--no-` / `pager`.
+            overflowWrap: tokenSafeWrap ? "normal" : "anywhere",
+            wordBreak: tokenSafeWrap ? "normal" : "break-word",
+            overflowX: tokenSafeWrap ? "auto !important" : "hidden !important",
           },
+          ...(tokenSafeWrap && {
+            // Prism marks flags as `.parameter`; keep those atomic. Quoted
+            // strings and other free-form highlighted values may still be
+            // wider than a phone, so let only those tokens make an emergency
+            // break instead of forcing every subsequent line to scroll.
+            "& code .token:not(.parameter)": {
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+            },
+          }),
         }),
         ...(hideCopy && { "& .cowboy-copy-btn": { display: "none" } }),
       }}
@@ -185,6 +201,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
         lang="bash"
         maxHeight={180}
         touchWrap={mode === "readable"}
+        tokenSafeWrap={mode === "readable"}
         wrapControl={false}
         hideCopy
       />
