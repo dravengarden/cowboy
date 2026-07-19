@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, useTheme } from "@mui/material";
+import { ExpandLess, ExpandMore } from "@mui/icons-material";
 import CodeMirror from "@uiw/react-codemirror";
 import type { Extension } from "@codemirror/state";
 import { cmTheme } from "./cmTheme";
@@ -14,7 +15,7 @@ import { livePreviewExtensions } from "./composerExtensions";
 // with a Show more / less toggle (the "默认折叠" ask), measured like the old
 // ClampedText. Image tokens are stripped by the caller (attachments render as
 // chips below), so no inline-image registry is needed here.
-const COLLAPSED_MAX = "4.6em"; // ~3 lines at the composer's 1.5 line-height
+const COLLAPSED_MAX = "3.1em"; // ~2 lines at the composer's 1.5 line-height
 
 // Display-only whitespace tidy for the preview — like HTML's whitespace
 // collapsing, but markdown-aware (the STORED text is untouched; this only shapes
@@ -66,13 +67,24 @@ function MessagePreviewImpl({
   }, [text, expanded]);
 
   return (
-    <>
+    <Box sx={{ position: "relative", minWidth: 0 }}>
       <Box
         ref={ref}
         onClick={onClick}
         sx={{
           ...(onClick && { cursor: "pointer" }),
-          ...(expanded ? {} : { maxHeight: COLLAPSED_MAX, overflow: "hidden" }),
+          ...(expanded
+            ? {}
+            : {
+              maxHeight: COLLAPSED_MAX,
+              overflow: "hidden",
+              // A hard crop made the last line look broken. Fade the final line
+              // so the compact disclosure below reads as its continuation rather
+              // than as the former loose 40px MUI button row.
+              maskImage: "linear-gradient(to bottom, #000 0, #000 calc(100% - 1.35em), transparent 100%)",
+              WebkitMaskImage:
+                "linear-gradient(to bottom, #000 0, #000 calc(100% - 1.35em), transparent 100%)",
+            }),
           // The preview is non-interactive — taps select the row to edit, they
           // don't place a caret or follow a link inside the read-only editor.
           "& .cm-editor": { backgroundColor: "transparent", pointerEvents: "none" },
@@ -91,6 +103,9 @@ function MessagePreviewImpl({
       {(overflowing || expanded) && (
         <Button
           size="small"
+          endIcon={expanded
+            ? <ExpandLess sx={{ fontSize: 16 }} />
+            : <ExpandMore sx={{ fontSize: 16 }} />}
           onClick={(e): void => {
             e.stopPropagation();
             setExpanded((v) => !v);
@@ -98,17 +113,33 @@ function MessagePreviewImpl({
           sx={{
             textTransform: "none",
             minWidth: 0,
+            // Touch theme globally raises every Button to 40px. This disclosure
+            // supplies its own 44px pseudo hit target below, so keep the painted
+            // label compact instead of paying for both policies.
+            minHeight: "28px !important",
+            height: 28,
             px: 0.5,
             py: 0,
-            mt: 0.25,
+            mt: expanded ? 0.25 : 0,
             color: "text.secondary",
             fontWeight: 400,
+            lineHeight: 1.2,
+            borderRadius: 0.75,
+            "& .MuiButton-endIcon": { ml: 0.125, mr: -0.375 },
+            // Keep a genuine 44px touch target without making the painted
+            // disclosure row 44px tall. It remains in normal flow, so headings
+            // and lists can never be obscured by the control.
+            "&::before": {
+              content: '""',
+              position: "absolute",
+              inset: -8,
+            },
           }}
         >
           {expanded ? "Show less" : "Show more"}
         </Button>
       )}
-    </>
+    </Box>
   );
 }
 
