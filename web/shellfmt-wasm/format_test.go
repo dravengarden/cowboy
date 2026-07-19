@@ -393,6 +393,30 @@ func TestExtractsJQThroughTransparentCommandWrappers(t *testing.T) {
 	}
 }
 
+func TestHistoricalQuotedNestedCommands(t *testing.T) {
+	cases := []string{
+		`/nix/store/0641h8qfqaxnwrsw2nzrz6i1wbzyx92l-bash-interactive-5.3p9/bin/bash -lc "sed -n '1710,1875p' web/src/Transcript.tsx && rg -n \"const run|itemIndex|runTitle|function ToolDetailsBrowser|select =\" web/src/Transcript.tsx web/src/tools/presentation.ts* web/src/**/*.test.*"`,
+		`nix develop -c bash -c "cd web && deno eval 'console.log(\".endpoints[] | select(.type == tailscale)\")'"`,
+	}
+	for _, source := range cases {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatalf("%q: %v", source, err)
+		}
+		if len(display.Frames) < 2 {
+			t.Fatalf("historical nested command was not extracted: %#v", display)
+		}
+	}
+}
+
+func TestDecodesBashDoubleQuotedEscapesForNestedParsing(t *testing.T) {
+	got := decodeDoubleQuotedLiteral("quoted=\\\"yes\\\" dollar=\\$HOME slash=\\\\ keep=\\q joined=one\\\ntwo")
+	want := "quoted=\"yes\" dollar=$HOME slash=\\ keep=\\q joined=onetwo"
+	if got != want {
+		t.Fatalf("decoded double-quoted literal = %q, want %q", got, want)
+	}
+}
+
 func TestExtractsNestedPayloadByGeneralComplexity(t *testing.T) {
 	longArgument := strings.Repeat("segment/", 10)
 	for _, source := range []string{

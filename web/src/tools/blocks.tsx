@@ -215,6 +215,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   const theme = useTheme();
   const [readable, setReadable] = useState<Awaited<ReturnType<typeof formatShellForDisplay>> | undefined>(undefined);
   const [mode, setMode] = useState<"readable" | "nested" | "source">("source");
+  const [wrapped, setWrapped] = useState(touch);
 
   useEffect(() => {
     let active = true;
@@ -264,6 +265,20 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           </Box>
         </Stack>
       )}
+      <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
+        <Box role="group" aria-label="Shell command line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+          {([true, false] as const).map((value) => (
+            <ButtonBase
+              key={String(value)}
+              aria-pressed={wrapped === value}
+              onClick={(): void => setWrapped(value)}
+              sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+            >
+              {value ? "Wrap" : "Scroll"}
+            </ButtonBase>
+          ))}
+        </Box>
+      </Stack>
       {mode === "nested" && readable
         ? (
           <Collapsible maxHeight={touch ? 360 : 320}>
@@ -350,6 +365,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     touchWrap
                     tokenSafeWrap
                     wrapControl={false}
+                    wrap={wrapped}
                     hideCopy
                   />
                 )}
@@ -369,6 +385,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             touchWrap
             tokenSafeWrap
             wrapControl={false}
+            wrap={wrapped}
             hideCopy
           />
         )
@@ -379,6 +396,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             lang="bash"
             maxHeight={touch ? 260 : 180}
             wrapControl={false}
+            wrap={wrapped}
             hideCopy
           />
         )}

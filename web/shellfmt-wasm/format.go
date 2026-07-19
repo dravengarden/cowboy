@@ -793,13 +793,38 @@ func staticWord(word *syntax.Word) (string, bool) {
 				if !ok {
 					return "", false
 				}
-				value.WriteString(literal.Value)
+				value.WriteString(decodeDoubleQuotedLiteral(literal.Value))
 			}
 		default:
 			return "", false
 		}
 	}
 	return value.String(), true
+}
+
+// mvdan's syntax tree preserves source backslashes inside double quotes.
+// Decode exactly the escapes Bash consumes there before recursively parsing a
+// `bash -c` payload: dollar, backtick, quote, backslash, and line continuation.
+// A backslash before any other byte remains literal per Bash semantics.
+func decodeDoubleQuotedLiteral(source string) string {
+	var value strings.Builder
+	for index := 0; index < len(source); index++ {
+		if source[index] != '\\' || index+1 >= len(source) {
+			value.WriteByte(source[index])
+			continue
+		}
+		next := source[index+1]
+		switch next {
+		case '$', '`', '"', '\\':
+			value.WriteByte(next)
+			index++
+		case '\n':
+			index++
+		default:
+			value.WriteByte('\\')
+		}
+	}
+	return value.String()
 }
 
 func insertStructuralBreaks(source string, file *syntax.File) string {
