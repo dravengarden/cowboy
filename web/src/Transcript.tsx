@@ -1878,24 +1878,26 @@ function ToolDetailsBrowser({
       sx={{
         position: "relative",
         width: "100%",
-        px: 0.75,
-        py: 0.5,
+        px: desktop ? 0.75 : 0.5,
+        py: desktop ? 0.5 : 0.375,
+        minHeight: desktop ? undefined : 58,
         display: "grid",
         gridTemplateColumns: desktop
           ? "1fr auto 1fr auto auto"
-          : "1fr auto minmax(108px, auto) auto 1fr",
+          : "repeat(5, minmax(0, 1fr))",
         alignItems: "center",
         gap: 0.5,
         bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
         backdropFilter: "blur(30px) saturate(200%)",
         WebkitBackdropFilter: "blur(30px) saturate(200%)",
-        borderTop: 1,
+        border: 1,
         borderColor: "divider",
-        borderRadius: 2,
+        borderRadius: desktop ? 2 : 2.5,
         userSelect: "none",
         WebkitUserSelect: "none",
-        boxShadow: (theme) =>
-          `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
+        boxShadow: (theme) => desktop
+          ? `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`
+          : `0 10px 32px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.28)" : "rgba(55,35,90,0.10)"}`,
       }}
     >
       {roomy
@@ -1928,23 +1930,22 @@ function ToolDetailsBrowser({
         {runIndex + 1} / {runs.length}{historyComplete ? "" : "+"}
       </Typography>
       {!desktop && (
-        <Button
+        <Tooltip title="Close details">
+        <IconButton
           aria-label="Close tool details"
           onClick={onClose}
           sx={{
-            minWidth: 108,
-            minHeight: 44,
+            width: 44,
+            height: 44,
             justifySelf: "center",
-            border: 1,
-            borderColor: "primary.main",
-            borderRadius: 999,
-            color: "text.primary",
-            textTransform: "none",
-            fontWeight: 700,
+            color: "primary.main",
+            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
+            "&:hover": { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.16) },
           }}
         >
-          Close
-        </Button>
+          <KeyboardArrowDown />
+        </IconButton>
+        </Tooltip>
       )}
       {roomy
         ? (
