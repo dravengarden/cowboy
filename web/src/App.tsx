@@ -1150,7 +1150,10 @@ export function App({
         const onTouchStart = (event: TouchEvent): void => {
             const touch = event.touches[0];
             const target = event.target instanceof HTMLElement ? event.target : null;
-            if (!touch || touch.clientX > 32 || target?.closest("button, input, textarea, [role='button']")) {
+            // A 56px edge lane is still narrow enough to avoid ordinary content
+            // gestures, while making one-handed drawer reveal practical through
+            // a case/screen protector instead of demanding a pixel-perfect edge.
+            if (!touch || touch.clientX > 56 || target?.closest("button, input, textarea, [role='button']")) {
                 gesture = null;
                 return;
             }

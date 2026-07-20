@@ -2550,7 +2550,15 @@ export function Transcript({
   // new array when a new event actually lands, so this O(n) fold runs once per
   // event — NOT on every scroll-driven re-render. Stable item identities also
   // let the `memo`'d `ItemView` rows skip re-rendering.
-  const items = useMemo(() => derive(timeline), [timeline]);
+  // Keep receiving canonical envelopes while native scrolling owns the viewport,
+  // but present one stable snapshot until momentum/smooth scrolling settles.
+  // This removes Markdown/layout work from WebKit's scrolling frames without
+  // dropping or delaying transport data; the latest timeline flushes atomically.
+  const [renderPausedForScroll, setRenderPausedForScroll] = useState(false);
+  const presentedTimelineRef = useRef(timeline);
+  if (!renderPausedForScroll) presentedTimelineRef.current = timeline;
+  const presentedTimeline = presentedTimelineRef.current;
+  const items = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
   const runs = useMemo(() => toolRuns(items), [items]);
   const tools = useMemo(() => runs.flatMap((run) => run.tools), [runs]);
   const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
@@ -2831,7 +2839,12 @@ export function Transcript({
     // the toggle stuck "active" all the way up (the reported bug). Gate the
     // re-stick on this so it only fires once the gesture SETTLES at the bottom.
     let touching = false;
+    let magneticArmed = false;
     let nativeScrollSettleTimer: number | undefined;
+    const magneticThreshold = (): number => {
+      const lineHeight = Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
+      return Math.max(40, lineHeight * 2);
+    };
     const detach = (): void => {
       cancelHistoryRelease();
       if (stick.current) {
@@ -2860,6 +2873,7 @@ export function Transcript({
       cancelHistoryRelease();
       markTranscriptScrollActivity();
       nativeScrollActiveRef.current = true;
+      setRenderPausedForScroll(true);
       // A pending corrective scroll event must never swallow the reader's next
       // real movement. From this point the native gesture is authoritative.
       freezeRef.current.self = false;
@@ -2867,10 +2881,35 @@ export function Transcript({
         globalThis.clearTimeout(nativeScrollSettleTimer);
       }
       nativeScrollSettleTimer = globalThis.setTimeout(() => {
+        const fromBottom = Math.abs(el.scrollTop);
+        if (!touching && !stick.current && fromBottom <= magneticThreshold()) {
+          // Crossing the final two-line magnetic zone is a single state change:
+          // tactile confirmation, compositor-thread glide, then live following.
+          stick.current = true;
+          setSticky(sessionIdRef.current, true);
+          freezeRef.current.key = null;
+          el.scrollTo({
+            top: 0,
+            behavior: globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? "auto"
+              : "smooth",
+          });
+          scheduleHistoryRelease();
+          // Keep presentation frozen through the compositor animation. Native
+          // scroll events replace this fallback with the normal settle timer;
+          // the fallback covers engines that omit events for a tiny correction.
+          nativeScrollSettleTimer = globalThis.setTimeout(() => {
+            nativeScrollActiveRef.current = false;
+            setRenderPausedForScroll(false);
+            nativeScrollSettleTimer = undefined;
+          }, 360);
+          return;
+        }
         // Capture first, then hand ownership back to chunk/resize anchoring.
         // The next stream update therefore preserves the exact settled view.
         if (!stick.current) captureAnchor();
         nativeScrollActiveRef.current = false;
+        setRenderPausedForScroll(false);
         nativeScrollSettleTimer = undefined;
       }, 240);
     };
@@ -2909,16 +2948,9 @@ export function Transcript({
       markNativeScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
-      if (fromBottom < 24 && !stick.current && !touching) {
-        // Settled back at the bottom (finger up) → re-stick + the toggle
-        // reactivates (REQ-4).
-        stick.current = true;
-        setSticky(sessionIdRef.current, true);
-        // Drop the freeze anchor so a later detach captures fresh, not a stale
-        // pre-re-stick row (which would yank the view on restore).
-        freezeRef.current.key = null;
-        scheduleHistoryRelease();
-      }
+      const insideMagneticZone = !stick.current && fromBottom <= magneticThreshold();
+      if (insideMagneticZone && !magneticArmed) haptic(12);
+      magneticArmed = insideMagneticZone;
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
       if (!stick.current) captureAnchor();
@@ -3022,7 +3054,14 @@ export function Transcript({
     const repin = (): void => {
       roRaf = 0;
       if (!stick.current) return;
-      pinTranscriptToLatest(el); // column-reverse: 0 = bottom
+      if (roTries === 0 && Math.abs(el.scrollTop) > 0.5) {
+        // Queue/draft disclosure changes the transcript viewport. Let WebKit's
+        // scrolling thread carry the short correction instead of visibly
+        // teleporting the final lines; later frames still converge exactly.
+        el.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        pinTranscriptToLatest(el); // column-reverse: 0 = bottom
+      }
       if (++roTries < 5) roRaf = requestAnimationFrame(repin);
     };
     const ro = new ResizeObserver(() => {
@@ -3060,6 +3099,7 @@ export function Transcript({
       }
       cancelHistoryRelease();
       nativeScrollActiveRef.current = false;
+      setRenderPausedForScroll(false);
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
     };
   }, []);
