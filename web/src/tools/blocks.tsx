@@ -76,6 +76,61 @@ export function CopyTextButton({ text, label }: { text: string; label: string })
   );
 }
 
+/** One line-layout interaction across every tool body. Touch surfaces expose
+ * one roomy toggle; Desktop keeps both states visible for faster scanning. */
+export function LineLayoutControl({
+  wrapped,
+  onChange,
+  label,
+}: {
+  wrapped: boolean;
+  onChange: (wrapped: boolean) => void;
+  label: string;
+}): React.JSX.Element {
+  const touch = useMediaQuery("(hover:none), (pointer:coarse)");
+  if (touch) {
+    return (
+      <Tooltip title={wrapped ? "Use horizontal scrolling" : "Wrap long lines"}>
+        <ButtonBase
+          aria-label={`${label}: ${wrapped ? "use horizontal scrolling" : "wrap long lines"}`}
+          aria-pressed={wrapped}
+          onClick={(): void => onChange(!wrapped)}
+          sx={{
+            minWidth: 44,
+            minHeight: 44,
+            px: 0.875,
+            gap: 0.375,
+            borderRadius: 1,
+            fontSize: "0.6875rem",
+            color: "text.secondary",
+            bgcolor: "action.hover",
+            "&:active": { bgcolor: "action.selected" },
+          }}
+        >
+          {wrapped
+            ? <WrapTextRounded sx={{ fontSize: "1.25em" }} />
+            : <SwapHorizRounded sx={{ fontSize: "1.25em" }} />}
+          {wrapped ? "Wrap" : "Scroll"}
+        </ButtonBase>
+      </Tooltip>
+    );
+  }
+  return (
+    <Box role="group" aria-label={label} sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+      {([false, true] as const).map((value) => (
+        <ButtonBase
+          key={String(value)}
+          aria-pressed={wrapped === value}
+          onClick={(): void => onChange(value)}
+          sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
+        >
+          {value ? "Wrap" : "Scroll"}
+        </ButtonBase>
+      ))}
+    </Box>
+  );
+}
+
 /** Highlighted source code (via Markdown's fenced highlighter), folded if long. */
 export function CodeView({
   code,
@@ -148,18 +203,7 @@ export function CodeView({
     >
       {wrapControl && (
         <Stack direction="row" justifyContent="flex-end" sx={{ mb: 0.375 }}>
-          <Box role="group" aria-label="Code line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
-            {([false, true] as const).map((value) => (
-              <ButtonBase
-                key={String(value)}
-                aria-pressed={wrapped === value}
-                onClick={(): void => setLocalWrapped(value)}
-                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
-              >
-                {value ? "Wrap" : "Scroll"}
-              </ButtonBase>
-            ))}
-          </Box>
+          <LineLayoutControl wrapped={wrapped} onChange={setLocalWrapped} label="Code line layout" />
         </Stack>
       )}
       {lightweight
@@ -263,30 +307,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             </ButtonBase>
           </Box>
         )}
-        <Tooltip title={wrapped ? "Use horizontal scrolling" : "Wrap long lines"}>
-          <span>
-            <ButtonBase
-              aria-label={wrapped ? "Use horizontal scrolling" : "Wrap long lines"}
-              aria-pressed={wrapped}
-              onClick={(): void => setWrapped((value) => !value)}
-              sx={{
-                minHeight: 32,
-                px: 0.875,
-                gap: 0.375,
-                borderRadius: 1,
-                fontSize: "0.6875rem",
-                color: "text.secondary",
-                bgcolor: "action.hover",
-                "&:active": { bgcolor: "action.selected" },
-              }}
-            >
-              {wrapped
-                ? <WrapTextRounded sx={{ fontSize: "1.25em" }} />
-                : <SwapHorizRounded sx={{ fontSize: "1.25em" }} />}
-              {wrapped ? "Wrap" : "Scroll"}
-            </ButtonBase>
-          </span>
-        </Tooltip>
+        <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="Command line layout" />
       </Stack>
       {mode === "nested" && readable
         ? (

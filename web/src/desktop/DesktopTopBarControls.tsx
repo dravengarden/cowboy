@@ -23,7 +23,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { ExpandMore, Refresh, Tune } from "@mui/icons-material";
+import { ArrowForwardRounded, ExpandMore, Refresh, Tune } from "@mui/icons-material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
@@ -176,9 +176,17 @@ function DesktopUsageExtras(
               const actionable = textValue(credit.id) === nearestCreditId;
               const card = (
                 <Box sx={{ minWidth: 0, px: 0.9, py: 0.75, borderRadius: 1.25, bgcolor: "action.hover", textAlign: "left" }}>
-                  <Typography variant="caption" fontWeight={700} noWrap sx={{ display: "block" }}>
-                    {textValue(credit.title) ?? "Rate-limit reset"}
-                  </Typography>
+                  <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={0.5}>
+                    <Typography variant="caption" fontWeight={700} noWrap sx={{ display: "block", minWidth: 0 }}>
+                      {textValue(credit.title) ?? "Rate-limit reset"}
+                    </Typography>
+                    {actionable && (
+                      <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "primary.main", flexShrink: 0 }}>
+                        <Typography variant="caption" fontWeight={700}>Schedule</Typography>
+                        <ArrowForwardRounded sx={{ fontSize: 15 }} />
+                      </Stack>
+                    )}
+                  </Stack>
                   <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
                     {expiresAt === undefined ? "No expiry reported" : `Expires ${fullResetTime(expiresAt)}`}
                   </Typography>
@@ -190,7 +198,27 @@ function DesktopUsageExtras(
                   sx={{ minWidth: 0 }}
                 >
                   {actionable
-                    ? <ButtonBase onClick={openResetDialog} sx={{ width: "100%", borderRadius: 1.25 }}>{card}</ButtonBase>
+                    ? (
+                      <Tooltip title="Schedule or use the nearest-expiring reset">
+                        <ButtonBase
+                          onClick={openResetDialog}
+                          aria-label="Schedule nearest full reset"
+                          sx={{
+                            width: "100%",
+                            borderRadius: 1.25,
+                            outline: 1,
+                            outlineColor: (theme) => alpha(theme.palette.primary.main, 0.24),
+                            "&:hover": { bgcolor: "action.hover" },
+                            "&.Mui-focusVisible": {
+                              outline: 2,
+                              outlineColor: "primary.main",
+                            },
+                          }}
+                        >
+                          {card}
+                        </ButtonBase>
+                      </Tooltip>
+                    )
                     : card}
                 </Box>
               );

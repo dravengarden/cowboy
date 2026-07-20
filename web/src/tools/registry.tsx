@@ -1,5 +1,5 @@
 import { Component, type ReactNode, useMemo, useState } from "react";
-import { Box, ButtonBase, Skeleton, Stack, Typography } from "@mui/material";
+import { Box, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
 import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
@@ -10,6 +10,7 @@ import {
   hasDiff,
   KeyValues,
   Labeled,
+  LineLayoutControl,
   langFromPath,
   OutputBlocks,
   PreBlock,
@@ -75,18 +76,7 @@ function TerminalOutput({ text, running }: { text: string; running: boolean }): 
   const segments = useMemo(() => terminalDisplaySegments(text), [text]);
   const control = text
     ? (
-      <Box role="group" aria-label="Output line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
-        {([true, false] as const).map((value) => (
-          <ButtonBase
-            key={String(value)}
-            aria-pressed={wrapped === value}
-            onClick={(): void => setWrapped(value)}
-            sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
-          >
-            {value ? "Wrap" : "Scroll"}
-          </ButtonBase>
-        ))}
-      </Box>
+      <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="Output line layout" />
     )
     : undefined;
   return (
@@ -131,20 +121,7 @@ function FileReadContent({
   const [wrapped, setWrapped] = useState(false);
   if (!text) return null;
   if (language === "markdown") return <OutputBlocks content={content} lang={language} />;
-  const control = (
-    <Box role="group" aria-label="File line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
-      {([true, false] as const).map((value) => (
-        <ButtonBase
-          key={String(value)}
-          aria-pressed={wrapped === value}
-          onClick={(): void => setWrapped(value)}
-          sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: wrapped === value ? "text.primary" : "text.disabled", bgcolor: wrapped === value ? "background.paper" : "transparent", boxShadow: wrapped === value ? 1 : 0 }}
-        >
-          {value ? "Wrap" : "Scroll"}
-        </ButtonBase>
-      ))}
-    </Box>
-  );
+  const control = <LineLayoutControl wrapped={wrapped} onChange={setWrapped} label="File line layout" />;
   return (
     <Labeled label={language ? "Source" : "Contents"} action={control}>
       {language

@@ -61,10 +61,8 @@ import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import { Transcript } from "./Transcript";
 import {
-    originLabel,
     PROVIDERS,
     type SessionMeta,
-    type SessionOrigin,
     type Status,
 } from "./protocol";
 import {
@@ -333,17 +331,6 @@ function ScheduleBadge({ meta }: { meta: SessionMeta }): React.JSX.Element | nul
     );
 }
 
-function originColor(
-    o: SessionOrigin | undefined,
-): "primary" | "secondary" | "default" {
-    switch (o ?? "api") {
-        case "web":
-            return "secondary";
-        default:
-            return "default";
-    }
-}
-
 const ReliableListItemButton = forwardRef<
     HTMLDivElement,
     Omit<ComponentPropsWithoutRef<typeof ListItemButton>, "onClick"> & { onActivate: () => void }
@@ -442,7 +429,7 @@ function SessionList({
                     onClick={onNew}
                 >
                     New session
-                    {desktop && <Kbd keys={`${MOD_LABEL}N`} />}
+                    {desktop && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
                 </Button>
             </Box>
             <List
@@ -539,16 +526,18 @@ function SessionList({
                                     >
                                         {s.title}
                                     </Typography>
-                                    <Chip
-                                        size="small"
-                                        label={s.system ? "System" : originLabel(s.origin)}
-                                        color={s.system ? "secondary" : originColor(s.origin)}
-                                        sx={{
-                                            height: 16,
-                                            fontSize: 10,
-                                            "& .MuiChip-label": { px: 0.75 },
-                                        }}
-                                    />
+                                    {(s.system || (s.origin ?? "api") !== "web") && (
+                                        <Chip
+                                            size="small"
+                                            label={s.system ? "System" : "External"}
+                                            color={s.system ? "secondary" : "default"}
+                                            sx={{
+                                                height: 16,
+                                                fontSize: 10,
+                                                "& .MuiChip-label": { px: 0.75 },
+                                            }}
+                                        />
+                                    )}
                                     <AutoResumeBadge meta={s} defaultOn={autoResumeDefault} />
                                     <ScheduleBadge meta={s} />
                                 </Stack>
@@ -2149,7 +2138,7 @@ export function App({
                                             onClick={(): void => setDialogOpen(true)}
                                         >
                                             New session
-                                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL}N`} />}
+                                            {surface === "desktop" && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
                                         </Button>
                                     </>
                                 )
