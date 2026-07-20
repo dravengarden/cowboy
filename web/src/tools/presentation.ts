@@ -62,6 +62,10 @@ export function toolTypeName(provider: string, toolName: string, kind: string): 
   return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Tool";
 }
 
+export function toolUsesRawOnly(kind: string): boolean {
+  return kind === "search";
+}
+
 export function toolHeading({ provider, toolName, kind, title, rawInput }: {
   provider: string;
   toolName: string;

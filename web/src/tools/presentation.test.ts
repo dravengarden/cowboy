@@ -4,6 +4,7 @@ import {
   toolCopyText,
   toolHeading,
   toolTypeName,
+  toolUsesRawOnly,
   toolVariantLabel,
 } from "./presentation";
 
@@ -64,6 +65,8 @@ Deno.test("search headings do not repeat the full query", () => {
     title: "Web search: a very long query",
     rawInput: { query: "a very long query" },
   }), "Web search");
+  assertEquals(toolUsesRawOnly("search"), true);
+  assertEquals(toolUsesRawOnly("execute"), false);
 });
 
 Deno.test("tool copy uses command input and normalized output", () => {

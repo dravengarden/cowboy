@@ -62,7 +62,7 @@ import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { toolHeading, toolVariantLabel } from "./tools/presentation";
+import { toolHeading, toolUsesRawOnly, toolVariantLabel } from "./tools/presentation";
 import { toolRuns, type ToolItem, type ToolRun } from "./tools/runs";
 import { formatShellForDisplay } from "./shellFormatter";
 import {
@@ -1794,7 +1794,7 @@ function ToolDetailsBrowser({
   // duplicates the query while adding two layers of layout controls. Keep the
   // transport JSON as the single, inspectable representation so input and
   // output retain their exact shape across Codex, Claude and future ACPs.
-  const rawOnly = item.toolKind === "search";
+  const rawOnly = toolUsesRawOnly(item.toolKind);
   const raw = rawOnly || (rawByKey[item.key] ?? false);
   const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
   const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
