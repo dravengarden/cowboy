@@ -54,12 +54,12 @@ const NIX_STORE_EXECUTABLE = new RegExp(
 );
 
 /** Collapse only executable paths whose store object matches Nix's canonical
- * 32-character Nix32 digest. The digest and package output name are deployment
- * identity rather than command semantics, so the readable projection uses a
- * compact snowflake origin plus the actual executable basename. Arbitrary
- * store data paths remain untouched. */
+ * 32-character Nix32 digest. `Nix bin` is a display namespace rather than a
+ * decorative badge: it says where the executable came from while leaving the
+ * actual command as the strongest token. Arbitrary store data paths remain
+ * untouched. */
 export function compactNixStoreExecutables(source: string): string {
-  return source.replaceAll(NIX_STORE_EXECUTABLE, (_path, executable: string) => `❄ Nix · ${executable}`);
+  return source.replaceAll(NIX_STORE_EXECUTABLE, (_path, executable: string) => `Nix bin › ${executable}`);
 }
 
 /** Add display-only soft opportunities at path separators. The copy action and
@@ -72,6 +72,13 @@ export function addShellPathBreaks(source: string): string {
 const formatCache = new Map<string, Promise<ShellDisplay | null>>();
 
 export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): Promise<ShellFrame> {
+  if (frame.language === "json") {
+    try {
+      return { ...frame, text: JSON.stringify(JSON.parse(frame.text), null, 2) };
+    } catch {
+      return frame;
+    }
+  }
   if (frame.language === "regex") {
     return { ...frame, text: addRegexSoftBreaks(frame.text) };
   }

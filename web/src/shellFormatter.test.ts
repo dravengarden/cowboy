@@ -28,11 +28,23 @@ Deno.test("readable shell compacts canonical Nix executable paths", () => {
   const hash = "0641h8qfqaxnwrsw2nzrz6i1wbzyx921";
   assertEquals(
     compactNixStoreExecutables(`/nix/store/${hash}-bash-interactive-5.3p9/bin/bash -lc 'echo ok'`),
-    "❄ Nix · bash -lc 'echo ok'",
+    "Nix bin › bash -lc 'echo ok'",
   );
   assertEquals(
     compactNixStoreExecutables(`/nix/store/${hash}-python-env/libexec/tools/python3 script.py`),
-    "❄ Nix · python3 script.py",
+    "Nix bin › python3 script.py",
+  );
+});
+
+Deno.test("complex embedded JSON is formatted while invalid JSON falls back intact", async () => {
+  const { formatEmbeddedFrame } = await import("./shellFormatter.ts");
+  assertEquals(
+    (await formatEmbeddedFrame({ launcher: "json", language: "json", text: '{"name":"cowboy","items":[1,2]}' }, 46)).text,
+    '{\n  "name": "cowboy",\n  "items": [\n    1,\n    2\n  ]\n}',
+  );
+  assertEquals(
+    (await formatEmbeddedFrame({ launcher: "json", language: "json", text: "{broken" }, 46)).text,
+    "{broken",
   );
 });
 

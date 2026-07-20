@@ -804,6 +804,33 @@ func TestNestedLanguageFramesHaveExplicitLabels(t *testing.T) {
 	}
 }
 
+func TestEmbeddedJSONUsesComplexityBeforeCreatingFrame(t *testing.T) {
+	complex := `curl -X POST --data '{"name":"cowboy","targets":[{"id":1},{"id":2}]}' https://example.test`
+	display, err := formatShellDisplay(complex, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 || display.Frames[1].Language != "json" || display.Frames[1].Label != "JSON" {
+		t.Fatalf("complex JSON should become a labeled child frame: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[1].Text, `"targets"`) {
+		t.Fatalf("JSON payload was lost: %#v", display.Frames)
+	}
+
+	for _, source := range []string{
+		`curl --data '{"ok":true}' https://example.test`,
+		`printf '%s' '{not-json}'`,
+	} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(display.Frames) != 1 {
+			t.Fatalf("small or invalid JSON should remain inline: %s: %#v", source, display.Frames)
+		}
+	}
+}
+
 func TestExtractsQuotedSSHRemotePipeline(t *testing.T) {
 	source := `ssh -o BatchMode=yes macbook-air 'scutil --nc status "SFM" | grep -i -E "ephemeral|expiry|tailscale|hostname|control_url" | sed -E '\''s/(auth_key|password|token|secret)[^,}]*/\1=REDACTED/Ig'\'' | head -n 80'`
 	display, err := formatShellDisplay(source, 46)

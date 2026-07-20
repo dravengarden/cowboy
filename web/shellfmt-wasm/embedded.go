@@ -69,6 +69,15 @@ func embeddedClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 		return nestedPayload{}, false
 	}
 	base := interpreterBase(command)
+	// JSON is an argv payload rather than an executable-specific language. Use
+	// the shell AST to decode quotes, accept only complete static JSON, and only
+	// promote structures whose visual cost earns a separate frame. Small values
+	// remain inline in Bash and are highlighted there.
+	for _, word := range args[1:] {
+		if payload, found := jsonPayload(word); found {
+			return payload, true
+		}
+	}
 	for _, spec := range embeddedLanguageSpecs {
 		if !containsString(spec.commands, base) {
 			continue
@@ -85,6 +94,66 @@ func embeddedClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 		}
 	}
 	return nestedPayload{}, false
+}
+
+func jsonPayload(word *syntax.Word) (nestedPayload, bool) {
+	value, static := staticWord(word)
+	trimmed := strings.TrimSpace(value)
+	if !static || len(trimmed) < 2 || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return nestedPayload{}, false
+	}
+	validShape, nodes, depth := jsonShape(trimmed)
+	if !validShape || !jsonNeedsFrame(trimmed, nodes, depth) {
+		return nestedPayload{}, false
+	}
+	return nestedPayload{
+		start: int(word.Pos().Offset()), end: int(word.End().Offset()),
+		launcher: "json", payload: trimmed, language: "json", label: "JSON",
+	}, true
+}
+
+func jsonNeedsFrame(source string, nodes, depth int) bool {
+	if strings.Contains(source, "\n") || utf8.RuneCountInString(source) >= 72 {
+		return true
+	}
+	return nodes >= 7 || (depth >= 2 && nodes >= 4)
+}
+
+// jsonShape is deliberately a bounded structural recognizer, not a second JSON
+// implementation. It rejects unbalanced strings/containers and counts only
+// separators outside strings. The browser's native JSON.parse remains the
+// authority before pretty-printing, so malformed payloads always fall back.
+func jsonShape(source string) (valid bool, nodes, maxDepth int) {
+	stack := make([]rune, 0, 8)
+	inString, escaped := false, false
+	nodes = 1
+	for _, char := range source {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch char {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, char)
+			maxDepth = max(maxDepth, len(stack))
+		case '}', ']':
+			if len(stack) == 0 || (char == '}' && stack[len(stack)-1] != '{') || (char == ']' && stack[len(stack)-1] != '[') {
+				return false, 0, 0
+			}
+			stack = stack[:len(stack)-1]
+		case ',', ':':
+			nodes++
+		}
+	}
+	return !inString && !escaped && len(stack) == 0, nodes, maxDepth
 }
 
 func flaggedPayload(args []*syntax.Word, spec embeddedLanguageSpec) (nestedPayload, bool) {

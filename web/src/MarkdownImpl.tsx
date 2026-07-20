@@ -32,6 +32,7 @@ import { copyText } from "./clipboard";
 import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import {
   oneDark,
   oneLight,
@@ -49,6 +50,7 @@ import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
 // pulls the highlighter into the eager application chunk.
 function cowboyShell(prism: Parameters<typeof bash>[0]): void {
   bash(prism);
+  json(prism);
   const languages = (prism as {
     languages: Record<string, unknown>;
   }).languages as Record<string, unknown> & {
@@ -71,19 +73,50 @@ function cowboyShell(prism: Parameters<typeof bash>[0]): void {
     greedy: true,
   };
   languages.insertBefore(SHELL_SYNTAX_LANGUAGE, "string", {
-    "dsl-sed": {
-      pattern:
-        /((?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?sed\b(?:\s+(?:-{1,2}[\w-]+(?:=[^\s]+)?))*\s+)(["'])(?:\\.|(?!\2)[^\\\r\n])*\2/gm,
+    "nix-bin-origin": {
+      pattern: /\bNix bin(?=\s+›)/g,
+      alias: "shell-origin",
+    },
+    "shell-path": {
+      // Conservative unquoted paths only. Quoted values remain owned by the
+      // Bash string grammar, avoiding false path styling in regexes and URLs.
+      pattern: /(^|[\s=])(?:~|\.{1,2})?\/(?:[^\s'";&|<>()[\]{}]+\/?)+/gm,
+      lookbehind: true,
+      alias: "shell-resource-path",
+    },
+    "quoted-shell-path": {
+      // Pure quoted paths are common arguments. Keep the quote characters in
+      // Bash's visual language and style only the resource identity inside.
+      pattern: /((['"]))(?:~|\.{1,2})?\/(?:\\.|(?!\2)[^\\\r\n])+(?=\2)/gm,
       lookbehind: true,
       greedy: true,
-      alias: ["string", "dsl-expression", "dsl-sed-expression"],
+      alias: "shell-resource-path",
+    },
+    "inline-json": {
+      // Keep compact JSON in the Bash line, but tokenize the decoded payload
+      // as JSON. Quotes that belong to Bash still remain outside this token;
+      // larger structures are promoted to their own JSON frame by the shell
+      // AST/complexity pass before Markdown is reached.
+      pattern:
+        /((['"])\s*)(?:\{(?=(?:\\.|(?!\2)[^\\\r\n])*"(?:\\.|(?!\2)[^\\\r\n])*"\s*:)|\[)(?:\\.|(?!\2)[^\\\r\n])+(?=\2)/gm,
+      lookbehind: true,
+      greedy: true,
+      inside: languages.json as Record<string, unknown>,
+      alias: "embedded-json-inline",
+    },
+    "dsl-sed": {
+      pattern:
+        /((?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?sed\b(?:\s+(?:-{1,2}[\w-]+(?:=[^\s]+)?))*\s+(["']))(?:\\.|(?!\2)[^\\\r\n])+(?=\2)/gm,
+      lookbehind: true,
+      greedy: true,
+      alias: ["dsl-expression", "dsl-sed-expression"],
     },
     "dsl-regex": {
       pattern:
-        /((?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?(?:rg|ripgrep|grep|egrep|pgrep|pkill)\b(?:\s+(?:-{1,2}[\w-]+(?:=[^\s]+)?))*\s+)(["'])(?:\\.|(?!\2)[^\\\r\n])*\2/gm,
+        /((?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?(?:rg|ripgrep|grep|egrep|pgrep|pkill)\b(?:\s+(?:-{1,2}[\w-]+(?:=[^\s]+)?))*\s+(["']))(?:\\.|(?!\2)[^\\\r\n])+(?=\2)/gm,
       lookbehind: true,
       greedy: true,
-      alias: ["string", "dsl-expression", "dsl-regex-expression"],
+      alias: ["dsl-expression", "dsl-regex-expression"],
     },
   });
 }
@@ -233,23 +266,45 @@ function CodeBlock({
         ...(syntaxLanguage === "cowboy-shell" && {
           "& .token.dsl-expression": {
             display: "inline",
-            borderRadius: "0.28em",
-            paddingInline: "0.14em",
             boxDecorationBreak: "clone",
             WebkitBoxDecorationBreak: "clone",
-            fontWeight: 520,
+            fontWeight: 540,
           },
           "& .token.dsl-regex-expression": {
-            backgroundColor: dark ? "rgba(86, 156, 214, 0.12)" : "rgba(9, 105, 218, 0.08)",
             boxShadow: dark
-              ? "inset 0 -1px rgba(86, 156, 214, 0.5)"
-              : "inset 0 -1px rgba(9, 105, 218, 0.35)",
+              ? "inset 0 -1px rgba(111, 181, 255, 0.52)"
+              : "inset 0 -1px rgba(9, 105, 218, 0.38)",
           },
           "& .token.dsl-sed-expression": {
-            backgroundColor: dark ? "rgba(220, 220, 170, 0.1)" : "rgba(154, 103, 0, 0.08)",
             boxShadow: dark
-              ? "inset 0 -1px rgba(220, 220, 170, 0.48)"
-              : "inset 0 -1px rgba(154, 103, 0, 0.34)",
+              ? "inset 0 -1px rgba(225, 183, 96, 0.5)"
+              : "inset 0 -1px rgba(154, 103, 0, 0.38)",
+          },
+          "& .token.shell-origin": {
+            display: "inline-block",
+            color: dark ? "#8fb8d8" : "#356b91",
+            backgroundColor: dark ? "rgba(90, 146, 184, 0.14)" : "rgba(53, 107, 145, 0.09)",
+            border: "1px solid",
+            borderColor: dark ? "rgba(143, 184, 216, 0.24)" : "rgba(53, 107, 145, 0.18)",
+            borderRadius: "0.34em",
+            paddingInline: "0.32em",
+            fontSize: "0.86em",
+            fontWeight: 650,
+            letterSpacing: "0.01em",
+          },
+          "& .token.shell-resource-path": {
+            color: dark ? "#a7c8c2" : "#376f69",
+            textDecoration: "underline dotted",
+            textDecorationColor: dark ? "rgba(167, 200, 194, 0.32)" : "rgba(55, 111, 105, 0.25)",
+            textUnderlineOffset: "0.16em",
+          },
+          "& .token.embedded-json-inline": {
+            // A subtle edge marks the language boundary without turning a
+            // short argument into a pill or stealing space from the command.
+            boxShadow: dark
+              ? "inset 2px 0 rgba(194, 137, 245, 0.45)"
+              : "inset 2px 0 rgba(130, 80, 185, 0.32)",
+            paddingInlineStart: "0.28em",
           },
         }),
       }}
