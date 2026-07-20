@@ -40,6 +40,28 @@ export interface ShellFrame {
   color?: number;
 }
 
+// Shell presentation is an information-density feature, not a source
+// rewriter. Its primary measure is how quickly a human can recover command
+// structure, executables, paths, endpoints, and embedded languages from a
+// small viewport. Every projection below must therefore be bounded, visually
+// quiet, and reversible by switching to Source; copy actions always retain the
+// exact ACP bytes.
+
+const NIX32 = "[0123456789abcdfghijklmnpqrsvwxyz]{32}";
+const NIX_STORE_EXECUTABLE = new RegExp(
+  String.raw`/nix/store/${NIX32}-[^\s'"\\]+/(?:bin|sbin|libexec)/(?:[^\s'"\\]+/)*([^/\s'"\\]+)`,
+  "gu",
+);
+
+/** Collapse only executable paths whose store object matches Nix's canonical
+ * 32-character Nix32 digest. The digest and package output name are deployment
+ * identity rather than command semantics, so the readable projection uses a
+ * compact snowflake origin plus the actual executable basename. Arbitrary
+ * store data paths remain untouched. */
+export function compactNixStoreExecutables(source: string): string {
+  return source.replaceAll(NIX_STORE_EXECUTABLE, (_path, executable: string) => `❄ ${executable}`);
+}
+
 /** Add display-only soft opportunities at path separators. The copy action and
  * Source mode retain the original bytes; this merely makes long assignment
  * values and URLs prefer `/` over an arbitrary mid-token phone wrap. */
@@ -178,12 +200,16 @@ export function formatShellForDisplay(source: string, columns = 80): Promise<She
           .map((frame) => formatEmbeddedFrame({ ...frame, text: frame.text.trimEnd() }, columns)),
       );
       return {
-          text: result.text.trimEnd(),
-          flatText: (result.flatText ?? result.text).trimEnd(),
-          context: result.context,
-          frames,
-          summary: result.summary ?? "",
-        };
+        text: compactNixStoreExecutables(result.text.trimEnd()),
+        flatText: compactNixStoreExecutables((result.flatText ?? result.text).trimEnd()),
+        context: result.context,
+        frames: frames.map((frame) => ({
+          ...frame,
+          launcher: compactNixStoreExecutables(frame.launcher),
+          text: compactNixStoreExecutables(frame.text),
+        })),
+        summary: result.summary ?? "",
+      };
     })
     .catch(() => null);
   formatCache.set(cacheKey, pending);
