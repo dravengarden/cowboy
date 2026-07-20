@@ -107,6 +107,24 @@ Then re-sign + reinstall via the usual resign skill, and verify on the device:
    button degrades to a manual "设置 › Cowboy › 本地网络" hint, so the feature
    still works while you adjust it.
 
+### Headless iOS Simulator inspection
+
+DEBUG simulator builds expose a loopback-only automation bridge on port `4171`.
+It is compiled out of release builds. From hawk, drive it through the shared
+resolver and Cowboy's project helper:
+
+```sh
+ios-sim-remote cowboy-shell/tools/cowboysim.sh status
+ios-sim-remote cowboy-shell/tools/cowboysim.sh launch
+ios-sim-remote cowboy-shell/tools/cowboysim.sh eval 'location.origin'
+ios-sim-remote cowboy-shell/tools/cowboysim.sh shot
+```
+
+Build/install the DEBUG simulator app on the Mac with
+`~/cowboy-shell/tools/cowboybuild-sim.sh`. The helper uses bundle ID
+`top.thundersparrow.cowboy`; confirm origin and iPhone user agent before trusting
+DOM evidence.
+
 Safe-area insets (`env(safe-area-inset-*)`) are reported correctly by the native
 WebView with no extra code — verified with a probe page.
 

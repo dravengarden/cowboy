@@ -8,6 +8,7 @@
 // NOTE: this file lives in the generated gen/apple tree but is hand-authored and
 // committed. If you ever re-run `cargo tauri ios init`, confirm it survived.
 #import <Foundation/Foundation.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
@@ -179,6 +180,19 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                 // Capture the shell's web view for the keyboard avoider below. The
                 // thin shell creates one main web view; the latest assignment wins.
                 gCowboyWebView = cowboyWv;
+#if DEBUG
+                // Opt into Safari inspection and install the headless simulator
+                // eval bridge. Both are DEBUG-only: release/device distribution
+                // builds expose neither an inspector nor a loopback listener.
+                if (@available(iOS 16.4, macOS 13.3, *)) {
+                    cowboyWv.inspectable = YES;
+                }
+                SEL devInstallSel = NSSelectorFromString(@"installOnWebView:");
+                Class devCls = NSClassFromString(@"CowboyDevBridge");
+                if (devCls && [devCls respondsToSelector:devInstallSel]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(devCls, devInstallSel, cowboyWv);
+                }
+#endif
                 return cowboyWv;
             });
         method_setImplementation(m, replacement);
