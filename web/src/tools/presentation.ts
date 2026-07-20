@@ -62,8 +62,19 @@ export function toolTypeName(provider: string, toolName: string, kind: string): 
   return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Tool";
 }
 
-export function toolUsesRawOnly(kind: string): boolean {
-  return kind === "search";
+export function toolUsesRawOnly({ kind, toolName = "", title = "" }: {
+  kind: string;
+  toolName?: string;
+  title?: string;
+}): boolean {
+  const compact = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const normalizedKind = compact(kind);
+  const normalizedTool = compact(toolName);
+
+  return normalizedKind === "search" ||
+    normalizedTool === "websearch" ||
+    normalizedTool === "searchquery" ||
+    /^web\s+search(?:\s*:|$)/iu.test(title.trim());
 }
 
 export function toolHeading({ provider, toolName, kind, title, rawInput }: {

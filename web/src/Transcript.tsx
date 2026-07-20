@@ -1794,7 +1794,11 @@ function ToolDetailsBrowser({
   // duplicates the query while adding two layers of layout controls. Keep the
   // transport JSON as the single, inspectable representation so input and
   // output retain their exact shape across Codex, Claude and future ACPs.
-  const rawOnly = toolUsesRawOnly(item.toolKind);
+  const rawOnly = toolUsesRawOnly({
+    kind: item.toolKind,
+    toolName: item.toolName,
+    title: item.title,
+  });
   const raw = rawOnly || (rawByKey[item.key] ?? false);
   const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
   const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
@@ -2042,17 +2046,17 @@ function ToolDetailsBrowser({
               />
             </Stack>
             <Box sx={{ borderTop: 1, borderColor: "divider", pt: 1 }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
-                <Typography variant="caption" color="text.disabled">
-                  {toolVariantLabel({
-                    provider,
-                    toolName: item.toolName,
-                    kind: item.toolKind,
-                    title: item.title,
-                    rawInput: item.rawInput,
-                  })}
-                </Typography>
-                {!rawOnly && (
+              {!rawOnly && (
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
+                  <Typography variant="caption" color="text.disabled">
+                    {toolVariantLabel({
+                      provider,
+                      toolName: item.toolName,
+                      kind: item.toolKind,
+                      title: item.title,
+                      rawInput: item.rawInput,
+                    })}
+                  </Typography>
                   <Stack direction="row" alignItems="center" spacing={0.25}>
                     <Box
                       role="group"
@@ -2080,8 +2084,8 @@ function ToolDetailsBrowser({
                       ))}
                     </Box>
                   </Stack>
-                )}
-              </Stack>
+                </Stack>
+              )}
               {detailReadyKey !== item.key
                 ? (
                   <Stack spacing={0.75} aria-label="Loading tool details">

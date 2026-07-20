@@ -65,8 +65,11 @@ Deno.test("search headings do not repeat the full query", () => {
     title: "Web search: a very long query",
     rawInput: { query: "a very long query" },
   }), "Web search");
-  assertEquals(toolUsesRawOnly("search"), true);
-  assertEquals(toolUsesRawOnly("execute"), false);
+  assertEquals(toolUsesRawOnly({ kind: "search" }), true);
+  assertEquals(toolUsesRawOnly({ kind: "other", toolName: "web_search" }), true);
+  assertEquals(toolUsesRawOnly({ kind: "other", toolName: "search_query" }), true);
+  assertEquals(toolUsesRawOnly({ kind: "other", title: "Web search: query" }), true);
+  assertEquals(toolUsesRawOnly({ kind: "execute", title: "Search local files" }), false);
 });
 
 Deno.test("tool copy uses command input and normalized output", () => {
