@@ -4,11 +4,19 @@ import {
   AccordionDetails,
   AccordionSummary,
   Box,
+  Button,
+  ButtonBase,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
   IconButton,
   LinearProgress,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import { ExpandMore, Refresh } from "@mui/icons-material";
@@ -20,6 +28,7 @@ import {
   record,
   relativeUpdateTime,
   type UsageLimit,
+  nearestAvailableResetCredit,
   usageLimits,
   type UsageSnapshot,
 } from "./usageLimits";
@@ -103,7 +112,17 @@ function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
   );
 }
 
-function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Element {
+function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
+  usage: ProviderUsage;
+  schedule: { fire_at_ms: number } | undefined;
+  onUsageChanged: () => Promise<void>;
+}): React.JSX.Element {
+  const [resetOpen, setResetOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [fireAt, setFireAt] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const account = record(usage.account?.account);
   const plan = account ? str(account.planType) : undefined;
@@ -112,10 +131,20 @@ function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Eleme
   const credits = Array.isArray(resetCredits?.credits)
     ? resetCredits.credits.map(record).filter((v): v is JsonRecord => v !== undefined)
     : [];
+  const nearestCredit = nearestAvailableResetCredit(usage);
+  const nearestCreditId = str(nearestCredit?.id);
   const summary = record(usage.activity?.summary);
   const sessionUsage = record(usage.activity?.session);
   const sessionCost = record(sessionUsage?.cost);
   const title = usage.provider === "claude-code" ? "Claude Code" : usage.provider === "gemini" ? "Gemini" : "Codex";
+  const closeResetDialog = () => {
+    if (resetBusy) return;
+    setResetOpen(false);
+    setScheduleOpen(false);
+    setFireAt("");
+    setConfirmText("");
+    setResetError(null);
+  };
 
   return (
     <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, px: 1.5, py: 1.4 }}>
@@ -140,23 +169,50 @@ function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Eleme
             <Divider />
             {credits.map((credit, index) => {
               const expiresAt = num(credit.expiresAt);
-              return (
-                <Box
-                  key={str(credit.id) ?? index}
-                  sx={{ py: 1.1, borderBottom: index < credits.length - 1 ? 1 : 0, borderColor: "divider" }}
-                >
+              const actionable = str(credit.id) === nearestCreditId;
+              const row = (
+                <Box sx={{ py: 1.1, width: "100%", textAlign: "left" }}>
                   <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="baseline">
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {str(credit.title) ?? "Rate-limit reset"}
                     </Typography>
-                    <Typography variant="caption" color="success.main">Available</Typography>
+                    <Typography variant="caption" color={actionable ? "success.main" : "text.secondary"}>
+                      {actionable ? "Use next" : "Available"}
+                    </Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
                     {expiresAt === undefined ? "No expiry reported" : `Expires ${fullDateTime(expiresAt)}`}
                   </Typography>
                 </Box>
               );
+              return (
+                <Box
+                  key={str(credit.id) ?? index}
+                  sx={{ borderBottom: index < credits.length - 1 ? 1 : 0, borderColor: "divider" }}
+                >
+                  {actionable
+                    ? <ButtonBase onClick={() => setResetOpen(true)} sx={{ width: "100%", borderRadius: 1 }}>{row}</ButtonBase>
+                    : row}
+                </Box>
+              );
             })}
+            {schedule && (
+              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ pt: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Scheduled {fullDateTime(schedule.fire_at_ms / 1000)}
+                </Typography>
+                <Button
+                  size="small"
+                  disabled={resetBusy}
+                  onClick={() => void (async () => {
+                    setResetBusy(true);
+                    await fetch("/api/usage/codex/reset/schedule", { method: "DELETE" });
+                    await onUsageChanged();
+                    setResetBusy(false);
+                  })()}
+                >Cancel</Button>
+              </Stack>
+            )}
           </Stack>
         )}
         {summary && num(summary.lifetimeTokens) !== undefined && (
@@ -181,6 +237,65 @@ function ProviderUsageCard({ usage }: { usage: ProviderUsage }): React.JSX.Eleme
           {usage.source} · Updated {relativeUpdateTime(usage.observed_at_ms)}
         </Typography>
       </Stack>
+      <Dialog open={resetOpen} onClose={closeResetDialog} fullWidth maxWidth="xs">
+        <DialogTitle>Use nearest reset?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Cowboy will consume only the earliest-expiring available reset. Later credits cannot be selected.
+          </DialogContentText>
+          {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
+          {scheduleOpen && (
+            <Box
+              component="input"
+              type="datetime-local"
+              value={fireAt}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFireAt(event.target.value)}
+              sx={{ mt: 2, width: "100%", boxSizing: "border-box", p: 1.25, font: "inherit", color: "inherit", bgcolor: "background.paper", border: 1, borderColor: "divider", borderRadius: 1.5 }}
+            />
+          )}
+          <TextField
+            autoComplete="off"
+            autoFocus
+            fullWidth
+            label="Type confirm to continue"
+            value={confirmText}
+            onChange={(event) => setConfirmText(event.target.value)}
+            sx={{ mt: 2 }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={closeResetDialog} disabled={resetBusy}>Cancel</Button>
+          <Button onClick={() => setScheduleOpen((value) => !value)} disabled={resetBusy}>Schedule</Button>
+          <Button
+            variant="contained"
+            disabled={resetBusy || confirmText !== "confirm" || (scheduleOpen && !fireAt)}
+            onClick={() => void (async () => {
+              setResetBusy(true);
+              setResetError(null);
+              const response = scheduleOpen
+                ? await fetch("/api/usage/codex/reset/schedule", {
+                  method: "PUT",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }),
+                })
+                : await fetch("/api/usage/codex/reset", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ confirm: confirmText, expected_credit_id: nearestCreditId }),
+                });
+              if (response.ok) {
+                setResetOpen(false);
+                setScheduleOpen(false);
+                setConfirmText("");
+                await onUsageChanged();
+              } else {
+                setResetError(await response.text() || `HTTP ${String(response.status)}`);
+              }
+              setResetBusy(false);
+            })()}
+          >{scheduleOpen ? "Save" : "Reset now"}</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
@@ -228,7 +343,14 @@ function UsageInfoSection(): React.JSX.Element {
           {refreshing ? <CircularProgress size={20} /> : <Refresh />}
         </IconButton>
       </Stack>
-      {snapshot?.providers.map((provider) => <ProviderUsageCard key={provider.provider} usage={provider} />)}
+      {snapshot?.providers.map((provider) => (
+        <ProviderUsageCard
+          key={provider.provider}
+          usage={provider}
+          schedule={snapshot.codex_reset_schedule}
+          onUsageChanged={() => load(false)}
+        />
+      ))}
       {!snapshot && !error && <Typography variant="body2" color="text.secondary">Loading usage…</Typography>}
     </Stack>
   );

@@ -17,6 +17,7 @@ import {
   Select,
   Skeleton,
   Stack,
+  TextField,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
@@ -37,6 +38,7 @@ import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import {
   fullResetTime,
+  nearestAvailableResetCredit,
   type JsonRecord,
   num,
   type ProviderUsage,
@@ -99,8 +101,18 @@ function textValue(value: unknown): string | undefined {
 }
 
 function DesktopUsageExtras(
-  { usage }: { usage: ProviderUsage },
+  { usage, schedule, onUsageChanged }: {
+    usage: ProviderUsage;
+    schedule: { fire_at_ms: number } | undefined;
+    onUsageChanged: () => Promise<void>;
+  },
 ): React.JSX.Element {
+  const [resetOpen, setResetOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [fireAt, setFireAt] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const resetCredits = record(usage.rate_limits?.rateLimitResetCredits);
   const availableCredits = num(resetCredits?.availableCount);
   const credits = Array.isArray(resetCredits?.credits)
@@ -108,6 +120,7 @@ function DesktopUsageExtras(
       credit !== undefined
     )
     : [];
+  const nearestCreditId = textValue(nearestAvailableResetCredit(usage)?.id);
   const summary = record(usage.activity?.summary);
   const session = record(usage.activity?.session);
   const cost = record(session?.cost);
@@ -115,6 +128,14 @@ function DesktopUsageExtras(
   const contextSize = num(session?.size);
   const lifetimeTokens = num(summary?.lifetimeTokens);
   const costAmount = num(cost?.amount);
+  const closeResetDialog = () => {
+    if (resetBusy) return;
+    setResetOpen(false);
+    setScheduleOpen(false);
+    setFireAt("");
+    setConfirmText("");
+    setResetError(null);
+  };
 
   return (
     <>
@@ -143,39 +164,34 @@ function DesktopUsageExtras(
           >
             {credits.map((credit, index) => {
               const expiresAt = num(credit.expiresAt);
+              const actionable = textValue(credit.id) === nearestCreditId;
+              const card = (
+                <Box sx={{ minWidth: 0, px: 0.9, py: 0.75, borderRadius: 1.25, bgcolor: "action.hover", textAlign: "left" }}>
+                  <Typography variant="caption" fontWeight={700} noWrap sx={{ display: "block" }}>
+                    {textValue(credit.title) ?? "Rate-limit reset"}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+                    {expiresAt === undefined ? "No expiry reported" : `Expires ${fullResetTime(expiresAt)}`}
+                  </Typography>
+                </Box>
+              );
               return (
                 <Box
                   key={textValue(credit.id) ?? index}
-                  sx={{
-                    minWidth: 0,
-                    px: 0.9,
-                    py: 0.75,
-                    borderRadius: 1.25,
-                    bgcolor: "action.hover",
-                  }}
+                  sx={{ minWidth: 0 }}
                 >
-                  <Typography
-                    variant="caption"
-                    fontWeight={700}
-                    noWrap
-                    sx={{ display: "block" }}
-                  >
-                    {textValue(credit.title) ?? "Rate-limit reset"}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    noWrap
-                    sx={{ display: "block" }}
-                  >
-                    {expiresAt === undefined
-                      ? "No expiry reported"
-                      : `Expires ${fullResetTime(expiresAt)}`}
-                  </Typography>
+                  {actionable
+                    ? <ButtonBase onClick={() => setResetOpen(true)} sx={{ width: "100%", borderRadius: 1.25 }}>{card}</ButtonBase>
+                    : card}
                 </Box>
               );
             })}
           </Box>
+          {schedule && (
+            <Typography variant="caption" color="text.secondary">
+              Scheduled {fullResetTime(schedule.fire_at_ms / 1000)}
+            </Typography>
+          )}
         </Stack>
       )}
       {(contextUsed !== undefined || lifetimeTokens !== undefined ||
@@ -214,6 +230,46 @@ function DesktopUsageExtras(
           )}
         </Stack>
       )}
+      <Dialog open={resetOpen} onClose={closeResetDialog} fullWidth maxWidth="xs">
+        <DialogTitle>Use nearest reset?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>Cowboy can only consume the earliest-expiring available reset.</DialogContentText>
+          {scheduleOpen && (
+            <TextField type="datetime-local" fullWidth value={fireAt} onChange={(event) => setFireAt(event.target.value)} sx={{ mt: 2 }} />
+          )}
+          <TextField autoFocus autoComplete="off" fullWidth label="Type confirm to continue" value={confirmText} onChange={(event) => setConfirmText(event.target.value)} sx={{ mt: 2 }} />
+          {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeResetDialog} disabled={resetBusy}>Cancel</Button>
+          <Button onClick={() => setScheduleOpen((value) => !value)} disabled={resetBusy}>Schedule</Button>
+          <Button
+            variant="contained"
+            disabled={resetBusy || confirmText !== "confirm" || (scheduleOpen && !fireAt)}
+            onClick={() => void (async () => {
+              setResetBusy(true);
+              setResetError(null);
+              const response = await fetch(
+                scheduleOpen ? "/api/usage/codex/reset/schedule" : "/api/usage/codex/reset",
+                {
+                  method: scheduleOpen ? "PUT" : "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(scheduleOpen
+                    ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
+                    : { confirm: confirmText, expected_credit_id: nearestCreditId }),
+                },
+              );
+              if (response.ok) {
+                setResetOpen(false);
+                setScheduleOpen(false);
+                setConfirmText("");
+                await onUsageChanged();
+              } else setResetError(await response.text() || `HTTP ${String(response.status)}`);
+              setResetBusy(false);
+            })()}
+          >{scheduleOpen ? "Save" : "Reset now"}</Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
@@ -884,7 +940,13 @@ export function DesktopTopBarControls({
               {usage?.error ?? "This provider has not exposed account limits."}
             </Typography>
           )}
-          {usage && <DesktopUsageExtras usage={usage} />}
+          {usage && (
+            <DesktopUsageExtras
+              usage={usage}
+              schedule={snapshot?.codex_reset_schedule}
+              onUsageChanged={() => loadUsage(false)}
+            />
+          )}
         </Stack>
       </Popover>
 

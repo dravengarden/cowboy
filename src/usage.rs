@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -41,6 +41,20 @@ pub struct UsageSnapshot {
     pub next_refresh_at_ms: i64,
     pub refresh_interval_ms: i64,
     pub providers: Vec<ProviderUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_reset_schedule: Option<CodexResetSchedule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexResetSchedule {
+    pub fire_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexResetResult {
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credit_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -48,6 +62,8 @@ pub struct UsageService {
     codex_command: String,
     snapshot: Arc<Mutex<UsageSnapshot>>,
     refresh_lock: Arc<Mutex<()>>,
+    reset_lock: Arc<Mutex<()>>,
+    reset_schedule: Arc<Mutex<Option<CodexResetSchedule>>>,
 }
 
 impl UsageService {
@@ -60,13 +76,18 @@ impl UsageService {
                 refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
                     .unwrap_or(i64::MAX),
                 providers: unavailable_providers(),
+                codex_reset_schedule: None,
             })),
             refresh_lock: Arc::new(Mutex::new(())),
+            reset_lock: Arc::new(Mutex::new(())),
+            reset_schedule: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn snapshot(&self) -> UsageSnapshot {
-        self.snapshot.lock().await.clone()
+        let mut snapshot = self.snapshot.lock().await.clone();
+        snapshot.codex_reset_schedule = self.reset_schedule.lock().await.clone();
+        snapshot
     }
 
     /// Coalesces concurrent manual/automatic refreshes. A failed provider keeps
@@ -104,10 +125,83 @@ impl UsageService {
                     "Provider does not expose account limits over ACP",
                 ),
             ],
+            codex_reset_schedule: self.reset_schedule.lock().await.clone(),
         };
         *self.snapshot.lock().await = next.clone();
         next
     }
+
+    pub async fn set_reset_schedule(&self, schedule: Option<CodexResetSchedule>) {
+        *self.reset_schedule.lock().await = schedule;
+    }
+
+    /// Consume exactly the earliest-expiring available credit. Callers cannot
+    /// supply an id, so stale clients and concurrent sessions cannot select a
+    /// later credit. The lock serializes the final refresh/select/consume path.
+    pub async fn consume_nearest_reset(
+        &self,
+        idempotency_key: &str,
+        expected_credit_id: Option<&str>,
+    ) -> Result<CodexResetResult> {
+        let _guard = self.reset_lock.lock().await;
+        let usage = tokio::time::timeout(
+            std::time::Duration::from_secs(12),
+            collect_codex(&self.codex_command),
+        )
+        .await
+        .context("refresh before Codex reset timed out")??;
+        let credit_id = nearest_available_credit_id(usage.rate_limits.as_ref())
+            .context("no available Codex reset credit")?;
+        if expected_credit_id.is_some_and(|expected| expected != credit_id) {
+            bail!("nearest Codex reset credit changed; refresh and confirm again");
+        }
+        let mut server = JsonRpcProcess::start(&self.codex_command).await?;
+        let response = server
+            .request(
+                "account/rateLimitResetCredit/consume",
+                json!({ "creditId": credit_id, "idempotencyKey": idempotency_key }),
+            )
+            .await?;
+        let outcome = response
+            .get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let _ = self.refresh_force().await;
+        Ok(CodexResetResult {
+            outcome,
+            credit_id: Some(credit_id),
+        })
+    }
+
+    async fn refresh_force(&self) -> UsageSnapshot {
+        self.snapshot.lock().await.refreshed_at_ms = 0;
+        self.refresh().await
+    }
+}
+
+fn nearest_available_credit_id(rate_limits: Option<&Value>) -> Option<String> {
+    let credits = rate_limits?
+        .get("rateLimitResetCredits")?
+        .get("credits")?
+        .as_array()?;
+    credits
+        .iter()
+        .filter(|credit| credit.get("status").and_then(Value::as_str) == Some("available"))
+        .filter_map(|credit| {
+            let id = credit.get("id")?.as_str()?.to_owned();
+            let expires = credit
+                .get("expiresAt")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MAX);
+            let granted = credit
+                .get("grantedAt")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MAX);
+            Some(((expires, granted, id.clone()), id))
+        })
+        .min_by(|left, right| left.0.cmp(&right.0))
+        .map(|(_, id)| id)
 }
 
 /// Overlay the newest live ACP usage per provider onto the account snapshot.
@@ -328,5 +422,18 @@ mod tests {
         assert!(has_supported_rate_limit_shape(
             &json!({ "rateLimitsByLimitId": {} })
         ));
+    }
+
+    #[test]
+    fn reset_selector_only_chooses_nearest_available_credit() {
+        let limits = json!({ "rateLimitResetCredits": { "credits": [
+            { "id": "later", "status": "available", "expiresAt": 300 },
+            { "id": "used", "status": "redeemed", "expiresAt": 50 },
+            { "id": "nearest", "status": "available", "expiresAt": 100 }
+        ]}});
+        assert_eq!(
+            nearest_available_credit_id(Some(&limits)).as_deref(),
+            Some("nearest")
+        );
     }
 }

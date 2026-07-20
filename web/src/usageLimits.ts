@@ -16,6 +16,19 @@ export interface UsageSnapshot {
   next_refresh_at_ms: number;
   refresh_interval_ms: number;
   providers: ProviderUsage[];
+  codex_reset_schedule?: { fire_at_ms: number };
+}
+
+export function nearestAvailableResetCredit(usage: ProviderUsage): JsonRecord | undefined {
+  const root = record(usage.rate_limits?.rateLimitResetCredits);
+  if (!Array.isArray(root?.credits)) return undefined;
+  return root.credits
+    .map(record)
+    .filter((credit): credit is JsonRecord => credit?.status === "available" && typeof credit.id === "string")
+    .sort((left, right) =>
+      (num(left.expiresAt) ?? Number.MAX_SAFE_INTEGER) -
+      (num(right.expiresAt) ?? Number.MAX_SAFE_INTEGER)
+    )[0];
 }
 
 export interface UsageLimit {

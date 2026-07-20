@@ -97,7 +97,51 @@ pub struct Store {
     artifacts: crate::artifacts::ArtifactStore,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScheduledProviderAction {
+    pub fire_at_ms: i64,
+    pub idempotency_key: String,
+}
+
 impl Store {
+    pub async fn upsert_codex_reset(&self, fire_at_ms: i64, idempotency_key: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scheduled_provider_actions (provider, action, fire_at_ms, idempotency_key) \
+             VALUES ('codex', 'rate_limit_reset', $1, $2) \
+             ON CONFLICT (provider) DO UPDATE SET action = EXCLUDED.action, \
+             fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key",
+        )
+        .bind(fire_at_ms)
+        .bind(idempotency_key)
+        .execute(&self.pool)
+        .await
+        .context("UPSERT scheduled Codex reset")?;
+        Ok(())
+    }
+
+    pub async fn load_codex_reset(&self) -> Result<Option<ScheduledProviderAction>> {
+        let row: Option<(i64, String)> = sqlx::query_as(
+            "SELECT fire_at_ms, idempotency_key FROM scheduled_provider_actions \
+             WHERE provider = 'codex' AND action = 'rate_limit_reset'",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT scheduled Codex reset")?;
+        Ok(
+            row.map(|(fire_at_ms, idempotency_key)| ScheduledProviderAction {
+                fire_at_ms,
+                idempotency_key,
+            }),
+        )
+    }
+
+    pub async fn delete_codex_reset(&self) -> Result<()> {
+        sqlx::query("DELETE FROM scheduled_provider_actions WHERE provider = 'codex'")
+            .execute(&self.pool)
+            .await
+            .context("DELETE scheduled Codex reset")?;
+        Ok(())
+    }
     /// Open a pool against `url`.
     ///
     /// # Errors

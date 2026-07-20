@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { topBarUsageLimits, usageLimits } from "./usageLimits.ts";
+import { nearestAvailableResetCredit, topBarUsageLimits, usageLimits } from "./usageLimits.ts";
 
 Deno.test("usage limits preserve provider buckets and sort by window", () => {
   const limits = usageLimits({
@@ -71,4 +71,23 @@ Deno.test("desktop summary tolerates a missing Codex 5h bucket", () => {
     },
   };
   assertEquals(topBarUsageLimits(usage).map((limit) => limit.label), ["Weekly"]);
+});
+
+Deno.test("only the earliest-expiring available reset is actionable", () => {
+  const usage = {
+    provider: "codex",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimitResetCredits: {
+        credits: [
+          { id: "later", status: "available", expiresAt: 300 },
+          { id: "redeemed", status: "redeemed", expiresAt: 50 },
+          { id: "nearest", status: "available", expiresAt: 100 },
+        ],
+      },
+    },
+  };
+  assertEquals(nearestAvailableResetCredit(usage)?.id, "nearest");
 });

@@ -59,6 +59,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0013_drop_inference.sql",
         "f0674ab068e55ba6aa5ccf1e7d0ef5f3ecbf28149b16d855fb5f3e8e8f009125",
     ),
+    (
+        "0014_provider_actions.sql",
+        "b6f32dc1f36c05b9d8461a0ca2bcb08936eb0173540e9ed3343d211d65c1ceea",
+    ),
 ];
 
 #[test]

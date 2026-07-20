@@ -21,7 +21,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -198,6 +198,63 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .map(|path| path.display().to_string()),
         )
     });
+    // Reset credits belong to the Codex account, not a session. Restore one
+    // shared provider-level timer and keep it independent from session queues.
+    if let Some(store) = store.as_ref() {
+        match store.load_codex_reset().await {
+            Ok(Some(action)) => {
+                usage
+                    .set_reset_schedule(Some(crate::usage::CodexResetSchedule {
+                        fire_at_ms: action.fire_at_ms,
+                    }))
+                    .await;
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "loading scheduled Codex reset"),
+        }
+    }
+    let reset_task = {
+        let usage = usage.clone();
+        let store = store.clone();
+        let mut shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                let schedule = usage.snapshot().await.codex_reset_schedule;
+                if schedule.is_some_and(|item| item.fire_at_ms <= now_ms()) {
+                    let key = match store.as_ref() {
+                        Some(store) => store
+                            .load_codex_reset()
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|item| item.idempotency_key),
+                        None => None,
+                    }
+                    .unwrap_or_else(new_reset_idempotency_key);
+                    match usage.consume_nearest_reset(&key, None).await {
+                        Ok(result) => {
+                            tracing::info!(outcome = %result.outcome, "scheduled Codex reset finished");
+                            if let Some(store) = store.as_ref()
+                                && let Err(error) = store.delete_codex_reset().await
+                            {
+                                tracing::warn!(%error, "clearing scheduled Codex reset");
+                            }
+                            usage.set_reset_schedule(None).await;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "scheduled Codex reset failed; retaining timer for retry")
+                        }
+                    }
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() { break; }
+                    }
+                }
+            }
+        })
+    };
     if let Some(runtime) = &remote_runtime {
         // Re-declare every adopted worker's launch metadata. This is
         // idempotent, and lets a newly restarted agentd reconstruct sessions
@@ -358,6 +415,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     .await;
     judge_task.abort();
     scheduler_task.abort();
+    reset_task.abort();
     match tokio::time::timeout(std::time::Duration::from_secs(5), &mut dispatcher_task).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
@@ -790,6 +848,11 @@ async fn serve_axum(
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
+        .route("/api/usage/codex/reset", post(api_codex_reset))
+        .route(
+            "/api/usage/codex/reset/schedule",
+            put(api_codex_reset_schedule).delete(api_codex_reset_cancel),
+        )
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/sessions", post(api_new_session))
@@ -1004,6 +1067,107 @@ async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
     let snapshot =
         crate::usage::with_session_usage(state.usage.refresh().await, &state.hub.session_list());
     Json(snapshot).into_response()
+}
+
+#[derive(Deserialize)]
+struct CodexResetScheduleRequest {
+    fire_at_ms: i64,
+    confirm: String,
+}
+
+#[derive(Deserialize)]
+struct CodexResetRequest {
+    confirm: String,
+    expected_credit_id: String,
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
+fn new_reset_idempotency_key() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "cowboy-reset-{}-{}-{}",
+        std::process::id(),
+        now_ms(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    )
+}
+
+async fn api_codex_reset(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CodexResetRequest>,
+) -> Response {
+    if request.confirm != "confirm" {
+        return (StatusCode::BAD_REQUEST, "confirmation must be confirm").into_response();
+    }
+    match state
+        .usage
+        .consume_nearest_reset(
+            &new_reset_idempotency_key(),
+            Some(&request.expected_credit_id),
+        )
+        .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error.to_string()).into_response(),
+    }
+}
+
+async fn api_codex_reset_schedule(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CodexResetScheduleRequest>,
+) -> Response {
+    if request.confirm != "confirm" {
+        return (StatusCode::BAD_REQUEST, "confirmation must be confirm").into_response();
+    }
+    if request.fire_at_ms < now_ms().saturating_add(60_000) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "schedule must be at least one minute in the future",
+        )
+            .into_response();
+    }
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistent scheduling unavailable",
+        )
+            .into_response();
+    };
+    let key = new_reset_idempotency_key();
+    if let Err(error) = store.upsert_codex_reset(request.fire_at_ms, &key).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    state
+        .usage
+        .set_reset_schedule(Some(crate::usage::CodexResetSchedule {
+            fire_at_ms: request.fire_at_ms,
+        }))
+        .await;
+    Json(state.usage.snapshot().await).into_response()
+}
+
+async fn api_codex_reset_cancel(State(state): State<Arc<AppState>>) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistent scheduling unavailable",
+        )
+            .into_response();
+    };
+    if let Err(error) = store.delete_codex_reset().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    state.usage.set_reset_schedule(None).await;
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
