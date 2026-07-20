@@ -5,6 +5,8 @@
 //! rolling deployment must retain at least one overlapping protocol version
 //! until all workers using the older version have drained.
 
+#![warn(clippy::pedantic)]
+
 use std::io;
 
 use serde::{Deserialize, Serialize};
@@ -90,7 +92,7 @@ pub struct StartSession {
     pub fallback_for: Option<String>,
     /// Rebuild agentd's launch registry without spawning a missing worker.
     /// Cowboy sends this on broker reconnect while surviving workers are still
-    /// converging; a later real EnsureSession may start one if it never returns.
+    /// converging; a later real `EnsureSession` may start one if it never returns.
     #[serde(default)]
     pub adopt_only: bool,
 }
@@ -335,6 +337,11 @@ pub fn negotiate(local_min: u16, local_max: u16, peer_min: u16, peer_max: u16) -
 }
 
 /// Write one length-prefixed JSON frame.
+///
+/// # Errors
+///
+/// Returns an error when serialization, frame-size validation, or writing to
+/// the transport fails.
 pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -> io::Result<()> {
     let payload = serde_json::to_vec(frame)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -353,6 +360,11 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -
 
 /// Read one length-prefixed JSON frame. EOF before a new header is a clean
 /// disconnect; EOF inside a frame is reported as corruption.
+///
+/// # Errors
+///
+/// Returns an error when the frame is truncated, oversized, invalid JSON, or
+/// the transport read fails.
 pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Option<Frame>> {
     let mut header = [0_u8; 4];
     match reader.read_exact(&mut header).await {
@@ -401,6 +413,12 @@ impl<R> FrameReader<R> {
 }
 
 impl<R: AsyncRead + Unpin> FrameReader<R> {
+    /// Reads the next frame while preserving partial input between calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stream contains a truncated, oversized, or
+    /// invalid frame, or when the transport read fails.
     pub async fn next(&mut self) -> io::Result<Option<Frame>> {
         while self.header_read < self.header.len() {
             let read = self
