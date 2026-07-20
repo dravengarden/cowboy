@@ -42,7 +42,7 @@ import {
   previewCodeForRendering,
   shouldUseLightweightCode,
 } from "./codeRendering";
-import { SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
+import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
 
 // Extend Prism's Bash grammar inside the already-lazy Markdown bundle. Tool
 // cards only import SHELL_SYNTAX_LANGUAGE, so this semantic enhancement never
@@ -60,6 +60,16 @@ function cowboyShell(prism: Parameters<typeof bash>[0]): void {
     ): Record<string, unknown>;
   };
   languages[SHELL_SYNTAX_LANGUAGE] = languages.extend("bash", {});
+  // Prism's stock Bash grammar treats any `#` outside the few string shapes it
+  // recognizes as a comment. Shell comments, however, only begin where a new
+  // word may start. Keep URI/flake fragments such as `.#packages.x86_64-linux`
+  // and `https://host/#fragment` as ordinary arguments while retaining real
+  // comments after whitespace or a control operator.
+  (languages[SHELL_SYNTAX_LANGUAGE] as Record<string, unknown>).comment = {
+    pattern: SHELL_COMMENT_PATTERN,
+    lookbehind: true,
+    greedy: true,
+  };
   languages.insertBefore(SHELL_SYNTAX_LANGUAGE, "string", {
     "dsl-sed": {
       pattern:

@@ -90,6 +90,13 @@ export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): P
       return frame;
     }
   }
+  if (frame.language === "javascript" || frame.language === "typescript") {
+    const { formatEmbeddedSource } = await import("./embeddedFormatter.ts");
+    return {
+      ...frame,
+      text: await formatEmbeddedSource({ language: frame.language, source: frame.text, columns }),
+    };
+  }
   if (frame.language !== "sql") return frame;
   try {
     // Kept behind the already-lazy shell formatter path: ordinary transcript
