@@ -709,21 +709,25 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) 
 		remoteArgs = append(remoteArgs, value)
 	}
 	payload := strings.Join(remoteArgs, " ")
-	if _, err := parseShell(payload); err != nil {
-		return nestedPayload{}, false
-	}
 	launcherArgs := make([]string, 0, remoteStart)
 	for _, word := range call.Args[:remoteStart] {
 		value, _ := staticWord(word)
 		launcherArgs = append(launcherArgs, value)
 	}
 	launcherArgs[0] = filepath.Base(launcherArgs[0])
-	return nestedPayload{
+	remote := nestedPayload{
 		start:    int(call.Args[remoteStart].Pos().Offset()),
 		end:      int(call.Args[len(call.Args)-1].End().Offset()),
 		launcher: strings.Join(launcherArgs, " "),
 		payload:  payload,
-	}, true
+	}
+	if _, err := parseShell(payload); err != nil {
+		if !opaqueRemoteShellNeedsFrame(payload) {
+			return nestedPayload{}, false
+		}
+		remote.language, remote.label = remoteShellFallbackLanguage(payload)
+	}
+	return remote, true
 }
 
 // dynamicSSHSubcommand recognizes helper CLIs shaped like
@@ -751,17 +755,40 @@ func dynamicSSHSubcommand(source string, call *syntax.CallExpr) (nestedPayload, 
 		remoteArgs = append(remoteArgs, value)
 	}
 	payload := strings.Join(remoteArgs, " ")
-	if _, err := parseShell(payload); err != nil {
-		return nestedPayload{}, false
-	}
 	launcherStart := int(call.Args[0].Pos().Offset())
 	launcherEnd := int(call.Args[1].End().Offset())
-	return nestedPayload{
+	remote := nestedPayload{
 		start:    int(call.Args[2].Pos().Offset()),
 		end:      int(call.Args[len(call.Args)-1].End().Offset()),
 		launcher: source[launcherStart:launcherEnd],
 		payload:  payload,
-	}, true
+	}
+	if _, err := parseShell(payload); err != nil {
+		if !opaqueRemoteShellNeedsFrame(payload) {
+			return nestedPayload{}, false
+		}
+		remote.language, remote.label = remoteShellFallbackLanguage(payload)
+	}
+	return remote, true
+}
+
+// A remote login shell is not necessarily Bash. macOS development hosts often
+// run Fish, while appliances may expose another shell dialect. Keep complex,
+// statically recovered payloads visible even when the Bash parser rejects them;
+// syntax highlighting is best-effort and Source remains the exact authority.
+func opaqueRemoteShellNeedsFrame(source string) bool {
+	trimmed := strings.TrimSpace(source)
+	return strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 72 ||
+		strings.Count(trimmed, ";") >= 2 || strings.Count(trimmed, "|") >= 2
+}
+
+func remoteShellFallbackLanguage(source string) (string, string) {
+	for _, signal := range []string{"; and ", "; or ", " end;", " end\n", "(seq ", "set -l ", "string match "} {
+		if strings.Contains(source, signal) {
+			return "fish", "Fish"
+		}
+	}
+	return "shell", "Remote shell"
 }
 
 func summarizeFrames(frames []shellFrame) string {
@@ -952,7 +979,7 @@ func staticWord(word *syntax.Word) (string, bool) {
 	for _, part := range word.Parts {
 		switch part := part.(type) {
 		case *syntax.Lit:
-			value.WriteString(part.Value)
+			value.WriteString(decodeUnquotedLiteral(part.Value))
 		case *syntax.SglQuoted:
 			value.WriteString(part.Value)
 		case *syntax.DblQuoted:
@@ -968,6 +995,26 @@ func staticWord(word *syntax.Word) (string, bool) {
 		}
 	}
 	return value.String(), true
+}
+
+// mvdan preserves source backslashes in unquoted literals too. Outside quotes,
+// Bash consumes a backslash before any following byte; a backslash-newline pair
+// is a line continuation and contributes no byte. Decoding here turns standard
+// quote bridges such as '\” back into the single quote an SSH or `bash -c`
+// receiver actually sees, while the Source view continues to use exact offsets.
+func decodeUnquotedLiteral(source string) string {
+	var value strings.Builder
+	for index := 0; index < len(source); index++ {
+		if source[index] != '\\' || index+1 >= len(source) {
+			value.WriteByte(source[index])
+			continue
+		}
+		if source[index+1] != '\n' {
+			value.WriteByte(source[index+1])
+		}
+		index++
+	}
+	return value.String()
 }
 
 // mvdan's syntax tree preserves source backslashes inside double quotes.

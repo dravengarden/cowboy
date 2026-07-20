@@ -128,6 +128,7 @@ const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   adoc: "asciidoc",
   tex: "latex",
   sh: "bash",
+  shell: "bash",
   bash: "bash",
   zsh: "bash",
   fish: "bash",

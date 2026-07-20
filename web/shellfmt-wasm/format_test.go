@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func TestFormatsShellStructure(t *testing.T) {
@@ -95,6 +97,7 @@ func TestHistoricalShellCorpus(t *testing.T) {
 	defer file.Close()
 	total, formatted, fallback, nested, ssh, heredoc, multiline := 0, 0, 0, 0, 0, 0, 0
 	sshNested, sshFallback, shellCommand, shellCommandNested := 0, 0, 0, 0
+	eligibleFrames, projectedFrames, missedFrames := 0, 0, 0
 	maxFrames := 0
 	errorCounts := make(map[string]int)
 	scanner := bufio.NewScanner(file)
@@ -130,6 +133,22 @@ func TestHistoricalShellCorpus(t *testing.T) {
 			continue
 		}
 		formatted++
+		if parsed, parseErr := parseShell(command); parseErr == nil {
+			required := requiredNestedLaunchers(command, parsed, 0)
+			eligibleFrames += len(required)
+			available := make(map[string]int, len(display.Frames))
+			for _, frame := range display.Frames {
+				available[frame.Launcher]++
+			}
+			for _, launcher := range required {
+				if available[launcher] > 0 {
+					available[launcher]--
+					projectedFrames++
+				} else {
+					missedFrames++
+				}
+			}
+		}
 		if len(display.Frames) > 1 {
 			nested++
 			if hasSSH {
@@ -146,6 +165,10 @@ func TestHistoricalShellCorpus(t *testing.T) {
 	}
 	t.Logf("commands=%d formatted=%d fallback=%d nested=%d ssh=%d heredoc=%d multiline=%d max_frames=%d", total, formatted, fallback, nested, ssh, heredoc, multiline, maxFrames)
 	t.Logf("ssh_nested=%d ssh_fallback=%d ssh_plain=%d shell_c=%d shell_c_nested=%d", sshNested, sshFallback, ssh-sshNested-sshFallback, shellCommand, shellCommandNested)
+	t.Logf("eligible_nested_frames=%d projected_nested_frames=%d missed_nested_frames=%d", eligibleFrames, projectedFrames, missedFrames)
+	if missedFrames != 0 {
+		t.Errorf("historical corpus has %d eligible nested frames which were not projected", missedFrames)
+	}
 	errors := make([]string, 0, len(errorCounts))
 	for message, count := range errorCounts {
 		errors = append(errors, message+" ["+strconv.Itoa(count)+"]")
@@ -154,6 +177,29 @@ func TestHistoricalShellCorpus(t *testing.T) {
 	for _, summary := range errors {
 		t.Log("fallback:", summary)
 	}
+}
+
+func requiredNestedLaunchers(source string, parsed *syntax.File, depth int) []string {
+	if depth >= maxShellFrameDepth {
+		return nil
+	}
+	var launchers []string
+	for _, candidate := range nestedPayloads(source, parsed) {
+		if candidate.language != "" {
+			launchers = append(launchers, candidate.launcher)
+			continue
+		}
+		inner, err := parseShell(candidate.payload)
+		if err != nil {
+			continue
+		}
+		children := requiredNestedLaunchers(candidate.payload, inner, depth+1)
+		if nestedShellNeedsFrame(candidate.payload, inner) || len(children) > 0 {
+			launchers = append(launchers, candidate.launcher)
+			launchers = append(launchers, children...)
+		}
+	}
+	return launchers
 }
 
 func TestExtractsNixBashCommandPayload(t *testing.T) {
@@ -679,5 +725,30 @@ func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
 		if len(display.Frames) != 1 {
 			t.Fatalf("trivial embedded program should stay inline: %s: %#v", source, display.Frames)
 		}
+	}
+}
+
+func TestExtractsQuotedSSHRemotePipeline(t *testing.T) {
+	source := `ssh -o BatchMode=yes macbook-air 'scutil --nc status "SFM" | grep -i -E "ephemeral|expiry|tailscale|hostname|control_url" | sed -E '\''s/(auth_key|password|token|secret)[^,}]*/\1=REDACTED/Ig'\'' | head -n 80'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) < 2 || display.Frames[1].Launcher != "ssh -o BatchMode=yes macbook-air" {
+		t.Fatalf("quoted SSH pipeline should become a remote frame: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[1].Text, "scutil") || !strings.Contains(display.Frames[1].Text, "sed -E") {
+		t.Fatalf("remote pipeline content was lost: %#v", display.Frames)
+	}
+}
+
+func TestKeepsComplexFishRemotePayloadAsLanguageFrame(t *testing.T) {
+	source := `ssh macbook-air 'for i in (seq 1 20); set state (scutil --nc status "SFM" | head -n 1); test "$state" = Connected; and break; sleep 1; end'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 || display.Frames[1].Language != "fish" || display.Frames[1].Label != "Fish" {
+		t.Fatalf("complex non-Bash remote source should use a labeled safe fallback: %#v", display.Frames)
 	}
 }
