@@ -3023,7 +3023,6 @@ function SessionInfoShell(
             open
             onClose={onClose}
             title="Session info"
-            actions={<Button onClick={onClose} color="inherit">Close<Kbd keys="Esc" /></Button>}
         >
             {body}
         </Sheet>

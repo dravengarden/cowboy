@@ -101,7 +101,7 @@ import {
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
-import { ImageLightbox } from "./_shell";
+import { FloatingActionIsland, ImageLightbox } from "./_shell";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
@@ -1873,34 +1873,9 @@ function ToolDetailsBrowser({
     ? run.server.split(/[-_]/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
     : null;
 
-  const navigation = (
-    <Box
-      sx={{
-        position: "relative",
-        width: "100%",
-        px: desktop ? 0.75 : 0.5,
-        py: desktop ? 0.5 : 0.375,
-        minHeight: desktop ? undefined : 58,
-        display: "grid",
-        gridTemplateColumns: desktop
-          ? "1fr auto 1fr auto auto"
-          : "repeat(5, minmax(0, 1fr))",
-        alignItems: "center",
-        gap: 0.5,
-        bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
-        backdropFilter: "blur(30px) saturate(200%)",
-        WebkitBackdropFilter: "blur(30px) saturate(200%)",
-        border: 1,
-        borderColor: "divider",
-        borderRadius: desktop ? 2 : 2.5,
-        userSelect: "none",
-        WebkitUserSelect: "none",
-        boxShadow: (theme) => desktop
-          ? `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`
-          : `0 10px 32px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.28)" : "rgba(55,35,90,0.10)"}`,
-      }}
-    >
-      {roomy
+  const navigationItems = (
+    <>
+      {desktop && roomy
         ? (
           <Button
             aria-label="Previous tool run"
@@ -1931,20 +1906,12 @@ function ToolDetailsBrowser({
       </Typography>
       {!desktop && (
         <Tooltip title="Close details">
-        <IconButton
-          aria-label="Close tool details"
-          onClick={onClose}
-          sx={{
-            width: 44,
-            height: 44,
-            justifySelf: "center",
-          }}
-        >
-          <KeyboardArrowDown />
-        </IconButton>
+          <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44, justifySelf: "center" }}>
+            <KeyboardArrowDown />
+          </IconButton>
         </Tooltip>
       )}
-      {roomy
+      {desktop && roomy
         ? (
           <Button
             aria-label="Next tool run"
@@ -1973,12 +1940,7 @@ function ToolDetailsBrowser({
       </Tooltip>
       {desktop && (roomy
         ? (
-          <Button
-            aria-label="Close tool details"
-            onClick={onClose}
-            endIcon={<KeyboardArrowDown />}
-            sx={{ minHeight: 40, textTransform: "none" }}
-          >
+          <Button aria-label="Close tool details" onClick={onClose} endIcon={<KeyboardArrowDown />} sx={{ minHeight: 40, textTransform: "none" }}>
             Close
           </Button>
         )
@@ -1989,8 +1951,36 @@ function ToolDetailsBrowser({
             </IconButton>
           </Tooltip>
         ))}
-    </Box>
+    </>
   );
+
+  const navigation = desktop
+    ? (
+      <Box
+      sx={{
+        position: "relative",
+        width: "100%",
+        px: 0.75,
+        py: 0.5,
+        display: "grid",
+        gridTemplateColumns: "1fr auto 1fr auto auto",
+        alignItems: "center",
+        gap: 0.5,
+        bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
+        backdropFilter: "blur(30px) saturate(200%)",
+        WebkitBackdropFilter: "blur(30px) saturate(200%)",
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        boxShadow: (theme) => `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
+      }}
+    >
+        {navigationItems}
+      </Box>
+    )
+    : <FloatingActionIsland columns="repeat(5, minmax(0, 1fr))">{navigationItems}</FloatingActionIsland>;
 
   const details = (
       <Box ref={bodyRef} sx={{ position: "relative", maxWidth: desktop ? 980 : "none", mx: desktop ? "auto" : 0 }}>
