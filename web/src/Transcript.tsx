@@ -2644,17 +2644,13 @@ export function Transcript({
     snapshot.pagination.get(sessionId)
   );
 
-  // The transcript normally retains a bounded recent tail. Tool details is a
-  // session-level browser, so its denominator must not pretend that tail is the
-  // complete history. While the sheet is open, page backward to the beginning;
-  // the footer uses a `+` until the server confirms completion.
-  useEffect(() => {
-    if (
-      selectedToolKey === null || !paging || paging.reachedStart ||
-      paging.loadingOlder || paging.beforeSeq === null
-    ) return;
-    void loadOlder(sessionId);
-  }, [paging?.beforeSeq, paging?.loadingOlder, paging?.reachedStart, selectedToolKey, sessionId]);
+  // Tool details deliberately browses only the retained history window. Never
+  // page an entire long-running session merely to make its denominator exact:
+  // thousands of newly derived transcript rows behind the sheet turn an
+  // otherwise local expand/collapse into a main-thread layout storm. The
+  // footer keeps its `+` suffix until ordinary transcript scrollback happens
+  // to reach the beginning, so the bounded count stays honest without doing
+  // hidden work.
   // A retained recent tail can arrive before enough older pages have filled a
   // tall phone viewport. Without an explicit state the latest reply sits above
   // the composer while the unused upper viewport looks like a broken blank
