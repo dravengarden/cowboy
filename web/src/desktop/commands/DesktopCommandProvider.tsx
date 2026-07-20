@@ -297,7 +297,7 @@ export function DesktopCommandProvider(
               j: "line-down",
               k: "line-up",
               G: "latest",
-              f: "toggle-following",
+              F: "toggle-following",
             } as Record<string, string>)[key] ?? null;
           }
         }

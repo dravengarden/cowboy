@@ -60,7 +60,8 @@ session state, not a global top-bar action. While Conversation is focused:
 - `Ctrl-d/u` scroll down/up by half a page;
 - `Ctrl-f/b` scroll down/up by one page;
 - `gg/G` jump to the oldest/latest output;
-- `f` toggles automatic following.
+- `Shift-f` toggles automatic following; bare `f` opens Vimium-style target
+  hints for every visible clickable control, including dialogs.
 - `Tab/Shift-Tab` selects the next/previous expandable transcript widget;
 - `h/l` closes/opens the selected widget, and `Enter` toggles it. With no
   selection these keys target the widget nearest the viewport centre;
@@ -103,6 +104,13 @@ in the current region.
 
 The Desktop-only shortcut dialog opens from the status-line `? Shortcuts`
 entry or `Mod+/`. `Mod+k` opens the all-command palette.
+
+Bare `f` is the pointerless escape hatch: it overlays short home-row labels on
+every visible actionable control. Type a label to focus and activate that
+target, or press Escape to cancel. Labels are recomputed while scrolling and
+when dialogs mutate, so the same mechanism covers the workspace, Tool History
+inspector, menus, and modal actions without every control needing a bespoke
+shortcut.
 
 Shortcut hints follow one shared keycap grammar and three visibility levels:
 

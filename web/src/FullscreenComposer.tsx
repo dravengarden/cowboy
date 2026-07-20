@@ -16,7 +16,6 @@ import {
   useTheme,
 } from "@mui/material";
 import { Check, Close, CloseFullscreen, Send, Tune } from "@mui/icons-material";
-import { MobileSheetDismiss } from "./_shell";
 import {
   PlatformComposerEditor,
   type ComposerEditorHandle,
@@ -254,14 +253,13 @@ export function FullscreenComposer({
         />
       </Box>
 
-      {/* Obsidian-style markdown toolbar pinned above the keyboard: the
-          config-driven commands scroll horizontally; a pinned wrench (never
-          scrolls away) opens "Manage toolbar options". */}
+      {/* One keyboard dock: formatting stays on its compact first row and an
+          edit-mode Save sits centred on the second. Keeping both actions in one
+          material avoids the old toolbar + detached giant-pill stack. */}
       <Box
         data-toolbar-mode={hasSelection ? "wrap" : "insert"}
         sx={{
-          display: "flex",
-          alignItems: "center",
+          display: "grid",
           // Same surface tone as the editor (was the whiter `background.paper`,
           // which read as an ugly bright band). A soft upward shadow gives the
           // toolbar a gentle lift above the writing area instead of a hard hairline
@@ -271,28 +269,45 @@ export function FullscreenComposer({
             `0 -10px 24px -18px ${
               alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.6 : 0.22)
             }`,
+          userSelect: "none",
+          WebkitUserSelect: "none",
         }}
       >
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={0.25}
-          sx={{ flex: 1, minWidth: 0, px: 1, py: 0.5, overflowX: "auto", flexWrap: "nowrap" }}
-        >
-          {actions}
-        </Stack>
-        <Box sx={{ borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
-          <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
-            <Tune />
-          </ToolBtn>
+        <Box sx={{ minWidth: 0, display: "flex", alignItems: "center" }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={0.25}
+            sx={{ flex: 1, minWidth: 0, px: 1, py: 0.5, overflowX: "auto", flexWrap: "nowrap" }}
+          >
+            {actions}
+          </Stack>
+          <Box sx={{ borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
+            <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
+              <Tune />
+            </ToolBtn>
+          </Box>
         </Box>
+        {onDiscard && (
+          <Box sx={{ display: "flex", justifyContent: "center", px: 2, pt: 0.25, pb: 1 }}>
+            <Button
+              aria-label="Save"
+              onClick={act(onSubmit)}
+              variant="outlined"
+              sx={{
+                minWidth: 152,
+                minHeight: 44,
+                borderRadius: 999,
+                color: "text.primary",
+                fontWeight: 750,
+                textTransform: "none",
+              }}
+            >
+              Save
+            </Button>
+          </Box>
+        )}
       </Box>
-
-      {onDiscard && (
-        <Box sx={{ px: 2, py: 1 }}>
-          <MobileSheetDismiss onClose={onSubmit} label="Save" />
-        </Box>
-      )}
 
       <ComposerToolbarSettings
         open={settingsOpen}

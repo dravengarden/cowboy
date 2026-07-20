@@ -3,6 +3,7 @@ import { App } from "../App";
 import type { Mode as ThemeMode } from "../theme";
 import { DesktopCommandProvider } from "./commands/DesktopCommandProvider";
 import { DesktopWorkspaceProvider } from "./DesktopWorkspaceController";
+import { DesktopHintOverlay } from "./DesktopHintOverlay";
 
 export function DesktopApp({
   themeMode,
@@ -19,6 +20,7 @@ export function DesktopApp({
   return (
     <DesktopWorkspaceProvider>
       <DesktopCommandProvider>
+        <DesktopHintOverlay />
         <App
           themeMode={themeMode}
           onSetThemeMode={onSetThemeMode}

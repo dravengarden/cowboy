@@ -23,6 +23,8 @@ import {
   ButtonBase,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogContent,
   IconButton,
   keyframes,
   Paper,
@@ -1562,13 +1564,15 @@ function ToolTranscriptContext({
   items,
   position,
   phase = "settled",
+  defaultOpen = false,
 }: {
   items: RenderItem[];
   position: "before" | "after";
   phase?: FollowingToolPhase;
+  defaultOpen?: boolean;
 }): React.JSX.Element | null {
   const blocks = toolContextBlocks(items);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const activeFollowing = position === "after" && phase !== "settled";
   if (blocks.length === 0 && !activeFollowing) return null;
   const label = position === "before" ? "Before this tool" : "After this tool";
@@ -1718,6 +1722,7 @@ function ToolDetailsBrowser({
   const currentRef = useRef<HTMLDivElement>(null);
   const anchorSpacerRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
+  const navigationChord = useRef<number | null>(null);
 
   useEffect(() => {
     if (!item) {
@@ -1777,17 +1782,52 @@ function ToolDetailsBrowser({
     if (!desktop || !item) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === "[") {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.matches("input, textarea, [contenteditable='true']")) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      } else if (event.key === "[") {
         event.preventDefault();
         select(runs[runIndex - 1]?.tools.at(-1));
       } else if (event.key === "]") {
         event.preventDefault();
         select(runs[runIndex + 1]?.tools[0]);
+      } else if (event.key === "j") {
+        event.preventDefault();
+        select(runs[Math.min(runs.length - 1, runIndex + 1)]?.tools[0]);
+      } else if (event.key === "k") {
+        event.preventDefault();
+        select(runs[Math.max(0, runIndex - 1)]?.tools.at(-1));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        onLocate(item.key);
+      } else if (navigationChord.current !== null) {
+        globalThis.clearTimeout(navigationChord.current);
+        navigationChord.current = null;
+        if (event.key === "g") {
+          event.preventDefault();
+          select(runs[0]?.tools[0]);
+        }
+      } else if (event.key === "g") {
+        event.preventDefault();
+        navigationChord.current = globalThis.setTimeout(() => {
+          navigationChord.current = null;
+        }, 900);
+      } else if (event.key === "G") {
+        event.preventDefault();
+        select(runs.at(-1)?.tools.at(-1));
       }
     };
     globalThis.addEventListener("keydown", onKeyDown);
-    return () => globalThis.removeEventListener("keydown", onKeyDown);
-  }, [desktop, runIndex, item, runs]);
+    return () => {
+      globalThis.removeEventListener("keydown", onKeyDown);
+      if (navigationChord.current !== null) {
+        globalThis.clearTimeout(navigationChord.current);
+        navigationChord.current = null;
+      }
+    };
+  }, [desktop, runIndex, item, runs, onClose, onLocate]);
 
   if (!item) return null;
   // A search query has no useful alternate presentation: formatting it only
@@ -1841,7 +1881,9 @@ function ToolDetailsBrowser({
         px: 0.75,
         py: 0.5,
         display: "grid",
-        gridTemplateColumns: desktop ? "1fr auto 1fr auto auto" : "1fr auto 1fr auto",
+        gridTemplateColumns: desktop
+          ? "1fr auto 1fr auto auto"
+          : "1fr auto minmax(108px, auto) auto 1fr",
         alignItems: "center",
         gap: 0.5,
         bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
@@ -1850,6 +1892,8 @@ function ToolDetailsBrowser({
         borderTop: 1,
         borderColor: "divider",
         borderRadius: 2,
+        userSelect: "none",
+        WebkitUserSelect: "none",
         boxShadow: (theme) =>
           `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
       }}
@@ -1883,6 +1927,25 @@ function ToolDetailsBrowser({
       >
         {runIndex + 1} / {runs.length}{historyComplete ? "" : "+"}
       </Typography>
+      {!desktop && (
+        <Button
+          aria-label="Close tool details"
+          onClick={onClose}
+          sx={{
+            minWidth: 108,
+            minHeight: 44,
+            justifySelf: "center",
+            border: 1,
+            borderColor: "primary.main",
+            borderRadius: 999,
+            color: "text.primary",
+            textTransform: "none",
+            fontWeight: 700,
+          }}
+        >
+          Close
+        </Button>
+      )}
       {roomy
         ? (
           <Button
@@ -1931,20 +1994,15 @@ function ToolDetailsBrowser({
     </Box>
   );
 
-  return createPortal(
-    <Sheet
-      open
-      onClose={onClose}
-      title="Tool details"
-      wide
-      forceSheet={!desktop}
-      cover={!desktop}
-      mobileDismiss="footer"
-      actions={navigation}
-    >
-      <Box ref={bodyRef} sx={{ position: "relative" }}>
+  const details = (
+      <Box ref={bodyRef} sx={{ position: "relative", maxWidth: desktop ? 980 : "none", mx: desktop ? "auto" : 0 }}>
         <Stack spacing={1.25}>
-            <ToolTranscriptContext key={`${item.key}-before`} items={before} position="before" />
+            <ToolTranscriptContext
+              key={`${item.key}-before`}
+              items={before}
+              position="before"
+              defaultOpen={desktop}
+            />
             {run && run.tools.length > 1 && (
               <Box
                 aria-label={`${runTitle ?? "MCP"} run with ${run.tools.length} calls`}
@@ -2103,7 +2161,7 @@ function ToolDetailsBrowser({
                         <CodeView
                           code={JSON.stringify(item.rawInput, null, 2) ?? String(item.rawInput)}
                           lang="json"
-                          maxHeight={360}
+                          maxHeight={desktop ? 640 : 360}
                           touchWrap={!rawOnly}
                         />
                       </Labeled>
@@ -2113,7 +2171,7 @@ function ToolDetailsBrowser({
                         <CodeView
                           code={JSON.stringify(item.content, null, 2) ?? String(item.content)}
                           lang="json"
-                          maxHeight={360}
+                          maxHeight={desktop ? 640 : 360}
                           touchWrap={!rawOnly}
                         />
                       </Labeled>
@@ -2131,11 +2189,142 @@ function ToolDetailsBrowser({
               items={after}
               position="after"
               phase={running ? "running" : runIndex < runs.length - 1 ? "ready" : "settled"}
+              defaultOpen={desktop}
             />
             <Box ref={anchorSpacerRef} aria-hidden />
           </Stack>
       </Box>
-    </Sheet>,
+  );
+
+  const desktopHistory = (
+    <Box
+      component="nav"
+      aria-label="Tool run history"
+      sx={{
+        minWidth: 0,
+        minHeight: 0,
+        overflowY: "auto",
+        borderRight: 1,
+        borderColor: "divider",
+        bgcolor: (theme) => alpha(theme.palette.background.default, 0.52),
+        userSelect: "none",
+      }}
+    >
+      <Box sx={{ position: "sticky", top: 0, zIndex: 1, px: 1.5, py: 1.25, bgcolor: "background.paper", borderBottom: 1, borderColor: "divider" }}>
+        <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 800 }}>
+          Agent history
+        </Typography>
+        <Typography variant="caption" display="block" color="text.disabled">
+          j/k step · gg/G ends · Enter locate
+        </Typography>
+      </Box>
+      <Stack sx={{ py: 0.5 }}>
+        {runs.map((candidate, candidateIndex) => {
+          const active = candidateIndex === runIndex;
+          const candidateTool = candidate.tools[0];
+          if (!candidateTool) return null;
+          const candidateHeading = toolHeading({
+            provider,
+            toolName: candidateTool.toolName,
+            kind: candidateTool.toolKind,
+            title: candidateTool.title,
+            rawInput: candidateTool.rawInput,
+          });
+          return (
+            <ButtonBase
+              key={candidate.key}
+              aria-current={active ? "step" : undefined}
+              onClick={(): void => select(candidateTool)}
+              sx={{
+                minHeight: 50,
+                px: 1.5,
+                py: 0.75,
+                display: "grid",
+                gridTemplateColumns: "32px minmax(0, 1fr) auto",
+                gap: 1,
+                alignItems: "center",
+                textAlign: "left",
+                borderLeft: 3,
+                borderColor: active ? "primary.main" : "transparent",
+                bgcolor: active ? "action.selected" : "transparent",
+                "&:hover": { bgcolor: "action.hover" },
+              }}
+            >
+              <Typography variant="caption" color={active ? "primary.main" : "text.disabled"} sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+                {candidateIndex + 1}
+              </Typography>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="body2" noWrap sx={{ fontFamily: candidateTool.toolKind === "execute" ? "ui-monospace, SFMono-Regular, Menlo, monospace" : "inherit", fontWeight: active ? 750 : 550 }}>
+                  {candidateHeading}
+                </Typography>
+                {candidate.tools.length > 1 && (
+                  <Typography variant="caption" color="text.disabled">
+                    {candidate.tools.length} calls
+                  </Typography>
+                )}
+              </Box>
+              <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: candidateTool.status === "failed" ? "error.main" : candidateTool.status === "in_progress" || candidateTool.status === "pending" ? "warning.main" : "success.main" }} />
+            </ButtonBase>
+          );
+        })}
+      </Stack>
+    </Box>
+  );
+
+  return createPortal(
+    desktop
+      ? (
+        <Dialog
+          open
+          onClose={onClose}
+          maxWidth={false}
+          fullWidth
+          PaperProps={{
+            sx: {
+              width: "calc(100vw - 32px)",
+              maxWidth: 1600,
+              height: "calc(100dvh - 32px)",
+              maxHeight: 1100,
+              m: 2,
+              overflow: "hidden",
+              borderRadius: 2.5,
+              backgroundImage: "none",
+            },
+          }}
+        >
+          <Box sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
+            <Box sx={{ px: 2, py: 1, display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(520px, 2fr)", alignItems: "center", gap: 2, borderBottom: 1, borderColor: "divider", userSelect: "none" }}>
+              <Box>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Tool history inspector</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Review what the agent ran, changed, and observed
+                </Typography>
+              </Box>
+              {navigation}
+            </Box>
+            <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)" }}>
+              {desktopHistory}
+              <DialogContent sx={{ minHeight: 0, overflowY: "auto", px: { md: 3, xl: 5 }, py: 2.5 }}>
+                {details}
+              </DialogContent>
+            </Box>
+          </Box>
+        </Dialog>
+      )
+      : (
+        <Sheet
+          open
+          onClose={onClose}
+          title="Tool details"
+          wide
+          forceSheet
+          cover
+          mobileDismiss="none"
+          actions={navigation}
+        >
+          {details}
+        </Sheet>
+      ),
     document.body,
   );
 }

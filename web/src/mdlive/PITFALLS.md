@@ -437,6 +437,16 @@ here says otherwise.
     escape slashes, and keep app-generated lifecycle commands such as `/compact`
     outside this user-composer guard.
 
+20. **Fullscreen row-edit chrome is one non-selectable keyboard dock.** The
+    formatting toolbar and edit-mode Save action share one bottom surface, with
+    Save centred below the horizontally scrolling commands. Do not restore a
+    second detached dismissal pill: on iOS it wastes the keyboard-adjacent area
+    and its label can acquire native text-selection handles. The dock and its
+    controls use `user-select: none`; this applies only to chrome, never the CM6
+    canvas, so native caret, selection, long-press Paste, and IME behavior remain
+    unchanged. The top-right ignore-modifications action and confirmation dialog
+    stay separate from Save.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
