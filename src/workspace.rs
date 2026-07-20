@@ -137,12 +137,15 @@ pub fn current_project_checkout(columbus: &Path, project: &str) -> Option<PathBu
     let body = std::fs::read_to_string(project_file).ok()?;
     let kind = toml_string(&body, "kind");
     let base = columbus.join("projects").join(project);
-    let candidate = if kind.as_deref() == Some("external") {
-        base.join(toml_string(&body, "default_branch")?)
-    } else {
-        base
-    };
-    usable_directory(&candidate).then_some(candidate)
+    if kind.as_deref() != Some("external") || ordinary_clone(&base) {
+        return usable_directory(&base).then_some(base);
+    }
+    let legacy = base.join(toml_string(&body, "default_branch")?);
+    ordinary_clone(&legacy).then_some(legacy)
+}
+
+fn ordinary_clone(path: &Path) -> bool {
+    path.join(".git").is_dir()
 }
 
 fn valid_project_name(project: &str) -> bool {
@@ -212,7 +215,26 @@ mod tests {
         )
         .expect("project definition");
         let checkout = columbus.join("projects/corsair/main");
-        std::fs::create_dir_all(&checkout).expect("checkout");
+        std::fs::create_dir_all(checkout.join(".git")).expect("checkout");
+        (root, checkout)
+    }
+
+    fn flat_fixture() -> (TestDir, PathBuf) {
+        let root = TestDir::new();
+        let columbus = root.path().join("columbus");
+        let definition = columbus
+            .join("project-defs")
+            .join("corsair")
+            .join("project.toml");
+        std::fs::create_dir_all(definition.parent().expect("definition parent"))
+            .expect("project definition dir");
+        std::fs::write(
+            definition,
+            "kind = \"external\"\nrepo = \"git@example/corsair\"\ndefault_branch = \"main\"\n",
+        )
+        .expect("project definition");
+        let checkout = columbus.join("projects/corsair");
+        std::fs::create_dir_all(checkout.join(".git")).expect("flat checkout");
         (root, checkout)
     }
 
@@ -251,6 +273,16 @@ mod tests {
         let (root, checkout) = fixture();
         let stale = root.path().join("columbus/projects/corsair/old-branch");
         let resolved = resolve_session_workspace(root.path(), &stale).expect("resolve");
+        assert_eq!(resolved.path, checkout);
+    }
+
+    #[test]
+    fn deleted_legacy_workspace_maps_to_flat_checkout() {
+        let (root, checkout) = flat_fixture();
+        let stale = root.path().join("columbus/projects/corsair/main");
+        let resolved = resolve_session_workspace(root.path(), &stale).expect("resolve");
+        assert!(resolved.changed);
+        assert_eq!(resolved.project.as_deref(), Some("corsair"));
         assert_eq!(resolved.path, checkout);
     }
 

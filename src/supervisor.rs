@@ -717,7 +717,7 @@ mod tests {
         )
         .expect("definition");
         let checkout = columbus.join("projects/corsair/main");
-        std::fs::create_dir_all(&checkout).expect("checkout");
+        std::fs::create_dir_all(checkout.join(".git")).expect("checkout");
         let hub = Hub::new();
         hub.create_session(
             "s".to_owned(),
