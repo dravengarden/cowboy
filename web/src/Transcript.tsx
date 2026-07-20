@@ -1781,7 +1781,7 @@ function ToolDetailsBrowser({
   useEffect(() => {
     if (!desktop || !item) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.matches("input, textarea, [contenteditable='true']")) return;
       if (event.key === "Escape") {
@@ -1819,9 +1819,9 @@ function ToolDetailsBrowser({
         select(runs.at(-1)?.tools.at(-1));
       }
     };
-    globalThis.addEventListener("keydown", onKeyDown);
+    globalThis.addEventListener("keydown", onKeyDown, true);
     return () => {
-      globalThis.removeEventListener("keydown", onKeyDown);
+      globalThis.removeEventListener("keydown", onKeyDown, true);
       if (navigationChord.current !== null) {
         globalThis.clearTimeout(navigationChord.current);
         navigationChord.current = null;
