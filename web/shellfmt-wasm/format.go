@@ -495,12 +495,41 @@ func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 		if !ok || strings.TrimSpace(value) == "" {
 			return nestedPayload{}, false
 		}
+		// Keep tiny psql commands in the shell flow. A separate rail and marker
+		// cost more attention than they save for meta commands such as `\d events`
+		// or a short scalar query; complex SQL still earns syntax-aware framing.
+		if !sqlNeedsFrame(value) {
+			return nestedPayload{}, false
+		}
 		return nestedPayload{
 			start: int(args[index+1].Pos().Offset()), end: int(args[index+1].End().Offset()),
 			launcher: "psql " + option, payload: value, language: "sql", dialect: "postgresql",
 		}, true
 	}
 	return nestedPayload{}, false
+}
+
+// sqlNeedsFrame is viewport-independent so the same command keeps the same
+// hierarchy across phone, tablet, and desktop. Newlines and long programs are
+// inherently dense; otherwise multiple clauses, joins, or nested expressions
+// provide enough structure for the dedicated SQL renderer to be worthwhile.
+func sqlNeedsFrame(source string) bool {
+	trimmed := strings.TrimSpace(source)
+	if strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 64 {
+		return true
+	}
+	upper := strings.ToUpper(trimmed)
+	clauses := 0
+	for _, keyword := range []string{
+		"SELECT ", " FROM ", " WHERE ", " GROUP BY ", " ORDER BY ",
+		" HAVING ", " LIMIT ", " JOIN ", " UNION ", " WITH ",
+		" INSERT ", " UPDATE ", " DELETE ", " CREATE ", " ALTER ",
+	} {
+		if strings.Contains(" "+upper+" ", keyword) {
+			clauses++
+		}
+	}
+	return clauses >= 3 || strings.Count(trimmed, "(") >= 2 || strings.Count(trimmed, ";") >= 2
 }
 
 // shellInterpreterName recognizes real interpreter binary naming conventions,

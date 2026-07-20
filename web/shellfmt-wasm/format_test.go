@@ -510,6 +510,23 @@ func TestLeavesDynamicPsqlPayloadInShellFrame(t *testing.T) {
 	}
 }
 
+func TestKeepsSimplePsqlPayloadsInline(t *testing.T) {
+	for _, source := range []string{
+		`psql database -c '\d events'`,
+		`psql database --command 'select 1'`,
+	} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range display.Frames {
+			if frame.Language == "sql" {
+				t.Fatalf("simple SQL must stay inline: source=%q frames=%#v", source, display.Frames)
+			}
+		}
+	}
+}
+
 func TestExtractsComplexJQProgramAsFormattedFrame(t *testing.T) {
 	source := `jq -er '.endpoints[] | select(.type == "tailscale" and (has("detour") | not) and .domain_resolver.server == "dns-direct") | .inbounds[] | select(.type == "tun") | .stack' "$tmp"`
 	display, err := formatShellDisplay(source, 46)
