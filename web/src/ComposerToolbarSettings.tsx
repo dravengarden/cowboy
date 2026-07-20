@@ -16,7 +16,7 @@ import {
   RestartAlt,
   Search,
 } from "@mui/icons-material";
-import { DetentSheet } from "./_shell";
+import { DetentSheet, MobileSheetDismiss } from "./_shell";
 import { COMPOSER_COMMANDS, COMPOSER_COMMANDS_BY_ID } from "./composerCommands";
 import {
   DEFAULT_COMPOSER_TOOLBAR,
@@ -114,6 +114,7 @@ export function ComposerToolbarSettings({
       cover
       frosted
       surfaceColor={theme.palette.background.default}
+      footer={<MobileSheetDismiss onClose={onClose} />}
       header={
         <Box sx={{ px: 1.5, pb: 0.5 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>

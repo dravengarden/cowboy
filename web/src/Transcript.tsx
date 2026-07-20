@@ -1939,6 +1939,7 @@ function ToolDetailsBrowser({
       wide
       forceSheet={!desktop}
       cover={!desktop}
+      mobileDismiss="none"
       actions={navigation}
     >
       <Box ref={bodyRef} sx={{ position: "relative" }}>

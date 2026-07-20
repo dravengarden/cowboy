@@ -103,7 +103,13 @@ import {
 import { useNavbarAtBottom } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
-import { ConnectionBanner, DetentSheet, ThemeModeControl, useAnyDetentSheetOpen } from "./_shell";
+import {
+    ConnectionBanner,
+    DetentSheet,
+    MobileSheetDismiss,
+    ThemeModeControl,
+    useAnyDetentSheetOpen,
+} from "./_shell";
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
@@ -1571,6 +1577,9 @@ export function App({
                     // works at either anchor (top on desktop, bottom on mobile).
                     frosted
                     surfaceColor={theme.palette.background.default}
+                    footer={navbarAtBottom
+                        ? <MobileSheetDismiss onClose={(): void => setDrawerOpen(false)} />
+                        : undefined}
                 >
                     {/* DetentSheet's body has no side padding, so the list spans
                         the full width on its own — render it directly. (A former
@@ -2442,7 +2451,15 @@ function SettingsShell({
                     onChange={setTab}
                     options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
                 />
-                <Box sx={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+                <Box
+                    sx={{
+                        flex: 1,
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        visibility: useSheetSurface ? "hidden" : "visible",
+                        pointerEvents: useSheetSurface ? "none" : "auto",
+                    }}
+                >
                     <Box sx={{ position: "relative", display: "inline-flex" }}>
                         <IconButton aria-label="close settings" onClick={onClose} sx={{ width: 36, height: 36 }}>
                             <CloseIcon fontSize="small" />
