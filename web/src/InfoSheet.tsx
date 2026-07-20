@@ -17,6 +17,8 @@ import {
   LinearProgress,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { ExpandMore, Refresh } from "@mui/icons-material";
@@ -118,7 +120,7 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
   onUsageChanged: () => Promise<void>;
 }): React.JSX.Element {
   const [resetOpen, setResetOpen] = useState(false);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
@@ -137,10 +139,18 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
   const sessionUsage = record(usage.activity?.session);
   const sessionCost = record(sessionUsage?.cost);
   const title = usage.provider === "claude-code" ? "Claude Code" : usage.provider === "gemini" ? "Gemini" : "Codex";
+  const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
+  const openResetDialog = () => {
+    setResetMode("schedule");
+    setFireAt("");
+    setConfirmText("");
+    setResetError(null);
+    setResetOpen(true);
+  };
   const closeResetDialog = () => {
     if (resetBusy) return;
     setResetOpen(false);
-    setScheduleOpen(false);
+    setResetMode("schedule");
     setFireAt("");
     setConfirmText("");
     setResetError(null);
@@ -191,7 +201,7 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
                   sx={{ borderBottom: index < credits.length - 1 ? 1 : 0, borderColor: "divider" }}
                 >
                   {actionable
-                    ? <ButtonBase onClick={() => setResetOpen(true)} sx={{ width: "100%", borderRadius: 1 }}>{row}</ButtonBase>
+                    ? <ButtonBase onClick={openResetDialog} sx={{ width: "100%", borderRadius: 1 }}>{row}</ButtonBase>
                     : row}
                 </Box>
               );
@@ -238,24 +248,45 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
         </Typography>
       </Stack>
       <Dialog open={resetOpen} onClose={closeResetDialog} fullWidth maxWidth="xs">
-        <DialogTitle>Use nearest reset?</DialogTitle>
+        <DialogTitle>{resetMode === "schedule" ? "Schedule nearest reset" : "Use nearest reset now?"}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Cowboy will consume only the earliest-expiring available reset. Later credits cannot be selected.
+            {resetMode === "schedule"
+              ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
+              : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
           </DialogContentText>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            value={resetMode}
+            onChange={(_event, value: "schedule" | "now" | null) => {
+              if (!value || value === resetMode || resetBusy) return;
+              setResetMode(value);
+              setConfirmText("");
+              setResetError(null);
+            }}
+            aria-label="Reset timing"
+            sx={{ mt: 2 }}
+          >
+            <ToggleButton value="schedule">Schedule</ToggleButton>
+            <ToggleButton value="now" color="error">Now</ToggleButton>
+          </ToggleButtonGroup>
           {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
-          {scheduleOpen && (
-            <Box
-              component="input"
+          {resetMode === "schedule" && (
+            <TextField
               type="datetime-local"
+              fullWidth
+              label="Run at"
               value={fireAt}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFireAt(event.target.value)}
-              sx={{ mt: 2, width: "100%", boxSizing: "border-box", p: 1.25, font: "inherit", color: "inherit", bgcolor: "background.paper", border: 1, borderColor: "divider", borderRadius: 1.5 }}
+              onChange={(event) => setFireAt(event.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+              error={fireAt !== "" && !scheduleValid}
+              helperText={fireAt !== "" && !scheduleValid ? "Choose a future time" : " "}
+              sx={{ mt: 2 }}
             />
           )}
           <TextField
             autoComplete="off"
-            autoFocus
             fullWidth
             label="Type confirm to continue"
             value={confirmText}
@@ -265,14 +296,14 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={closeResetDialog} disabled={resetBusy}>Cancel</Button>
-          <Button onClick={() => setScheduleOpen((value) => !value)} disabled={resetBusy}>Schedule</Button>
           <Button
             variant="contained"
-            disabled={resetBusy || confirmText !== "confirm" || (scheduleOpen && !fireAt)}
+            color={resetMode === "now" ? "error" : "primary"}
+            disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
             onClick={() => void (async () => {
               setResetBusy(true);
               setResetError(null);
-              const response = scheduleOpen
+              const response = resetMode === "schedule"
                 ? await fetch("/api/usage/codex/reset/schedule", {
                   method: "PUT",
                   headers: { "content-type": "application/json" },
@@ -285,7 +316,7 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
                 });
               if (response.ok) {
                 setResetOpen(false);
-                setScheduleOpen(false);
+                setResetMode("schedule");
                 setConfirmText("");
                 await onUsageChanged();
               } else {
@@ -293,7 +324,7 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
               }
               setResetBusy(false);
             })()}
-          >{scheduleOpen ? "Save" : "Reset now"}</Button>
+          >{resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}</Button>
         </DialogActions>
       </Dialog>
     </Box>

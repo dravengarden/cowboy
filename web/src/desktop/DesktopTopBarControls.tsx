@@ -108,7 +108,7 @@ function DesktopUsageExtras(
   },
 ): React.JSX.Element {
   const [resetOpen, setResetOpen] = useState(false);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [resetMode, setResetMode] = useState<"schedule" | "now">("schedule");
   const [fireAt, setFireAt] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
@@ -128,10 +128,18 @@ function DesktopUsageExtras(
   const contextSize = num(session?.size);
   const lifetimeTokens = num(summary?.lifetimeTokens);
   const costAmount = num(cost?.amount);
+  const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
+  const openResetDialog = () => {
+    setResetMode("schedule");
+    setFireAt("");
+    setConfirmText("");
+    setResetError(null);
+    setResetOpen(true);
+  };
   const closeResetDialog = () => {
     if (resetBusy) return;
     setResetOpen(false);
-    setScheduleOpen(false);
+    setResetMode("schedule");
     setFireAt("");
     setConfirmText("");
     setResetError(null);
@@ -181,7 +189,7 @@ function DesktopUsageExtras(
                   sx={{ minWidth: 0 }}
                 >
                   {actionable
-                    ? <ButtonBase onClick={() => setResetOpen(true)} sx={{ width: "100%", borderRadius: 1.25 }}>{card}</ButtonBase>
+                    ? <ButtonBase onClick={openResetDialog} sx={{ width: "100%", borderRadius: 1.25 }}>{card}</ButtonBase>
                     : card}
                 </Box>
               );
@@ -231,43 +239,73 @@ function DesktopUsageExtras(
         </Stack>
       )}
       <Dialog open={resetOpen} onClose={closeResetDialog} fullWidth maxWidth="xs">
-        <DialogTitle>Use nearest reset?</DialogTitle>
+        <DialogTitle>{resetMode === "schedule" ? "Schedule nearest reset" : "Use nearest reset now?"}</DialogTitle>
         <DialogContent>
-          <DialogContentText>Cowboy can only consume the earliest-expiring available reset.</DialogContentText>
-          {scheduleOpen && (
-            <TextField type="datetime-local" fullWidth value={fireAt} onChange={(event) => setFireAt(event.target.value)} sx={{ mt: 2 }} />
+          <DialogContentText>
+            {resetMode === "schedule"
+              ? "At the selected time, Cowboy will use the earliest-expiring reset then available."
+              : "Cowboy will immediately use the earliest-expiring available reset. This cannot be undone."}
+          </DialogContentText>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            value={resetMode}
+            onChange={(_event, value: "schedule" | "now" | null) => {
+              if (!value || value === resetMode || resetBusy) return;
+              setResetMode(value);
+              setConfirmText("");
+              setResetError(null);
+            }}
+            aria-label="Reset timing"
+            sx={{ mt: 2 }}
+          >
+            <ToggleButton value="schedule">Schedule</ToggleButton>
+            <ToggleButton value="now" color="error">Now</ToggleButton>
+          </ToggleButtonGroup>
+          {resetMode === "schedule" && (
+            <TextField
+              type="datetime-local"
+              fullWidth
+              label="Run at"
+              value={fireAt}
+              onChange={(event) => setFireAt(event.target.value)}
+              slotProps={{ inputLabel: { shrink: true } }}
+              error={fireAt !== "" && !scheduleValid}
+              helperText={fireAt !== "" && !scheduleValid ? "Choose a future time" : " "}
+              sx={{ mt: 2 }}
+            />
           )}
-          <TextField autoFocus autoComplete="off" fullWidth label="Type confirm to continue" value={confirmText} onChange={(event) => setConfirmText(event.target.value)} sx={{ mt: 2 }} />
+          <TextField autoComplete="off" fullWidth label="Type confirm to continue" value={confirmText} onChange={(event) => setConfirmText(event.target.value)} sx={{ mt: 2 }} />
           {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
         </DialogContent>
         <DialogActions>
           <Button onClick={closeResetDialog} disabled={resetBusy}>Cancel</Button>
-          <Button onClick={() => setScheduleOpen((value) => !value)} disabled={resetBusy}>Schedule</Button>
           <Button
             variant="contained"
-            disabled={resetBusy || confirmText !== "confirm" || (scheduleOpen && !fireAt)}
+            color={resetMode === "now" ? "error" : "primary"}
+            disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
             onClick={() => void (async () => {
               setResetBusy(true);
               setResetError(null);
               const response = await fetch(
-                scheduleOpen ? "/api/usage/codex/reset/schedule" : "/api/usage/codex/reset",
+                resetMode === "schedule" ? "/api/usage/codex/reset/schedule" : "/api/usage/codex/reset",
                 {
-                  method: scheduleOpen ? "PUT" : "POST",
+                  method: resetMode === "schedule" ? "PUT" : "POST",
                   headers: { "content-type": "application/json" },
-                  body: JSON.stringify(scheduleOpen
+                  body: JSON.stringify(resetMode === "schedule"
                     ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
                     : { confirm: confirmText, expected_credit_id: nearestCreditId }),
                 },
               );
               if (response.ok) {
                 setResetOpen(false);
-                setScheduleOpen(false);
+                setResetMode("schedule");
                 setConfirmText("");
                 await onUsageChanged();
               } else setResetError(await response.text() || `HTTP ${String(response.status)}`);
               setResetBusy(false);
             })()}
-          >{scheduleOpen ? "Save" : "Reset now"}</Button>
+          >{resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}</Button>
         </DialogActions>
       </Dialog>
     </>
