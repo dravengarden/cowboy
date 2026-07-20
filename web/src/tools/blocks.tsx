@@ -81,7 +81,6 @@ export function CodeView({
   lang,
   maxHeight,
   centerCopy = false,
-  touchWrap = false,
   tokenSafeWrap = false,
   wrapControl = true,
   hideCopy = false,
@@ -98,9 +97,8 @@ export function CodeView({
   /** Optional parent-controlled line layout (for mixed terminal output). */
   wrap?: boolean;
 }): React.JSX.Element {
-  const coarse = useMediaQuery("(hover:none), (pointer:coarse)");
   const theme = useTheme();
-  const [localWrapped, setLocalWrapped] = useState((touchWrap || tokenSafeWrap) && coarse);
+  const [localWrapped, setLocalWrapped] = useState(false);
   const wrapped = wrap ?? localWrapped;
   const lightweight = shouldUseLightweightCode(code);
   const lightweightWrap = wrapped;
@@ -215,7 +213,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
   const theme = useTheme();
   const [readable, setReadable] = useState<Awaited<ReturnType<typeof formatShellForDisplay>> | undefined>(undefined);
   const [mode, setMode] = useState<"readable" | "nested" | "source">("source");
-  const [wrapped, setWrapped] = useState(touch);
+  const [wrapped, setWrapped] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -335,8 +333,14 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 data-shell-depth={depth}
                 sx={{
                   position: "relative",
-                  pl: depth === 0 ? 0 : `${20 + (depth - 1) * 10}px`,
+                  // One compact gutter carries the hierarchy. Code blocks
+                  // already have internal padding, so a second full indent
+                  // wastes scarce phone width without adding information.
+                  pl: depth === 0 ? 0 : `${10 + (depth - 1) * 8}px`,
                   py: depth === 0 ? 0 : 0.25,
+                  ...(depth > 0 && {
+                    "& pre": { paddingLeft: "6px !important" },
+                  }),
                 }}
               >
                 {rails.map((rail) => (
@@ -346,7 +350,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     data-shell-rail={rail.level}
                     sx={{
                       position: "absolute",
-                      left: `${8 + (rail.level - 1) * 10}px`,
+                      left: `${4 + (rail.level - 1) * 8}px`,
                       top: rail.current ? 8 : 0,
                       bottom: 0,
                       width: 2,
@@ -361,9 +365,9 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     aria-hidden="true"
                     sx={{
                       position: "absolute",
-                      left: `${8 + (depth - 1) * 10}px`,
+                      left: `${4 + (depth - 1) * 8}px`,
                       top: 8,
-                      width: 8,
+                      width: 6,
                       height: 2,
                       borderRadius: 999,
                       bgcolor: markerColor,
@@ -378,7 +382,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     sx={{
                       position: "absolute",
                       zIndex: 1,
-                      left: `${1 + (depth - 1) * 10}px`,
+                      left: `${-3 + (depth - 1) * 8}px`,
                       top: 0,
                       display: "grid",
                       placeItems: "center",

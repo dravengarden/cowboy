@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Component, type ReactNode, useMemo, useState } from "react";
 import { Box, ButtonBase, Skeleton, Stack, Typography } from "@mui/material";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import RadioButtonUncheckedRounded from "@mui/icons-material/RadioButtonUncheckedRounded";
@@ -17,7 +17,6 @@ import {
   textOfContent,
 } from "./blocks";
 import { mcpIdentity } from "./presentation";
-import { outputPrefersHorizontalScroll } from "./outputLayout";
 import { terminalDisplaySegments } from "./terminalHighlight";
 
 // The dispatch layer: given a tool call, pick how to render its body. Two tiers,
@@ -72,9 +71,8 @@ function terminalText(content: unknown): string {
 }
 
 function TerminalOutput({ text, running }: { text: string; running: boolean }): React.JSX.Element {
-  const [wrapped, setWrapped] = useState(() => !outputPrefersHorizontalScroll(text));
+  const [wrapped, setWrapped] = useState(false);
   const segments = useMemo(() => terminalDisplaySegments(text), [text]);
-  useEffect(() => setWrapped(!outputPrefersHorizontalScroll(text)), [text]);
   const control = text
     ? (
       <Box role="group" aria-label="Output line layout" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
@@ -130,7 +128,7 @@ function FileReadContent({
   language: string;
 }): React.JSX.Element | null {
   const text = terminalText(content);
-  const [wrapped, setWrapped] = useState(true);
+  const [wrapped, setWrapped] = useState(false);
   if (!text) return null;
   if (language === "markdown") return <OutputBlocks content={content} lang={language} />;
   const control = (
