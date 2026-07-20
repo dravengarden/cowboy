@@ -4,7 +4,7 @@ export type MarkerTone = "violet" | "blue" | "cyan" | "green" | "yellow" | "oran
 // does: every emoji belongs to one tone that matches its own character. Parent
 // references, child badges, and rails all resolve through this same table.
 const markerTones: Readonly<Record<MarkerTone, readonly string[]>> = {
-  violet: ["🔮", "💎", "🧿", "✨", "🦄", "🎮", "🕹️", "🧩", "🪄", "🎭"],
+  violet: ["🔮", "💎", "🧿", "✨", "🦄", "🎲", "🎮", "🕹️", "🧩", "🪄", "🎭"],
   blue: ["🪐", "🌙", "⭐", "🌀", "🛸", "🛰️", "🌌", "🐳", "🐬", "🐧"],
   cyan: ["🌊", "🫐", "🦋", "🐙", "🐡"],
   green: ["🍀", "🥝", "🐢", "🌵", "🌴", "🌲"],

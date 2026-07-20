@@ -363,7 +363,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 ))}
                 {depth > 0 && (
                   <>
-                    {[{ top: 8, cap: "start" }, ...(nextDepth < depth ? [{ bottom: 0, cap: "end" }] : [])].map((edge) => (
+                    {[{ top: 8, cap: "start" }, { bottom: 0, cap: "end" }].map((edge) => (
                       <Box
                         key={edge.cap}
                         aria-hidden="true"
@@ -574,7 +574,6 @@ export function DiffView({
         lang={sourceLanguage ? `diff-${sourceLanguage}` : "diff"}
         maxHeight={320}
         touchWrap
-        wrapControl={false}
       />
     </Box>
   );
