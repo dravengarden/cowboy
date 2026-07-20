@@ -3,6 +3,9 @@
 default:
     @just --list
 
+toolchain-check:
+    required="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cowboy") | .rust_version')"; actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; test "$required" = "$actual" || { echo "rust-version $required does not match pinned rustc $actual" >&2; exit 1; }
+
 # Install frontend deps. `deno install` reads package.json + deno.json and
 # populates web/node_modules (nodeModulesDir = "auto") so Vite resolves
 # `vite`, `tsc`, etc. from there as it always did.
@@ -56,8 +59,7 @@ test:
     cargo test --all-targets --all-features --locked
     cd web && deno task test
 
-check: fmt lint dependencies typecheck test
-    cargo build --all-features --locked
+check: toolchain-check fmt lint dependencies typecheck test build
 
 test-fast:
     cargo nextest run --all-features --locked
@@ -69,3 +71,11 @@ build-cached:
 # Show sccache cache stats.
 cache-stats:
     sccache --show-stats
+
+# Preview or remove the oldest compiler artifacts without discarding the
+# incremental state that serves the active edit loop.
+cache-prune-dry max-size="20GB":
+    cargo sweep --dry-run --maxsize {{max-size}} .
+
+cache-prune max-size="20GB":
+    cargo sweep --maxsize {{max-size}} .

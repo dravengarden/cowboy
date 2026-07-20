@@ -165,6 +165,7 @@
           cargo-nextest
           cargo-deny
           cargo-machete
+          cargo-sweep
           just
           go
           nodejs_24

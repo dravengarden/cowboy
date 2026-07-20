@@ -2,9 +2,10 @@
 name = "cowboy"
 version = "0.1.0"
 edition = "2024"
+publish = false
 description = "Drive coding-agent CLIs from anywhere over ACP, with one shared live progress."
 license = "MIT"
-rust-version = "1.95"
+rust-version = "1.95.0"
 
 [features]
 default = ["full"]
