@@ -19,6 +19,7 @@ import {
 } from "./_sync/mod.ts";
 import { idbListKeys, idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
+import { shouldReconnectOnForeground } from "./connectionRecovery.ts";
 import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
 import { notifyHaptic } from "./haptic";
@@ -178,6 +179,13 @@ let openedSessionId: string | undefined;
 // kept here is the single pending-attempt timer.
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
+function clearReconnectTimer(): void {
+  if (reconnectTimer !== undefined) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+}
+
 // --- Liveness watchdog (half-open detection) --------------------------------
 // A WebSocket can go HALF-OPEN — TCP still "connected" but no data flows and
 // `onclose` NEVER fires — which is common on mobile/5G (NAT drops, radio
@@ -186,8 +194,9 @@ let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 // spinner that never resolves). The daemon sends an app-level heartbeat
 // (Outbound::Ping) on a fixed interval, so on a HEALTHY socket some message
 // always arrives within it; prolonged silence means the socket is dead. We
-// track the last-message time and, if it goes stale, force-close → `onclose` →
-// reconnect → fresh snapshot (self-healing the frozen state).
+// track the last-message time and, if it goes stale, replace it immediately →
+// fresh snapshot (self-healing the frozen state without waiting for a mobile
+// browser's close-handshake timeout).
 const STALE_MS = 60_000; // ~2.4 missed 25s heartbeats → dead (conservative)
 const FOREGROUND_STALE_MS = 30_000; // on app-foreground, suspend likely killed it
 const LIVENESS_CHECK_MS = 15_000;
@@ -210,9 +219,25 @@ function startLiveness(ws: WebSocket): void {
       socket === ws && ws.readyState === WebSocket.OPEN &&
       Date.now() - lastMessageAt > STALE_MS
     ) {
-      ws.close(); // → onclose → scheduleReconnect → fresh snapshot
+      reconnectNow();
     }
   }, LIVENESS_CHECK_MS);
+}
+
+// A suspended mobile WebSocket can remain OPEN in JS while its underlying TCP
+// connection is already gone. Calling close() and waiting for onclose makes
+// foreground recovery depend on the browser's close-handshake timeout. Detach
+// the zombie first so its eventual callbacks cannot affect the replacement,
+// then open the replacement immediately. This path is user-driven (foreground
+// or network return), so it intentionally bypasses outage backoff.
+function reconnectNow(): void {
+  const stale = socket;
+  socket = undefined;
+  clearReconnectTimer();
+  stopLiveness();
+  if (state.connected) setState({ ...state, connected: false });
+  stale?.close();
+  openSocket();
 }
 
 // Mobile suspends a backgrounded tab (freezing timers AND often killing the
@@ -226,12 +251,16 @@ if (typeof document !== "undefined") {
     if (document.visibilityState !== "visible") return;
     if (notifyScheduled) flushNotify();
     if (
-      socket && socket.readyState === WebSocket.OPEN &&
-      Date.now() - lastMessageAt > FOREGROUND_STALE_MS
+      shouldReconnectOnForeground(
+        socket?.readyState,
+        Date.now() - lastMessageAt,
+        FOREGROUND_STALE_MS,
+      )
     ) {
-      socket.close();
+      reconnectNow();
     }
   });
+  globalThis.addEventListener("online", reconnectNow);
 }
 
 function emit(): void {
@@ -815,10 +844,7 @@ function openSocket(): void {
       ws.close();
       return;
     }
-    if (reconnectTimer !== undefined) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = undefined;
-    }
+    clearReconnectTimer();
     markAlive(); // seed liveness so the watchdog doesn't fire before the snapshot
     startLiveness(ws);
     setState({ ...state, connected: true });
