@@ -64,7 +64,7 @@ import { Markdown } from "./Markdown";
 import { attachmentDisplayParts } from "./attachments";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
-import { toolHeading, toolUsesRawOnly, toolVariantLabel } from "./tools/presentation";
+import { toolCopyText, toolHeading, toolUsesRawOnly, toolVariantLabel } from "./tools/presentation";
 import { toolRuns, type ToolItem, type ToolRun } from "./tools/runs";
 import { formatShellForDisplay } from "./shellFormatter";
 import {
@@ -2230,6 +2230,11 @@ function ToolDetailsBrowser({
             title: candidateTool.title,
             rawInput: candidateTool.rawInput,
           });
+          const candidateSummary = toolCopyText({
+            title: candidateTool.title,
+            toolName: candidateTool.toolName,
+            rawInput: candidateTool.rawInput,
+          }).split("\n", 1)[0]?.replace(/\s+/g, " ").trim() || candidateHeading;
           return (
             <ButtonBase
               key={candidate.key}
@@ -2255,13 +2260,11 @@ function ToolDetailsBrowser({
               </Typography>
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="body2" noWrap sx={{ fontFamily: candidateTool.toolKind === "execute" ? "ui-monospace, SFMono-Regular, Menlo, monospace" : "inherit", fontWeight: active ? 750 : 550 }}>
-                  {candidateHeading}
+                  {candidateSummary}
                 </Typography>
-                {candidate.tools.length > 1 && (
-                  <Typography variant="caption" color="text.disabled">
-                    {candidate.tools.length} calls
-                  </Typography>
-                )}
+                <Typography variant="caption" color="text.disabled" noWrap>
+                  {candidateHeading}{candidate.tools.length > 1 ? ` · ${candidate.tools.length} calls` : ""}
+                </Typography>
               </Box>
               <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: candidateTool.status === "failed" ? "error.main" : candidateTool.status === "in_progress" || candidateTool.status === "pending" ? "warning.main" : "success.main" }} />
             </ButtonBase>

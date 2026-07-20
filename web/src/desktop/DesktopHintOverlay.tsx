@@ -148,8 +148,10 @@ export function DesktopHintOverlay(): React.JSX.Element | null {
             textTransform: "uppercase",
           }}
         >
-          <span style={{ opacity: 0.38 }}>{target.label.slice(0, typed.length)}</span>
-          {target.label.slice(typed.length)}
+          <span>
+            <span style={{ opacity: 0.38 }}>{target.label.slice(0, typed.length)}</span>
+            {target.label.slice(typed.length)}
+          </span>
         </Box>
       ))}
     </Box>,
