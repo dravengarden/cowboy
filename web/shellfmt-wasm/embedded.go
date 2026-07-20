@@ -57,6 +57,7 @@ var embeddedLanguageSpecs = []embeddedLanguageSpec{
 		"-A": 1, "--after-context": 1, "-B": 1, "--before-context": 1,
 		"-C": 1, "--context": 1, "-f": 1, "--file": 1,
 	}},
+	{commands: []string{"pgrep", "pkill"}, language: "regex", label: "Regex", kind: payloadFirstPositional, minRunes: 52, structural: "|()[]{}?+*", minStructure: 6},
 }
 
 func embeddedClientPayload(args []*syntax.Word) (nestedPayload, bool) {

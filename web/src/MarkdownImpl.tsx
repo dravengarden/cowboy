@@ -31,6 +31,7 @@ import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { copyText } from "./clipboard";
 import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
 import {
   oneDark,
   oneLight,
@@ -41,6 +42,45 @@ import {
   previewCodeForRendering,
   shouldUseLightweightCode,
 } from "./codeRendering";
+import { SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
+
+// Extend Prism's Bash grammar inside the already-lazy Markdown bundle. Tool
+// cards only import SHELL_SYNTAX_LANGUAGE, so this semantic enhancement never
+// pulls the highlighter into the eager application chunk.
+function cowboyShell(prism: Parameters<typeof bash>[0]): void {
+  bash(prism);
+  const languages = (prism as {
+    languages: Record<string, unknown>;
+  }).languages as Record<string, unknown> & {
+    extend(language: string, redef: Record<string, unknown>): Record<string, unknown>;
+    insertBefore(
+      language: string,
+      before: string,
+      insert: Record<string, unknown>,
+    ): Record<string, unknown>;
+  };
+  languages[SHELL_SYNTAX_LANGUAGE] = languages.extend("bash", {});
+  languages.insertBefore(SHELL_SYNTAX_LANGUAGE, "string", {
+    "dsl-sed": {
+      pattern:
+        /((?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?sed\b(?:\s+(?:-{1,2}[\w-]+(?:=[^\s]+)?))*\s+)(["'])(?:\\.|(?!\2)[^\\\r\n])*\2/gm,
+      lookbehind: true,
+      greedy: true,
+      alias: ["string", "dsl-expression", "dsl-sed-expression"],
+    },
+    "dsl-regex": {
+      pattern:
+        /((?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?(?:rg|ripgrep|grep|egrep|pgrep|pkill)\b(?:\s+(?:-{1,2}[\w-]+(?:=[^\s]+)?))*\s+)(["'])(?:\\.|(?!\2)[^\\\r\n])*\2/gm,
+      lookbehind: true,
+      greedy: true,
+      alias: ["string", "dsl-expression", "dsl-regex-expression"],
+    },
+  });
+}
+
+(cowboyShell as typeof cowboyShell & { displayName?: string }).displayName =
+  SHELL_SYNTAX_LANGUAGE;
+SyntaxHighlighter.registerLanguage(SHELL_SYNTAX_LANGUAGE, cowboyShell);
 
 // Markdown images in document order, so the `img` override can find a clicked
 // thumbnail's index and the lightbox can page through the whole message's
@@ -178,6 +218,28 @@ function CodeBlock({
               wordBreak: "break-word",
               overflowX: "hidden !important",
             },
+          },
+        }),
+        ...(syntaxLanguage === "cowboy-shell" && {
+          "& .token.dsl-expression": {
+            display: "inline",
+            borderRadius: "0.28em",
+            paddingInline: "0.14em",
+            boxDecorationBreak: "clone",
+            WebkitBoxDecorationBreak: "clone",
+            fontWeight: 520,
+          },
+          "& .token.dsl-regex-expression": {
+            backgroundColor: dark ? "rgba(86, 156, 214, 0.12)" : "rgba(9, 105, 218, 0.08)",
+            boxShadow: dark
+              ? "inset 0 -1px rgba(86, 156, 214, 0.5)"
+              : "inset 0 -1px rgba(9, 105, 218, 0.35)",
+          },
+          "& .token.dsl-sed-expression": {
+            backgroundColor: dark ? "rgba(220, 220, 170, 0.1)" : "rgba(154, 103, 0, 0.08)",
+            boxShadow: dark
+              ? "inset 0 -1px rgba(220, 220, 170, 0.48)"
+              : "inset 0 -1px rgba(154, 103, 0, 0.34)",
           },
         }),
       }}

@@ -753,7 +753,7 @@ func TestExtractsInlineScriptLanguages(t *testing.T) {
 }
 
 func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
-	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `rg -o 'cowboy-v[0-9]+' sw.js`, `rg 'a(b|c)[0-9]+' .`, `sed 's/a/b/' file`, `awk '{print}' file`} {
+	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `rg -o 'cowboy-v[0-9]+' sw.js`, `rg 'a(b|c)[0-9]+' .`, `pgrep -af 'r2-membership-verify|reconcile-lightsail-window'`, `sed 's/a/b/' file`, `awk '{print}' file`} {
 		display, err := formatShellDisplay(source, 46)
 		if err != nil {
 			t.Fatal(err)

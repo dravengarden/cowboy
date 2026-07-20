@@ -8,6 +8,7 @@ import { nestedMarkerColor } from "./nestedMarkerColors";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
 import { addShellPathBreaks, formatShellForDisplay } from "../shellFormatter";
+import { SHELL_SYNTAX_LANGUAGE } from "../shellLanguage";
 import {
   chunkCodeForRendering,
   previewCodeForRendering,
@@ -453,7 +454,9 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 {frame.text && (
                   <CodeView
                     code={phone && (!frame.language || frame.language === "bash") ? addShellPathBreaks(frame.text) : frame.text}
-                    lang={frame.language ?? "bash"}
+                    lang={frame.language === "bash" || !frame.language
+                      ? SHELL_SYNTAX_LANGUAGE
+                      : frame.language}
                     // Nested mode is one semantic disclosure. Its outer fold
                     // owns expansion so a parent frame cannot collapse while
                     // its children remain floating below it.
@@ -476,7 +479,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           <CodeView
             key={mode}
             code={phone ? addShellPathBreaks(readable.flatText) : readable.flatText}
-            lang="bash"
+            lang={SHELL_SYNTAX_LANGUAGE}
             maxHeight={touch ? 260 : 180}
             touchWrap
             tokenSafeWrap
@@ -489,7 +492,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
           <CodeView
             key={mode}
             code={command}
-            lang="bash"
+            lang={SHELL_SYNTAX_LANGUAGE}
             maxHeight={touch ? 260 : 180}
             wrapControl={false}
             wrap={wrapped}

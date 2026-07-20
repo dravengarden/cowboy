@@ -59,7 +59,7 @@ const NIX_STORE_EXECUTABLE = new RegExp(
  * compact snowflake origin plus the actual executable basename. Arbitrary
  * store data paths remain untouched. */
 export function compactNixStoreExecutables(source: string): string {
-  return source.replaceAll(NIX_STORE_EXECUTABLE, (_path, executable: string) => `❄ ${executable}`);
+  return source.replaceAll(NIX_STORE_EXECUTABLE, (_path, executable: string) => `❄ Nix · ${executable}`);
 }
 
 /** Add display-only soft opportunities at path separators. The copy action and

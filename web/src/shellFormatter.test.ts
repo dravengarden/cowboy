@@ -28,11 +28,11 @@ Deno.test("readable shell compacts canonical Nix executable paths", () => {
   const hash = "0641h8qfqaxnwrsw2nzrz6i1wbzyx921";
   assertEquals(
     compactNixStoreExecutables(`/nix/store/${hash}-bash-interactive-5.3p9/bin/bash -lc 'echo ok'`),
-    "❄ bash -lc 'echo ok'",
+    "❄ Nix · bash -lc 'echo ok'",
   );
   assertEquals(
     compactNixStoreExecutables(`/nix/store/${hash}-python-env/libexec/tools/python3 script.py`),
-    "❄ python3 script.py",
+    "❄ Nix · python3 script.py",
   );
 });
 
