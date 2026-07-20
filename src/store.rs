@@ -19,6 +19,8 @@
 //! Embedded migrations live next to `Cargo.toml` in `./migrations/`. Run
 //! [`Store::migrate`] once on startup.
 
+#![warn(clippy::pedantic)]
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -41,7 +43,6 @@ use crate::core::{Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, Session
 fn strip_nul(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(s) if s.contains('\0') => s.retain(|c| c != '\0'),
-        serde_json::Value::String(_) => {}
         serde_json::Value::Array(arr) => arr.iter_mut().for_each(strip_nul),
         serde_json::Value::Object(map) => {
             // Object keys can also carry NUL; rebuild the map only if needed so

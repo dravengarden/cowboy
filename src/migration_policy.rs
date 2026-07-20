@@ -1,9 +1,11 @@
 //! Guard the startup migration contract: unbounded data rewrites are explicit
 //! maintenance work, never daemon-startup work.
 
+#![warn(clippy::pedantic)]
+
 use sha2::Digest as _;
 
-/// Every migration that has reached a shared database is immutable. SQLx
+/// Every migration that has reached a shared database is immutable. `SQLx`
 /// enforces this at runtime; pinning the source digests here moves the same
 /// failure into `cargo test`, before a Cowboy restart can take the UI down.
 const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
@@ -72,7 +74,7 @@ fn published_migrations_are_immutable() {
     for entry in std::fs::read_dir(directory).expect("read migrations") {
         let entry = entry.expect("migration entry");
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".sql") {
+        if entry.path().extension() != Some(std::ffi::OsStr::new("sql")) {
             continue;
         }
         let expected = PUBLISHED_MIGRATIONS

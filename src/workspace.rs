@@ -4,6 +4,8 @@
 //! the native Codex thread remains valid. This module maps stale Columbus paths
 //! to the registry's current stable checkout without touching Codex state.
 
+#![warn(clippy::pedantic)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -83,8 +85,7 @@ fn infer_columbus_project(columbus: &Path, stale: &Path) -> Option<String> {
     let workspace_root = columbus.parent()?;
     let state_root = if std::env::var_os("HOME").as_deref() == Some(workspace_root.as_os_str()) {
         std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| workspace_root.join(".local/state"))
+            .map_or_else(|| workspace_root.join(".local/state"), PathBuf::from)
     } else {
         workspace_root.join(".local/state")
     };

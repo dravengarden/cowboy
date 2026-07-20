@@ -4,6 +4,8 @@
 //! reports context/cost for one session; provider collectors add plan windows,
 //! reset times, credits, and account activity when an official interface exists.
 
+#![warn(clippy::pedantic)]
+
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,7 +19,7 @@ use tokio::sync::Mutex;
 
 use crate::core::SessionMeta;
 
-pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderUsage {
@@ -86,7 +88,8 @@ impl UsageService {
 
     pub async fn snapshot(&self) -> UsageSnapshot {
         let mut snapshot = self.snapshot.lock().await.clone();
-        snapshot.codex_reset_schedule = self.reset_schedule.lock().await.clone();
+        let reset_schedule = self.reset_schedule.lock().await;
+        snapshot.codex_reset_schedule.clone_from(&reset_schedule);
         snapshot
     }
 

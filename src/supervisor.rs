@@ -6,6 +6,8 @@
 //! current-thread tokio runtime + `LocalSet` (see [`crate::acp::run_agent`]).
 //! The supervisor talks to that thread only through a `Send` command channel.
 
+#![warn(clippy::pedantic)]
+
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -242,7 +244,7 @@ impl Supervisor {
     /// # Errors
     /// If the session is unknown to the Hub, its provider is no longer
     /// registered, or the agent thread cannot be spawned.
-    pub fn send(&self, session_id: &str, cmd: AgentCommand) -> Result<(), String> {
+    pub fn send(&self, session_id: &str, command: AgentCommand) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         self.prepare_session_inner(session_id)?;
         if let Backend::Remote(runtime) = &self.backend {
@@ -254,7 +256,7 @@ impl Supervisor {
             {
                 return Err(format!("unknown session {session_id:?}"));
             }
-            match cmd {
+            match command {
                 AgentCommand::Prompt(blocks, cmid, completion) => {
                     if let Some(completion) = completion {
                         let _ = completion.send(Err(
@@ -289,17 +291,17 @@ impl Supervisor {
         // A failed `send` means the receiver (agent thread) is gone: drop the
         // stale sender and fall through to revive, recovering the command from
         // the `SendError` so we needn't require `AgentCommand: Clone`.
-        let cmd = {
+        let command = {
             let mut senders = senders.lock();
             match senders.get(session_id) {
-                Some(tx) => match tx.send(cmd) {
+                Some(tx) => match tx.send(command) {
                     Ok(()) => return Ok(()),
                     Err(error) => {
                         senders.remove(session_id);
                         error.0
                     }
                 },
-                None => cmd,
+                None => command,
             }
         };
         self.revive(session_id)?;
@@ -310,7 +312,7 @@ impl Supervisor {
             .lock()
             .get(session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?
-            .send(cmd)
+            .send(command)
             .map_err(|_| "session ended".to_owned())
     }
 

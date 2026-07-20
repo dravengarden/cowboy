@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -118,6 +120,12 @@ pub struct ServeArgs {
 }
 
 impl Cli {
+    /// Runs the selected Cowboy command until it exits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when command validation, startup, or the selected
+    /// long-running service fails.
     pub async fn run(self) -> anyhow::Result<()> {
         match self.command {
             Command::Serve(args) => crate::server::serve(args).await,
