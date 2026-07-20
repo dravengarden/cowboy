@@ -99,9 +99,10 @@ func (allocator *nestedShellMarkerAllocator) nextMarker() (string, int) {
 
 // formatShellFrames projects nested shell payloads as independently parsed
 // source frames. The parent retains its execution skeleton with a compact
-// colored payload reference; the child repeats that reference on its nesting
-// rail. Each launcher therefore appears once while sibling payloads remain
-// unambiguous and receive Bash highlighting instead of one quoted-string token.
+// colored payload reference only when its own direct syntax earns a frame.
+// Transparent wrappers are removed after their descendants have been parsed,
+// so complexity never bubbles upward from a child into an otherwise empty
+// `bash -c` or SSH payload.
 func formatShellFrames(source string, file *syntax.File, columns, depth int, markers *nestedShellMarkerAllocator) ([]shellFrame, error) {
 	if depth < maxShellFrameDepth {
 		nested := nestedPayloads(source, file)
@@ -134,7 +135,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				// it saves. Structural shell complexity, multiple source lines, or a
 				// genuinely long command justify a frame. A child which found deeper
 				// frames must also remain so that the execution hierarchy is intact.
-				if candidate.language == "" && len(children) == 1 && !nestedShellNeedsFrame(candidate.payload, innerFile) {
+				if candidate.language == "" && len(children) == 1 && children[0].Launcher == "" && !nestedShellNeedsFrame(candidate.payload, innerFile) {
 					continue
 				}
 				children[0].Launcher = candidate.launcher
@@ -166,6 +167,16 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 						for _, child := range extracted {
 							frames = append(frames, child.children...)
 						}
+						// Judge this node only after its immediate payloads have been
+						// replaced by inert references. A complex grandchild must not
+						// force a one-line wrapper into a separate visual frame. Promote
+						// the descendants one level when that wrapper adds no structure.
+						if depth > 0 && !directShellNeedsFrame(source, file) {
+							frames = frames[1:]
+							for index := range frames {
+								frames[index].Depth--
+							}
+						}
 						if len(frames) <= maxShellFrames {
 							return frames, nil
 						}
@@ -179,6 +190,33 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 		return nil, err
 	}
 	return []shellFrame{{Text: text, Language: "bash", Label: "Bash", Depth: depth}}, nil
+}
+
+// directShellNeedsFrame measures only syntax owned by this node. Every
+// immediate embedded language or child shell is replaced with a harmless word
+// before scoring, so a complex descendant cannot make a transparent launcher
+// look complex. Descendants are evaluated independently by formatShellFrames.
+func directShellNeedsFrame(source string, file *syntax.File) bool {
+	nested := nestedPayloads(source, file)
+	if len(nested) == 0 {
+		return nestedShellNeedsFrame(source, file)
+	}
+	direct := source
+	for index := len(nested) - 1; index >= 0; index-- {
+		payload := nested[index]
+		reference := "'x'"
+		if payload.heredoc {
+			reference += "\n" + payload.terminator + "\n"
+		}
+		direct = direct[:payload.start] + reference + direct[payload.end:]
+	}
+	directFile, err := parseShell(direct)
+	if err != nil {
+		// The original node parsed successfully. If its defensive projection
+		// does not, retain the node instead of hiding potentially useful syntax.
+		return true
+	}
+	return nestedShellNeedsFrame(direct, directFile)
 }
 
 // nestedShellNeedsFrame measures information density rather than matching

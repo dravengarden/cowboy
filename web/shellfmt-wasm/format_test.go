@@ -136,18 +136,9 @@ func TestHistoricalShellCorpus(t *testing.T) {
 		if parsed, parseErr := parseShell(command); parseErr == nil {
 			required := requiredNestedLaunchers(command, parsed, 0)
 			eligibleFrames += len(required)
-			available := make(map[string]int, len(display.Frames))
-			for _, frame := range display.Frames {
-				available[frame.Launcher]++
-			}
-			for _, launcher := range required {
-				if available[launcher] > 0 {
-					available[launcher]--
-					projectedFrames++
-				} else {
-					missedFrames++
-				}
-			}
+			actual := max(0, len(display.Frames)-1)
+			projectedFrames += min(len(required), actual)
+			missedFrames += max(0, len(required)-actual)
 		}
 		if len(display.Frames) > 1 {
 			nested++
@@ -194,10 +185,10 @@ func requiredNestedLaunchers(source string, parsed *syntax.File, depth int) []st
 			continue
 		}
 		children := requiredNestedLaunchers(candidate.payload, inner, depth+1)
-		if nestedShellNeedsFrame(candidate.payload, inner) || len(children) > 0 {
+		if directShellNeedsFrame(candidate.payload, inner) {
 			launchers = append(launchers, candidate.launcher)
-			launchers = append(launchers, children...)
 		}
+		launchers = append(launchers, children...)
 	}
 	return launchers
 }
@@ -220,19 +211,19 @@ func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 3 {
-		t.Fatalf("expected local bash, ssh transport, and remote script frames, got %#v", display.Frames)
+	if len(display.Frames) != 2 {
+		t.Fatalf("expected the transparent transport wrapper to collapse, got %#v", display.Frames)
 	}
-	if display.Frames[1].Launcher != "nix develop -c bash -lc" || display.Frames[2].Launcher != "ssh host" {
+	if display.Frames[1].Launcher != "nix develop -c bash -lc" {
 		t.Fatalf("unexpected launchers %#v", display.Frames)
 	}
-	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 {
+	if display.Frames[0].Depth != 0 || display.Frames[1].Depth != 1 {
 		t.Fatalf("expected a real parent/child depth chain: %#v", display.Frames)
 	}
 	if strings.Contains(display.Frames[0].Text, "…") || !strings.Contains(display.Frames[0].Text, "nix develop -c bash -lc") {
 		t.Fatalf("outer script must use its execution skeleton without a textual placeholder: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[2].Text, "printf") || !strings.Contains(display.Summary, "ssh host") {
+	if !strings.Contains(display.Frames[1].Text, "sh -c") || !strings.Contains(display.Frames[1].Text, "printf") {
 		t.Fatalf("deepest source and compact summary missing: %#v", display)
 	}
 }
@@ -343,18 +334,34 @@ func TestProjectsQuotedSSHRemoteScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(display.Frames) != 3 {
-		t.Fatalf("expected ssh transport, remote bash, and decoded script frames: %#v", display.Frames)
+	if len(display.Frames) != 2 {
+		t.Fatalf("expected the transparent remote bash wrapper to collapse: %#v", display.Frames)
 	}
-	if display.Frames[1].Launcher != "ssh -o BatchMode=yes macbook-air" || display.Frames[2].Launcher != "bash -lc" {
+	if display.Frames[1].Launcher != "ssh -o BatchMode=yes macbook-air" {
 		t.Fatalf("unexpected ssh nesting launchers: %#v", display.Frames)
 	}
-	if display.Frames[1].Depth != 1 || display.Frames[2].Depth != 2 ||
-		display.Frames[1].Marker == display.Frames[2].Marker {
-		t.Fatalf("ssh and its remote shell need distinct nested references: %#v", display.Frames)
+	if display.Frames[1].Depth != 1 || display.Frames[1].Marker == "" {
+		t.Fatalf("the promoted remote script must retain the ssh reference: %#v", display.Frames)
 	}
-	if !strings.Contains(display.Frames[2].Text, `test -f "/tmp/a b"`) {
+	if !strings.Contains(display.Frames[1].Text, `test -f "/tmp/a b"`) {
 		t.Fatalf("decoded remote script was not preserved: %#v", display.Frames)
+	}
+}
+
+func TestNestedComplexityKeepsParentWithDirectWork(t *testing.T) {
+	source := `ssh host 'echo before; bash -c "printf one; printf two"; echo after'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 3 {
+		t.Fatalf("a parent with its own direct work must remain visible: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[1].Text, "echo before") || !strings.Contains(display.Frames[1].Text, "echo after") {
+		t.Fatalf("direct parent work was not preserved: %#v", display.Frames)
+	}
+	if display.Frames[2].Depth != 2 || !strings.Contains(display.Frames[2].Text, "printf one") {
+		t.Fatalf("complex child must remain nested beneath its meaningful parent: %#v", display.Frames)
 	}
 }
 
@@ -725,6 +732,23 @@ func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
 		if len(display.Frames) != 1 {
 			t.Fatalf("trivial embedded program should stay inline: %s: %#v", source, display.Frames)
 		}
+	}
+}
+
+func TestNestedComplexityDoesNotBubbleIntoTransparentWrappers(t *testing.T) {
+	source := `ssh macbook-air 'bash -c "for i in {1..12}; do value=$(/Library/PrivilegedHelperTools/xyz.stormbird.device version --json); echo $i $value; if echo $value | grep -q df6f983; then exit 0; fi; sleep 15; done; exit 1"'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 {
+		t.Fatalf("transparent bash wrapper should be promoted, not framed: %#v", display.Frames)
+	}
+	if display.Frames[1].Launcher != "ssh macbook-air" || !strings.Contains(display.Frames[1].Text, "for i in") {
+		t.Fatalf("complex direct descendant should remain under the remote launcher: %#v", display.Frames)
+	}
+	if display.Frames[1].Depth != 1 {
+		t.Fatalf("promoted descendant depth=%d, want 1: %#v", display.Frames[1].Depth, display.Frames)
 	}
 }
 
