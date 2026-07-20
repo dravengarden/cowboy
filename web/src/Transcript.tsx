@@ -1790,7 +1790,12 @@ function ToolDetailsBrowser({
   }, [desktop, runIndex, item, runs]);
 
   if (!item) return null;
-  const raw = rawByKey[item.key] ?? false;
+  // A search query has no useful alternate presentation: formatting it only
+  // duplicates the query while adding two layers of layout controls. Keep the
+  // transport JSON as the single, inspectable representation so input and
+  // output retain their exact shape across Codex, Claude and future ACPs.
+  const rawOnly = item.toolKind === "search";
+  const raw = rawOnly || (rawByKey[item.key] ?? false);
   const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
   const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
   const previousToolIndex = runIndex > 0
@@ -2047,33 +2052,35 @@ function ToolDetailsBrowser({
                     rawInput: item.rawInput,
                   })}
                 </Typography>
-                <Stack direction="row" alignItems="center" spacing={0.25}>
-                  <Box
-                    role="group"
-                    aria-label="Tool detail view"
-                    sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
-                  >
-                    {[false, true].map((isRaw) => (
-                      <ButtonBase
-                        key={String(isRaw)}
-                        aria-pressed={raw === isRaw}
-                        onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
-                        sx={{
-                          minHeight: 32,
-                          px: 1,
-                          borderRadius: 1,
-                          fontSize: "0.6875rem",
-                          fontWeight: raw === isRaw ? 700 : 500,
-                          color: raw === isRaw ? "text.primary" : "text.disabled",
-                          bgcolor: raw === isRaw ? "background.paper" : "transparent",
-                          boxShadow: raw === isRaw ? 1 : 0,
-                        }}
-                      >
-                        {isRaw ? "Raw" : "Formatted"}
-                      </ButtonBase>
-                    ))}
-                  </Box>
-                </Stack>
+                {!rawOnly && (
+                  <Stack direction="row" alignItems="center" spacing={0.25}>
+                    <Box
+                      role="group"
+                      aria-label="Tool detail view"
+                      sx={{ display: "flex", p: 0.25, borderRadius: 1.25, bgcolor: "action.hover" }}
+                    >
+                      {[false, true].map((isRaw) => (
+                        <ButtonBase
+                          key={String(isRaw)}
+                          aria-pressed={raw === isRaw}
+                          onClick={(): void => setRawByKey((state) => ({ ...state, [item.key]: isRaw }))}
+                          sx={{
+                            minHeight: 32,
+                            px: 1,
+                            borderRadius: 1,
+                            fontSize: "0.6875rem",
+                            fontWeight: raw === isRaw ? 700 : 500,
+                            color: raw === isRaw ? "text.primary" : "text.disabled",
+                            bgcolor: raw === isRaw ? "background.paper" : "transparent",
+                            boxShadow: raw === isRaw ? 1 : 0,
+                          }}
+                        >
+                          {isRaw ? "Raw" : "Formatted"}
+                        </ButtonBase>
+                      ))}
+                    </Box>
+                  </Stack>
+                )}
               </Stack>
               {detailReadyKey !== item.key
                 ? (
@@ -2092,7 +2099,7 @@ function ToolDetailsBrowser({
                           code={JSON.stringify(item.rawInput, null, 2) ?? String(item.rawInput)}
                           lang="json"
                           maxHeight={360}
-                          touchWrap
+                          touchWrap={!rawOnly}
                         />
                       </Labeled>
                     )}
@@ -2102,7 +2109,7 @@ function ToolDetailsBrowser({
                           code={JSON.stringify(item.content, null, 2) ?? String(item.content)}
                           lang="json"
                           maxHeight={360}
-                          touchWrap
+                          touchWrap={!rawOnly}
                         />
                       </Labeled>
                     )}
