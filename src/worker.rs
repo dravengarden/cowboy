@@ -356,16 +356,10 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
     std::thread::Builder::new()
         .name(format!("acp-worker-{session_id}"))
         .spawn(move || {
-            acp::run_agent_with_sink(
-                &spec,
-                &session_id,
-                cwd,
-                resume,
-                cmd_rx,
-                Arc::new(RemoteSink {
-                    shared: Arc::clone(&thread_shared),
-                }),
-            );
+            let sink: Arc<dyn AgentSink> = Arc::new(RemoteSink {
+                shared: Arc::clone(&thread_shared),
+            });
+            acp::run_agent_with_sink(&spec, &session_id, cwd, resume, cmd_rx, &sink);
             thread_shared.done.store(true, Ordering::Release);
             let _ = done_tx.blocking_send(());
         })

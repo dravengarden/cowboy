@@ -17,6 +17,8 @@
 //! require `Send` futures. The shared `Hub` is already `Arc`-backed; the small
 //! per-session client state ([`ClientState`]) uses `Arc` + `Mutex`/atomics.
 
+#![warn(clippy::pedantic)]
+
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -60,7 +62,7 @@ use crate::provider::LaunchSpec;
 /// not race it. Too tight would false-trip a slow-but-healthy start into a
 /// pointless respawn; a real stall is caught either way. `run_agent` auto-retries
 /// the spawn once before this ever surfaces as `Crashed`.
-pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_mins(1);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 
@@ -291,14 +293,8 @@ pub fn run_agent(
     cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
     hub: &Hub,
 ) {
-    run_agent_with_sink(
-        spec,
-        session_id,
-        cwd,
-        resume,
-        cmd_rx,
-        Arc::new(HubAgentSink::new(hub.clone())),
-    );
+    let sink: Arc<dyn AgentSink> = Arc::new(HubAgentSink::new(hub.clone()));
+    run_agent_with_sink(spec, session_id, cwd, resume, cmd_rx, &sink);
 }
 
 /// Detached-worker entry point. The ACP connection and all pending request
@@ -310,7 +306,7 @@ pub fn run_agent_with_sink(
     cwd: PathBuf,
     resume: Option<String>,
     mut cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
-    sink: Arc<dyn AgentSink>,
+    sink: &Arc<dyn AgentSink>,
 ) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -344,7 +340,7 @@ pub fn run_agent_with_sink(
             cwd.clone(),
             resume.clone(),
             &mut cmd_rx,
-            Arc::clone(&sink),
+            Arc::clone(sink),
         )
         .await;
         let stalled = result
@@ -363,15 +359,7 @@ pub fn run_agent_with_sink(
                 Status::Starting,
                 Some("agent slow to start — retrying…".to_owned()),
             );
-            result = agent_main(
-                spec,
-                session_id,
-                cwd,
-                resume,
-                &mut cmd_rx,
-                Arc::clone(&sink),
-            )
-            .await;
+            result = agent_main(spec, session_id, cwd, resume, &mut cmd_rx, Arc::clone(sink)).await;
         }
         result
     });
@@ -864,7 +852,7 @@ async fn run_session(
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(mode = want, error = ?e, "setting full-access startup mode failed")
+                    tracing::warn!(mode = want, error = ?e, "setting full-access startup mode failed");
                 }
             }
         }
@@ -1064,7 +1052,7 @@ async fn run_session(
                             match serde_json::to_value([opt]) {
                                 Ok(v) => sink.set_config_options(&sid, v),
                                 Err(e) => {
-                                    tracing::warn!(error = %e, "re-serializing gemini mode chip")
+                                    tracing::warn!(error = %e, "re-serializing gemini mode chip");
                                 }
                             }
                         }
