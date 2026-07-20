@@ -3359,7 +3359,7 @@ function PendingRow({
   // diverges from the stored message, so merely opening an edit fires no redundant
   // write; it converges (after a write, message.text catches up, guard goes quiet).
   useEffect(() => {
-    if (!editing) return undefined;
+    if (!editing || touchInput) return undefined;
     const sameAttachments = editAttachments.length === message.attachments.length &&
       editAttachments.every((a, i) => a.id === message.attachments[i]?.id);
     if (draft === message.text && sameAttachments) return undefined;
@@ -3378,6 +3378,7 @@ function PendingRow({
     message.id,
     message.text,
     message.attachments,
+    touchInput,
   ]);
   if (editing) {
     const save = (): void => {
@@ -3519,6 +3520,17 @@ function PendingRow({
             submitIcon={<Check />}
             vim={vim}
             onVimMode={setVimMode}
+            {...(touchInput
+              ? {
+                onDiscard: (): void => {
+                  setDraft(message.text);
+                  editTextRef.current = message.text;
+                  setEditAttachments(message.attachments);
+                  setOverlayOpen(false);
+                  onEditDone();
+                },
+              }
+              : {})}
             attachmentsSlot={editAttachments.some((a) => !a.isImage)
               ? (
                 <AttachmentPreviews

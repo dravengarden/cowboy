@@ -4,13 +4,19 @@ import {
   alpha,
   AppBar,
   Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   IconButton,
   Stack,
   Toolbar,
   Tooltip,
   useTheme,
 } from "@mui/material";
-import { Check, CloseFullscreen, Send, Tune } from "@mui/icons-material";
+import { Check, Close, CloseFullscreen, Send, Tune } from "@mui/icons-material";
+import { MobileSheetDismiss } from "./_shell";
 import {
   PlatformComposerEditor,
   type ComposerEditorHandle,
@@ -48,6 +54,7 @@ export function FullscreenComposer({
   submitIcon,
   vim = false,
   onVimMode,
+  onDiscard,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -83,6 +90,8 @@ export function FullscreenComposer({
    * touch surfaces, so the native Mobile editor path remains unchanged. */
   vim?: boolean;
   onVimMode?: (mode: string) => void;
+  /** Edit mode: save explicitly in the footer; abandoning edits requires confirmation. */
+  onDiscard?: (() => void) | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
 
@@ -126,6 +135,7 @@ export function FullscreenComposer({
   const toolbarIds = useComposerToolbar();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const runCmd = (cmd: ComposerCommand): void => {
     const ed = editorRef.current;
     if (ed) cmd.run({ editor: ed, attach: onAttach });
@@ -188,15 +198,15 @@ export function FullscreenComposer({
             </Tooltip>
           )}
           <Box sx={{ flex: 1 }} />
-          <Tooltip title={submitLabel}>
+          <Tooltip title={onDiscard ? "Ignore modifications" : submitLabel}>
             <span>
               <IconButton
-                aria-label={submitLabel.toLowerCase()}
-                color="primary"
-                disabled={!sendable}
-                onClick={act(onSubmit)}
+                aria-label={onDiscard ? "ignore modifications" : submitLabel.toLowerCase()}
+                color={onDiscard ? "default" : "primary"}
+                disabled={onDiscard ? false : !sendable}
+                onClick={act(onDiscard ? () => setDiscardOpen(true) : onSubmit)}
               >
-                {submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
+                {onDiscard ? <Close /> : submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
               </IconButton>
             </span>
           </Tooltip>
@@ -278,10 +288,24 @@ export function FullscreenComposer({
         </Box>
       </Box>
 
+      {onDiscard && (
+        <Box sx={{ px: 2, py: 1 }}>
+          <MobileSheetDismiss onClose={onSubmit} label="Save" />
+        </Box>
+      )}
+
       <ComposerToolbarSettings
         open={settingsOpen}
         onClose={(): void => setSettingsOpen(false)}
       />
+      <Dialog open={discardOpen} onClose={(): void => setDiscardOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Ignore modifications?</DialogTitle>
+        <DialogContent>Your unsaved changes will be discarded.</DialogContent>
+        <DialogActions>
+          <Button onClick={(): void => setDiscardOpen(false)}>Keep editing</Button>
+          <Button color="error" onClick={onDiscard}>Ignore modifications</Button>
+        </DialogActions>
+      </Dialog>
     </Box>,
     document.body,
   );

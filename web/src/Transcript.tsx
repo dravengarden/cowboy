@@ -1841,7 +1841,7 @@ function ToolDetailsBrowser({
         px: 0.75,
         py: 0.5,
         display: "grid",
-        gridTemplateColumns: "1fr auto 1fr auto auto",
+        gridTemplateColumns: desktop ? "1fr auto 1fr auto auto" : "1fr auto 1fr auto",
         alignItems: "center",
         gap: 0.5,
         bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
@@ -1910,7 +1910,7 @@ function ToolDetailsBrowser({
           <MyLocation fontSize="small" />
         </IconButton>
       </Tooltip>
-      {roomy
+      {desktop && (roomy
         ? (
           <Button
             aria-label="Close tool details"
@@ -1927,7 +1927,7 @@ function ToolDetailsBrowser({
               <KeyboardArrowDown fontSize="small" />
             </IconButton>
           </Tooltip>
-        )}
+        ))}
     </Box>
   );
 
@@ -1939,7 +1939,7 @@ function ToolDetailsBrowser({
       wide
       forceSheet={!desktop}
       cover={!desktop}
-      mobileDismiss="none"
+      mobileDismiss="footer"
       actions={navigation}
     >
       <Box ref={bodyRef} sx={{ position: "relative" }}>
