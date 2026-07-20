@@ -236,6 +236,15 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 			found = append(found, remote)
 			return false
 		}
+		// Project-owned VM/device helpers commonly expose a remote shell as a
+		// subcommand: `"$HELPER" ssh 'script'`. The executable is deliberately
+		// dynamic, so it cannot be mistaken for OpenSSH and cannot be resolved by
+		// shellInterpreterName. Treat the static `ssh` subcommand as the execution
+		// boundary while preserving the dynamic launcher in the parent frame.
+		if remote, ok := dynamicSSHSubcommand(source, call); ok {
+			found = append(found, remote)
+			return false
+		}
 		clientArgs := unwrappedClientArgs(call.Args)
 		if sql, ok := sqlClientPayload(clientArgs); ok {
 			found = append(found, sql)
@@ -621,6 +630,44 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) 
 		start:    int(call.Args[remoteStart].Pos().Offset()),
 		end:      int(call.Args[len(call.Args)-1].End().Offset()),
 		launcher: strings.Join(launcherArgs, " "),
+		payload:  payload,
+	}, true
+}
+
+// dynamicSSHSubcommand recognizes helper CLIs shaped like
+// `"$HELPER" ssh 'remote shell source'`. Requiring a non-static launcher keeps
+// this separate from ordinary programs which merely receive the word `ssh` as
+// data. Every argument after the subcommand belongs to the remote shell, which
+// matches the argv contract used by VM and device helpers.
+func dynamicSSHSubcommand(source string, call *syntax.CallExpr) (nestedPayload, bool) {
+	if len(call.Args) < 3 {
+		return nestedPayload{}, false
+	}
+	if _, static := staticWord(call.Args[0]); static {
+		return nestedPayload{}, false
+	}
+	subcommand, static := staticWord(call.Args[1])
+	if !static || subcommand != "ssh" {
+		return nestedPayload{}, false
+	}
+	remoteArgs := make([]string, 0, len(call.Args)-2)
+	for _, word := range call.Args[2:] {
+		value, ok := staticWord(word)
+		if !ok {
+			return nestedPayload{}, false
+		}
+		remoteArgs = append(remoteArgs, value)
+	}
+	payload := strings.Join(remoteArgs, " ")
+	if _, err := parseShell(payload); err != nil {
+		return nestedPayload{}, false
+	}
+	launcherStart := int(call.Args[0].Pos().Offset())
+	launcherEnd := int(call.Args[1].End().Offset())
+	return nestedPayload{
+		start:    int(call.Args[2].Pos().Offset()),
+		end:      int(call.Args[len(call.Args)-1].End().Offset()),
+		launcher: source[launcherStart:launcherEnd],
 		payload:  payload,
 	}, true
 }

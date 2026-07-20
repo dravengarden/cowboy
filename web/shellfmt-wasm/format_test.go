@@ -312,6 +312,27 @@ func TestProjectsQuotedSSHRemoteScript(t *testing.T) {
 	}
 }
 
+func TestProjectsDynamicHelperSSHSubcommand(t *testing.T) {
+	source := `VM=/opt/tools/vm.sh
+VM_DIR=/tmp/falcon VM_PORT=2247 "$VM" ssh 'systemctl is-active force-ipv4-egress.service; systemctl list-jobs --no-pager; ip -6 rule show'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 {
+		t.Fatalf("expected helper transport and remote shell frames, got %#v", display.Frames)
+	}
+	if display.Frames[1].Launcher != `"$VM" ssh` || display.Frames[1].Depth != 1 {
+		t.Fatalf("unexpected helper launcher frame: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[1].Text, "systemctl list-jobs") || !strings.Contains(display.Frames[1].Text, "\n\nip -6 rule show") {
+		t.Fatalf("remote commands should be readable and independently grouped: %q", display.Frames[1].Text)
+	}
+	if strings.Contains(display.Frames[0].Text, "systemctl is-active") || !strings.Contains(display.Frames[0].Text, display.Frames[1].Marker) {
+		t.Fatalf("parent helper call should reference, not duplicate, its child: %#v", display.Frames)
+	}
+}
+
 func TestPreservesLauncherCase(t *testing.T) {
 	display, err := formatShellDisplay("BASH -lc 'echo ok'", 80)
 	if err != nil {
