@@ -18,6 +18,18 @@ pub fn resolve_session_workspace(
     workspace_root: &Path,
     stored_cwd: &Path,
 ) -> Result<ResolvedWorkspace, String> {
+    let columbus = workspace_root.join("columbus");
+    if let Some(project) = project_container(&columbus, stored_cwd)
+        && let Some(replacement) = current_project_checkout(&columbus, &project)
+        && replacement != stored_cwd
+    {
+        return Ok(ResolvedWorkspace {
+            path: replacement,
+            changed: true,
+            project: Some(project),
+        });
+    }
+
     if usable_directory(stored_cwd) {
         return Ok(ResolvedWorkspace {
             path: stored_cwd.to_path_buf(),
@@ -26,7 +38,6 @@ pub fn resolve_session_workspace(
         });
     }
 
-    let columbus = workspace_root.join("columbus");
     let project = infer_columbus_project(&columbus, stored_cwd).ok_or_else(|| {
         format!(
             "session workspace is unavailable: {}. Cowboy could not map it to a registered Columbus project; restore the directory or open the session after choosing a valid workspace",
@@ -46,6 +57,16 @@ pub fn resolve_session_workspace(
         path: replacement,
         project: Some(project),
     })
+}
+
+fn project_container(columbus: &Path, cwd: &Path) -> Option<String> {
+    let relative = cwd.strip_prefix(columbus.join("projects")).ok()?;
+    let mut components = relative.components();
+    let name = components.next()?.as_os_str().to_string_lossy();
+    if components.next().is_some() {
+        return None;
+    }
+    registered_project(columbus, &name)
 }
 
 fn usable_directory(path: &Path) -> bool {
@@ -199,6 +220,16 @@ mod tests {
         let (root, checkout) = fixture();
         let resolved = resolve_session_workspace(root.path(), &checkout).expect("resolve");
         assert!(!resolved.changed);
+        assert_eq!(resolved.path, checkout);
+    }
+
+    #[test]
+    fn existing_project_container_maps_to_current_checkout() {
+        let (root, checkout) = fixture();
+        let container = root.path().join("columbus/projects/corsair");
+        let resolved = resolve_session_workspace(root.path(), &container).expect("resolve");
+        assert!(resolved.changed);
+        assert_eq!(resolved.project.as_deref(), Some("corsair"));
         assert_eq!(resolved.path, checkout);
     }
 
