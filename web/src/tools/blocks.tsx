@@ -361,19 +361,25 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                   />
                 ))}
                 {depth > 0 && (
-                  <Box
-                    aria-hidden="true"
-                    sx={{
-                      position: "absolute",
-                      left: `${4 + (depth - 1) * 8}px`,
-                      top: 8,
-                      width: 6,
-                      height: 2,
-                      borderRadius: 999,
-                      bgcolor: markerColor,
-                      opacity: 0.72,
-                    }}
-                  />
+                  <>
+                    {[{ top: 8 }, { bottom: 0 }].map((edge, edgeIndex) => (
+                      <Box
+                        key={edgeIndex}
+                        aria-hidden="true"
+                        data-shell-rail-cap={edgeIndex === 0 ? "start" : "end"}
+                        sx={{
+                          position: "absolute",
+                          left: `${4 + (depth - 1) * 8}px`,
+                          ...edge,
+                          width: 6,
+                          height: 2,
+                          borderRadius: 999,
+                          bgcolor: markerColor,
+                          opacity: 0.72,
+                        }}
+                      />
+                    ))}
+                  </>
                 )}
                 {depth > 0 && frame.marker && !frame.label && (
                   <Box
@@ -418,7 +424,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     <Box component="span" aria-hidden="true" sx={{ fontSize: "0.875rem", lineHeight: 1 }}>
                       {frame.marker}
                     </Box>
-                    {frame.label}
+                    {frame.language === "bash" && frame.label === "Shell" ? "Bash" : frame.label}
                     {frame.dialect && frame.dialect !== frame.label.toLowerCase() && (
                       <Box component="span" sx={{ color: "text.disabled", fontWeight: 500 }}>
                         · {frame.dialect}

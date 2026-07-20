@@ -21,14 +21,15 @@ const (
 )
 
 type embeddedLanguageSpec struct {
-	commands    []string
-	language    string
-	label       string
-	flags       []string
-	kind        payloadKind
-	minRunes    int
-	structural  string
-	skipOptions map[string]int
+	commands     []string
+	language     string
+	label        string
+	flags        []string
+	kind         payloadKind
+	minRunes     int
+	structural   string
+	minStructure int
+	skipOptions  map[string]int
 }
 
 var embeddedLanguageSpecs = []embeddedLanguageSpec{
@@ -43,16 +44,16 @@ var embeddedLanguageSpecs = []embeddedLanguageSpec{
 	{commands: []string{"awk", "gawk", "mawk"}, language: "awk", label: "AWK", kind: payloadFirstPositional, minRunes: 38, structural: "\n{};", skipOptions: map[string]int{"-F": 1, "-v": 1}},
 	{commands: []string{"sed"}, language: "sed", label: "Sed", flags: []string{"-e", "--expression"}, kind: payloadFlag, minRunes: 42, structural: "\n;{}"},
 	{commands: []string{"sed"}, language: "sed", label: "Sed", kind: payloadFirstPositional, minRunes: 42, structural: "\n;{}"},
-	{commands: []string{"rg", "ripgrep"}, language: "regex", label: "Regex", flags: []string{"-e", "--regexp"}, kind: payloadFlag, minRunes: 52, structural: "|()[]{}?+*"},
-	{commands: []string{"rg", "ripgrep"}, language: "regex", label: "Regex", kind: payloadFirstPositional, minRunes: 52, structural: "|()[]{}?+*", skipOptions: map[string]int{
+	{commands: []string{"rg", "ripgrep"}, language: "regex", label: "Regex", flags: []string{"-e", "--regexp"}, kind: payloadFlag, minRunes: 52, structural: "|()[]{}?+*", minStructure: 6},
+	{commands: []string{"rg", "ripgrep"}, language: "regex", label: "Regex", kind: payloadFirstPositional, minRunes: 52, structural: "|()[]{}?+*", minStructure: 6, skipOptions: map[string]int{
 		"-A": 1, "--after-context": 1, "-B": 1, "--before-context": 1,
 		"-C": 1, "--context": 1, "-f": 1, "--file": 1, "-g": 1,
 		"--glob": 1, "--iglob": 1, "--ignore-file": 1, "-t": 1,
 		"--type": 1, "-T": 1, "--type-not": 1, "--max-count": 1,
 		"--max-depth": 1, "--max-filesize": 1, "--replace": 1,
 	}},
-	{commands: []string{"grep", "egrep"}, language: "regex", label: "Regex", flags: []string{"-e", "--regexp"}, kind: payloadFlag, minRunes: 52, structural: "|()[]{}?+*"},
-	{commands: []string{"grep", "egrep"}, language: "regex", label: "Regex", kind: payloadFirstPositional, minRunes: 52, structural: "|()[]{}?+*", skipOptions: map[string]int{
+	{commands: []string{"grep", "egrep"}, language: "regex", label: "Regex", flags: []string{"-e", "--regexp"}, kind: payloadFlag, minRunes: 52, structural: "|()[]{}?+*", minStructure: 6},
+	{commands: []string{"grep", "egrep"}, language: "regex", label: "Regex", kind: payloadFirstPositional, minRunes: 52, structural: "|()[]{}?+*", minStructure: 6, skipOptions: map[string]int{
 		"-A": 1, "--after-context": 1, "-B": 1, "--before-context": 1,
 		"-C": 1, "--context": 1, "-f": 1, "--file": 1,
 	}},
@@ -152,7 +153,11 @@ func embeddedNeedsFrame(source string, spec embeddedLanguageSpec) bool {
 			count++
 		}
 	}
-	return count >= 3
+	minimum := spec.minStructure
+	if minimum == 0 {
+		minimum = 3
+	}
+	return count >= minimum
 }
 
 // embeddedHeredocPayload recognizes interpreter stdin without guessing from a

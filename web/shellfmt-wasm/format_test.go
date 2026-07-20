@@ -717,13 +717,36 @@ func TestExtractsInlineScriptLanguages(t *testing.T) {
 }
 
 func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
-	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `sed 's/a/b/' file`, `awk '{print}' file`} {
+	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `rg -o 'cowboy-v[0-9]+' sw.js`, `sed 's/a/b/' file`, `awk '{print}' file`} {
 		display, err := formatShellDisplay(source, 46)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(display.Frames) != 1 {
 			t.Fatalf("trivial embedded program should stay inline: %s: %#v", source, display.Frames)
+		}
+	}
+}
+
+func TestNestedLanguageFramesHaveExplicitLabels(t *testing.T) {
+	display, err := formatShellDisplay(`printf x | jq '.items[] | select(.ready) | {id, ready}'; psql db -c 'select id, payload #>> '{}' from events where deleted_at is null order by id'`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"bash": "Bash", "jq": "jq", "sql": "SQL"}
+	seen := map[string]bool{}
+	for _, frame := range display.Frames {
+		if label, ok := want[frame.Language]; ok {
+			seen[frame.Language] = true
+			if frame.Label == label {
+				continue
+			}
+			t.Fatalf("language %s label=%q, want %q: %#v", frame.Language, frame.Label, label, display.Frames)
+		}
+	}
+	for language := range want {
+		if !seen[language] {
+			t.Fatalf("missing labeled %s frame: %#v", language, display.Frames)
 		}
 	}
 }

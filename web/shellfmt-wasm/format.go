@@ -162,7 +162,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				if err == nil {
 					outerText, err := formatParsedFile(outerFile, columns)
 					if err == nil {
-						frames := []shellFrame{{Text: outerText, Language: "bash", Label: "Shell", Depth: depth}}
+						frames := []shellFrame{{Text: outerText, Language: "bash", Label: "Bash", Depth: depth}}
 						for _, child := range extracted {
 							frames = append(frames, child.children...)
 						}
@@ -178,7 +178,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 	if err != nil {
 		return nil, err
 	}
-	return []shellFrame{{Text: text, Language: "bash", Label: "Shell", Depth: depth}}, nil
+	return []shellFrame{{Text: text, Language: "bash", Label: "Bash", Depth: depth}}, nil
 }
 
 // nestedShellNeedsFrame measures information density rather than matching
@@ -532,7 +532,7 @@ func formattedJQPayload(word *syntax.Word) (nestedPayload, bool) {
 	}
 	return nestedPayload{
 		start: int(word.Pos().Offset()), end: int(word.End().Offset()),
-		launcher: "jq", payload: strings.TrimSpace(source), language: "jq",
+		launcher: "jq", payload: strings.TrimSpace(source), language: "jq", label: "jq",
 	}, true
 }
 
@@ -604,7 +604,7 @@ func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 		}
 		return nestedPayload{
 			start: int(args[index+1].Pos().Offset()), end: int(args[index+1].End().Offset()),
-			launcher: "psql " + option, payload: value, language: "sql", dialect: "postgresql",
+			launcher: "psql " + option, payload: value, language: "sql", label: "SQL", dialect: "postgresql",
 		}, true
 	}
 	return nestedPayload{}, false

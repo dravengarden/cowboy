@@ -50,6 +50,9 @@ export function addShellPathBreaks(source: string): string {
 const formatCache = new Map<string, Promise<ShellDisplay | null>>();
 
 export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): Promise<ShellFrame> {
+  if (frame.language === "regex") {
+    return { ...frame, text: addRegexSoftBreaks(frame.text) };
+  }
   if (frame.language === "jq") {
     try {
       // The parser/formatter is loaded only after a complex jq filter has been
@@ -89,6 +92,30 @@ export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): P
   } catch {
     return frame;
   }
+}
+
+/** Add display-only opportunities after top-level alternations. Regex spacing
+ * is dialect-sensitive, so unlike a source formatter this never inserts a
+ * visible character and never changes escaped pipes or character classes. */
+export function addRegexSoftBreaks(source: string): string {
+  let escaped = false;
+  let inClass = false;
+  let result = "";
+  for (const char of source) {
+    result += char;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "[") inClass = true;
+    else if (char === "]") inClass = false;
+    else if (char === "|" && !inClass) result += "\u200b";
+  }
+  return result;
 }
 
 function loadScript(source: string): Promise<void> {
