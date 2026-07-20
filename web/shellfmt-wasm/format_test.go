@@ -607,3 +607,77 @@ func TestLeavesInvalidJQProgramInShellFrame(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractsPythonHeredocAsLanguageFrame(t *testing.T) {
+	directSource := "python3 - <<'PY'\nimport socket\nfor host in [\"github.com\"]:\n    print(host)\nPY\n"
+	direct, directErr := formatShellDisplay(directSource, 46)
+	if directErr != nil || len(direct.Frames) != 2 {
+		t.Fatalf("direct Python heredoc should project: err=%v frames=%#v", directErr, direct.Frames)
+	}
+	source := `ssh macbook-air 'python3 - <<'"'"'PY'"'"'
+import socket
+for host in ["github.com", "cowboy.example"]:
+    print(socket.getaddrinfo(host, 443))
+PY'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var python *shellFrame
+	for index := range display.Frames {
+		if display.Frames[index].Language == "python" {
+			python = &display.Frames[index]
+			break
+		}
+	}
+	if python == nil || python.Label != "Python" {
+		t.Fatalf("expected a labeled Python frame: %#v", display.Frames)
+	}
+	if !strings.Contains(python.Text, "import socket") || strings.Contains(python.Text, "PY") {
+		t.Fatalf("heredoc boundaries must stay in Bash: %q", python.Text)
+	}
+}
+
+func TestExtractsInlineScriptLanguages(t *testing.T) {
+	tests := []struct {
+		source   string
+		language string
+	}{
+		{`python3 -c 'import json; print(json.dumps({"ready": True}))'`, "python"},
+		{`nix develop -c env PYTHONUTF8=1 python3.12 -c 'import json; print(json.dumps({"ready": True}))'`, "python"},
+		{`deno eval 'const value = {ready: true}; console.log(JSON.stringify(value))'`, "typescript"},
+		{`node --input-type=module -e 'const value = {ready: true}; console.log(JSON.stringify(value))'`, "javascript"},
+		{`perl -e 'use JSON::PP; print encode_json({ready => JSON::PP::true});'`, "perl"},
+		{`ruby -e 'require "json"; puts JSON.generate({ready: true})'`, "ruby"},
+		{`php -r '$value = ["ready" => true]; echo json_encode($value);'`, "php"},
+		{`lua -e 'local value = {ready = true}; for key, item in pairs(value) do print(key, item) end'`, "lua"},
+		{`awk '{ totals[$1] += $2 } END { for (key in totals) print key, totals[key] }' data`, "awk"},
+		{`sed -e 's/(alpha|beta)/replacement/g; /failed/{p;q;}' file`, "sed"},
+		{`rg -e 'ToolDetails(Browser|Sheet)|format(Shell|Embedded)Frame' web/src`, "regex"},
+	}
+	for _, test := range tests {
+		display, err := formatShellDisplay(test.source, 46)
+		if err != nil {
+			t.Fatalf("%s: %v", test.language, err)
+		}
+		found := false
+		for _, frame := range display.Frames {
+			found = found || frame.Language == test.language
+		}
+		if !found {
+			t.Fatalf("expected %s frame: %#v", test.language, display.Frames)
+		}
+	}
+}
+
+func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
+	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `sed 's/a/b/' file`, `awk '{print}' file`} {
+		display, err := formatShellDisplay(source, 46)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(display.Frames) != 1 {
+			t.Fatalf("trivial embedded program should stay inline: %s: %#v", source, display.Frames)
+		}
+	}
+}

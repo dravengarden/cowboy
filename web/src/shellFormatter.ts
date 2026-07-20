@@ -32,7 +32,8 @@ export interface ShellDisplay {
 export interface ShellFrame {
   launcher: string;
   text: string;
-  language?: "bash" | "jq" | "sql";
+  language?: string;
+  label?: string;
   dialect?: "postgresql" | "sql";
   depth?: number;
   marker?: string;

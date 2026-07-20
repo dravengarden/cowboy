@@ -50,6 +50,9 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   plaintext: "text",
   txt: "text",
   jq: "jq",
+  awk: "awk",
+  sed: "bash",
+  regex: "regex",
 };
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {

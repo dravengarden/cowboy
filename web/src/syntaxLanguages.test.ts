@@ -13,6 +13,9 @@ Deno.test("file language routing covers mainstream and extensionless files", () 
 Deno.test("language routing normalizes aliases and safely leaves unknown files plain", () => {
   assertEquals(normalizeSyntaxLanguage("language-js"), "javascript");
   assertEquals(normalizeSyntaxLanguage("jq"), "jq");
+  assertEquals(normalizeSyntaxLanguage("AWK"), "awk");
+  assertEquals(normalizeSyntaxLanguage("regex"), "regex");
+  assertEquals(normalizeSyntaxLanguage("sed"), "bash");
   assertEquals(normalizeSyntaxLanguage("SH"), "bash");
   assertEquals(languageFromPath("/repo/LICENSE"), "");
   assertEquals(languageFromPath("/repo/archive.unknown"), "");

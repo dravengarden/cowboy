@@ -23,6 +23,7 @@ type shellFrame struct {
 	Launcher string
 	Text     string
 	Language string
+	Label    string
 	Dialect  string
 	Depth    int
 	Marker   string
@@ -115,7 +116,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 				var children []shellFrame
 				var innerFile *syntax.File
 				if candidate.language != "" {
-					children = []shellFrame{{Text: candidate.payload, Language: candidate.language, Dialect: candidate.dialect, Depth: depth + 1}}
+					children = []shellFrame{{Text: candidate.payload, Language: candidate.language, Label: candidate.label, Dialect: candidate.dialect, Depth: depth + 1}}
 				} else {
 					var err error
 					innerFile, err = parseShell(candidate.payload)
@@ -149,13 +150,19 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 					// A quoted emoji is a valid, inert display payload. It preserves
 					// the launcher's argument slot and pairs it with the matching
 					// child rail without inventing prose or changing copied source.
-					outer = outer[:child.start] + "'" + marker + "'" + outer[child.end:]
+					reference := "'" + marker + "'"
+					if child.heredoc {
+						// Hdoc.End includes both body and delimiter. Rebuild a tiny,
+						// valid heredoc around the inert marker for the parent frame.
+						reference += "\n" + child.terminator + "\n"
+					}
+					outer = outer[:child.start] + reference + outer[child.end:]
 				}
 				outerFile, err := parseShell(outer)
 				if err == nil {
 					outerText, err := formatParsedFile(outerFile, columns)
 					if err == nil {
-						frames := []shellFrame{{Text: outerText, Depth: depth}}
+						frames := []shellFrame{{Text: outerText, Language: "bash", Label: "Shell", Depth: depth}}
 						for _, child := range extracted {
 							frames = append(frames, child.children...)
 						}
@@ -171,7 +178,7 @@ func formatShellFrames(source string, file *syntax.File, columns, depth int, mar
 	if err != nil {
 		return nil, err
 	}
-	return []shellFrame{{Text: text, Depth: depth}}, nil
+	return []shellFrame{{Text: text, Language: "bash", Label: "Shell", Depth: depth}}, nil
 }
 
 // nestedShellNeedsFrame measures information density rather than matching
@@ -211,17 +218,29 @@ func nestedShellNeedsFrame(source string, file *syntax.File) bool {
 }
 
 type nestedPayload struct {
-	start    int
-	end      int
-	launcher string
-	payload  string
-	language string
-	dialect  string
+	start      int
+	end        int
+	launcher   string
+	payload    string
+	language   string
+	label      string
+	dialect    string
+	heredoc    bool
+	terminator string
 }
 
 func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 	found := make([]nestedPayload, 0, 4)
 	syntax.Walk(file, func(node syntax.Node) bool {
+		if statement, ok := node.(*syntax.Stmt); ok {
+			if payload, foundPayload := embeddedHeredocPayload(statement); foundPayload {
+				found = append(found, payload)
+				// The heredoc word is part of this statement's tree. Once its exact
+				// payload has been projected, do not discover a duplicate inside it.
+				return false
+			}
+			return true
+		}
 		call, isCall := node.(*syntax.CallExpr)
 		if !isCall || len(call.Args) < 2 {
 			return true
@@ -252,6 +271,10 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 		}
 		if query, ok := jqClientPayload(clientArgs); ok {
 			found = append(found, query)
+			return false
+		}
+		if embedded, ok := embeddedClientPayload(clientArgs); ok {
+			found = append(found, embedded)
 			return false
 		}
 		for index := 0; index+2 < len(call.Args); index++ {
@@ -372,6 +395,75 @@ func unwrappedClientArgs(args []*syntax.Word) []*syntax.Word {
 				return args
 			}
 			args = args[index:]
+		case "env":
+			index := 1
+			for index < len(args) {
+				value, ok := staticWord(args[index])
+				if !ok {
+					return args
+				}
+				if value == "--" {
+					index++
+					break
+				}
+				if value == "-u" || value == "--unset" || value == "-C" || value == "--chdir" {
+					index += 2
+					continue
+				}
+				if strings.HasPrefix(value, "-") || strings.Contains(value, "=") {
+					index++
+					continue
+				}
+				break
+			}
+			if index >= len(args) {
+				return args
+			}
+			args = args[index:]
+		case "timeout":
+			index := 1
+			for index < len(args) {
+				value, ok := staticWord(args[index])
+				if !ok {
+					return args
+				}
+				if value == "-k" || value == "--kill-after" || value == "-s" || value == "--signal" {
+					index += 2
+					continue
+				}
+				if strings.HasPrefix(value, "-") {
+					index++
+					continue
+				}
+				// The first non-option is the duration; the next word is the
+				// wrapped executable.
+				index++
+				break
+			}
+			if index >= len(args) {
+				return args
+			}
+			args = args[index:]
+		case "nix":
+			if len(args) < 4 {
+				return args
+			}
+			subcommand, ok := staticWord(args[1])
+			if !ok || (subcommand != "develop" && subcommand != "shell") {
+				return args
+			}
+			commandAt := -1
+			for index := 2; index < len(args); index++ {
+				value, ok := staticWord(args[index])
+				if ok && (value == "-c" || value == "--command") {
+					commandAt = index + 1
+					break
+				}
+			}
+			if commandAt < 0 || commandAt >= len(args) {
+				return args
+			}
+			args = args[commandAt:]
 		default:
 			return args
 		}

@@ -375,10 +375,10 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     }}
                   />
                 )}
-                {depth > 0 && frame.marker && (
+                {depth > 0 && frame.marker && !frame.label && (
                   <Box
                     component="span"
-                    aria-label={`Nested shell ${frame.marker}`}
+                    aria-label={`${frame.label ?? frame.language ?? "Shell"} nested program ${frame.marker}`}
                     sx={{
                       position: "absolute",
                       zIndex: 1,
@@ -396,6 +396,34 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     }}
                   >
                     {frame.marker}
+                  </Box>
+                )}
+                {depth > 0 && frame.label && (
+                  <Box
+                    data-shell-language={frame.language ?? "unknown"}
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      minHeight: 20,
+                      pl: 0.75,
+                      pb: 0.125,
+                      color: markerColor,
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      fontSize: "0.6875rem",
+                      fontWeight: 650,
+                      letterSpacing: "0.015em",
+                    }}
+                  >
+                    <Box component="span" aria-hidden="true" sx={{ fontSize: "0.875rem", lineHeight: 1 }}>
+                      {frame.marker}
+                    </Box>
+                    {frame.label}
+                    {frame.dialect && frame.dialect !== frame.label.toLowerCase() && (
+                      <Box component="span" sx={{ color: "text.disabled", fontWeight: 500 }}>
+                        · {frame.dialect}
+                      </Box>
+                    )}
                   </Box>
                 )}
                 {frame.text && (
