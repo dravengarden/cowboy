@@ -1938,9 +1938,6 @@ function ToolDetailsBrowser({
             width: 44,
             height: 44,
             justifySelf: "center",
-            color: "primary.main",
-            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
-            "&:hover": { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.16) },
           }}
         >
           <KeyboardArrowDown />
