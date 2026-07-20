@@ -24,6 +24,7 @@ import {
 import { ExpandMore, Refresh } from "@mui/icons-material";
 import { useSkills } from "./store";
 import {
+  acceptedScheduleTime,
   type JsonRecord,
   num,
   type ProviderUsage,
@@ -278,10 +279,9 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
               fullWidth
               label="Run at"
               value={fireAt}
-              onChange={(event) => setFireAt(event.target.value)}
+              onChange={(event) => setFireAt(acceptedScheduleTime(event.target.value))}
               slotProps={{ inputLabel: { shrink: true } }}
-              error={fireAt !== "" && !scheduleValid}
-              helperText={fireAt !== "" && !scheduleValid ? "Choose a future time" : " "}
+              helperText="Choose a time at least one minute ahead"
               sx={{ mt: 2 }}
             />
           )}

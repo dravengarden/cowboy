@@ -1,5 +1,18 @@
 import { assertEquals } from "jsr:@std/assert";
-import { nearestAvailableResetCredit, topBarUsageLimits, usageLimits } from "./usageLimits.ts";
+import {
+  acceptedScheduleTime,
+  nearestAvailableResetCredit,
+  topBarUsageLimits,
+  usageLimits,
+} from "./usageLimits.ts";
+
+Deno.test("datetime picker ignores iOS current-minute provisional values", () => {
+  const now = new Date("2026-07-20T10:59:30").getTime();
+  assertEquals(acceptedScheduleTime("2026-07-20T10:59", now), "");
+  assertEquals(acceptedScheduleTime("2026-07-20T11:00", now), "");
+  assertEquals(acceptedScheduleTime("2026-07-20T11:01", now), "2026-07-20T11:01");
+  assertEquals(acceptedScheduleTime("", now), "");
+});
 
 Deno.test("usage limits preserve provider buckets and sort by window", () => {
   const limits = usageLimits({

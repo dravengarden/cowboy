@@ -37,6 +37,7 @@ import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import {
+  acceptedScheduleTime,
   fullResetTime,
   nearestAvailableResetCredit,
   type JsonRecord,
@@ -268,10 +269,9 @@ function DesktopUsageExtras(
               fullWidth
               label="Run at"
               value={fireAt}
-              onChange={(event) => setFireAt(event.target.value)}
+              onChange={(event) => setFireAt(acceptedScheduleTime(event.target.value))}
               slotProps={{ inputLabel: { shrink: true } }}
-              error={fireAt !== "" && !scheduleValid}
-              helperText={fireAt !== "" && !scheduleValid ? "Choose a future time" : " "}
+              helperText="Choose a time at least one minute ahead"
               sx={{ mt: 2 }}
             />
           )}

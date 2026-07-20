@@ -132,6 +132,16 @@ export function relativeUpdateTime(ms: number, now = Date.now()): string {
   return `${String(Math.round(seconds / 60))}m ago`;
 }
 
+/**
+ * iOS may emit the current minute when an empty datetime-local picker opens.
+ * Treat that native provisional value as no selection; a scheduled reset must
+ * be deliberately placed at least one minute in the future.
+ */
+export function acceptedScheduleTime(value: string, now = Date.now()): string {
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp >= now + 60_000 ? value : "";
+}
+
 export function providerUsage(snapshot: UsageSnapshot | null, provider: string | undefined): ProviderUsage | undefined {
   if (!provider) return undefined;
   const normalized = provider === "claude" ? "claude-code" : provider;
