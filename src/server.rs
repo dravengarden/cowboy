@@ -61,6 +61,26 @@ struct AppState {
 const STORE_QUEUE_CAPACITY: usize = 8_192;
 const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+#[derive(Debug, PartialEq, Eq)]
+enum ScheduledResetFailurePolicy {
+    RetryPreflight,
+    StopFailed,
+    StopUnknown,
+}
+
+fn scheduled_reset_failure_policy(
+    call_may_have_reached_provider: bool,
+    prior_attempts: i32,
+) -> ScheduledResetFailurePolicy {
+    if call_may_have_reached_provider {
+        ScheduledResetFailurePolicy::StopUnknown
+    } else if prior_attempts < 2 {
+        ScheduledResetFailurePolicy::RetryPreflight
+    } else {
+        ScheduledResetFailurePolicy::StopFailed
+    }
+}
+
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     init_tracing();
@@ -219,21 +239,41 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
             loop {
-                let schedule = usage.snapshot().await.codex_reset_schedule;
-                if schedule.is_some_and(|item| item.fire_at_ms <= now_ms()) {
-                    let key = match store.as_ref() {
-                        Some(store) => store
-                            .load_codex_reset()
-                            .await
-                            .ok()
-                            .flatten()
-                            .map(|item| item.idempotency_key),
-                        None => None,
+                let action = match store.as_ref() {
+                    Some(store) => store.load_codex_reset().await.ok().flatten(),
+                    None => None,
+                };
+                if let Some(action) = action.filter(|item| item.next_attempt_at_ms <= now_ms()) {
+                    let key = action.idempotency_key;
+                    if let Some(store) = store.as_ref() {
+                        let _ = store
+                            .append_provider_action_log(
+                                "scheduled",
+                                "started",
+                                "preflight",
+                                "Scheduled reset attempt started",
+                                None,
+                                Some(&key),
+                                now_ms(),
+                            )
+                            .await;
                     }
-                    .unwrap_or_else(new_reset_idempotency_key);
                     match usage.consume_nearest_reset(&key, None).await {
                         Ok(result) => {
                             tracing::info!(outcome = %result.outcome, "scheduled Codex reset finished");
+                            if let Some(store) = store.as_ref() {
+                                let _ = store
+                                    .append_provider_action_log(
+                                        "scheduled",
+                                        "succeeded",
+                                        "provider_response",
+                                        &result.outcome,
+                                        result.credit_id.as_deref(),
+                                        Some(&key),
+                                        now_ms(),
+                                    )
+                                    .await;
+                            }
                             if let Some(store) = store.as_ref()
                                 && let Err(error) = store.delete_codex_reset().await
                             {
@@ -242,7 +282,65 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                             usage.set_reset_schedule(None).await;
                         }
                         Err(error) => {
-                            tracing::warn!(%error, "scheduled Codex reset failed; retaining timer for retry")
+                            if scheduled_reset_failure_policy(
+                                error.call_may_have_reached_provider,
+                                action.attempt_count,
+                            ) == ScheduledResetFailurePolicy::StopUnknown
+                            {
+                                tracing::error!(%error, "scheduled Codex reset outcome unknown; automatic retry disabled");
+                                if let Some(store) = store.as_ref() {
+                                    let _ = store
+                                        .append_provider_action_log(
+                                            "scheduled",
+                                            "unknown",
+                                            "consume",
+                                            &error.to_string(),
+                                            error.credit_id.as_deref(),
+                                            Some(&key),
+                                            now_ms(),
+                                        )
+                                        .await;
+                                    let _ = store.delete_codex_reset().await;
+                                }
+                                usage.set_reset_schedule(None).await;
+                            } else if scheduled_reset_failure_policy(false, action.attempt_count)
+                                == ScheduledResetFailurePolicy::RetryPreflight
+                            {
+                                tracing::warn!(%error, "scheduled Codex reset preflight failed; retrying safely");
+                                if let Some(store) = store.as_ref() {
+                                    let _ = store
+                                        .append_provider_action_log(
+                                            "scheduled",
+                                            "retrying",
+                                            "preflight",
+                                            &error.to_string(),
+                                            error.credit_id.as_deref(),
+                                            Some(&key),
+                                            now_ms(),
+                                        )
+                                        .await;
+                                    let _ = store
+                                        .defer_codex_reset(now_ms().saturating_add(60_000))
+                                        .await;
+                                }
+                            } else {
+                                tracing::error!(%error, "scheduled Codex reset preflight retry limit reached");
+                                if let Some(store) = store.as_ref() {
+                                    let _ = store
+                                        .append_provider_action_log(
+                                            "scheduled",
+                                            "failed",
+                                            "preflight",
+                                            &error.to_string(),
+                                            error.credit_id.as_deref(),
+                                            Some(&key),
+                                            now_ms(),
+                                        )
+                                        .await;
+                                    let _ = store.delete_codex_reset().await;
+                                }
+                                usage.set_reset_schedule(None).await;
+                            }
                         }
                     }
                 }
@@ -848,6 +946,7 @@ async fn serve_axum(
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
+        .route("/api/usage/logs", get(api_usage_logs))
         .route("/api/usage/codex/reset", post(api_codex_reset))
         .route(
             "/api/usage/codex/reset/schedule",
@@ -1108,16 +1207,67 @@ async fn api_codex_reset(
     if request.confirm != "confirm" {
         return (StatusCode::BAD_REQUEST, "confirmation must be confirm").into_response();
     }
+    let key = new_reset_idempotency_key();
+    if let Some(store) = state.store.as_ref() {
+        let _ = store
+            .append_provider_action_log(
+                "manual",
+                "started",
+                "preflight",
+                "Manual reset attempt started",
+                Some(&request.expected_credit_id),
+                Some(&key),
+                now_ms(),
+            )
+            .await;
+    }
     match state
         .usage
-        .consume_nearest_reset(
-            &new_reset_idempotency_key(),
-            Some(&request.expected_credit_id),
-        )
+        .consume_nearest_reset(&key, Some(&request.expected_credit_id))
         .await
     {
-        Ok(result) => Json(result).into_response(),
-        Err(error) => (StatusCode::CONFLICT, error.to_string()).into_response(),
+        Ok(result) => {
+            if let Some(store) = state.store.as_ref() {
+                let _ = store
+                    .append_provider_action_log(
+                        "manual",
+                        "succeeded",
+                        "provider_response",
+                        &result.outcome,
+                        result.credit_id.as_deref(),
+                        Some(&key),
+                        now_ms(),
+                    )
+                    .await;
+            }
+            Json(result).into_response()
+        }
+        Err(error) => {
+            if let Some(store) = state.store.as_ref() {
+                let status = if error.call_may_have_reached_provider {
+                    "unknown"
+                } else {
+                    "failed"
+                };
+                let phase = if error.call_may_have_reached_provider {
+                    "consume"
+                } else {
+                    "preflight"
+                };
+                let _ = store
+                    .append_provider_action_log(
+                        "manual",
+                        status,
+                        phase,
+                        &error.to_string(),
+                        error.credit_id.as_deref(),
+                        Some(&key),
+                        now_ms(),
+                    )
+                    .await;
+            }
+            (StatusCode::CONFLICT, error.to_string()).into_response()
+        }
     }
 }
 
@@ -1146,6 +1296,17 @@ async fn api_codex_reset_schedule(
     if let Err(error) = store.upsert_codex_reset(request.fire_at_ms, &key).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
+    let _ = store
+        .append_provider_action_log(
+            "scheduled",
+            "scheduled",
+            "timer",
+            "Reset scheduled",
+            None,
+            Some(&key),
+            now_ms(),
+        )
+        .await;
     state
         .usage
         .set_reset_schedule(Some(crate::usage::CodexResetSchedule {
@@ -1166,8 +1327,33 @@ async fn api_codex_reset_cancel(State(state): State<Arc<AppState>>) -> Response 
     if let Err(error) = store.delete_codex_reset().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
+    let _ = store
+        .append_provider_action_log(
+            "scheduled",
+            "cancelled",
+            "timer",
+            "Scheduled reset cancelled",
+            None,
+            None,
+            now_ms(),
+        )
+        .await;
     state.usage.set_reset_schedule(None).await;
     StatusCode::NO_CONTENT.into_response()
+}
+
+async fn api_usage_logs(State(state): State<Arc<AppState>>) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistent logs unavailable",
+        )
+            .into_response();
+    };
+    match store.provider_action_logs(100).await {
+        Ok(logs) => Json(logs).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
 }
 
 async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
@@ -2409,4 +2595,33 @@ where
 {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     sink.send(Message::Text(text.into())).await.map_err(|_| ())
+}
+
+#[cfg(test)]
+mod reset_policy_tests {
+    use super::{ScheduledResetFailurePolicy, scheduled_reset_failure_policy};
+
+    #[test]
+    fn ambiguous_consume_is_never_retried() {
+        assert_eq!(
+            scheduled_reset_failure_policy(true, 0),
+            ScheduledResetFailurePolicy::StopUnknown
+        );
+    }
+
+    #[test]
+    fn only_preflight_failures_receive_two_bounded_retries() {
+        assert_eq!(
+            scheduled_reset_failure_policy(false, 0),
+            ScheduledResetFailurePolicy::RetryPreflight
+        );
+        assert_eq!(
+            scheduled_reset_failure_policy(false, 1),
+            ScheduledResetFailurePolicy::RetryPreflight
+        );
+        assert_eq!(
+            scheduled_reset_failure_policy(false, 2),
+            ScheduledResetFailurePolicy::StopFailed
+        );
+    }
 }

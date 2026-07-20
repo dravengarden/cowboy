@@ -115,6 +115,7 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
+import { UsageLogs } from "./UsageLogs";
 import { SegmentedPill } from "./SegmentedPill";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { ResourceLightbox } from "./ResourceLightbox";
@@ -2393,7 +2394,7 @@ function SettingsShell({
 }): React.JSX.Element {
     // Merged sheet: a Settings / Info segmented switch in the header. Each open
     // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
-    const [tab, setTab] = useState<"settings" | "info">(initialTab);
+    const [tab, setTab] = useState<"settings" | "info" | "logs">(initialTab);
     useEffect(() => {
         if (open) setTab(initialTab);
     }, [open, initialTab]);
@@ -2452,7 +2453,7 @@ function SettingsShell({
                 <SegmentedPill
                     value={tab}
                     onChange={setTab}
-                    options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }]}
+                    options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
                 />
                 <Box
                     sx={{
@@ -2471,7 +2472,7 @@ function SettingsShell({
                     </Box>
                 </Box>
             </Box>
-            {tab === "info" ? <InfoContent /> : (
+            {tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 

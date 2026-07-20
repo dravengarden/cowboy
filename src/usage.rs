@@ -59,6 +59,21 @@ pub struct CodexResetResult {
     pub credit_id: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct CodexResetError {
+    pub call_may_have_reached_provider: bool,
+    pub credit_id: Option<String>,
+    source: anyhow::Error,
+}
+
+impl std::fmt::Display for CodexResetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl std::error::Error for CodexResetError {}
+
 #[derive(Clone)]
 pub struct UsageService {
     codex_command: String,
@@ -145,26 +160,57 @@ impl UsageService {
         &self,
         idempotency_key: &str,
         expected_credit_id: Option<&str>,
-    ) -> Result<CodexResetResult> {
+    ) -> std::result::Result<CodexResetResult, CodexResetError> {
         let _guard = self.reset_lock.lock().await;
         let usage = tokio::time::timeout(
             std::time::Duration::from_secs(12),
             collect_codex(&self.codex_command),
         )
         .await
-        .context("refresh before Codex reset timed out")??;
+        .context("refresh before Codex reset timed out")
+        .and_then(|result| result)
+        .map_err(|source| CodexResetError {
+            call_may_have_reached_provider: false,
+            credit_id: None,
+            source,
+        })?;
         let credit_id = nearest_available_credit_id(usage.rate_limits.as_ref())
-            .context("no available Codex reset credit")?;
+            .context("no available Codex reset credit")
+            .map_err(|source| CodexResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source,
+            })?;
         if expected_credit_id.is_some_and(|expected| expected != credit_id) {
-            bail!("nearest Codex reset credit changed; refresh and confirm again");
+            return Err(CodexResetError {
+                call_may_have_reached_provider: false,
+                credit_id: Some(credit_id),
+                source: anyhow::anyhow!(
+                    "nearest Codex reset credit changed; refresh and confirm again"
+                ),
+            });
         }
-        let mut server = JsonRpcProcess::start(&self.codex_command).await?;
+        let mut server = JsonRpcProcess::start(&self.codex_command)
+            .await
+            .map_err(|source| CodexResetError {
+                call_may_have_reached_provider: false,
+                credit_id: Some(credit_id.clone()),
+                source,
+            })?;
         let response = server
             .request(
                 "account/rateLimitResetCredit/consume",
                 json!({ "creditId": credit_id, "idempotencyKey": idempotency_key }),
             )
-            .await?;
+            .await
+            .map_err(|source| CodexResetError {
+                // Once the consume frame is written, a missing/error response is
+                // ambiguous. Never retry automatically: the provider may have
+                // committed the credit before the transport failed.
+                call_may_have_reached_provider: true,
+                credit_id: Some(credit_id.clone()),
+                source,
+            })?;
         let outcome = response
             .get("outcome")
             .and_then(Value::as_str)

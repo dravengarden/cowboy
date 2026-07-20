@@ -65,6 +65,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0014_provider_actions.sql",
         "b6f32dc1f36c05b9d8461a0ca2bcb08936eb0173540e9ed3343d211d65c1ceea",
     ),
+    (
+        "0015_provider_action_logs.sql",
+        "47dea213814a7ad695f0dad94189342b3cbbee526cbafc611498144acf3d3780",
+    ),
 ];
 
 #[test]

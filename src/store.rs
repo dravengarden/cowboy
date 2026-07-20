@@ -102,6 +102,22 @@ pub struct Store {
 pub struct ScheduledProviderAction {
     pub fire_at_ms: i64,
     pub idempotency_key: String,
+    pub attempt_count: i32,
+    pub next_attempt_at_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderActionLog {
+    pub id: i64,
+    pub provider: String,
+    pub action: String,
+    pub trigger: String,
+    pub status: String,
+    pub phase: String,
+    pub message: String,
+    pub credit_id: Option<String>,
+    pub idempotency_suffix: Option<String>,
+    pub created_at_ms: i64,
 }
 
 impl Store {
@@ -110,7 +126,8 @@ impl Store {
             "INSERT INTO scheduled_provider_actions (provider, action, fire_at_ms, idempotency_key) \
              VALUES ('codex', 'rate_limit_reset', $1, $2) \
              ON CONFLICT (provider) DO UPDATE SET action = EXCLUDED.action, \
-             fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key",
+             fire_at_ms = EXCLUDED.fire_at_ms, idempotency_key = EXCLUDED.idempotency_key, \
+             attempt_count = 0, next_attempt_at_ms = EXCLUDED.fire_at_ms",
         )
         .bind(fire_at_ms)
         .bind(idempotency_key)
@@ -121,19 +138,115 @@ impl Store {
     }
 
     pub async fn load_codex_reset(&self) -> Result<Option<ScheduledProviderAction>> {
-        let row: Option<(i64, String)> = sqlx::query_as(
-            "SELECT fire_at_ms, idempotency_key FROM scheduled_provider_actions \
+        let row: Option<(i64, String, i32, Option<i64>)> = sqlx::query_as(
+            "SELECT fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms FROM scheduled_provider_actions \
              WHERE provider = 'codex' AND action = 'rate_limit_reset'",
         )
         .fetch_optional(&self.pool)
         .await
         .context("SELECT scheduled Codex reset")?;
-        Ok(
-            row.map(|(fire_at_ms, idempotency_key)| ScheduledProviderAction {
-                fire_at_ms,
-                idempotency_key,
-            }),
+        Ok(row.map(
+            |(fire_at_ms, idempotency_key, attempt_count, next_attempt_at_ms)| {
+                ScheduledProviderAction {
+                    fire_at_ms,
+                    idempotency_key,
+                    attempt_count,
+                    next_attempt_at_ms: next_attempt_at_ms.unwrap_or(fire_at_ms),
+                }
+            },
+        ))
+    }
+
+    pub async fn defer_codex_reset(&self, next_attempt_at_ms: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE scheduled_provider_actions SET attempt_count = attempt_count + 1, \
+             next_attempt_at_ms = $1 WHERE provider = 'codex' AND action = 'rate_limit_reset'",
         )
+        .bind(next_attempt_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("defer scheduled Codex reset")?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn append_provider_action_log(
+        &self,
+        trigger: &str,
+        status: &str,
+        phase: &str,
+        message: &str,
+        credit_id: Option<&str>,
+        idempotency_key: Option<&str>,
+        created_at_ms: i64,
+    ) -> Result<()> {
+        let suffix = idempotency_key.map(|key| {
+            key.chars()
+                .rev()
+                .take(8)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        });
+        sqlx::query(
+            "INSERT INTO provider_action_logs \
+             (provider, action, trigger, status, phase, message, credit_id, idempotency_suffix, created_at_ms) \
+             VALUES ('codex', 'rate_limit_reset', $1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(trigger)
+        .bind(status)
+        .bind(phase)
+        .bind(message)
+        .bind(credit_id)
+        .bind(suffix)
+        .bind(created_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("append provider action log")?;
+        Ok(())
+    }
+
+    pub async fn provider_action_logs(&self, limit: i64) -> Result<Vec<ProviderActionLog>> {
+        sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                i64,
+            ),
+        >(
+            "SELECT id, provider, action, trigger, status, phase, message, credit_id, \
+             idempotency_suffix, created_at_ms FROM provider_action_logs \
+             ORDER BY created_at_ms DESC, id DESC LIMIT $1",
+        )
+        .bind(limit.clamp(1, 200))
+        .fetch_all(&self.pool)
+        .await
+        .context("list provider action logs")
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| ProviderActionLog {
+                    id: row.0,
+                    provider: row.1,
+                    action: row.2,
+                    trigger: row.3,
+                    status: row.4,
+                    phase: row.5,
+                    message: row.6,
+                    credit_id: row.7,
+                    idempotency_suffix: row.8,
+                    created_at_ms: row.9,
+                })
+                .collect()
+        })
     }
 
     pub async fn delete_codex_reset(&self) -> Result<()> {

@@ -53,6 +53,7 @@ import {
   type UsageSnapshot,
 } from "../usageLimits";
 import { DesktopContextShortcut } from "./commands/DesktopContextShortcut";
+import { UsageLogs } from "../UsageLogs";
 import {
   type DesktopCommand,
   useDesktopCommand,
@@ -516,6 +517,7 @@ export function DesktopTopBarControls({
   );
   const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
+  const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
@@ -974,16 +976,17 @@ export function DesktopTopBarControls({
             justifyContent="space-between"
           >
             <Box>
-              <Typography variant="subtitle2" fontWeight={750}>
-                Usage limits
-              </Typography>
+              <Stack direction="row" spacing={1.5}>
+                <ButtonBase onClick={() => setUsagePanel("usage")} sx={{ borderBottom: 2, borderColor: usagePanel === "usage" ? "primary.main" : "transparent" }}><Typography variant="subtitle2" fontWeight={750}>Usage</Typography></ButtonBase>
+                <ButtonBase onClick={() => setUsagePanel("logs")} sx={{ borderBottom: 2, borderColor: usagePanel === "logs" ? "primary.main" : "transparent" }}><Typography variant="subtitle2" fontWeight={750}>Logs</Typography></ButtonBase>
+              </Stack>
               <Typography variant="caption" color="text.secondary">
                 {session?.provider ?? "Provider"} ·{" "}
                 {usage?.source ?? usage?.status ?? "unavailable"} · Updated{" "}
                 {updatedAgo}
               </Typography>
             </Box>
-            <Button
+            {usagePanel === "usage" && <Button
               size="small"
               startIcon={refreshing
                 ? <CircularProgress size={14} />
@@ -995,9 +998,10 @@ export function DesktopTopBarControls({
               sx={{ textTransform: "none" }}
             >
               Refresh
-            </Button>
+            </Button>}
           </Stack>
           <Divider />
+          {usagePanel === "logs" ? <UsageLogs dense /> : <>
           {limits.map((limit) => (
             <Stack key={limit.id} spacing={0.5}>
               <Stack direction="row" justifyContent="space-between">
@@ -1032,6 +1036,7 @@ export function DesktopTopBarControls({
               onUsageChanged={() => loadUsage(false)}
             />
           )}
+          </>}
         </Stack>
       </Popover>
 
