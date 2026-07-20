@@ -81,6 +81,16 @@ func TestNestedEmojiAllocationIsStableAndUnique(t *testing.T) {
 	}
 }
 
+func TestNestedEmojiDoesNotCollideWithPayloadText(t *testing.T) {
+	allocator := newNestedShellMarkerAllocator("rg -n '⚡' web/src")
+	for range maxShellFrames {
+		marker, _ := allocator.nextMarker()
+		if marker == "⚡" {
+			t.Fatal("a source emoji must not be reused as a nested-frame reference")
+		}
+	}
+}
+
 // TestHistoricalShellCorpus is an opt-in, read-only production-corpus audit.
 // The input is one base64-encoded command per line so multiline scripts remain
 // distinct. Normal unit tests skip it; operators can export a corpus without
@@ -417,6 +427,25 @@ func TestRecognizesVersionedNixShellInterpreters(t *testing.T) {
 	}
 }
 
+func TestNestedRegexRemainsAGrandchildOfBash(t *testing.T) {
+	source := `/nix/store/hash-bash-interactive-5.3p9/bin/bash-interactive-5.3p9 -lc "sed -n '240,455p' web/src/tools/blocks.tsx && rg -n 'Shell|Regex|JQ|SQL|embeddedNeedsFrame|cowboy-v\\[0-9\\]' web/src"`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 3 {
+		t.Fatalf("expected root, Bash payload, and Regex payload: %#v", display.Frames)
+	}
+	if display.Frames[1].Language != "bash" || display.Frames[1].Depth != 1 ||
+		display.Frames[2].Language != "regex" || display.Frames[2].Depth != 2 {
+		t.Fatalf("Regex must remain enclosed by its Bash parent: %#v", display.Frames)
+	}
+	if !strings.Contains(display.Frames[0].Text, display.Frames[1].Marker) ||
+		!strings.Contains(display.Frames[1].Text, display.Frames[2].Marker) {
+		t.Fatalf("each marker must appear in its direct parent: %#v", display.Frames)
+	}
+}
+
 func TestShellInterpreterNamesRejectLookalikes(t *testing.T) {
 	for _, path := range []string{"BASH", "bash-language-server", "sh-syntax", "mybash"} {
 		if name, ok := shellInterpreterName(path); ok {
@@ -724,7 +753,7 @@ func TestExtractsInlineScriptLanguages(t *testing.T) {
 }
 
 func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
-	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `rg -o 'cowboy-v[0-9]+' sw.js`, `sed 's/a/b/' file`, `awk '{print}' file`} {
+	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `rg -o 'cowboy-v[0-9]+' sw.js`, `rg 'a(b|c)[0-9]+' .`, `sed 's/a/b/' file`, `awk '{print}' file`} {
 		display, err := formatShellDisplay(source, 46)
 		if err != nil {
 			t.Fatal(err)

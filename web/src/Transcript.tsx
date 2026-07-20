@@ -1692,6 +1692,7 @@ function ToolDetailsBrowser({
   onSelect,
   onClose,
   onLocate,
+  historyComplete,
 }: {
   items: RenderItem[];
   runs: ToolRun[];
@@ -1701,6 +1702,7 @@ function ToolDetailsBrowser({
   onSelect: (key: string) => void;
   onClose: () => void;
   onLocate: (key: string) => void;
+  historyComplete: boolean;
 }): React.JSX.Element | null {
   const theme = useTheme();
   const roomy = useMediaQuery(theme.breakpoints.up("sm"));
@@ -1866,11 +1868,11 @@ function ToolDetailsBrowser({
           </IconButton>
         )}
       <Typography
-        aria-label={`Tool run ${runIndex + 1} of ${runs.length}`}
+        aria-label={`Tool run ${runIndex + 1} of ${runs.length}${historyComplete ? "" : " loaded"}`}
         variant="caption"
         sx={{ px: 0.75, fontWeight: 700, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
       >
-        {runIndex + 1} / {runs.length}
+        {runIndex + 1} / {runs.length}{historyComplete ? "" : "+"}
       </Typography>
       {roomy
         ? (
@@ -2641,6 +2643,18 @@ export function Transcript({
   const paging = useStoreSelector((snapshot) =>
     snapshot.pagination.get(sessionId)
   );
+
+  // The transcript normally retains a bounded recent tail. Tool details is a
+  // session-level browser, so its denominator must not pretend that tail is the
+  // complete history. While the sheet is open, page backward to the beginning;
+  // the footer uses a `+` until the server confirms completion.
+  useEffect(() => {
+    if (
+      selectedToolKey === null || !paging || paging.reachedStart ||
+      paging.loadingOlder || paging.beforeSeq === null
+    ) return;
+    void loadOlder(sessionId);
+  }, [paging?.beforeSeq, paging?.loadingOlder, paging?.reachedStart, selectedToolKey, sessionId]);
   // A retained recent tail can arrive before enough older pages have filled a
   // tall phone viewport. Without an explicit state the latest reply sits above
   // the composer while the unused upper viewport looks like a broken blank
@@ -2774,11 +2788,11 @@ export function Transcript({
     // Do not fight the short-history bootstrap above: it deliberately pages
     // until the viewport fills. Once there is real overflow, the recent tail is
     // already sufficient to fill the reader and can safely replace deep rows.
-    if (stick.current && el && el.scrollHeight > el.clientHeight + 1) {
+    if (selectedToolKey === null && stick.current && el && el.scrollHeight > el.clientHeight + 1) {
       scheduleHistoryRelease();
     }
     return cancelHistoryRelease;
-  }, [sessionId, timeline.length]);
+  }, [sessionId, timeline.length, selectedToolKey]);
 
   // SCROLL MODEL: the scroll container is `flex-direction: column-reverse`, so
   // the browser anchors the viewport FROM THE BOTTOM natively. We render rows
@@ -3349,6 +3363,7 @@ export function Transcript({
         onSelect={setSelectedToolKey}
         onClose={closeTool}
         onLocate={locateTool}
+        historyComplete={paging?.reachedStart ?? true}
       />
       {
         /* "Loading older history" — an ABSOLUTE overlay at the top (not in the

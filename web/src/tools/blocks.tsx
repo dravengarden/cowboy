@@ -302,6 +302,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             >
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
+              const nextDepth = readable.frames[index + 1]?.depth ?? 0;
               const markerColor = nestedMarkerColor(frame.marker, theme.palette.mode === "dark", frame.color);
               // Every nested frame redraws the still-active ancestor rails in
               // the same coordinate system. This makes a parent rail continue
@@ -362,15 +363,15 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 ))}
                 {depth > 0 && (
                   <>
-                    {[{ top: 8 }, { bottom: 0 }].map((edge, edgeIndex) => (
+                    {[{ top: 8, cap: "start" }, ...(nextDepth < depth ? [{ bottom: 0, cap: "end" }] : [])].map((edge) => (
                       <Box
-                        key={edgeIndex}
+                        key={edge.cap}
                         aria-hidden="true"
-                        data-shell-rail-cap={edgeIndex === 0 ? "start" : "end"}
+                        data-shell-rail-cap={edge.cap}
                         sx={{
                           position: "absolute",
                           left: `${4 + (depth - 1) * 8}px`,
-                          ...edge,
+                          ...(edge.cap === "start" ? { top: edge.top } : { bottom: edge.bottom }),
                           width: 6,
                           height: 2,
                           borderRadius: 999,
@@ -381,6 +382,23 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     ))}
                   </>
                 )}
+                {rails.filter((rail) => rail.level < depth && nextDepth < rail.level).map((rail) => (
+                  <Box
+                    key={`close-${rail.level}`}
+                    aria-hidden="true"
+                    data-shell-rail-cap="ancestor-end"
+                    sx={{
+                      position: "absolute",
+                      left: `${4 + (rail.level - 1) * 8}px`,
+                      bottom: 0,
+                      width: 6,
+                      height: 2,
+                      borderRadius: 999,
+                      bgcolor: rail.color,
+                      opacity: 0.48,
+                    }}
+                  />
+                ))}
                 {depth > 0 && frame.marker && !frame.label && (
                   <Box
                     component="span"

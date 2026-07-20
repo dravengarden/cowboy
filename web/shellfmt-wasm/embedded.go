@@ -144,7 +144,8 @@ func languagePayload(word *syntax.Word, launcher string, spec embeddedLanguageSp
 
 func embeddedNeedsFrame(source string, spec embeddedLanguageSpec) bool {
 	trimmed := strings.TrimSpace(source)
-	if utf8.RuneCountInString(trimmed) >= spec.minRunes || strings.Contains(trimmed, "\n") {
+	runes := utf8.RuneCountInString(trimmed)
+	if runes >= spec.minRunes || strings.Contains(trimmed, "\n") {
 		return true
 	}
 	count := 0
@@ -157,7 +158,11 @@ func embeddedNeedsFrame(source string, spec embeddedLanguageSpec) bool {
 	if minimum == 0 {
 		minimum = 3
 	}
-	return count >= minimum
+	// Dense punctuation is a useful secondary signal only when the payload also
+	// occupies meaningful visual width. Short one-line expressions such as
+	// `cowboy-v[0-9]+` remain inline (and syntax highlighted) instead of paying
+	// the hierarchy cost of a separate frame.
+	return runes >= min(spec.minRunes, 28) && count >= minimum
 }
 
 // embeddedHeredocPayload recognizes interpreter stdin without guessing from a

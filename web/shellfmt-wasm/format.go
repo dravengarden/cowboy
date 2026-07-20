@@ -75,6 +75,7 @@ var nestedShellMarkers = [...]string{
 type nestedShellMarkerAllocator struct {
 	next   int
 	stride int
+	source string
 }
 
 func newNestedShellMarkerAllocator(source string) nestedShellMarkerAllocator {
@@ -88,10 +89,24 @@ func newNestedShellMarkerAllocator(source string) nestedShellMarkerAllocator {
 	return nestedShellMarkerAllocator{
 		next:   int(sum % uint64(len(nestedShellMarkers))),
 		stride: int((sum>>8)%uint64(len(nestedShellMarkers)/2))*2 + 1,
+		source: source,
 	}
 }
 
 func (allocator *nestedShellMarkerAllocator) nextMarker() (string, int) {
+	// Never use an emoji which already occurs in the command as a structural
+	// reference. A real `rg '⚡'` payload must not be visually indistinguishable
+	// from the marker which replaces it in its parent frame.
+	for range len(nestedShellMarkers) {
+		paletteIndex := allocator.next
+		allocator.next = (allocator.next + allocator.stride) % len(nestedShellMarkers)
+		marker := nestedShellMarkers[paletteIndex]
+		if !strings.Contains(allocator.source, marker) {
+			return marker, paletteIndex
+		}
+	}
+	// The palette is larger than the maximum frame count, so this is only a
+	// defensive fallback for an artificial command containing every marker.
 	paletteIndex := allocator.next
 	allocator.next = (allocator.next + allocator.stride) % len(nestedShellMarkers)
 	return nestedShellMarkers[paletteIndex], paletteIndex
