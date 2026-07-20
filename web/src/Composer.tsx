@@ -3514,6 +3514,7 @@ function PendingRow({
             // user has already started a native IME composition and detach its
             // marked-text channel. Touch keeps the established keyboard retries.
             autoFocus={touchInput}
+            showCollapse={false}
             submitLabel="Done editing"
             submitIcon={<Check />}
             vim={vim}

@@ -43,6 +43,7 @@ export function FullscreenComposer({
   attachmentsSlot,
   editorRef,
   autoFocus = true,
+  showCollapse = true,
   submitLabel = "Send",
   submitIcon,
   vim = false,
@@ -71,6 +72,9 @@ export function FullscreenComposer({
   // disarm the iOS long-press menu. The row-edit overlay (opened from an effect,
   // not directly in a tap) still relies on this.
   autoFocus?: boolean;
+  /** Keep collapse separate from submit for new messages. Row edits hide it:
+   *  their live-saved Done action already closes the overlay. */
+  showCollapse?: boolean;
   /** Row editors are live-saved; their primary action finishes editing rather
    *  than sending the queued/draft item. */
   submitLabel?: string;
@@ -176,11 +180,13 @@ export function FullscreenComposer({
         }}
       >
         <Toolbar variant="dense" sx={{ minHeight: 48, gap: 1 }}>
-          <Tooltip title="Collapse">
-            <IconButton aria-label="collapse editor" onClick={act(onCollapse)}>
-              <CloseFullscreen />
-            </IconButton>
-          </Tooltip>
+          {showCollapse && (
+            <Tooltip title="Collapse">
+              <IconButton aria-label="collapse editor" onClick={act(onCollapse)}>
+                <CloseFullscreen />
+              </IconButton>
+            </Tooltip>
+          )}
           <Box sx={{ flex: 1 }} />
           <Tooltip title={submitLabel}>
             <span>

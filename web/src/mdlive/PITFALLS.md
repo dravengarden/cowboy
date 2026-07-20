@@ -418,6 +418,14 @@ here says otherwise.
     stall during every reveal frame. Re-verify touch scrolling and inline-editor
     focus after changing this animation.
 
+18. **Fullscreen row edits expose one completion action.** A queued/draft edit
+    is live-saved, so both Collapse and Done previously committed the same state
+    and closed the overlay. Hide Collapse for row edits and retain the top-right
+    Done check as the single explicit completion action. The main new-message
+    composer still needs both controls because Collapse preserves the draft while
+    Send submits it. Keep this distinction explicit through `showCollapse`; do
+    not infer it from labels or alter editor, focus, or IME behavior.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
