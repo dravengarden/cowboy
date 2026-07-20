@@ -69,6 +69,18 @@ export function addShellPathBreaks(source: string): string {
   return source.replaceAll(/\/(?=[^/\s])/gu, "/\u200b");
 }
 
+/** Remove the display-only marker reference that links a launcher to its
+ * extracted child frame. The original command remains available in Source and
+ * copy; keeping the quoted emoji in highlighted Bash makes structural chrome
+ * look like executable string data. */
+export function stripStructuralMarkerReference(source: string, marker?: string): string {
+  if (!marker) return source;
+  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const shellPayload = new RegExp(`\\s*(?:\\\\\\s*)?-(?:lc|c)\\s+(["'])${escaped}\\1\\s*$`, "u");
+  const quotedMarker = new RegExp(`\\s*(?:\\\\\\s*)?(["'])${escaped}\\1\\s*$`, "u");
+  return source.replace(shellPayload, "").replace(quotedMarker, "").trimEnd();
+}
+
 const formatCache = new Map<string, Promise<ShellDisplay | null>>();
 
 export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): Promise<ShellFrame> {

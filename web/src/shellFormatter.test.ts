@@ -3,6 +3,7 @@ import {
   addRegexSoftBreaks,
   addShellPathBreaks,
   compactNixStoreExecutables,
+  stripStructuralMarkerReference,
 } from "./shellFormatter.ts";
 
 Deno.test("shell path wrapping prefers separators without changing visible text", () => {
@@ -11,6 +12,12 @@ Deno.test("shell path wrapping prefers separators without changing visible text"
 
   assertEquals(display.replaceAll("\u200b", ""), source);
   assertEquals(display, "BRIDGE=/\u200bhome/\u200bdraven/\u200bchrome-debug-bridge/\u200bhelpers/\u200bbridge.sh");
+});
+
+Deno.test("nested structural markers stay outside highlighted command text", () => {
+  assertEquals(stripStructuralMarkerReference("Nix bin › bash \\\n  -lc '🍊'", "🍊"), "Nix bin › bash");
+  assertEquals(stripStructuralMarkerReference("ssh macbook-air '🌸'", "🌸"), "ssh macbook-air");
+  assertEquals(stripStructuralMarkerReference("echo '🍊' later", "🍊"), "echo '🍊' later");
 });
 
 Deno.test("regex soft wrapping preserves escaped pipes and character classes", () => {

@@ -7,7 +7,7 @@ import { Collapsible } from "./Collapsible";
 import { nestedMarkerColor } from "./nestedMarkerColors";
 import { unifiedDiff } from "./diff";
 import { languageFromPath } from "../syntaxLanguages";
-import { addShellPathBreaks, formatShellForDisplay } from "../shellFormatter";
+import { addShellPathBreaks, formatShellForDisplay, stripStructuralMarkerReference } from "../shellFormatter";
 import { SHELL_SYNTAX_LANGUAGE } from "../shellLanguage";
 import {
   chunkCodeForRendering,
@@ -276,16 +276,17 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
 
   const enhanced = readable != null;
   const nested = !!readable && readable.frames.length > 1;
+  const presentationControlHeight = touch ? 44 : 28;
   return (
     <Box>
       <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
         {(readable === undefined || enhanced) && (
-          <Box role="group" aria-label="Shell command presentation" sx={{ display: "flex", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
+          <Box role="group" aria-label="Shell command presentation" sx={{ display: "flex", height: presentationControlHeight, boxSizing: "border-box", bgcolor: "action.hover", borderRadius: 1, p: 0.25 }}>
             <ButtonBase
               aria-pressed={mode === "readable"}
               disabled={!enhanced}
               onClick={(): void => setMode("readable")}
-              sx={{ minHeight: 28, minWidth: 70, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "readable" ? "text.primary" : "text.disabled", bgcolor: mode === "readable" ? "background.paper" : "transparent", boxShadow: mode === "readable" ? 1 : 0 }}
+              sx={{ height: "100%", minHeight: 0, minWidth: 70, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "readable" ? "text.primary" : "text.disabled", bgcolor: mode === "readable" ? "background.paper" : "transparent", boxShadow: mode === "readable" ? 1 : 0 }}
             >
               {readable === undefined ? <CircularProgress size="0.8125rem" /> : "Readable"}
             </ButtonBase>
@@ -293,7 +294,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
               <ButtonBase
                 aria-pressed={mode === "nested"}
                 onClick={(): void => setMode("nested")}
-                sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "nested" ? "text.primary" : "text.disabled", bgcolor: mode === "nested" ? "background.paper" : "transparent", boxShadow: mode === "nested" ? 1 : 0 }}
+                sx={{ height: "100%", minHeight: 0, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "nested" ? "text.primary" : "text.disabled", bgcolor: mode === "nested" ? "background.paper" : "transparent", boxShadow: mode === "nested" ? 1 : 0 }}
               >
                 Nested
               </ButtonBase>
@@ -301,7 +302,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             <ButtonBase
               aria-pressed={mode === "source"}
               onClick={(): void => setMode("source")}
-              sx={{ minHeight: 28, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "source" ? "text.primary" : "text.disabled", bgcolor: mode === "source" ? "background.paper" : "transparent", boxShadow: mode === "source" ? 1 : 0 }}
+              sx={{ height: "100%", minHeight: 0, px: 0.875, borderRadius: 0.75, fontSize: "0.6875rem", color: mode === "source" ? "text.primary" : "text.disabled", bgcolor: mode === "source" ? "background.paper" : "transparent", boxShadow: mode === "source" ? 1 : 0 }}
             >
               Source
             </ButtonBase>
@@ -324,8 +325,8 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
             >
             {readable.frames.map((frame, index) => {
               const depth = frame.depth ?? index;
-              const nextDepth = readable.frames[index + 1]?.depth ?? 0;
               const markerColor = nestedMarkerColor(frame.marker, theme.palette.mode === "dark", frame.color);
+              const displayText = stripStructuralMarkerReference(frame.text, frame.marker);
               // Every nested frame redraws the still-active ancestor rails in
               // the same coordinate system. This makes a parent rail continue
               // through its descendants instead of disappearing when the
@@ -383,44 +384,6 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                     }}
                   />
                 ))}
-                {depth > 0 && (
-                  <>
-                    {[{ top: 8, cap: "start" }, { bottom: 0, cap: "end" }].map((edge) => (
-                      <Box
-                        key={edge.cap}
-                        aria-hidden="true"
-                        data-shell-rail-cap={edge.cap}
-                        sx={{
-                          position: "absolute",
-                          left: `${4 + (depth - 1) * 8}px`,
-                          ...(edge.cap === "start" ? { top: edge.top } : { bottom: edge.bottom }),
-                          width: 6,
-                          height: 2,
-                          borderRadius: 999,
-                          bgcolor: markerColor,
-                          opacity: 0.72,
-                        }}
-                      />
-                    ))}
-                  </>
-                )}
-                {rails.filter((rail) => rail.level < depth && nextDepth < rail.level).map((rail) => (
-                  <Box
-                    key={`close-${rail.level}`}
-                    aria-hidden="true"
-                    data-shell-rail-cap="ancestor-end"
-                    sx={{
-                      position: "absolute",
-                      left: `${4 + (rail.level - 1) * 8}px`,
-                      bottom: 0,
-                      width: 6,
-                      height: 2,
-                      borderRadius: 999,
-                      bgcolor: rail.color,
-                      opacity: 0.48,
-                    }}
-                  />
-                ))}
                 {depth > 0 && frame.marker && !frame.label && (
                   <Box
                     component="span"
@@ -474,7 +437,7 @@ export function ShellCommandView({ command }: { command: string }): React.JSX.El
                 )}
                 {frame.text && (
                   <CodeView
-                    code={phone && (!frame.language || frame.language === "bash") ? addShellPathBreaks(frame.text) : frame.text}
+                    code={phone && (!frame.language || frame.language === "bash") ? addShellPathBreaks(displayText) : displayText}
                     lang={frame.language === "bash" || !frame.language
                       ? SHELL_SYNTAX_LANGUAGE
                       : frame.language}
