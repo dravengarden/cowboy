@@ -46,6 +46,7 @@ import {
   providerUsage,
   record,
   relativeUpdateTime,
+  scheduledResetCountdown,
   shortResetTime,
   topBarUsageLimits,
   usageLimits,
@@ -145,6 +146,19 @@ function DesktopUsageExtras(
     setConfirmText("");
     setResetError(null);
   };
+  const cancelSchedule = async (): Promise<void> => {
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      const response = await fetch("/api/usage/codex/reset/schedule", { method: "DELETE" });
+      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      await onUsageChanged();
+    } catch (cause) {
+      setResetError(cause instanceof Error ? cause.message : "Could not cancel schedule");
+    } finally {
+      setResetBusy(false);
+    }
+  };
 
   return (
     <>
@@ -182,8 +196,8 @@ function DesktopUsageExtras(
                     </Typography>
                     {actionable && (
                       <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "primary.main", flexShrink: 0 }}>
-                        <Typography variant="caption" fontWeight={700}>Schedule</Typography>
-                        <ArrowForwardRounded sx={{ fontSize: 15 }} />
+                        <Typography variant="caption" fontWeight={700}>{schedule ? "Scheduled" : "Schedule"}</Typography>
+                        {!schedule && <ArrowForwardRounded sx={{ fontSize: 15 }} />}
                       </Stack>
                     )}
                   </Stack>
@@ -197,7 +211,7 @@ function DesktopUsageExtras(
                   key={textValue(credit.id) ?? index}
                   sx={{ minWidth: 0 }}
                 >
-                  {actionable
+                  {actionable && !schedule
                     ? (
                       <Tooltip title="Schedule or use the nearest-expiring reset">
                         <ButtonBase
@@ -225,10 +239,15 @@ function DesktopUsageExtras(
             })}
           </Box>
           {schedule && (
-            <Typography variant="caption" color="text.secondary">
-              Scheduled {fullResetTime(schedule.fire_at_ms / 1000)}
-            </Typography>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ px: 1, py: 0.75, borderRadius: 1.25, bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) }}>
+              <Box>
+                <Typography variant="caption" color="primary.main" fontWeight={750}>{scheduledResetCountdown(schedule.fire_at_ms)}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{fullResetTime(schedule.fire_at_ms / 1000)}</Typography>
+              </Box>
+              <Button size="small" disabled={resetBusy} onClick={() => void cancelSchedule()}>Cancel</Button>
+            </Stack>
           )}
+          {resetError && !resetOpen && <Typography variant="caption" color="error.main">{resetError}</Typography>}
         </Stack>
       )}
       {(contextUsed !== undefined || lifetimeTokens !== undefined ||

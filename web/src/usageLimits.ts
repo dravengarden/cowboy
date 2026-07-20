@@ -142,6 +142,18 @@ export function acceptedScheduleTime(value: string, now = Date.now()): string {
   return Number.isFinite(timestamp) && timestamp >= now + 60_000 ? value : "";
 }
 
+export function scheduledResetCountdown(fireAtMs: number, now = Date.now()): string {
+  const minutes = Math.max(0, Math.ceil((fireAtMs - now) / 60_000));
+  if (minutes === 0) return "Due now";
+  if (minutes < 60) return `Runs in ${String(minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours < 24) return `Runs in ${String(hours)}h${remainder === 0 ? "" : ` ${String(remainder)}m`}`;
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return `Runs in ${String(days)}d${remainingHours === 0 ? "" : ` ${String(remainingHours)}h`}`;
+}
+
 export function providerUsage(snapshot: UsageSnapshot | null, provider: string | undefined): ProviderUsage | undefined {
   if (!provider) return undefined;
   const normalized = provider === "claude" ? "claude-code" : provider;

@@ -30,6 +30,7 @@ import {
   type ProviderUsage,
   record,
   relativeUpdateTime,
+  scheduledResetCountdown,
   type UsageLimit,
   nearestAvailableResetCredit,
   usageLimits,
@@ -115,9 +116,10 @@ function LimitRow({ limit }: { limit: UsageLimit }): React.JSX.Element {
   );
 }
 
-function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
+function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   usage: ProviderUsage;
   schedule: { fire_at_ms: number } | undefined;
+  now: number;
   onUsageChanged: () => Promise<void>;
 }): React.JSX.Element {
   const [resetOpen, setResetOpen] = useState(false);
@@ -156,6 +158,19 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
     setConfirmText("");
     setResetError(null);
   };
+  const cancelSchedule = async (): Promise<void> => {
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      const response = await fetch("/api/usage/codex/reset/schedule", { method: "DELETE" });
+      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      await onUsageChanged();
+    } catch (cause) {
+      setResetError(cause instanceof Error ? cause.message : "Could not cancel schedule");
+    } finally {
+      setResetBusy(false);
+    }
+  };
 
   return (
     <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, px: 1.5, py: 1.4 }}>
@@ -187,8 +202,8 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {str(credit.title) ?? "Rate-limit reset"}
                     </Typography>
-                    <Typography variant="caption" color={actionable ? "success.main" : "text.secondary"}>
-                      {actionable ? "Use next" : "Available"}
+                    <Typography variant="caption" color={actionable ? "primary.main" : "text.secondary"} fontWeight={actionable ? 700 : 400}>
+                      {actionable ? schedule ? "Scheduled" : "Use next" : "Available"}
                     </Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
@@ -201,29 +216,26 @@ function ProviderUsageCard({ usage, schedule, onUsageChanged }: {
                   key={str(credit.id) ?? index}
                   sx={{ borderBottom: index < credits.length - 1 ? 1 : 0, borderColor: "divider" }}
                 >
-                  {actionable
+                  {actionable && !schedule
                     ? <ButtonBase onClick={openResetDialog} sx={{ width: "100%", borderRadius: 1 }}>{row}</ButtonBase>
                     : row}
+                  {actionable && schedule && (
+                    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1} sx={{ pb: 1.1 }}>
+                      <Box>
+                        <Typography variant="caption" color="primary.main" fontWeight={700}>
+                          {scheduledResetCountdown(schedule.fire_at_ms, now)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                          {fullDateTime(schedule.fire_at_ms / 1000)}
+                        </Typography>
+                      </Box>
+                      <Button size="small" disabled={resetBusy} onClick={() => void cancelSchedule()}>Cancel</Button>
+                    </Stack>
+                  )}
                 </Box>
               );
             })}
-            {schedule && (
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ pt: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Scheduled {fullDateTime(schedule.fire_at_ms / 1000)}
-                </Typography>
-                <Button
-                  size="small"
-                  disabled={resetBusy}
-                  onClick={() => void (async () => {
-                    setResetBusy(true);
-                    await fetch("/api/usage/codex/reset/schedule", { method: "DELETE" });
-                    await onUsageChanged();
-                    setResetBusy(false);
-                  })()}
-                >Cancel</Button>
-              </Stack>
-            )}
+            {resetError && !resetOpen && <Typography color="error.main" variant="caption">{resetError}</Typography>}
           </Stack>
         )}
         {summary && num(summary.lifetimeTokens) !== undefined && (
@@ -379,6 +391,7 @@ function UsageInfoSection(): React.JSX.Element {
           key={provider.provider}
           usage={provider}
           schedule={snapshot.codex_reset_schedule}
+          now={clock}
           onUsageChanged={() => load(false)}
         />
       ))}
