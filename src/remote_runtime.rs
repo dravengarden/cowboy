@@ -1,5 +1,7 @@
 //! Cowboy-side client for the stable agentd runtime broker.
 
+#![warn(clippy::pedantic)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -496,7 +498,7 @@ async fn connect_settled(
             }
             Ok(Ok(None)) => anyhow::bail!("agentd closed during runtime settle"),
             Ok(Err(error)) => return Err(error.into()),
-            Err(_) if tokio::time::Instant::now() < minimum_settle => continue,
+            Err(_) if tokio::time::Instant::now() < minimum_settle => {}
             Err(_) => break,
         }
     }
@@ -645,6 +647,7 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // One exhaustive wire-frame dispatch keeps broker ordering visible.
 async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     frame: Frame,
@@ -896,9 +899,8 @@ fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
 fn worker_status(state: WorkerState) -> Status {
     match state {
         WorkerState::Starting => Status::Starting,
-        WorkerState::Running => Status::Running,
+        WorkerState::Running | WorkerState::Draining => Status::Running,
         WorkerState::Busy => Status::Busy,
-        WorkerState::Draining => Status::Running,
         WorkerState::Exited => Status::Exited,
         WorkerState::Crashed => Status::Crashed,
     }
