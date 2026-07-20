@@ -77,6 +77,9 @@ export interface ComposerEditorHandle {
   // message already sent. Dispatching straight to the view bypasses the latch
   // and clears now.
   clear: () => void;
+  // Returns one command only when its slash completion was explicitly selected.
+  // Typed `/`, `/dir`, and paths deliberately have no command intent.
+  consumeSelectedSlashCommand: () => string | null;
   // Markdown toolbar actions (the fullscreen keyboard toolbar). All dispatch CM6
   // transactions on the literal doc — live-preview re-renders automatically.
   /// Wrap the selection (or insert the marker pair at the caret) — bold `**`,
@@ -273,6 +276,7 @@ export const ComposerEditor = forwardRef<
   // Clamp via CSS so a px persisted on a taller viewport can't overflow a short one.
   const expandedHeight = heightPx > 0 ? `min(${String(heightPx)}px, 82vh)` : "48vh";
   const cmRef = useRef<ReactCodeMirrorRef>(null);
+  const selectedSlashCommandRef = useRef<string | null>(null);
   // Keep latest callbacks/data in refs so the (memoized) extensions never go
   // stale without rebuilding the editor state on every keystroke.
   const onSubmitRef = useRef(onSubmit);
@@ -373,6 +377,7 @@ export const ComposerEditor = forwardRef<
       removeImageTokenById(view, id);
     },
     clear: (): void => {
+      selectedSlashCommandRef.current = null;
       const view = cmRef.current?.view;
       if (!view) return;
       view.dispatch({
@@ -390,6 +395,11 @@ export const ComposerEditor = forwardRef<
       requestAnimationFrame(() => {
         content.style.opacity = "";
       });
+    },
+    consumeSelectedSlashCommand: (): string | null => {
+      const command = selectedSlashCommandRef.current;
+      selectedSlashCommandRef.current = null;
+      return command;
     },
     wrap: (before: string, after: string): void => {
       const view = cmRef.current?.view;
@@ -592,6 +602,14 @@ export const ComposerEditor = forwardRef<
       // Publish selection-empty state to the fullscreen keyboard toolbar so it can
       // swap insert↔wrap actions. Ref-routed so the memo never rebuilds for it.
       EditorView.updateListener.of((u): void => {
+        if (u.docChanged && selectedSlashCommandRef.current) {
+          const command = selectedSlashCommandRef.current;
+          const text = u.state.doc.toString();
+          const rest = text.slice(command.length + 1);
+          if (!text.startsWith(`/${command}`) || (rest !== "" && !/^\s/u.test(rest))) {
+            selectedSlashCommandRef.current = null;
+          }
+        }
         if (u.selectionSet || u.docChanged) {
           onSelectionChangeRef.current?.(!u.state.selection.main.empty);
         }
@@ -635,7 +653,12 @@ export const ComposerEditor = forwardRef<
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
-          slashCompletionSource(() => commandsRef.current()),
+          slashCompletionSource(
+            () => commandsRef.current(),
+            (command) => {
+              selectedSlashCommandRef.current = command;
+            },
+          ),
         ],
         activateOnTyping: true,
         icons: false,

@@ -24,6 +24,7 @@ interface PickerOption {
   apply: string;
   primary: string;
   secondary?: string;
+  slashCommand?: string;
 }
 
 // The active `@`/`/` trigger token at the caret, if any.
@@ -85,6 +86,7 @@ function slashOptions(
       apply: `/${c.name} `,
       primary: `/${c.name}`,
       secondary: c.description,
+      slashCommand: c.name,
     }));
 }
 
@@ -150,6 +152,7 @@ export const ComposerTextarea = forwardRef<
   ref,
 ): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
   // Top edge (viewport px) of the input the picker is anchored to. The picker
@@ -207,11 +210,13 @@ export const ComposerTextarea = forwardRef<
   // preventDefault kept the textarea focused (keyboard never dropped), so we only
   // move the caret (in a rAF, after the controlled value re-renders). Calling
   // focus() — especially deferred — is what caused the iOS phantom-keyboard gap.
-  const applyOption = (apply: string): void => {
+  const applyOption = (option: PickerOption): void => {
     if (!trigger) return;
+    const { apply } = option;
     const end = trigger.from + 1 + trigger.query.length;
     const next = value.slice(0, trigger.from) + apply + value.slice(end);
     onChange(next);
+    selectedSlashCommandRef.current = option.slashCommand ?? null;
     setTrigger(null);
     const pos = trigger.from + apply.length;
     requestAnimationFrame(() => inputRef.current?.setSelectionRange(pos, pos));
@@ -239,7 +244,14 @@ export const ComposerTextarea = forwardRef<
         sync(next, pos);
       });
     },
-    clear: (): void => undefined,
+    clear: (): void => {
+      selectedSlashCommandRef.current = null;
+    },
+    consumeSelectedSlashCommand: (): string | null => {
+      const command = selectedSlashCommandRef.current;
+      selectedSlashCommandRef.current = null;
+      return command;
+    },
     // Inline images are CM6-only (the textarea fallback can't host widgets); a
     // no-op keeps the shared handle satisfied. Touch paths that hit this fallback
     // keep the legacy tray behaviour for their attachments.
@@ -297,7 +309,7 @@ export const ComposerTextarea = forwardRef<
           // never drops); a plain Box isn't focusable so it can't steal focus.
           // Select on click so the list can still be scrolled by dragging.
           onMouseDown={(e): void => e.preventDefault()}
-          onClick={(): void => applyOption(o.apply)}
+          onClick={(): void => applyOption(o)}
           sx={{
             px: 1.5,
             py: 0.625,
@@ -351,6 +363,17 @@ export const ComposerTextarea = forwardRef<
         inputRef={inputRef}
         value={value}
         onChange={(e): void => {
+          const command = selectedSlashCommandRef.current;
+          if (command) {
+            const next = e.target.value;
+            const rest = next.slice(command.length + 1);
+            if (
+              !next.startsWith(`/${command}`) ||
+              (rest !== "" && !/^\s/u.test(rest))
+            ) {
+              selectedSlashCommandRef.current = null;
+            }
+          }
           onChange(e.target.value);
           sync(
             e.target.value,

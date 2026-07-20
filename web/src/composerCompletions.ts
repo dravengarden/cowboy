@@ -1,7 +1,9 @@
 import type {
+  Completion,
   CompletionContext,
   CompletionResult,
 } from "@codemirror/autocomplete";
+import type { EditorView } from "@codemirror/view";
 import type { AvailableCommand } from "./protocol";
 
 // `@path` file references. Async fuzzy search against the daemon — the same
@@ -60,6 +62,7 @@ export function fileCompletionSource(
 // late `available_commands_update` is reflected). (Plan Step 9.)
 export function slashCompletionSource(
   commands: () => AvailableCommand[],
+  onSelect?: (command: string) => void,
 ): (context: CompletionContext) => CompletionResult | null {
   return (context: CompletionContext): CompletionResult | null => {
     const match = context.matchBefore(/^\/\S*/);
@@ -72,7 +75,20 @@ export function slashCompletionSource(
       options: cmds.map((c) => ({
         label: `/${c.name}`,
         detail: c.description,
-        apply: `/${c.name} `,
+        apply: (
+          view: EditorView,
+          _completion: Completion,
+          from: number,
+          to: number,
+        ): void => {
+          const insert = `/${c.name} `;
+          onSelect?.(c.name);
+          view.dispatch({
+            changes: { from, to, insert },
+            selection: { anchor: from + insert.length },
+            userEvent: "input.complete",
+          });
+        },
         type: "keyword",
       })),
     };

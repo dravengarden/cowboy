@@ -19,6 +19,7 @@ import {
   submitPrompt,
 } from "../store";
 import { haptic } from "../haptic";
+import { prepareUserPrompt } from "./slashCommandIntent";
 
 export interface ComposerDraftController {
   text: string;
@@ -96,6 +97,11 @@ export function useComposerDraftController(
     clear();
     return true;
   };
+  const preparedText = (): string =>
+    prepareUserPrompt(
+      text.trimEnd(),
+      editorRef.current?.consumeSelectedSlashCommand() ?? null,
+    );
 
   return {
     text,
@@ -108,12 +114,12 @@ export function useComposerDraftController(
     removeAttachment,
     clear,
     submit: () =>
-      commit(() => submitPrompt(sessionId, text.trimEnd(), attachments)),
+      commit(() => submitPrompt(sessionId, preparedText(), attachments)),
     force: () =>
-      commit(() => forcePrompt(sessionId, text.trimEnd(), attachments)),
+      commit(() => forcePrompt(sessionId, preparedText(), attachments)),
     jumpToFront: (queueLength) =>
       queueLength > 0 &&
-      commit(() => frontPrompt(sessionId, text.trimEnd(), attachments)),
+      commit(() => frontPrompt(sessionId, preparedText(), attachments)),
     // Parking/scheduling is deliberate state management rather than a send
     // gesture, so preserve the existing no-haptic behaviour.
     saveAsDraft: () =>
@@ -122,7 +128,7 @@ export function useComposerDraftController(
       commit(
         () =>
           scheduleDraft(sessionId, {
-            text: text.trimEnd(),
+            text: preparedText(),
             attachments,
             fireAtMs,
             delivery,

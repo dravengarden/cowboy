@@ -426,6 +426,17 @@ here says otherwise.
     Send submits it. Keep this distinction explicit through `showCollapse`; do
     not infer it from labels or alter editor, focus, or IME behavior.
 
+19. **Slash commands require explicit completion provenance.** ACP transports
+    commands and ordinary prompt text through the same string field, so text
+    alone cannot distinguish a selected `/skill` from a typed `/dir` or absolute
+    path. Both CM6 and the native-textarea picker retain intent only when the
+    user clicks or keyboard-confirms a completion. At the user-submit boundary,
+    an unselected leading slash receives an invisible U+2060 WORD JOINER; this
+    prevents agent command dispatch without changing the visible editor text or
+    path. Never infer intent merely from a command-shaped string, never blanket
+    escape slashes, and keep app-generated lifecycle commands such as `/compact`
+    outside this user-composer guard.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
