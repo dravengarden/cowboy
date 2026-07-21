@@ -46,19 +46,23 @@ export function DesktopContextShortcut({
         alignItems: "center",
         justifyContent: "center",
         height: 40,
-        gap: inline ? 0.5 : 0,
+        gap: 0,
         flexShrink: 0,
         // Top-bar hints belong beside their control, not below the bar. Keep a
         // narrow inter-control lane for the floating keycap so it never crosses
         // the pane header rail or covers the adjacent action.
-        mr: toolbar ? 1.25 : inline ? 0.5 : 0,
-        "&:hover .cowboy-context-shortcut, &:focus-within .cowboy-context-shortcut":
-          {
-            opacity: 1,
-            transform: visibleTransform,
-          },
+        mr: toolbar ? 1.25 : 0,
+        ...(!inline && {
+          "&:hover .cowboy-context-shortcut, &:focus-within .cowboy-context-shortcut":
+            {
+              opacity: 1,
+              transform: visibleTransform,
+            },
+        }),
         "[data-desktop-focused='true'] & .cowboy-context-shortcut": {
           opacity: inline ? 0.72 : 0.82,
+          maxWidth: inline ? 32 : undefined,
+          ml: inline ? 0.5 : undefined,
           transform: visibleTransform,
         },
       }}
@@ -75,9 +79,14 @@ export function DesktopContextShortcut({
             right: corner ? -4 : toolbar ? -9 : "auto",
             left: corner || toolbar ? "auto" : "50%",
             display: "inline-flex",
-            opacity: inline ? 0.48 : 0,
+            maxWidth: inline ? 0 : undefined,
+            ml: 0,
+            overflow: inline ? "hidden" : "visible",
+            opacity: 0,
             transform: restingTransform,
-            transition: "opacity 120ms ease, transform 120ms ease",
+            transition: inline
+              ? "opacity 120ms ease, max-width 120ms ease, margin-left 120ms ease"
+              : "opacity 120ms ease, transform 120ms ease",
             pointerEvents: "none",
           }}
         >
