@@ -27,7 +27,7 @@ import { ArrowForwardRounded, ExpandMore, Refresh, Tune } from "@mui/icons-mater
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
-import { ENTER_LABEL, MOD_LABEL } from "../platform";
+import { ENTER_LABEL } from "../platform";
 import {
   latestAvailableCommands,
   resolveSessionAction,
@@ -609,7 +609,7 @@ export function DesktopTopBarControls({
       id: "topbar.runConfiguration",
       title: "Open Run Configuration",
       group: "Top Bar",
-      shortcut: "Mod+R",
+      shortcut: "R",
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -624,7 +624,7 @@ export function DesktopTopBarControls({
       id: "topbar.usage",
       title: "Open Usage Limits",
       group: "Top Bar",
-      shortcut: "Mod+U",
+      shortcut: "U",
       regions: ["topbar.controls"],
       run: () =>
         document.querySelector<HTMLButtonElement>(
@@ -635,7 +635,7 @@ export function DesktopTopBarControls({
       id: "topbar.compact",
       title: "Compact Conversation",
       group: "Top Bar",
-      shortcut: "Mod+K",
+      shortcut: "C",
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -650,7 +650,7 @@ export function DesktopTopBarControls({
       id: "topbar.stop",
       title: "Stop Current Turn",
       group: "Top Bar",
-      shortcut: "Mod+.",
+      shortcut: "S",
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector("[data-desktop-topbar-action='stop']") !== null,
@@ -695,8 +695,8 @@ export function DesktopTopBarControls({
         ? <Skeleton variant="rounded" width={300} height={34} />
         : (
           <DesktopContextShortcut
-            badge={`${MOD_LABEL}R`}
-            shortcut={`${MOD_LABEL}R · Run configuration`}
+            badge="R"
+            shortcut="R · Run configuration"
             placement="inline"
           >
             <Tooltip title={configSummary || "Run configuration"}>
@@ -865,8 +865,8 @@ export function DesktopTopBarControls({
       </Popover>
 
       <DesktopContextShortcut
-        badge={`${MOD_LABEL}U`}
-        shortcut={`${MOD_LABEL}U · Usage limits`}
+        badge="U"
+        shortcut="U · Usage limits"
         placement="inline"
       >
         <ButtonBase
@@ -1061,8 +1061,8 @@ export function DesktopTopBarControls({
 
       {compactAction && (
         <DesktopContextShortcut
-          badge={`${MOD_LABEL}K`}
-          shortcut={`${MOD_LABEL}K · Compact conversation`}
+          badge="C"
+          shortcut="C · Compact conversation"
           placement="inline"
         >
           <Tooltip

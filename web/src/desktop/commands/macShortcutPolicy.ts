@@ -8,10 +8,8 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+e", new Set(["workspace.focusPrompt"])],
   ["mod+l", new Set(["workspace.focusConversation"])],
   ["mod+t", new Set(["workspace.focusTopbar"])],
-  ["mod+r", new Set(["topbar.runConfiguration"])],
-  ["mod+u", new Set(["topbar.usage"])],
-  ["mod+k", new Set(["commandPalette.open", "topbar.compact"])],
-  ["mod+.", new Set(["composer.more", "topbar.stop"])],
+  ["mod+k", new Set(["commandPalette.open"])],
+  ["mod+.", new Set(["composer.more"])],
 ]);
 
 const RESERVED_MAC_SHORTCUTS = new Map<string, string>([

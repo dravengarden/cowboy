@@ -140,7 +140,7 @@ contract and the conventions users depend on in editors and browsers:
   `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
   and `Mod+1…0` switches session tabs;
 - global Cowboy workspace navigation uses mnemonic `Mod+B/E/L/T` for Sidebar,
-  Editor, Log, and Top Bar. Focused Top Bar uses `Mod+R/U/K/.` for Run
+  Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/S` for Run
   Configuration, Usage, Compact, and Stop; `Mod+1…0` remains global session slots;
 - macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,
   `Alt+E/I/N/U`) are reserved so Cowboy never breaks accent or IME entry;
