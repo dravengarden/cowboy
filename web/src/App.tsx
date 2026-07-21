@@ -663,9 +663,9 @@ function SessionList({
                                             label={s.system ? "System" : "External"}
                                             color={s.system ? "secondary" : "default"}
                                             sx={{
-                                                height: 16,
-                                                fontSize: 10,
-                                                "& .MuiChip-label": { px: 0.75 },
+                                                height: "1.5rem",
+                                                fontSize: "0.75rem",
+                                                "& .MuiChip-label": { px: "0.625rem" },
                                             }}
                                         />
                                     )}
