@@ -14,7 +14,15 @@ import {
   Tooltip,
   useTheme,
 } from "@mui/material";
-import { Check, Close, CloseFullscreen, Send, Tune } from "@mui/icons-material";
+import {
+  AttachFile,
+  Check,
+  Close,
+  CloseFullscreen,
+  EditNoteOutlined,
+  Send,
+  Tune,
+} from "@mui/icons-material";
 import {
   PlatformComposerEditor,
   type ComposerEditorHandle,
@@ -200,18 +208,16 @@ export function FullscreenComposer({
             </Tooltip>
           )}
           <Box sx={{ flex: 1 }} />
-          <Tooltip title={onDiscard ? "Ignore modifications" : submitLabel}>
-            <span>
+          {onDiscard && (
+            <Tooltip title="Ignore modifications">
               <IconButton
-                aria-label={onDiscard ? "ignore modifications" : submitLabel.toLowerCase()}
-                color={onDiscard ? "default" : "primary"}
-                disabled={onDiscard ? false : !sendable}
-                onClick={act(onDiscard ? () => setDiscardOpen(true) : onSubmit)}
+                aria-label="ignore modifications"
+                onClick={act(() => setDiscardOpen(true))}
               >
-                {onDiscard ? <Close /> : submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
+                <Close />
               </IconButton>
-            </span>
-          </Tooltip>
+            </Tooltip>
+          )}
         </Toolbar>
       </AppBar>
 
@@ -256,17 +262,15 @@ export function FullscreenComposer({
         />
       </Box>
 
-      {/* One keyboard dock: formatting, the primary edit action, and settings
-          share one row. Save is an exact-centre liquid-glass island rather than
-          a second opaque footer row, so the keyboard does not consume another
-          50px of the writing canvas. */}
+      {/* One keyboard dock shared by main compose and queued/draft editing:
+          formatting on the left, the exact-centre primary action, and contextual
+          utilities on the right. Equal outer tracks keep the liquid-glass action
+          geometrically centred even when either side contains more controls. */}
       <Box
         data-toolbar-mode={hasSelection ? "wrap" : "insert"}
         sx={{
           display: "grid",
-          gridTemplateColumns: onDiscard
-            ? "minmax(0, 1fr) auto minmax(0, 1fr)"
-            : "minmax(0, 1fr) auto",
+          gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
           alignItems: "center",
           gap: 0.5,
           px: 1,
@@ -284,29 +288,42 @@ export function FullscreenComposer({
         >
           {actions}
         </Stack>
-        {onDiscard && (
-          <FloatingActionIsland maxWidth={54}>
-            <IconButton
-              aria-label="Save"
-              onClick={act(onSubmit)}
-              color="inherit"
-              sx={{
-                width: 46,
-                height: 46,
-                justifySelf: "center",
-                borderRadius: 999,
-                color: "text.primary",
-              }}
-            >
-              <Check />
-            </IconButton>
-          </FloatingActionIsland>
-        )}
-        <Box sx={{ justifySelf: "end", flexShrink: 0 }}>
+        <FloatingActionIsland maxWidth={54}>
+          <IconButton
+            aria-label={submitLabel.toLowerCase()}
+            disabled={!sendable}
+            onClick={act(onSubmit)}
+            color="inherit"
+            sx={{
+              width: 46,
+              height: 46,
+              justifySelf: "center",
+              borderRadius: 999,
+              color: "text.primary",
+            }}
+          >
+            {submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
+          </IconButton>
+        </FloatingActionIsland>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="flex-end"
+          spacing={0.25}
+          sx={{ justifySelf: "stretch", minWidth: 0 }}
+        >
+          {!onDiscard && (
+            <ToolBtn title="Save as draft" onClick={act(onSaveDraft)}>
+              <EditNoteOutlined />
+            </ToolBtn>
+          )}
+          <ToolBtn title="Attach file" onClick={act(onAttach)}>
+            <AttachFile />
+          </ToolBtn>
           <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
             <Tune />
           </ToolBtn>
-        </Box>
+        </Stack>
       </Box>
 
       <ComposerToolbarSettings
