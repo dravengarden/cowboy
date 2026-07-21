@@ -1,7 +1,6 @@
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  alpha,
   AppBar,
   Box,
   Button,
@@ -269,13 +268,7 @@ export function FullscreenComposer({
           gap: 0.5,
           px: 1,
           py: 0.5,
-          bgcolor: (t) => alpha(t.palette.background.default, 0.72),
-          backdropFilter: "blur(22px) saturate(165%)",
-          WebkitBackdropFilter: "blur(22px) saturate(165%)",
-          boxShadow: (t) =>
-            `0 -10px 24px -18px ${
-              alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.6 : 0.22)
-            }`,
+          bgcolor: "transparent",
           userSelect: "none",
           WebkitUserSelect: "none",
         }}
@@ -289,26 +282,24 @@ export function FullscreenComposer({
           {actions}
         </Stack>
         {onDiscard && (
-          <FloatingActionIsland maxWidth={132}>
-            <Button
+          <FloatingActionIsland maxWidth={54}>
+            <IconButton
               aria-label="Save"
               onClick={act(onSubmit)}
               color="inherit"
               sx={{
-                width: "100%",
-                minWidth: 120,
-                minHeight: 46,
+                width: 46,
+                height: 46,
+                justifySelf: "center",
                 borderRadius: 999,
                 color: "text.primary",
-                fontWeight: 750,
-                textTransform: "none",
               }}
             >
-              Save
-            </Button>
+              <Check />
+            </IconButton>
           </FloatingActionIsland>
         )}
-        <Box sx={{ justifySelf: "end", borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
+        <Box sx={{ justifySelf: "end", flexShrink: 0 }}>
           <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
             <Tune />
           </ToolBtn>

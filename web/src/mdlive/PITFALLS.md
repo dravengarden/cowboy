@@ -440,8 +440,10 @@ here says otherwise.
 20. **Fullscreen row-edit chrome is one non-selectable keyboard dock.** The
     formatting toolbar, edit-mode Save action, and toolbar settings share one
     three-column row: horizontally scrolling commands on the left, an exact-centre
-    liquid-glass Save island, and settings on the right. Do not restore the opaque
-    second Save row or a detached dismissal pill: on iOS either wastes the
+    54px liquid-glass check action, and settings on the right. The dock itself is
+    transparent; glass belongs to the primary action, not a keyboard-like second
+    surface spanning the screen. Do not restore the wide Save pill, opaque second
+    Save row, or a detached dismissal pill: on iOS each wastes the
     keyboard-adjacent area and the detached label can acquire native text-selection
     handles. The dock and its controls use `user-select: none`; this applies only
     to chrome, never the CM6 canvas, so native caret, selection, long-press Paste,
