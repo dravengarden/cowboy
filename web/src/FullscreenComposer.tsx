@@ -25,6 +25,8 @@ import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 import { FloatingActionIsland } from "./_shell";
+import { Kbd, useConfirmEnter } from "./Kbd";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
 // 100dvh overlay modeled on Obsidian's mobile note editor — a light top bar
@@ -135,6 +137,7 @@ export function FullscreenComposer({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  useConfirmEnter(discardOpen, () => onDiscard?.());
   const runCmd = (cmd: ComposerCommand): void => {
     const ed = editorRef.current;
     if (ed) cmd.run({ editor: ed, attach: onAttach });
@@ -315,7 +318,10 @@ export function FullscreenComposer({
         <DialogContent>Your unsaved changes will be discarded.</DialogContent>
         <DialogActions>
           <Button onClick={(): void => setDiscardOpen(false)}>Keep editing</Button>
-          <Button color="error" onClick={onDiscard}>Ignore modifications</Button>
+          <Button color="error" onClick={onDiscard}>
+            Ignore modifications
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>,

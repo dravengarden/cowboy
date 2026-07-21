@@ -2,7 +2,7 @@ import type React from "react";
 import { useEffect, useRef } from "react";
 import { ShortcutKeycap, type ShortcutKeycapVariant } from "./ShortcutKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
-import { isImeKeyEvent } from "./imeKey";
+import { confirmEnterIntent } from "./confirmShortcut";
 
 // A keyboard-shortcut keycap (Linear / Raycast style) shown after a modal
 // button's label. Desktop-ONLY: use the canonical product surface instead of a
@@ -29,9 +29,10 @@ export function Kbd(
   );
 }
 
-// While `open`, a bare Enter confirms the modal. Capture phase so it beats a
+// While `open`, Command/Ctrl+Enter confirms the modal. Capture phase so it beats a
 // focused editor's own Enter (which would otherwise insert a newline before the
-// dialog saw the key). Esc is intentionally NOT handled here — MUI's Dialog /
+// dialog saw the key). A bare Enter is deliberately consumed without confirming,
+// including when a confirm button owns focus. Esc is intentionally NOT handled here — MUI's Dialog /
 // Popover already close on Escape via their `onClose`, so wiring it again would
 // double-fire; this hook only adds the affirmative key.
 //
@@ -46,10 +47,11 @@ export function useConfirmEnter(open: boolean, onConfirm: () => void): void {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== "Enter" || e.shiftKey || e.repeat || isImeKeyEvent(e)) return;
+      const intent = confirmEnterIntent(e);
+      if (intent === "ignore") return;
       e.preventDefault();
       e.stopPropagation();
-      ref.current();
+      if (intent === "confirm") ref.current();
     };
     globalThis.addEventListener("keydown", onKey, true);
     return (): void => globalThis.removeEventListener("keydown", onKey, true);

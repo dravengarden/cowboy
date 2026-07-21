@@ -983,6 +983,13 @@ export function ComposerWorkspace({
       submitPrompt(sessionId, a.command, []);
     }
   }
+  function confirmSessionAction(): void {
+    if (cmdConfirm === null) return;
+    const action = cmdConfirm;
+    setCmdConfirm(null);
+    runSessionAction(action);
+  }
+  useConfirmEnter(cmdConfirm !== null, confirmSessionAction);
 
   // Vim is opt-in and desktop-only — ComposerEditor gates the actual
   // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
@@ -2142,7 +2149,7 @@ export function ComposerWorkspace({
               onClick={confirmForce}
             >
               Force push
-              <Kbd keys={ENTER_LABEL} />
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
             </Button>
           </Stack>
         </Box>
@@ -2271,16 +2278,11 @@ export function ComposerWorkspace({
               <Button
                 variant="contained"
                 color={cmdConfirm.destructive ? "error" : "primary"}
-                autoFocus
-                onClick={(): void => {
-                  const a = cmdConfirm;
-                  setCmdConfirm(null);
-                  runSessionAction(a);
-                }}
+                onClick={confirmSessionAction}
                 sx={{ textTransform: "none" }}
               >
                 {cmdConfirm.destructive ? "Clear" : "Compact"}
-                <Kbd keys={ENTER_LABEL} />
+                <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
               </Button>
             </DialogActions>
           </>
@@ -2775,7 +2777,7 @@ function ConfirmButton({
               sx={{ textTransform: "none" }}
             >
               {confirmLabel}
-              <Kbd keys={ENTER_LABEL} />
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
             </Button>
           </Stack>
         </Box>
@@ -3738,7 +3740,7 @@ function PendingRow({
                   sx={{ textTransform: "none" }}
                 >
                   Force push
-                  <Kbd keys={ENTER_LABEL} />
+                  <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                 </Button>
               </Stack>
             </Box>
@@ -3830,12 +3832,11 @@ function PendingRow({
           <Button
             color="error"
             variant="contained"
-            autoFocus
             onClick={doRemove}
             sx={{ textTransform: "none" }}
           >
             Delete
-            <Kbd keys={ENTER_LABEL} />
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
         </DialogActions>
       </Dialog>
@@ -3846,7 +3847,7 @@ function PendingRow({
 // Confirm before stopping a running turn — the in-flight turn ends, so a single
 // click/Esc must not trigger it. Shared by the navbar's Stop button (SessionControls)
 // and the composer editor's Esc-to-stop; each owns its own `open` state, the markup
-// is one component. Stop autoFocuses so Enter confirms; Esc dismisses (Dialog default).
+// is one component. Command/Ctrl+Enter confirms; Esc dismisses (Dialog default).
 function StopConfirmDialog({
   open,
   onClose,
@@ -3856,6 +3857,7 @@ function StopConfirmDialog({
   onClose: () => void;
   onConfirm: () => void;
 }): React.JSX.Element {
+  useConfirmEnter(open, onConfirm);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle>Stop the running turn?</DialogTitle>
@@ -3873,12 +3875,11 @@ function StopConfirmDialog({
         <Button
           color="error"
           variant="contained"
-          autoFocus
           onClick={onConfirm}
           sx={{ textTransform: "none" }}
         >
           Stop
-          <Kbd keys={ENTER_LABEL} />
+          <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
         </Button>
       </DialogActions>
     </Dialog>

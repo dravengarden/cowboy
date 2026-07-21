@@ -2826,9 +2826,9 @@ function DeleteSessionShell({
                         Cancel
                         <Kbd keys="Esc" />
                     </Button>
-                    <Button onClick={onConfirm} color="error" variant="contained" autoFocus>
+                    <Button onClick={onConfirm} color="error" variant="contained">
                         Delete
-                        <Kbd keys={ENTER_LABEL} />
+                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
             }

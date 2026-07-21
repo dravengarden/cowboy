@@ -27,7 +27,7 @@ import { ArrowForwardRounded, ExpandMore, Refresh, Tune } from "@mui/icons-mater
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
-import { ENTER_LABEL } from "../platform";
+import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import {
   latestAvailableCommands,
   resolveSessionAction,
@@ -160,6 +160,34 @@ function DesktopUsageExtras(
       setResetBusy(false);
     }
   };
+  const submitReset = async (): Promise<void> => {
+    if (resetBusy || confirmText !== "confirm" ||
+      (resetMode === "schedule" && !scheduleValid)) return;
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      const response = await fetch(
+        resetMode === "schedule" ? "/api/usage/codex/reset/schedule" : "/api/usage/codex/reset",
+        {
+          method: resetMode === "schedule" ? "PUT" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(resetMode === "schedule"
+            ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
+            : { confirm: confirmText, expected_credit_id: nearestCreditId }),
+        },
+      );
+      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      setResetOpen(false);
+      setResetMode("schedule");
+      setConfirmText("");
+      await onUsageChanged();
+    } catch (cause) {
+      setResetError(cause instanceof Error ? cause.message : "Could not use reset");
+    } finally {
+      setResetBusy(false);
+    }
+  };
+  useConfirmEnter(resetOpen, () => void submitReset());
 
   return (
     <>
@@ -332,28 +360,11 @@ function DesktopUsageExtras(
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
             disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
-            onClick={() => void (async () => {
-              setResetBusy(true);
-              setResetError(null);
-              const response = await fetch(
-                resetMode === "schedule" ? "/api/usage/codex/reset/schedule" : "/api/usage/codex/reset",
-                {
-                  method: resetMode === "schedule" ? "PUT" : "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify(resetMode === "schedule"
-                    ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
-                    : { confirm: confirmText, expected_credit_id: nearestCreditId }),
-                },
-              );
-              if (response.ok) {
-                setResetOpen(false);
-                setResetMode("schedule");
-                setConfirmText("");
-                await onUsageChanged();
-              } else setResetError(await response.text() || `HTTP ${String(response.status)}`);
-              setResetBusy(false);
-            })()}
-          >{resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}</Button>
+            onClick={() => void submitReset()}
+          >
+            {resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </Button>
         </DialogActions>
       </Dialog>
     </>
@@ -1171,7 +1182,7 @@ export function DesktopTopBarControls({
             sx={{ textTransform: "none" }}
           >
             Compact
-            <Kbd keys={ENTER_LABEL} />
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
         </DialogActions>
       </Dialog>
