@@ -2469,7 +2469,7 @@ function DesktopSettingsChoice({
                 borderColor: active ? "primary.main" : "divider",
                 bgcolor: active ? "action.selected" : "transparent",
                 color: active ? "primary.main" : "text.primary",
-                fontSize: 13,
+                fontSize: "0.8125rem",
                 fontWeight: active ? 700 : 500,
                 justifyContent: "center",
                 overflow: "hidden",
@@ -2570,7 +2570,10 @@ function DesktopSettingsContent({
                             mt: 0.5,
                             px: `${reading.padding}px`,
                             fontFamily: selectedFont.stack,
-                            fontSize: `${reading.fontScale}rem`,
+                            // Global font scale is already applied at <html>.
+                            // Keep the preview at one inherited rem so changing
+                            // Font size is represented once, not squared here.
+                            fontSize: "1rem",
                             lineHeight: reading.lineHeight,
                         }}
                     >
