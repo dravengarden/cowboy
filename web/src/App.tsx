@@ -1678,19 +1678,14 @@ export function App({
                     // the Sessions region owns focus.
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.07),
-                        boxShadow: "none",
-                        "&::before": {
-                            content: '""',
-                            position: "absolute",
-                            left: 3,
-                            top: "28%",
-                            bottom: "28%",
-                            width: 3,
-                            borderRadius: 999,
-                            bgcolor: "primary.main",
-                            boxShadow: (t) =>
-                                `0 0 0 1px ${alpha(t.palette.primary.main, 0.12)}`,
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.065),
+                        boxShadow: (t) =>
+                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.3)}, 0 2px 10px ${alpha(t.palette.primary.main, 0.055)}`,
+                        "& .cowboy-session-grip": {
+                            color: "primary.main",
+                        },
+                        "& .cowboy-session-shortcut": {
+                            opacity: "1 !important",
                         },
                     },
                 }),
