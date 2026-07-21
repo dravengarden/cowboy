@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { Box } from "@mui/material";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { isTextEditingTarget } from "./commands/shortcut";
+import { desktopImeOwnsKey } from "./commands/imeShortcut";
+import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 
 const HINT_KEYS = "asdfghjkl";
 const TARGET_SELECTOR = [
@@ -64,8 +66,9 @@ export function DesktopHintOverlay(): React.JSX.Element | null {
 
   useEffect(() => {
     const openHints = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey ||
-        event.shiftKey || event.key.toLowerCase() !== "f" || isTextEditingTarget(event.target)) return;
+      if (desktopImeOwnsKey(event) || event.defaultPrevented || event.repeat || event.metaKey ||
+        event.ctrlKey || event.altKey || event.shiftKey ||
+        workspaceCommandKey(event).toLowerCase() !== "f" || isTextEditingTarget(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       setTyped("");
@@ -80,17 +83,19 @@ export function DesktopHintOverlay(): React.JSX.Element | null {
     if (!active) return undefined;
     const refresh = (): void => setTargets(visibleTargets());
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
+      if (desktopImeOwnsKey(event)) return;
+      const commandKey = workspaceCommandKey(event);
+      if (commandKey === "Escape") {
         event.preventDefault();
         workspace.setMode("normal");
         return;
       }
-      if (event.key === "Backspace") {
+      if (commandKey === "Backspace") {
         event.preventDefault();
         setTyped((value) => value.slice(0, -1));
         return;
       }
-      const key = event.key.toLowerCase();
+      const key = commandKey.toLowerCase();
       if (!HINT_KEYS.includes(key)) return;
       event.preventDefault();
       event.stopPropagation();

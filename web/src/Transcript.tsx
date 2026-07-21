@@ -36,6 +36,8 @@ import {
   useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
   Bedtime,
   ChatBubbleOutline,
@@ -1781,40 +1783,42 @@ function ToolDetailsBrowser({
   useEffect(() => {
     if (!desktop || !item) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.matches("input, textarea, [contenteditable='true']")) return;
-      if (event.key === "Escape") {
+      const key = workspaceCommandKey(event);
+      if (key === "Escape") {
         event.preventDefault();
         onClose();
-      } else if (event.key === "[") {
+      } else if (key === "[") {
         event.preventDefault();
         select(runs[runIndex - 1]?.tools.at(-1));
-      } else if (event.key === "]") {
+      } else if (key === "]") {
         event.preventDefault();
         select(runs[runIndex + 1]?.tools[0]);
-      } else if (event.key === "j") {
+      } else if (key === "j") {
         event.preventDefault();
         select(runs[Math.min(runs.length - 1, runIndex + 1)]?.tools[0]);
-      } else if (event.key === "k") {
+      } else if (key === "k") {
         event.preventDefault();
         select(runs[Math.max(0, runIndex - 1)]?.tools.at(-1));
-      } else if (event.key === "Enter") {
+      } else if (key === "Enter") {
         event.preventDefault();
         onLocate(item.key);
       } else if (navigationChord.current !== null) {
         globalThis.clearTimeout(navigationChord.current);
         navigationChord.current = null;
-        if (event.key === "g") {
+        if (key === "g") {
           event.preventDefault();
           select(runs[0]?.tools[0]);
         }
-      } else if (event.key === "g") {
+      } else if (key === "g") {
         event.preventDefault();
         navigationChord.current = globalThis.setTimeout(() => {
           navigationChord.current = null;
         }, 900);
-      } else if (event.key === "G") {
+      } else if (key === "G") {
         event.preventDefault();
         select(runs.at(-1)?.tools.at(-1));
       }

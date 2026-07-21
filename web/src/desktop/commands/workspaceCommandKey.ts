@@ -11,7 +11,17 @@ export function workspaceCommandKey(event: {
   shiftKey: boolean;
 }): string {
   const match = /^Key([A-Z])$/.exec(event.code);
-  if (!match?.[1]) return event.key;
-  const key = match[1].toLowerCase();
-  return event.shiftKey ? key.toUpperCase() : key;
+  if (match?.[1]) {
+    const key = match[1].toLowerCase();
+    return event.shiftKey ? key.toUpperCase() : key;
+  }
+  const physical = ({
+    BracketLeft: "[",
+    BracketRight: "]",
+    Enter: "Enter",
+    Escape: "Escape",
+    Backspace: "Backspace",
+    Tab: "Tab",
+  } as Readonly<Record<string, string>>)[event.code];
+  return physical ?? event.key;
 }

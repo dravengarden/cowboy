@@ -33,6 +33,8 @@ import {
   resolveSessionAction,
 } from "../agentCommands";
 import { isCompactingTail, latestCompactionCompletionSeq } from "../derive";
+import { desktopImeOwnsKey } from "./commands/imeShortcut";
+import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Envelope, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
@@ -609,8 +611,9 @@ export function DesktopTopBarControls({
   useEffect(() => {
     if (configAnchor === null) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      const key = event.key.toLowerCase();
+      const key = workspaceCommandKey(event).toLowerCase();
       if (document.querySelector("[role='listbox']") !== null) return;
       const panel = configPanelRef.current;
       if (!panel) return;
@@ -672,8 +675,9 @@ export function DesktopTopBarControls({
   useEffect(() => {
     if (usageAnchor === null) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-      const key = event.key.toLowerCase();
+      const key = workspaceCommandKey(event).toLowerCase();
       if (document.querySelector("[role='dialog']") !== null) return;
       if (key === "h" || key === "l") {
         event.preventDefault();

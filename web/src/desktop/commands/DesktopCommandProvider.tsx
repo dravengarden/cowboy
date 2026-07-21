@@ -15,9 +15,9 @@ import {
   matchesShortcut,
   parseShortcut,
 } from "./shortcut";
-import { isImeComposing } from "../vim/imeStatusStore";
 import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
+import { desktopImeOwnsKey } from "./imeShortcut";
 
 export interface DesktopCommand {
   id: string;
@@ -136,8 +136,7 @@ export function DesktopCommandProvider(
       // composition. Let that sink continue through the physical-key command
       // path; a real shared IME transaction remains exclusive.
       if (
-        isImeComposing() ||
-        (!normalCommandSink && (event.isComposing || event.keyCode === 229))
+        desktopImeOwnsKey(event)
       ) {
         if (windowChord.current !== null) {
           globalThis.clearTimeout(windowChord.current);
@@ -156,7 +155,7 @@ export function DesktopCommandProvider(
       if (windowChord.current !== null) {
         globalThis.clearTimeout(windowChord.current);
         windowChord.current = null;
-        const key = event.key.toLowerCase();
+        const key = workspaceCommandKey(event).toLowerCase();
         if (["h", "j", "k", "l", "w"].includes(key)) {
           event.preventDefault();
           event.stopPropagation();
@@ -322,7 +321,7 @@ export function DesktopCommandProvider(
       ) {
         if (
           region?.dataset.desktopReorderable === "true" &&
-          (event.key.toLowerCase() === "j" || event.key.toLowerCase() === "k")
+          (["j", "k"].includes(workspaceCommandKey(event).toLowerCase()))
         ) {
           const active = document.activeElement instanceof HTMLElement
             ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
@@ -332,7 +331,7 @@ export function DesktopCommandProvider(
             event.stopPropagation();
             active.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
               bubbles: true,
-              detail: { delta: event.key.toLowerCase() === "j" ? 1 : -1 },
+              detail: { delta: workspaceCommandKey(event).toLowerCase() === "j" ? 1 : -1 },
             }));
             return;
           }

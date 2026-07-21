@@ -21,4 +21,16 @@ Deno.test("workspace Vim motions preserve shifted G and native non-letter keys",
     workspaceCommandKey({ code: "Enter", key: "Enter", shiftKey: false }),
     "Enter",
   );
+  assert.equal(
+    workspaceCommandKey({
+      code: "BracketLeft",
+      key: "Process",
+      shiftKey: false,
+    }),
+    "[",
+  );
+  assert.equal(
+    workspaceCommandKey({ code: "Escape", key: "Process", shiftKey: false }),
+    "Escape",
+  );
 });
