@@ -15,6 +15,7 @@ import {
     AppBar,
     Box,
     Button,
+    ButtonBase,
     Chip,
     CircularProgress,
     Divider,
@@ -2446,10 +2447,187 @@ function interpolateTemplate(template: string, vars: Record<string, string>): st
     return template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
 }
 
+function DesktopSettingsChoice({
+    active,
+    children,
+    onClick,
+    ariaLabel,
+}: {
+    active: boolean;
+    children: React.ReactNode;
+    onClick: () => void;
+    ariaLabel: string;
+}): React.JSX.Element {
+    return (
+        <ButtonBase
+            data-settings-choice
+            aria-label={ariaLabel}
+            aria-pressed={active}
+            onClick={onClick}
+            sx={{
+                minHeight: 38,
+                minWidth: 0,
+                width: "100%",
+                px: 0.75,
+                borderRadius: 1.25,
+                border: 1,
+                borderColor: active ? "primary.main" : "divider",
+                bgcolor: active ? "action.selected" : "transparent",
+                color: active ? "primary.main" : "text.primary",
+                fontSize: 13,
+                fontWeight: active ? 700 : 500,
+                justifyContent: "center",
+                overflow: "hidden",
+                transition: "background-color 120ms ease, border-color 120ms ease",
+                "&:hover": { bgcolor: "action.hover", borderColor: "primary.light" },
+                "&:focus-visible": desktopFocusBoundary,
+            }}
+        >
+            {children}
+        </ButtonBase>
+    );
+}
+
+function DesktopSettingsRow({
+    shortcut,
+    label,
+    description,
+    children,
+}: {
+    shortcut: string;
+    label: string;
+    description: string;
+    children: React.ReactNode;
+}): React.JSX.Element {
+    return (
+        <Box
+            data-settings-row
+            data-settings-shortcut={shortcut.toLowerCase()}
+            sx={{
+                display: "grid",
+                gridTemplateColumns: "minmax(116px, 0.55fr) minmax(0, 1.45fr)",
+                gap: 1,
+                alignItems: "center",
+                minHeight: 64,
+                px: 1.5,
+                py: 1,
+                borderRadius: 1.5,
+                border: 1,
+                borderColor: "transparent",
+                "&:has([data-settings-choice]:focus-visible)": {
+                    borderColor: "primary.main",
+                    bgcolor: "action.hover",
+                },
+            }}
+        >
+            <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ minWidth: 0 }}>
+                <Kbd keys={shortcut.toUpperCase()} />
+                <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={700}>{label}</Typography>
+                    <Typography variant="caption" color="text.secondary">{description}</Typography>
+                </Box>
+            </Stack>
+            {children}
+        </Box>
+    );
+}
+
+function DesktopSettingsContent({
+    themeMode,
+    onSetThemeMode,
+}: {
+    themeMode: ThemeMode;
+    onSetThemeMode: (mode: ThemeMode) => void;
+}): React.JSX.Element {
+    const vim = useVimSetting();
+    const notify = useNotifySetting();
+    const vibrate = useVibrateSetting();
+    const reading = useReadingSettings();
+    const selectedFont = getFontPreset(reading.fontVariant);
+    const settings = useStoreSelector((snapshot) => snapshot.settings);
+    const autoResume = settings[AUTO_RESUME_DEFAULT_KEY] === true;
+    return (
+        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, alignItems: "start" }}>
+            <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, p: 1 }}>
+                <Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>Appearance</Typography>
+                <DesktopSettingsRow shortcut="T" label="Theme" description="Follow the system or pin a palette">
+                    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
+                        {(["system", "light", "dark"] as const).map((mode) => (
+                            <DesktopSettingsChoice key={mode} active={themeMode === mode} onClick={() => onSetThemeMode(mode)} ariaLabel={`${mode} theme`}>
+                                {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                            </DesktopSettingsChoice>
+                        ))}
+                    </Box>
+                </DesktopSettingsRow>
+                <DesktopSettingsRow shortcut="F" label="Reading font" description="Typeface used for transcript prose">
+                    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 0.75 }}>
+                        {FONT_PRESETS.map((preset) => (
+                            <DesktopSettingsChoice key={preset.id} active={reading.fontVariant === preset.id} onClick={() => setFontVariant(preset.id)} ariaLabel={`${preset.label} reading font`}>
+                                <Typography component="span" variant="body2" sx={{ fontFamily: preset.stack }} noWrap>{preset.label} · Aa 阅读</Typography>
+                            </DesktopSettingsChoice>
+                        ))}
+                    </Box>
+                </DesktopSettingsRow>
+                <Box sx={{ mx: 1.5, mt: 1, p: 1.5, borderRadius: 1.5, bgcolor: "action.hover", border: 1, borderColor: "divider" }}>
+                    <Typography variant="overline" color="text.secondary">Live preview</Typography>
+                    <Typography
+                        sx={{
+                            mt: 0.5,
+                            px: `${reading.padding}px`,
+                            fontFamily: selectedFont.stack,
+                            fontSize: `${reading.fontScale}rem`,
+                            lineHeight: reading.lineHeight,
+                        }}
+                    >
+                        Make the common path fast. 阅读输出时，密度、节奏和字形会立即反映在这里。
+                    </Typography>
+                </Box>
+            </Box>
+            <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, p: 1 }}>
+                <Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>Density</Typography>
+                <DesktopSettingsRow shortcut="Z" label="Font size" description="Scale application text">
+                    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
+                        {FONT_SCALE_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.fontScale, FONT_SCALE_PRESETS) === value} onClick={() => setFontScale(value)} ariaLabel={`${Math.round(value * 100)} percent font size`}>{Math.round(value * 100)}%</DesktopSettingsChoice>)}
+                    </Box>
+                </DesktopSettingsRow>
+                <DesktopSettingsRow shortcut="P" label="Padding" description="Transcript and composer side gutter">
+                    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
+                        {PADDING_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.padding, PADDING_PRESETS) === value} onClick={() => setPadding(value)} ariaLabel={`${value} pixel padding`}>{value}px</DesktopSettingsChoice>)}
+                    </Box>
+                </DesktopSettingsRow>
+                <DesktopSettingsRow shortcut="R" label="Line height" description="Vertical rhythm for long output">
+                    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 0.75 }}>
+                        {LINE_HEIGHT_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.lineHeight, LINE_HEIGHT_PRESETS) === value} onClick={() => setLineHeight(value)} ariaLabel={`${value.toFixed(1)} line height`}>{value.toFixed(1)}</DesktopSettingsChoice>)}
+                    </Box>
+                </DesktopSettingsRow>
+            </Box>
+            <Box sx={{ gridColumn: "1 / -1", border: 1, borderColor: "divider", borderRadius: 2, p: 1 }}>
+                <Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>Workflow</Typography>
+                <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 2 }}>
+                    <DesktopSettingsRow shortcut="S" label="Sound alert" description="Chime when an agent needs you">
+                        <DesktopSettingsChoice active={notify} onClick={() => setNotifySetting(!notify)} ariaLabel="Toggle sound alerts">{notify ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                    <DesktopSettingsRow shortcut="V" label="Vibration alert" description="Native haptic notification">
+                        <DesktopSettingsChoice active={vibrate} onClick={() => setVibrateSetting(!vibrate)} ariaLabel="Toggle vibration alerts">{vibrate ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                    <DesktopSettingsRow shortcut="M" label="Vim keybindings" description="Modal editing in the composer">
+                        <DesktopSettingsChoice active={vim} onClick={() => setVimSetting(!vim)} ariaLabel="Toggle Vim keybindings">{vim ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                    <DesktopSettingsRow shortcut="A" label="Auto-resume" description="Continue interrupted turns after restart">
+                        <DesktopSettingsChoice active={autoResume} onClick={() => setSetting(AUTO_RESUME_DEFAULT_KEY, !autoResume)} ariaLabel="Toggle automatic turn resume">{autoResume ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                </Box>
+                <Divider sx={{ my: 1 }} />
+                <AutoResumeSettings showToggle={false} />
+            </Box>
+        </Box>
+    );
+}
+
 // Global auto-resume settings (tasks/archive/2026/07/session-auto-resume): the default
 // toggle + a collapsed continuation-template editor with a live interpolated
 // preview. Server-authoritative (reads `state.settings`, writes via setSetting).
-function AutoResumeSettings(): React.JSX.Element {
+function AutoResumeSettings({ showToggle = true }: { showToggle?: boolean } = {}): React.JSX.Element {
     const settings = useStoreSelector((snapshot) => snapshot.settings);
     const defaultOn = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     const saved =
@@ -2474,10 +2652,10 @@ function AutoResumeSettings(): React.JSX.Element {
     }, [editorOpen]);
     return (
         <Stack spacing={1}>
-            <Typography variant="overline" color="text.secondary">
+            {showToggle && <Typography variant="overline" color="text.secondary">
                 Interrupted turns
-            </Typography>
-            <Stack
+            </Typography>}
+            {showToggle && <Stack
                 direction="row"
                 alignItems="center"
                 justifyContent="space-between"
@@ -2496,7 +2674,7 @@ function AutoResumeSettings(): React.JSX.Element {
                     onChange={(e): void => setSetting(AUTO_RESUME_DEFAULT_KEY, e.target.checked)}
                     inputProps={{ "aria-label": "Auto-resume interrupted turns" }}
                 />
-            </Stack>
+            </Stack>}
             <Button
                 size="small"
                 color="inherit"
@@ -2620,6 +2798,66 @@ function SettingsShell({
     // Vim is desktop-only (ComposerEditor won't load it on touch), so the
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
+    const settingsPanelRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!open || !desktop) return undefined;
+        const focusFirst = requestAnimationFrame(() => {
+            if (tab === "settings") {
+                settingsPanelRef.current?.querySelector<HTMLElement>("[data-settings-choice]")?.focus();
+            }
+        });
+        const onKeyDown = (event: KeyboardEvent): void => {
+            if (isImeKeyEvent(event) || event.metaKey || event.ctrlKey || event.altKey) return;
+            const target = event.target;
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
+            const key = event.key.toLowerCase();
+            const tabs = ["settings", "info", "logs"] as const;
+            if (key === "[" || key === "]") {
+                event.preventDefault();
+                const index = tabs.indexOf(tab);
+                setTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
+                return;
+            }
+            if (tab !== "settings") return;
+            const panel = settingsPanelRef.current;
+            if (!panel) return;
+            const rows = [...panel.querySelectorAll<HTMLElement>("[data-settings-row]")];
+            const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            const activeRow = active?.closest<HTMLElement>("[data-settings-row]");
+            const focusChoice = (row: HTMLElement, preferred = 0): void => {
+                const choices = [...row.querySelectorAll<HTMLElement>("[data-settings-choice]")];
+                const selected = choices.findIndex((choice) => choice.getAttribute("aria-pressed") === "true");
+                choices[Math.max(0, Math.min(choices.length - 1, preferred < 0 ? selected : preferred))]?.focus();
+            };
+            const direct = panel.querySelector<HTMLElement>(`[data-settings-shortcut="${CSS.escape(key)}"]`);
+            if (direct && !["h", "j", "k", "l"].includes(key)) {
+                event.preventDefault();
+                focusChoice(direct, -1);
+                return;
+            }
+            if (!["h", "j", "k", "l"].includes(key)) return;
+            event.preventDefault();
+            const rowIndex = activeRow ? rows.indexOf(activeRow) : -1;
+            if (key === "j" || key === "k") {
+                const next = rowIndex < 0
+                    ? (key === "j" ? rows[0] : rows.at(-1))
+                    : rows[Math.max(0, Math.min(rows.length - 1, rowIndex + (key === "j" ? 1 : -1)))];
+                if (next) focusChoice(next, -1);
+                return;
+            }
+            const row = activeRow ?? rows[0];
+            if (!row) return;
+            const choices = [...row.querySelectorAll<HTMLElement>("[data-settings-choice]")];
+            const choiceIndex = active ? choices.indexOf(active) : -1;
+            const next = choices[Math.max(0, Math.min(choices.length - 1, choiceIndex + (key === "l" ? 1 : -1)))];
+            next?.focus();
+        };
+        globalThis.addEventListener("keydown", onKeyDown, true);
+        return () => {
+            cancelAnimationFrame(focusFirst);
+            globalThis.removeEventListener("keydown", onKeyDown, true);
+        };
+    }, [desktop, open, tab]);
     return (
         <Sheet
             open={open}
@@ -2658,7 +2896,11 @@ function SettingsShell({
                     </Box>
                 </Box>
             </Box>
-            {tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
+            {tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : desktop ? (
+                <Box ref={settingsPanelRef}>
+                    <DesktopSettingsContent themeMode={themeMode} onSetThemeMode={onSetThemeMode} />
+                </Box>
+            ) : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -2935,6 +3177,37 @@ function SettingsShell({
                 {/* Daemon system info (Storage metrics + About) lives in the Info
                     tab — Settings holds user preferences only. */}
             </Stack>
+            )}
+            {desktop && (
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    sx={{
+                        position: "sticky",
+                        bottom: -1,
+                        zIndex: 3,
+                        mt: 1.5,
+                        mx: -1,
+                        px: 2,
+                        py: 1,
+                        borderTop: 1,
+                        borderColor: "divider",
+                        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
+                        backdropFilter: "blur(16px)",
+                    }}
+                >
+                    <Stack direction="row" spacing={1.75} color="text.secondary">
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Field</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Apply</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="[/]" /><Typography variant="caption">Tab</Typography></Stack>
+                    </Stack>
+                    <Stack direction="row" spacing={1.75} color="text.secondary">
+                        {tab === "settings" && <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="T F Z P R S V M A" /><Typography variant="caption">Jump</Typography></Stack>}
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
+                    </Stack>
+                </Stack>
             )}
         </Sheet>
     );
