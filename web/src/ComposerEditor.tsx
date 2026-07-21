@@ -245,6 +245,10 @@ export const ComposerEditor = forwardRef<
     /// column height IS the size, so there's no compact↔expand toggle here.
     /// Overrides `expanded`/`heightPx`.
     fill?: boolean;
+    /// Desktop column layout: keep CodeMirror's vertical scrollbar flush with
+    /// the card edge while reserving the overlaid action gutter on content only.
+    /// Touch surfaces deliberately retain their established inset scroller.
+    flushRightScrollbar?: boolean;
   }
 >(function ComposerEditor(
   {
@@ -268,6 +272,7 @@ export const ComposerEditor = forwardRef<
     expanded = false,
     heightPx = 0,
     fill = false,
+    flushRightScrollbar = false,
   },
   ref,
 ): React.JSX.Element {
@@ -806,6 +811,12 @@ export const ComposerEditor = forwardRef<
         py: "8.5px",
         // Clear the overlaid send/kebab buttons at the bottom-right (base 14 + inset).
         ...(endInset > 0 && { pr: `${String(14 + endInset)}px` }),
+        ...(flushRightScrollbar && {
+          pr: 0,
+          "& .cm-content": {
+            paddingRight: `${String(14 + endInset)}px`,
+          },
+        }),
         cursor: "text",
         "&:hover .composer-notch": disabled || borderless
           ? {}

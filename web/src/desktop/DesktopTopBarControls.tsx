@@ -1161,7 +1161,11 @@ export function DesktopTopBarControls({
           },
         }}
       >
-        <Stack ref={usagePanelRef} spacing={1.25}>
+        <Stack
+          ref={usagePanelRef}
+          data-desktop-shortcut-scope="exclusive"
+          spacing={1.25}
+        >
           <Stack
             direction="row"
             alignItems="center"

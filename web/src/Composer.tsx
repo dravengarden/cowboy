@@ -1531,6 +1531,7 @@ export function ComposerWorkspace({
             // Column layout: stretch to fill the column instead of the vh-bounded
             // compact/expanded sizes (overrides expanded/heightPx).
             fill={column}
+            flushRightScrollbar={desktop && column}
             // Reserve a top-right gutter so no line runs under the ↗/↙ expand
             // toggle the card overlays at its top-right corner.
             endInset={36}
