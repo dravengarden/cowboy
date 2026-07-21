@@ -259,7 +259,10 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 @interface CowboyKeyboardAvoider : NSObject
 @end
 
-@implementation CowboyKeyboardAvoider
+@implementation CowboyKeyboardAvoider {
+    NSUInteger _settleGeneration;
+    BOOL _keyboardVisible;
+}
 
 + (instancetype)shared {
     static CowboyKeyboardAvoider *inst;
@@ -340,18 +343,72 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     [self applyOverlap:overlap userInfo:note.userInfo];
 }
 
+// Notification end frames are predictions made before UIKit finishes laying out
+// the keyboard. Predictive/IME bars and third-party keyboards can change that
+// geometry after DidShow without another dependable frame notification. On iOS
+// 15+, keyboardLayoutGuide is the native view hierarchy's current, authoritative
+// keyboard edge. Reconcile the web view against it after each settling phase so
+// an early over-tall prediction cannot leave a gray strip above the real keyboard.
+- (void)applySettledLayoutGuide:(NSUInteger)generation {
+    if (generation != _settleGeneration || !_keyboardVisible) return;
+    WKWebView *wv = gCowboyWebView;
+    UIView *parent = wv.superview;
+    if (wv == nil || parent == nil || wv.window == nil) return;
+    if (@available(iOS 15.0, *)) {
+        [parent layoutIfNeeded];
+        CGRect keyboardFrame = parent.keyboardLayoutGuide.layoutFrame;
+        CGFloat overlap =
+            MAX(0, CGRectGetMaxY(parent.bounds) - CGRectGetMinY(keyboardFrame));
+        // A visible software keyboard is substantially taller than the safe-area
+        // guide. Ignore a transient empty/hidden guide rather than collapsing the
+        // web view to a bogus bottom inset.
+        if (overlap < 80) return;
+        [UIView performWithoutAnimation:^{
+            CGRect frame = parent.bounds;
+            frame.size.height = MAX(0, frame.size.height - overlap);
+            wv.frame = frame;
+            [wv layoutIfNeeded];
+        }];
+#if DEBUG
+        NSLog(@"[cowboy] keyboard settled overlap=%.1f webHeight=%.1f",
+              overlap, CGRectGetHeight(wv.frame));
+#endif
+    }
+}
+
+- (void)scheduleSettledCorrections {
+    NSUInteger generation = ++_settleGeneration;
+    // Cover the normal animation completion plus late predictive/third-party
+    // keyboard phases. Generation checks make every older schedule harmless
+    // after a new frame or hide event.
+    for (NSNumber *delay in @[@0.0, @0.12, @0.35, @0.70]) {
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                [self applySettledLayoutGuide:generation];
+            });
+    }
+}
+
 - (void)onKeyboardWillChangeFrame:(NSNotification *)note {
+    _keyboardVisible = YES;
     [self applyFromNote:note];
+    [self scheduleSettledCorrections];
 }
 
 // Re-apply once the keyboard has fully settled — fixes the WeChat-keyboard
 // first-open gap (BUG 2). Idempotent with WillChangeFrame for the system keyboard
 // (same settled frame → same overlap → no visible change).
 - (void)onKeyboardDidShow:(NSNotification *)note {
+    _keyboardVisible = YES;
     [self applyFromNote:note];
+    [self scheduleSettledCorrections];
 }
 
 - (void)onKeyboardWillHide:(NSNotification *)note {
+    _keyboardVisible = NO;
+    ++_settleGeneration;
     [self applyOverlap:0 userInfo:note.userInfo];
 }
 
