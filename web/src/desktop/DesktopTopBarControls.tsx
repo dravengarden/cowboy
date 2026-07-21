@@ -570,6 +570,7 @@ export function DesktopTopBarControls({
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
   const configPanelRef = useRef<HTMLDivElement>(null);
+  const usagePanelRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
@@ -673,6 +674,34 @@ export function DesktopTopBarControls({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
       const key = event.key.toLowerCase();
+      if (document.querySelector("[role='dialog']") !== null) return;
+      if (key === "h" || key === "l") {
+        event.preventDefault();
+        event.stopPropagation();
+        setUsagePanel(key === "h" ? "usage" : "logs");
+        return;
+      }
+      if (key === "j" || key === "k") {
+        const panel = usagePanelRef.current;
+        if (!panel) return;
+        const controls = [...panel.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), [role='button']:not([aria-disabled='true'])",
+        )].filter((control) => control.offsetParent !== null);
+        if (controls.length === 0) return;
+        const activeIndex = document.activeElement instanceof HTMLElement
+          ? controls.indexOf(document.activeElement)
+          : -1;
+        const nextIndex = activeIndex < 0
+          ? (key === "j" ? 0 : controls.length - 1)
+          : Math.min(
+            controls.length - 1,
+            Math.max(0, activeIndex + (key === "j" ? 1 : -1)),
+          );
+        event.preventDefault();
+        event.stopPropagation();
+        controls[nextIndex]?.focus();
+        return;
+      }
       if (key === "u" || key === "l") {
         event.preventDefault();
         event.stopPropagation();
@@ -1119,7 +1148,7 @@ export function DesktopTopBarControls({
           },
         }}
       >
-        <Stack spacing={1.25}>
+        <Stack ref={usagePanelRef} spacing={1.25}>
           <Stack
             direction="row"
             alignItems="center"
@@ -1194,6 +1223,26 @@ export function DesktopTopBarControls({
             />
           )}
           </>}
+          <Divider />
+          <Stack
+            direction="row"
+            justifyContent="flex-end"
+            spacing={1.25}
+            sx={{ color: "text.secondary" }}
+          >
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys="J/K" />
+              <Typography variant="caption">Move</Typography>
+            </Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys="H/L" />
+              <Typography variant="caption">Tab</Typography>
+            </Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys="Esc" />
+              <Typography variant="caption">Close</Typography>
+            </Stack>
+          </Stack>
         </Stack>
       </Popover>
 
