@@ -86,7 +86,7 @@ import { FullscreenComposer } from "./FullscreenComposer";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
-import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ALT_LABEL, COWBOY_MOD_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
@@ -3926,8 +3926,8 @@ export function AutoScrollAndStop({
         {stopButton && (
           <Suspense fallback={stopButton}>
             <DesktopContextShortcut
-              badge="S"
-              shortcut="S · Stop current turn"
+              badge={`${COWBOY_MOD_LABEL}S`}
+              shortcut={`${COWBOY_MOD_LABEL}S · Stop current turn`}
               placement="inline"
             >
               {stopButton}

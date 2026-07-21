@@ -46,7 +46,18 @@ Deno.test("common Command shortcuts require matching native semantics", () => {
 
 Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   for (
-    const shortcut of ["Alt+B", "Alt+P", "Alt+C", "Alt+T", "Mod+K", "Mod+/"]
+    const shortcut of [
+      "Shift+Alt+Mod+B",
+      "Shift+Alt+Mod+P",
+      "Shift+Alt+Mod+C",
+      "Shift+Alt+Mod+T",
+      "Shift+Alt+Mod+R",
+      "Shift+Alt+Mod+U",
+      "Shift+Alt+Mod+K",
+      "Shift+Alt+Mod+S",
+      "Mod+K",
+      "Mod+/",
+    ]
   ) {
     assertEquals(macShortcutConflict("workspace.command", shortcut), null);
   }

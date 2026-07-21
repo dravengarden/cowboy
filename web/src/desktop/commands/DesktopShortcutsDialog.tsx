@@ -21,10 +21,14 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
-  { keys: ["Alt+B"], title: "Focus Sessions" },
-  { keys: ["Alt+P"], title: "Focus Prompt" },
-  { keys: ["Alt+C"], title: "Focus Conversation" },
-  { keys: ["Alt+T"], title: "Focus Top Bar" },
+  { keys: ["Shift+Alt+Mod+B"], title: "Focus Sessions" },
+  { keys: ["Shift+Alt+Mod+P"], title: "Focus Prompt" },
+  { keys: ["Shift+Alt+Mod+C"], title: "Focus Conversation" },
+  { keys: ["Shift+Alt+Mod+T"], title: "Focus Top Bar" },
+  { keys: ["Shift+Alt+Mod+R"], title: "Open Run Configuration in Top Bar" },
+  { keys: ["Shift+Alt+Mod+U"], title: "Open Usage Limits in Top Bar" },
+  { keys: ["Shift+Alt+Mod+K"], title: "Compact Conversation in Top Bar" },
+  { keys: ["Shift+Alt+Mod+S"], title: "Stop Current Turn in Top Bar" },
   {
     keys: ["P/O/D/E"],
     title: "Plan / Queue / Drafts / Editor inside Prompt",
