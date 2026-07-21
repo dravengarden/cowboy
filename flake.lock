@@ -29,11 +29,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1784641370,
-        "narHash": "sha256-suH4GyxoOg8y+EIw9o7DcKFuemnz1xtpPf7XJGEOvgg=",
+        "lastModified": 1784641936,
+        "narHash": "sha256-SY8LWLIEzP/vlzCXfCAil0ROBMKD8e4afNZMgMTLvw0=",
         "ref": "refs/heads/main",
-        "rev": "4af96b4261aa17ca1b3c9ae3ceaa9fefd747bfc4",
-        "revCount": 131,
+        "rev": "1eadca7df02ad5b0aae0fe286e86de92d71115d1",
+        "revCount": 132,
         "type": "git",
         "url": "ssh://git@github.com/dravengarden/shared-utils.git"
       },
