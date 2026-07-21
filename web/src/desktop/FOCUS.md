@@ -24,6 +24,8 @@ same controller state.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
   to the oldest/latest output there.
+- In Sessions, the filled row remains the currently open session; a distinct
+  accent cursor shows the row selected by `j/k` for the next `l`/Enter action.
 - `Enter`: default item action. In Sessions, `l` and `Enter` open the selected
   session and move focus to its Prompt editor; entering the Sessions region
   always starts on the currently open session.

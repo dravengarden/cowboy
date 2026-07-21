@@ -1669,6 +1669,18 @@ export function App({
                         boxShadow: (t) =>
                             `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.34)}`,
                     },
+                    // Session selection and keyboard focus are distinct: the
+                    // filled row is the open session, while j/k moves a keyboard
+                    // cursor that l/Enter can open. MUI's :focus-visible flag is
+                    // not retained reliably across programmatic focus() on
+                    // macOS, so draw the cursor from real DOM :focus whenever
+                    // the Sessions region owns focus.
+                    "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
+                        outline: "none",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.15),
+                        boxShadow: (t) =>
+                            `inset 3px 0 0 ${t.palette.primary.main}, inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.42)}`,
+                    },
                 }),
             }}
         >
