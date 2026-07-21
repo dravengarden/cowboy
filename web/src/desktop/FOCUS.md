@@ -122,7 +122,7 @@ shortcut.
 
 Shortcut hints follow one shared keycap grammar and three visibility levels:
 
-1. global shortcuts are always visible but quiet (`Mod+B/E/L/T`, `Mod+N`,
+1. global shortcuts are always visible but quiet (`Mod+E/I/L/T`, `Mod+N`,
    `Mod+,`) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
    focused (Prompt subregions and list item actions), so they add no layout
@@ -147,7 +147,7 @@ contract and the conventions users depend on in editors and browsers:
 - common application chords may be used only with matching native semantics:
   `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
   and `Mod+1…0` switches session tabs;
-- global Cowboy workspace navigation uses mnemonic `Mod+B/E/L/T` for Sidebar,
+- global Cowboy workspace navigation uses mnemonic `Mod+E/I/L/T` for Sessions,
   Editor, Log, and Top Bar. Focused Top Bar uses bare `R/U/C/S` for Run
   Configuration, Usage, Compact, and Stop; `Mod+1…0` remains global session slots;
 - macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,

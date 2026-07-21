@@ -99,7 +99,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="prompt"
-          shortcut={{ value: "Mod+E", title: "Focus Prompt" }}
+          shortcut={{ value: "Mod+I", title: "Focus Prompt" }}
         >
           Prompt
         </PaneHeader>

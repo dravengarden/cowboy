@@ -35,15 +35,15 @@ Deno.test("common Command shortcuts require matching native semantics", () => {
   assertEquals(macShortcutConflict("session.new", "Mod+N"), null);
   assertEquals(macShortcutConflict("settings.open", "Mod+,"), null);
   assertEquals(macShortcutConflict("composer.saveDraft", "Mod+S"), null);
-  assertEquals(macShortcutConflict("workspace.focusSessions", "Mod+B"), null);
+  assertEquals(macShortcutConflict("workspace.focusSessions", "Mod+E"), null);
   assertEquals(macShortcutConflict("workspace.focusTopbar", "Mod+T"), null);
   assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+S"));
 });
 
 Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   for (const [commandId, shortcut] of [
-    ["workspace.focusSessions", "Mod+B"],
-    ["workspace.focusPrompt", "Mod+E"],
+    ["workspace.focusSessions", "Mod+E"],
+    ["workspace.focusPrompt", "Mod+I"],
     ["workspace.focusConversation", "Mod+L"],
     ["workspace.focusTopbar", "Mod+T"],
     ["commandPalette.open", "Mod+K"],
@@ -51,7 +51,7 @@ Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   ] as const) {
     assertEquals(macShortcutConflict(commandId, shortcut), null);
   }
-  assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+B"));
+  assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+E"));
   assertThrows(() => assertMacShortcutAllowed("prompt.focusQueue", "Q"));
   assertEquals(macShortcutConflict("prompt.focusQueue", "Mod+Y"), null);
   assertEquals(macShortcutConflict("prompt.focusDrafts", "Mod+D"), null);

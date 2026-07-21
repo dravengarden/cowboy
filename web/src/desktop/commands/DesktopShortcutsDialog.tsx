@@ -21,8 +21,8 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
-  { keys: ["Mod+B"], title: "Focus Sessions / Sidebar" },
-  { keys: ["Mod+E"], title: "Focus Prompt Editor" },
+  { keys: ["Mod+E"], title: "Focus Sessions / Sidebar" },
+  { keys: ["Mod+I"], title: "Focus Prompt Editor" },
   { keys: ["Mod+L"], title: "Focus Conversation Log" },
   { keys: ["Mod+T"], title: "Focus Top Bar" },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },

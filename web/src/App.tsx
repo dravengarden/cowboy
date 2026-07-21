@@ -1595,9 +1595,9 @@ export function App({
             {surface === "desktop" && (
                 <Suspense fallback={null}>
                     <DesktopRegionShortcut
-                        shortcut="Mod+B"
+                        shortcut="Mod+E"
                         title="Focus Sessions"
-                        singleKeycap={`${MOD_LABEL}B`}
+                        singleKeycap={`${MOD_LABEL}E`}
                     />
                 </Suspense>
             )}
