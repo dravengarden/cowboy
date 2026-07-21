@@ -24,7 +24,14 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowForwardRounded, ExpandMore, Refresh, Tune } from "@mui/icons-material";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type HTMLAttributes,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
@@ -454,8 +461,10 @@ function ConfigOptionControl({
         ? (
           <FormControl fullWidth size="small">
             <Select
-              data-config-choice
               value={String(option.currentValue)}
+              SelectDisplayProps={{
+                "data-config-choice": "true",
+              } as HTMLAttributes<HTMLDivElement>}
               onChange={(event): void => setValue(String(event.target.value))}
               aria-label="Model"
               sx={{
