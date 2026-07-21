@@ -666,8 +666,10 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
   // Lower bound for the complete session-control strip. Each quota tile owns
   // 104px, the freshness tile owns 58px, and run configuration / Compact keep
-  // their full touch targets. The parent toolbar scrolls once less space than
-  // this is available instead of compressing controls into one another.
+  // their full touch targets. Auto margin restores the spacious, trailing
+  // desktop layout whenever the pane can afford it; once the pane is narrower
+  // than this strip, the margin collapses and the parent toolbar scrolls instead
+  // of compressing controls into one another.
   const usageMinWidth = visibleLimits.length > 0
     ? visibleLimits.length * 104 + Math.max(0, visibleLimits.length - 1) * 4 +
       58 + 12
@@ -681,7 +683,12 @@ export function DesktopTopBarControls({
       direction="row"
       alignItems="center"
       spacing={0.75}
-      sx={{ flex: "0 0 auto", minWidth: controlsMinWidth, ml: 2, overflow: "visible" }}
+      sx={{
+        flex: "0 0 auto",
+        minWidth: controlsMinWidth,
+        ml: "auto",
+        overflow: "visible",
+      }}
     >
       {options.length === 0 && !dead &&
           (status === "starting" || status === "running")
