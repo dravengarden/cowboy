@@ -32,7 +32,6 @@ import {
   Stack,
   Tooltip,
   Typography,
-  useMediaQuery,
   useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -104,6 +103,7 @@ import {
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import { FloatingActionIsland, ImageLightbox } from "./_shell";
+import { Kbd } from "./Kbd";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
@@ -1710,8 +1710,6 @@ function ToolDetailsBrowser({
   onLocate: (key: string) => void;
   historyComplete: boolean;
 }): React.JSX.Element | null {
-  const theme = useTheme();
-  const roomy = useMediaQuery(theme.breakpoints.up("sm"));
   const runIndex = selectedKey === null
     ? -1
     : runs.findIndex((candidate) => candidate.tools.some((tool) => tool.key === selectedKey));
@@ -1723,8 +1721,16 @@ function ToolDetailsBrowser({
   const bodyRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLDivElement>(null);
   const anchorSpacerRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
   const navigationChord = useRef<number | null>(null);
+  const rawOnly = item
+    ? toolUsesRawOnly({
+      kind: item.toolKind,
+      toolName: item.toolName,
+      title: item.title,
+    })
+    : false;
 
   useEffect(() => {
     if (!item) {
@@ -1762,6 +1768,13 @@ function ToolDetailsBrowser({
       globalThis.clearTimeout(settled);
     };
   }, [item?.key]);
+
+  useLayoutEffect(() => {
+    if (!desktop || runIndex < 0) return;
+    historyRef.current
+      ?.querySelector<HTMLElement>(`[data-tool-run-index="${runIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [desktop, runIndex]);
 
   const select = (next: ToolItem | undefined): void => {
     if (!next || !item) return;
@@ -1803,6 +1816,9 @@ function ToolDetailsBrowser({
       } else if (key === "k") {
         event.preventDefault();
         select(runs[Math.max(0, runIndex - 1)]?.tools.at(-1));
+      } else if (!rawOnly && (key === "h" || key === "l")) {
+        event.preventDefault();
+        setRawByKey((state) => ({ ...state, [item.key]: key === "l" }));
       } else if (key === "Enter") {
         event.preventDefault();
         onLocate(item.key);
@@ -1831,18 +1847,13 @@ function ToolDetailsBrowser({
         navigationChord.current = null;
       }
     };
-  }, [desktop, runIndex, item, runs, onClose, onLocate]);
+  }, [desktop, runIndex, item, rawOnly, runs, onClose, onLocate]);
 
   if (!item) return null;
   // A search query has no useful alternate presentation: formatting it only
   // duplicates the query while adding two layers of layout controls. Keep the
   // transport JSON as the single, inspectable representation so input and
   // output retain their exact shape across Codex, Claude and future ACPs.
-  const rawOnly = toolUsesRawOnly({
-    kind: item.toolKind,
-    toolName: item.toolName,
-    title: item.title,
-  });
   const raw = rawOnly || (rawByKey[item.key] ?? false);
   const firstRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools[0]?.key);
   const lastRunItemIndex = items.findIndex((candidate) => candidate.key === run?.tools.at(-1)?.key);
@@ -1877,30 +1888,16 @@ function ToolDetailsBrowser({
     ? run.server.split(/[-_]/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
     : null;
 
-  const navigationItems = (
+  const mobileNavigationItems = (
     <>
-      {desktop && roomy
-        ? (
-          <Button
-            aria-label="Previous tool run"
-            disabled={runIndex === 0}
-            onClick={(): void => select(runs[runIndex - 1]?.tools.at(-1))}
-            startIcon={<NavigateBefore />}
-            sx={{ minHeight: 40, justifySelf: "start", textTransform: "none" }}
-          >
-            Previous
-          </Button>
-        )
-        : (
-          <IconButton
-            aria-label="Previous tool run"
-            disabled={runIndex === 0}
-            onClick={(): void => select(runs[runIndex - 1]?.tools.at(-1))}
-            sx={{ width: 44, height: 44, justifySelf: "start" }}
-          >
-            <NavigateBefore />
-          </IconButton>
-        )}
+      <IconButton
+        aria-label="Previous tool run"
+        disabled={runIndex === 0}
+        onClick={(): void => select(runs[runIndex - 1]?.tools.at(-1))}
+        sx={{ width: 44, height: 44, justifySelf: "start" }}
+      >
+        <NavigateBefore />
+      </IconButton>
       <Typography
         aria-label={`Tool run ${runIndex + 1} of ${runs.length}${historyComplete ? "" : " loaded"}`}
         variant="caption"
@@ -1908,86 +1905,35 @@ function ToolDetailsBrowser({
       >
         {runIndex + 1} / {runs.length}{historyComplete ? "" : "+"}
       </Typography>
-      {!desktop && (
-        <Tooltip title="Close details">
-          <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44, justifySelf: "center" }}>
-            <KeyboardArrowDown />
-          </IconButton>
-        </Tooltip>
-      )}
-      {desktop && roomy
-        ? (
-          <Button
-            aria-label="Next tool run"
-            disabled={runIndex >= runs.length - 1}
-            onClick={(): void => select(runs[runIndex + 1]?.tools[0])}
-            endIcon={<NavigateNext />}
-            sx={{ minHeight: 40, justifySelf: "end", textTransform: "none" }}
-          >
-            Next
-          </Button>
-        )
-        : (
-          <IconButton
-            aria-label="Next tool run"
-            disabled={runIndex >= runs.length - 1}
-            onClick={(): void => select(runs[runIndex + 1]?.tools[0])}
-            sx={{ width: 44, height: 44, justifySelf: "end" }}
-          >
-            <NavigateNext />
-          </IconButton>
-        )}
+      <Tooltip title="Close details">
+        <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44, justifySelf: "center" }}>
+          <KeyboardArrowDown />
+        </IconButton>
+      </Tooltip>
+      <IconButton
+        aria-label="Next tool run"
+        disabled={runIndex >= runs.length - 1}
+        onClick={(): void => select(runs[runIndex + 1]?.tools[0])}
+        sx={{ width: 44, height: 44, justifySelf: "end" }}
+      >
+        <NavigateNext />
+      </IconButton>
       <Tooltip title="Locate in transcript">
         <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)} sx={{ width: 44, height: 44 }}>
           <MyLocation fontSize="small" />
         </IconButton>
       </Tooltip>
-      {desktop && (roomy
-        ? (
-          <Button aria-label="Close tool details" onClick={onClose} endIcon={<KeyboardArrowDown />} sx={{ minHeight: 40, textTransform: "none" }}>
-            Close
-          </Button>
-        )
-        : (
-          <Tooltip title="Close details">
-            <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44 }}>
-              <KeyboardArrowDown fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        ))}
     </>
   );
 
-  const navigation = desktop
-    ? (
-      <Box
-      sx={{
-        position: "relative",
-        width: "100%",
-        px: 0.75,
-        py: 0.5,
-        display: "grid",
-        gridTemplateColumns: "1fr auto 1fr auto auto",
-        alignItems: "center",
-        gap: 0.5,
-        bgcolor: (theme) => alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.78 : 0.82),
-        backdropFilter: "blur(30px) saturate(200%)",
-        WebkitBackdropFilter: "blur(30px) saturate(200%)",
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 2,
-        userSelect: "none",
-        WebkitUserSelect: "none",
-        boxShadow: (theme) => `0 -1px 24px ${theme.palette.mode === "dark" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"}`,
-      }}
-    >
-        {navigationItems}
-      </Box>
-    )
-    : <FloatingActionIsland columns="repeat(5, minmax(0, 1fr))">{navigationItems}</FloatingActionIsland>;
+  const navigation = (
+    <FloatingActionIsland columns="repeat(5, minmax(0, 1fr))">
+      {mobileNavigationItems}
+    </FloatingActionIsland>
+  );
 
   const details = (
-      <Box ref={bodyRef} sx={{ position: "relative", maxWidth: desktop ? 980 : "none", mx: desktop ? "auto" : 0 }}>
+      <Box ref={bodyRef} sx={{ position: "relative", maxWidth: desktop ? 1280 : "none", mx: desktop ? "auto" : 0 }}>
         <Stack spacing={1.25}>
             <ToolTranscriptContext
               key={`${item.key}-before`}
@@ -2191,6 +2137,7 @@ function ToolDetailsBrowser({
   const desktopHistory = (
     <Box
       component="nav"
+      ref={historyRef}
       aria-label="Tool run history"
       sx={{
         minWidth: 0,
@@ -2207,7 +2154,7 @@ function ToolDetailsBrowser({
           Agent history
         </Typography>
         <Typography variant="caption" display="block" color="text.disabled">
-          j/k step · gg/G ends · Enter locate
+          {runs.length} runs{historyComplete ? "" : "+"} · newest agent activity last
         </Typography>
       </Box>
       <Stack sx={{ py: 0.5 }}>
@@ -2230,6 +2177,7 @@ function ToolDetailsBrowser({
           return (
             <ButtonBase
               key={candidate.key}
+              data-tool-run-index={candidateIndex}
               aria-current={active ? "step" : undefined}
               onClick={(): void => select(candidateTool)}
               sx={{
@@ -2245,6 +2193,11 @@ function ToolDetailsBrowser({
                 borderColor: active ? "primary.main" : "transparent",
                 bgcolor: active ? "action.selected" : "transparent",
                 "&:hover": { bgcolor: "action.hover" },
+                "&:focus-visible": {
+                  outline: "2px solid",
+                  outlineColor: "primary.main",
+                  outlineOffset: -2,
+                },
               }}
             >
               <Typography variant="caption" color={active ? "primary.main" : "text.disabled"} sx={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
@@ -2287,21 +2240,74 @@ function ToolDetailsBrowser({
             },
           }}
         >
-          <Box sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
-            <Box sx={{ px: 2, py: 1, display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(520px, 2fr)", alignItems: "center", gap: 2, borderBottom: 1, borderColor: "divider", userSelect: "none" }}>
+          <Box sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto" }}>
+            <Box sx={{ px: 2.5, py: 1.25, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)", alignItems: "center", gap: 2.5, borderBottom: 1, borderColor: "divider", userSelect: "none" }}>
               <Box>
                 <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Tool history inspector</Typography>
                 <Typography variant="caption" color="text.secondary">
                   Review what the agent ran, changed, and observed
                 </Typography>
               </Box>
-              {navigation}
+              <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 0 }}>
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                  <Typography variant="body2" noWrap sx={{ fontWeight: 750 }}>{heading}</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+                    Run {runIndex + 1} of {runs.length}{historyComplete ? "" : "+"}{runTitle ? ` · ${runTitle}` : ""}
+                  </Typography>
+                </Box>
+                <Button
+                  disabled={runIndex === 0}
+                  onClick={(): void => select(runs[runIndex - 1]?.tools.at(-1))}
+                  startIcon={<NavigateBefore />}
+                  sx={{ textTransform: "none", flexShrink: 0 }}
+                >
+                  Previous
+                </Button>
+                <Button
+                  disabled={runIndex >= runs.length - 1}
+                  onClick={(): void => select(runs[runIndex + 1]?.tools[0])}
+                  endIcon={<NavigateNext />}
+                  sx={{ textTransform: "none", flexShrink: 0 }}
+                >
+                  Next
+                </Button>
+                <Tooltip title="Locate in transcript">
+                  <IconButton aria-label="Locate tool in transcript" onClick={(): void => onLocate(item.key)}>
+                    <MyLocation fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Button onClick={onClose} endIcon={<KeyboardArrowDown />} sx={{ textTransform: "none", flexShrink: 0 }}>
+                  Close
+                </Button>
+              </Stack>
             </Box>
             <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)" }}>
               {desktopHistory}
-              <DialogContent sx={{ minHeight: 0, overflowY: "auto", px: { md: 3, xl: 5 }, py: 2.5 }}>
+              <DialogContent sx={{ minHeight: 0, overflowY: "auto", px: { md: 3, xl: 4 }, py: 2.5 }}>
                 {details}
               </DialogContent>
+            </Box>
+            <Box
+              aria-label="Tool history keyboard shortcuts"
+              sx={{
+                minHeight: 46,
+                px: 2.5,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                gap: 2.25,
+                borderTop: 1,
+                borderColor: "divider",
+                bgcolor: "background.paper",
+                color: "text.secondary",
+                userSelect: "none",
+              }}
+            >
+              <Stack direction="row" alignItems="center"><Kbd keys="J/K" /> <Typography variant="caption">Run</Typography></Stack>
+              {!rawOnly && <Stack direction="row" alignItems="center"><Kbd keys="H/L" /> <Typography variant="caption">View</Typography></Stack>}
+              <Stack direction="row" alignItems="center"><Kbd keys="GG/G" /> <Typography variant="caption">Oldest/latest</Typography></Stack>
+              <Stack direction="row" alignItems="center"><Kbd keys="↵" /> <Typography variant="caption">Locate</Typography></Stack>
+              <Stack direction="row" alignItems="center"><Kbd keys="Esc" /> <Typography variant="caption">Close</Typography></Stack>
             </Box>
           </Box>
         </Dialog>
