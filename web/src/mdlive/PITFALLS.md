@@ -466,6 +466,22 @@ here says otherwise.
     close/open cycles, equal layout/visual viewport heights, settled-overlap
     logs, and a screenshot with no band between app chrome and keyboard.
 
+22. **An iPad split/floating keyboard can leave the composer and navbar near
+    the top with a large blank region below.** UIKit first reports a predictive
+    full-width keyboard end frame, so shrinking the WKWebView from that frame
+    makes the web layout only a few hundred points tall. The default
+    `UIKeyboardLayoutGuide` does not follow undocked keyboards; its collapsed
+    safe-area frame therefore could not correct that early shrink. The native
+    avoider must set `followsUndockedKeyboard = YES`. Both notification and
+    settled-guide geometry resize the viewport only when the keyboard frame
+    reaches the parent's bottom edge: a docked split keyboard receives its real
+    bottom overlap, while a genuinely floating keyboard overlays the document
+    and leaves the WKWebView full-height. A collapsed (<80px) guide remains a
+    transient non-authoritative reading. Do not compensate in web CSS or
+    `--kb-inset`; that would double-lift ordinary docked keyboards. Verify on an
+    iPad-sized Simulator with repeated docked keyboard open/close cycles and on
+    a physical iPad with split and floating layouts.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
