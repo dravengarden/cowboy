@@ -7,7 +7,8 @@
   # deno) from the public shared-utils monorepo. The SPA is built via that shared
   # builder — NOT a hand-rolled FOD here — so source changes always rebuild and
   # the deno pin / _shell staging are not copy-pasted into this flake.
-  inputs.shared-utils.url = "github:dravengarden/shared-utils";
+  inputs.shared-utils.url =
+    "git+ssh://git@github.com/dravengarden/shared-utils.git?ref=refs/heads/main";
   inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = { self, nixpkgs, shared-utils }:
