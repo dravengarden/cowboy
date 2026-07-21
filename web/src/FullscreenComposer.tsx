@@ -25,6 +25,7 @@ import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
+import { FloatingActionIsland } from "./_shell";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
 // 100dvh overlay modeled on Obsidian's mobile note editor — a light top bar
@@ -253,18 +254,24 @@ export function FullscreenComposer({
         />
       </Box>
 
-      {/* One keyboard dock: formatting stays on its compact first row and an
-          edit-mode Save sits centred on the second. Keeping both actions in one
-          material avoids the old toolbar + detached giant-pill stack. */}
+      {/* One keyboard dock: formatting, the primary edit action, and settings
+          share one row. Save is an exact-centre liquid-glass island rather than
+          a second opaque footer row, so the keyboard does not consume another
+          50px of the writing canvas. */}
       <Box
         data-toolbar-mode={hasSelection ? "wrap" : "insert"}
         sx={{
           display: "grid",
-          // Same surface tone as the editor (was the whiter `background.paper`,
-          // which read as an ugly bright band). A soft upward shadow gives the
-          // toolbar a gentle lift above the writing area instead of a hard hairline
-          // seam — distinct, but part of one cohesive surface.
-          bgcolor: "background.default",
+          gridTemplateColumns: onDiscard
+            ? "minmax(0, 1fr) auto minmax(0, 1fr)"
+            : "minmax(0, 1fr) auto",
+          alignItems: "center",
+          gap: 0.5,
+          px: 1,
+          py: 0.5,
+          bgcolor: (t) => alpha(t.palette.background.default, 0.72),
+          backdropFilter: "blur(22px) saturate(165%)",
+          WebkitBackdropFilter: "blur(22px) saturate(165%)",
           boxShadow: (t) =>
             `0 -10px 24px -18px ${
               alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.6 : 0.22)
@@ -273,30 +280,24 @@ export function FullscreenComposer({
           WebkitUserSelect: "none",
         }}
       >
-        <Box sx={{ minWidth: 0, display: "flex", alignItems: "center" }}>
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={0.25}
-            sx={{ flex: 1, minWidth: 0, px: 1, py: 0.5, overflowX: "auto", flexWrap: "nowrap" }}
-          >
-            {actions}
-          </Stack>
-          <Box sx={{ borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
-            <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
-              <Tune />
-            </ToolBtn>
-          </Box>
-        </Box>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={0.25}
+          sx={{ minWidth: 0, overflowX: "auto", flexWrap: "nowrap", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}
+        >
+          {actions}
+        </Stack>
         {onDiscard && (
-          <Box sx={{ display: "flex", justifyContent: "center", px: 2, pt: 0.25, pb: 1 }}>
+          <FloatingActionIsland maxWidth={132}>
             <Button
               aria-label="Save"
               onClick={act(onSubmit)}
-              variant="outlined"
+              color="inherit"
               sx={{
-                minWidth: 152,
-                minHeight: 44,
+                width: "100%",
+                minWidth: 120,
+                minHeight: 46,
                 borderRadius: 999,
                 color: "text.primary",
                 fontWeight: 750,
@@ -305,8 +306,13 @@ export function FullscreenComposer({
             >
               Save
             </Button>
-          </Box>
+          </FloatingActionIsland>
         )}
+        <Box sx={{ justifySelf: "end", borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
+          <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
+            <Tune />
+          </ToolBtn>
+        </Box>
       </Box>
 
       <ComposerToolbarSettings

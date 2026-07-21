@@ -438,14 +438,15 @@ here says otherwise.
     outside this user-composer guard.
 
 20. **Fullscreen row-edit chrome is one non-selectable keyboard dock.** The
-    formatting toolbar and edit-mode Save action share one bottom surface, with
-    Save centred below the horizontally scrolling commands. Do not restore a
-    second detached dismissal pill: on iOS it wastes the keyboard-adjacent area
-    and its label can acquire native text-selection handles. The dock and its
-    controls use `user-select: none`; this applies only to chrome, never the CM6
-    canvas, so native caret, selection, long-press Paste, and IME behavior remain
-    unchanged. The top-right ignore-modifications action and confirmation dialog
-    stay separate from Save.
+    formatting toolbar, edit-mode Save action, and toolbar settings share one
+    three-column row: horizontally scrolling commands on the left, an exact-centre
+    liquid-glass Save island, and settings on the right. Do not restore the opaque
+    second Save row or a detached dismissal pill: on iOS either wastes the
+    keyboard-adjacent area and the detached label can acquire native text-selection
+    handles. The dock and its controls use `user-select: none`; this applies only
+    to chrome, never the CM6 canvas, so native caret, selection, long-press Paste,
+    and IME behavior remain unchanged. The top-right ignore-modifications action
+    and confirmation dialog stay separate from Save.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
