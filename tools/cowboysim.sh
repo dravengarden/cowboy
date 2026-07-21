@@ -74,8 +74,19 @@ case "$command" in
   eval)
     dev_eval "${1:?JavaScript expression required}"
     ;;
+  eval64)
+    # The generic SSH resolver cannot preserve every shell metacharacter in a
+    # complex selector script. A base64 argument remains one inert word until
+    # it reaches this project-owned helper, where it is decoded exactly once.
+    dev_eval "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)"
+    ;;
   aeval)
     curl -fsS -m 20 --data-binary "${1:?JavaScript body required}" \
+      "http://127.0.0.1:$DEVPORT/aeval"
+    ;;
+  aeval64)
+    curl -fsS -m 20 \
+      --data-binary "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)" \
       "http://127.0.0.1:$DEVPORT/aeval"
     ;;
   url)

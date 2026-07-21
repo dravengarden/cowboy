@@ -38,3 +38,5 @@ Before accepting evidence, `status` must report all of:
 Prefer `eval` with selector-driven DOM actions over pixel taps. Use `shot` only
 for visual evidence. The bridge can prove real WKWebView layout and behavior,
 but physical-device-only interactions still require device acceptance.
+The Hawk wrapper base64-encodes `eval` source before SSH, so selectors and
+multi-statement scripts arrive without remote-shell quoting changes.

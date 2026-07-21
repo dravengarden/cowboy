@@ -18,4 +18,10 @@ if [ -z "$resolver" ] || [ ! -x "$resolver" ]; then
   exit 1
 fi
 
+if { [ "${1:-}" = "eval" ] || [ "${1:-}" = "aeval" ]; } && [ "$#" -eq 2 ]; then
+  # Encode locally so complex JavaScript remains one shell-safe SSH argument.
+  encoded="$(printf '%s' "$2" | base64 --wrap=0)"
+  exec "$resolver" '$HOME/cowboy-shell/tools/cowboysim.sh' "${1}64" "$encoded"
+fi
+
 exec "$resolver" '$HOME/cowboy-shell/tools/cowboysim.sh' "$@"
