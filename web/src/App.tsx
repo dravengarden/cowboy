@@ -1677,9 +1677,20 @@ export function App({
                     // the Sessions region owns focus.
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.15),
-                        boxShadow: (t) =>
-                            `inset 3px 0 0 ${t.palette.primary.main}, inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.42)}`,
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.07),
+                        boxShadow: "none",
+                        "&::before": {
+                            content: '""',
+                            position: "absolute",
+                            left: 3,
+                            top: "28%",
+                            bottom: "28%",
+                            width: 3,
+                            borderRadius: 999,
+                            bgcolor: "primary.main",
+                            boxShadow: (t) =>
+                                `0 0 0 1px ${alpha(t.palette.primary.main, 0.12)}`,
+                        },
                     },
                 }),
             }}
