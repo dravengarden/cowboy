@@ -155,10 +155,13 @@ update the policy and this document together when intentionally adding an
 exception. The reference inventory is Apple's official Mac keyboard-shortcut
 guide: <https://support.apple.com/en-us/102650>.
 
-The inline queued/draft editor follows the same discoverable toolbar contract
-as the main Composer: `Alt+/` slash command, `Alt+R` reference, `Alt+A` attach,
-`Mod+Enter` finish editing, and `Alt+X` expand. Their keycaps appear only while
-that Pending region is focused; Mobile renders neither bindings nor hints.
+An expanded Queue or Draft region starts on its first row. `j/k` moves the row
+selection, while `l` or `Enter` opens the selected message for editing. The
+inline queued/draft editor follows the same discoverable toolbar contract as
+the main Composer: `Alt+/` slash command, `Alt+R` reference, `Alt+A` attach,
+`Mod+Enter` commits the edit, `Esc` opens the discard confirmation, and `Alt+X`
+expands. Plain `Enter` remains a newline. Their keycaps appear only while that
+Pending region is focused; Mobile renders neither bindings nor hints.
 
 ## Visual hierarchy
 

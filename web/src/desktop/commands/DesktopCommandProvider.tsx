@@ -380,9 +380,17 @@ export function DesktopCommandProvider(
           }
           const opensSession = region?.dataset.desktopRegion === "sessions.list" &&
             (key === "Enter" || key.toLowerCase() === "l");
-          if ((key === "Enter" || opensSession) && active >= 0) {
+          const opensPending =
+            (region?.dataset.desktopRegion === "prompt.queued" ||
+              region?.dataset.desktopRegion === "prompt.draft") &&
+            (key === "Enter" || key.toLowerCase() === "l");
+          if ((key === "Enter" || opensSession || opensPending) && active >= 0) {
             const item = items[active];
-            const action = item?.matches("button,[role='button']")
+            const action = opensPending
+              ? item?.querySelector<HTMLElement>(
+                "[data-desktop-item-action='edit'], button[aria-label='Edit']",
+              )
+              : item?.matches("button,[role='button']")
               ? item
               : item?.querySelector<HTMLElement>("[data-desktop-item-action='default']");
             if (action) {

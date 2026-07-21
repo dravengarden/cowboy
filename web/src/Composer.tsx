@@ -2820,6 +2820,7 @@ function PendingPanel({
    *  trap the gesture. The outer region owns the cap + scroll. */
   unbounded?: boolean;
 }): React.JSX.Element {
+  const scrollRef = useRef<HTMLDivElement>(null);
   // Collapsed state is an APP-LEVEL (per-device) UI pref, NOT service state: it
   // persists in localStorage per panel kind so it survives reloads + session
   // switches, but is never synced across terminals (mirrors PlanDock's
@@ -2831,6 +2832,12 @@ function PendingPanel({
     // MuiButtonBase, so the global delegation doesn't see it. Light disclosure tap.
     haptic();
     collapse.set(!collapsed);
+    if (desktop && collapsed) {
+      requestAnimationFrame(() => {
+        scrollRef.current?.querySelector<HTMLElement>("[data-desktop-item]")
+          ?.focus({ preventScroll: true });
+      });
+    }
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggleCollapsed);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -2866,7 +2873,6 @@ function PendingPanel({
   // the WHOLE queue pauses (drain is front-to-back) until the drop commits the
   // new order and releases. Drafts don't drain, so no hold.
   const byId = new Map(items.map((m) => [m.id, m]));
-  const scrollRef = useRef<HTMLDivElement>(null);
   const sortable = useSortable({
     ids: items.map((m) => m.id),
     scrollContainer: () => scrollRef.current,
@@ -3147,6 +3153,18 @@ function PendingPanel({
                 direction="row"
                 alignItems="center"
                 spacing={0.5}
+                sx={desktop
+                  ? {
+                    borderRadius: 1,
+                    outline: "2px solid transparent",
+                    outlineOffset: -2,
+                    transition: "background-color 120ms ease, outline-color 120ms ease",
+                    "&:focus-visible": {
+                      bgcolor: desktopFocusFill,
+                      outlineColor: desktopFocusBoundary,
+                    },
+                  }
+                  : undefined}
               >
                 {
                   /* Leading grip — visibility is ADAPTIVE: on a narrow panel it's
@@ -3183,7 +3201,14 @@ function PendingPanel({
                         commands={commands}
                         editing={editingId === m.id}
                         onEdit={(): void => setEditingId(m.id)}
-                        onEditDone={(): void => setEditingId(null)}
+                        onEditDone={(): void => {
+                          setEditingId(null);
+                          requestAnimationFrame(() =>
+                            scrollRef.current?.querySelector<HTMLElement>(
+                              `[data-desktop-item="${CSS.escape(m.id)}"]`,
+                            )?.focus({ preventScroll: true })
+                          );
+                        }}
                         onMove={onMoveDraft
                           ? (): void => onMoveDraft(m.id)
                           : undefined}
@@ -3203,8 +3228,8 @@ function PendingPanel({
 }
 
 // One queued prompt. Read mode shows the (clamped) text + a primary action +
-// Edit / Delete. Edit mode swaps in a small multiline field (Enter saves, Esc
-// cancels). The primary action depends on whether the session can take a turn
+// Edit / Delete. Desktop edit mode is transactional: Mod+Enter saves and Esc
+// asks before discarding. The primary action depends on whether the session can take a turn
 // right now: dispatchable → a plain "Send now" (sends immediately, revives a
 // dead session); busy → a warning-coloured "Force push" that interrupts the
 // running turn and runs this prompt next — gated behind a confirm popover
@@ -3251,6 +3276,7 @@ function PendingRow({
   // Per-row kebab (⋮) anchor — holds the draft's secondary actions (Edit / Move
   // / Remove) so the row shows only Send inline and stays uncluttered.
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [confirmDiscardEdit, setConfirmDiscardEdit] = useState(false);
   // Local attachments while editing, seeded from the queued message. The edit
   // box is the SAME ComposerEditor as the main composer, so a queued prompt can
   // gain/lose images here too (pasted screenshots, picked files).
@@ -3319,6 +3345,21 @@ function PendingRow({
   const [overlayOpen, setOverlayOpen] = useState(false);
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
+  const beginEdit = (): void => {
+    setDraft(message.text);
+    editTextRef.current = message.text;
+    setEditAttachments(message.attachments);
+    onEdit();
+  };
+  const discardEdit = (): void => {
+    setDraft(message.text);
+    editTextRef.current = message.text;
+    setEditAttachments(message.attachments);
+    setOverlayOpen(false);
+    setConfirmDiscardEdit(false);
+    onEditDone();
+  };
+  useConfirmEnter(confirmDiscardEdit, discardEdit);
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;
     // Small delay so the sheet has mounted before we focus (desktop pops the
@@ -3353,34 +3394,6 @@ function PendingRow({
     });
     return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, touchInput]);
-  // Real-time save: while editing (desktop OR touch), debounce-persist the
-  // in-progress edit back to the queued/draft item — editing is now live like the
-  // composer's own draft (no Save/Cancel; closing just leaves the saved edit).
-  // Persist-only (no onEditDone) — the editor stays open. Skipped until the content
-  // diverges from the stored message, so merely opening an edit fires no redundant
-  // write; it converges (after a write, message.text catches up, guard goes quiet).
-  useEffect(() => {
-    if (!editing || touchInput) return undefined;
-    const sameAttachments = editAttachments.length === message.attachments.length &&
-      editAttachments.every((a, i) => a.id === message.attachments[i]?.id);
-    if (draft === message.text && sameAttachments) return undefined;
-    const t = globalThis.setTimeout(() => {
-      if (kind === "draft") {
-        editDraft(sessionId, message.id, draft, editAttachments);
-      } else editQueued(sessionId, message.id, draft, editAttachments);
-    }, 500);
-    return () => globalThis.clearTimeout(t);
-  }, [
-    editing,
-    draft,
-    editAttachments,
-    kind,
-    sessionId,
-    message.id,
-    message.text,
-    message.attachments,
-    touchInput,
-  ]);
   if (editing) {
     const save = (): void => {
       if (kind === "draft") {
@@ -3410,10 +3423,8 @@ function PendingRow({
         added.forEach((a) => active.current?.insertImage(a));
       });
     };
-    // Editing IS the composer surface now: the same editor (vim + completions), the
-    // shared ComposeBar (attachments + triggers + ↗ expand), and live-persist (the
-    // effect above) in place of Save. No Save/Cancel buttons — closing keeps the
-    // live-saved edit; ✓ / Esc just finish (a final commit + done, no revert).
+    // Editing reuses the composer surface, but Desktop treats it as a transaction:
+    // Mod+Enter commits and Esc asks before throwing away the local buffer.
     const editBar = (
       <ComposeBar
         desktop={desktop}
@@ -3444,7 +3455,20 @@ function PendingRow({
             e.target.value = "";
           }}
         />
-        <Paper ref={rowRef} variant="outlined" sx={{ p: 0.75 }}>
+        <Paper
+          ref={rowRef}
+          variant="outlined"
+          tabIndex={desktop ? -1 : undefined}
+          sx={{ p: 0.75 }}
+          onKeyDownCapture={desktop
+            ? (event): void => {
+              if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setConfirmDiscardEdit(true);
+            }
+            : undefined}
+        >
           {desktop && !overlayOpen && (
             <Suspense fallback={null}>
               <DesktopPendingEditCommandBindings
@@ -3478,7 +3502,8 @@ function PendingRow({
               placeholder="Edit message…"
               onPasteFiles={addEditFiles}
               onEscape={(): boolean => {
-                save();
+                if (desktop) setConfirmDiscardEdit(true);
+                else save();
                 return true;
               }}
             />
@@ -3543,6 +3568,38 @@ function PendingRow({
               : undefined}
           />
         )}
+        <Dialog
+          open={confirmDiscardEdit}
+          onClose={(): void => setConfirmDiscardEdit(false)}
+          maxWidth="xs"
+          fullWidth
+        >
+          <DialogTitle>Discard message edits?</DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              The pending message is unchanged until you save with {MOD_LABEL}{ENTER_LABEL}.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              color="inherit"
+              onClick={(): void => setConfirmDiscardEdit(false)}
+              sx={{ textTransform: "none" }}
+            >
+              Keep editing
+              <Kbd keys="Esc" />
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              onClick={discardEdit}
+              sx={{ textTransform: "none" }}
+            >
+              Discard
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </DialogActions>
+        </Dialog>
       </>
     );
   }
@@ -3561,7 +3618,7 @@ function PendingRow({
         key: "edit",
         label: "Edit",
         icon: <EditOutlined fontSize="small" />,
-        onClick: onEdit,
+        onClick: beginEdit,
       },
       ...(onSchedule
         ? [{
@@ -3597,7 +3654,7 @@ function PendingRow({
         key: "edit",
         label: "Edit",
         icon: <EditOutlined fontSize="small" />,
-        onClick: onEdit,
+        onClick: beginEdit,
       },
       {
         key: "remove",
@@ -3673,7 +3730,7 @@ function PendingRow({
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
         {stripImageTokens(message.text).trim() !== "" && (
-          <MessagePreview text={stripImageTokens(message.text)} onClick={onEdit} />
+          <MessagePreview text={stripImageTokens(message.text)} onClick={beginEdit} />
         )}
         {message.attachments.length > 0 && (
           <QueuedAttachmentChips attachments={message.attachments} />
@@ -3754,7 +3811,12 @@ function PendingRow({
         >
           {secondary.map((a) => (
             <Tooltip key={a.key} title={a.label}>
-              <IconButton size="small" aria-label={a.label} onClick={a.onClick}>
+              <IconButton
+                size="small"
+                aria-label={a.label}
+                data-desktop-item-action={a.key === "edit" ? "edit" : undefined}
+                onClick={a.onClick}
+              >
                 {a.icon}
               </IconButton>
             </Tooltip>
