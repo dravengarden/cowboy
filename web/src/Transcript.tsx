@@ -1907,7 +1907,7 @@ function ToolDetailsBrowser({
       </Typography>
       <Tooltip title="Close details">
         <IconButton aria-label="Close tool details" onClick={onClose} sx={{ width: 44, height: 44, justifySelf: "center" }}>
-          <KeyboardArrowDown />
+          <Close />
         </IconButton>
       </Tooltip>
       <IconButton
