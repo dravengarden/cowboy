@@ -127,6 +127,13 @@ export function DesktopCommandProvider(
     const onKeyDown = (event: KeyboardEvent): void => {
       const eventElement = event.target instanceof Element ? event.target : null;
       const normalCommandSink = eventElement?.matches("[data-vim-command-sink]") ?? false;
+      // A pane pointer/focus transition can update the workspace region one
+      // frame before DOM focus leaves the Composer's hidden Normal-mode sink.
+      // In that brief mismatch the newly focused non-editor region owns the
+      // physical Vim key; the sink is not a text field and must not strand list
+      // navigation. Real editors remain exclusive.
+      const textEditorOwnsKey = isTextEditingTarget(event.target) &&
+        !(normalCommandSink && workspace.focusedRegion !== "prompt.composer");
       // Composition is an exclusive native-input transaction. `isComposing`
       // is not reliable for every macOS keydown (the first and final events can
       // straddle compositionstart/end), so consult the shared lifecycle too.
@@ -316,7 +323,7 @@ export function DesktopCommandProvider(
       // Vim j/k, gg/G and Enter instead of overloading the same chord.
       if (
         workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
-        !isTextEditingTarget(event.target) &&
+        !textEditorOwnsKey &&
         document.querySelector("[role='dialog'], [role='menu']") === null
       ) {
         if (
@@ -342,7 +349,7 @@ export function DesktopCommandProvider(
       // arrows and IME semantics. Regions expose items through a tiny DOM
       // contract so Sessions, Queue and Drafts share one implementation.
       if (
-        workspace.mode === "normal" && !isTextEditingTarget(event.target) &&
+        workspace.mode === "normal" && !textEditorOwnsKey &&
         !event.ctrlKey && !event.metaKey && !event.altKey
       ) {
         const key = workspaceCommandKey(event);
@@ -387,13 +394,13 @@ export function DesktopCommandProvider(
             return;
           }
           if (sessionsList && key.toLowerCase() === "h" && !event.repeat) {
-            const actions = items[active]?.querySelector<HTMLElement>(
-              "button[aria-label^='row actions']",
-            );
-            if (actions) {
+            const item = items[active];
+            if (item) {
               event.preventDefault();
               event.stopPropagation();
-              actions.click();
+              item.dispatchEvent(new CustomEvent("cowboy:desktop-session-settings", {
+                bubbles: true,
+              }));
               return;
             }
           }

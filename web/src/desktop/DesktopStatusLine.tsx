@@ -66,7 +66,7 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
         { keys: "J/K", label: "Session" },
         { keys: "GG/G", label: "First/last" },
         { keys: "L/Enter", label: "Open prompt" },
-        { keys: "H", label: "Actions" },
+        { keys: "H", label: "Settings" },
         { keys: "P", label: "Pin reorder" },
       ];
     case "prompt.plan":

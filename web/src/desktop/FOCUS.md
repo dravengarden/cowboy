@@ -29,7 +29,8 @@ same controller state.
   always starts on the currently open session.
 - Sessions use `p` to enter or leave Pin reorder mode. While pinned, `j/k`
   moves the selected session instead of moving selection, and `Esc` releases
-  the mode. `h` opens the selected session's actions popup.
+  the mode. `h` opens the selected session's Settings directly; the trailing
+  three-dot menu retains secondary actions such as Rename and Delete.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Alt-b/p/c/t`: jump directly to Sessions, Prompt, Conversation or Top Bar.

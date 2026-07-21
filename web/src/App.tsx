@@ -447,6 +447,22 @@ function SessionList({
         list.addEventListener("cowboy:desktop-reorder", onKeyboardReorder);
         return () => list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
     }, [sortable.order]);
+    useEffect(() => {
+        const list = listRef.current;
+        if (!list || !desktop) return undefined;
+        const onKeyboardSettings = (event: Event): void => {
+            const item = event.target instanceof Element
+                ? event.target.closest<HTMLElement>("[data-desktop-item]")
+                : null;
+            const session = item?.dataset.desktopItem
+                ? byId.get(item.dataset.desktopItem)
+                : undefined;
+            if (session) onRequestInfo(session);
+        };
+        list.addEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
+        return () =>
+            list.removeEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
+    }, [byId, desktop, onRequestInfo]);
     return (
         <Stack sx={{ height: "100%" }}>
             <Box sx={{ p: 1 }}>
