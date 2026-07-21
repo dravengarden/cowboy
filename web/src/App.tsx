@@ -113,7 +113,7 @@ import {
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
-import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { SegmentedPill } from "./SegmentedPill";
@@ -1991,6 +1991,14 @@ export function App({
                                             />
                                         </Suspense>
                                     )}
+                                    <Suspense fallback={null}>
+                                        <DesktopRegionShortcut
+                                            shortcut="Alt+T"
+                                            title="Focus Top Bar"
+                                            singleKeycap={`${ALT_LABEL}T`}
+                                            sx={{ mx: 0.5 }}
+                                        />
+                                    </Suspense>
                                     <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
