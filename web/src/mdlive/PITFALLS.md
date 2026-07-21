@@ -482,6 +482,14 @@ here says otherwise.
     iPad-sized Simulator with repeated docked keyboard open/close cycles and on
     a physical iPad with split and floating layouts.
 
+23. **Fullscreen Mobile needs an explicit way to inspect behind the keyboard.**
+    Keep one `KeyboardHide` icon in the existing right-hand dock utilities. It
+    blurs only the currently active element; it must not reconfigure CM6, mutate
+    the document, collapse the fullscreen surface, or add a detached dismissal
+    pill. Tapping the editor restores native focus normally. This fills the
+    otherwise unused balanced-dock slot while preserving the exact-centre primary
+    action and the native caret/IME ownership rules above.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

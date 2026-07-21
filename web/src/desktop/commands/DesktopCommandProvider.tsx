@@ -18,6 +18,7 @@ import {
 import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
+import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
 
 export interface DesktopCommand {
   id: string;
@@ -155,6 +156,9 @@ export function DesktopCommandProvider(
         }
         return;
       }
+      // A visible configuration popover advertises and owns its own J/K/H/L
+      // map. Relinquish the workspace map before it consumes those keys.
+      if (desktopOverlayOwnsShortcuts(document)) return;
       // Standard Vim window navigation. The first Ctrl-W arms a short chord;
       // the following h/l moves panes, j/k moves vertical regions in the current
       // pane, and w cycles every visible region. Capture-phase handling keeps the

@@ -20,6 +20,7 @@ import {
   Close,
   CloseFullscreen,
   EditNoteOutlined,
+  KeyboardHide,
   Send,
   Tune,
 } from "@mui/icons-material";
@@ -312,6 +313,16 @@ export function FullscreenComposer({
           spacing={0.25}
           sx={{ justifySelf: "stretch", minWidth: 0 }}
         >
+          <ToolBtn
+            title="Hide keyboard"
+            onClick={act(() => {
+              if (document.activeElement instanceof HTMLElement) {
+                document.activeElement.blur();
+              }
+            })}
+          >
+            <KeyboardHide />
+          </ToolBtn>
           {!onDiscard && (
             <ToolBtn title="Save as draft" onClick={act(onSaveDraft)}>
               <EditNoteOutlined />

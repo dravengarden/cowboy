@@ -976,7 +976,7 @@ export function DesktopTopBarControls({
           },
         }}
       >
-        <Box ref={configPanelRef}>
+        <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
           <Box sx={{ px: 1.5, pt: 1.4, pb: 1.15 }}>
             <Stack direction="row" spacing={0.8} alignItems="center">
               <Tune sx={{ fontSize: 17, color: "primary.main" }} />
