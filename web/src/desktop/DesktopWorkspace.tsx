@@ -2,7 +2,7 @@ import { alpha, Box, Typography } from "@mui/material";
 import type { DesktopPane } from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
-import { COWBOY_MOD_LABEL } from "../platform";
+import { MOD_LABEL } from "../platform";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -44,7 +44,7 @@ function PaneHeader({
       <DesktopRegionShortcut
         shortcut={shortcut.value}
         title={shortcut.title}
-        singleKeycap={`${COWBOY_MOD_LABEL}${shortcut.value.slice(-1)}`}
+        singleKeycap={`${MOD_LABEL}${shortcut.value.slice(-1)}`}
       />
     </Box>
   );
@@ -99,7 +99,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="prompt"
-          shortcut={{ value: "Shift+Alt+Mod+P", title: "Focus Prompt" }}
+          shortcut={{ value: "Mod+2", title: "Focus Prompt" }}
         >
           Prompt
         </PaneHeader>
@@ -148,7 +148,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="conversation"
-          shortcut={{ value: "Shift+Alt+Mod+C", title: "Focus Conversation" }}
+          shortcut={{ value: "Mod+3", title: "Focus Conversation" }}
           actions={<DesktopConversationControls sessionId={sessionId} />}
         >
           Conversation

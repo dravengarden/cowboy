@@ -189,13 +189,11 @@ export function DesktopCommandProvider(
       const mod = isMac
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
-      // Sessions are first-level application navigation, so Mod+1…0 switches
-      // them globally instead of being scoped to whichever list currently owns
-      // focus. This intentionally works from the composer too: a modifier chord
-      // cannot become text, and requiring a preliminary Sessions focus defeats
-      // the purpose of a direct workspace switch.
+      // Within the focused Sessions list, Mod+1…0 switches directly by slot.
+      // Outside that region Mod+1…4 remain the global workspace focus keys.
       if (
-        workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
+        workspace.mode === "normal" && workspace.focusedRegion === "sessions.list" &&
+        mod && !event.altKey && !event.shiftKey &&
         document.querySelector("[role='dialog'], [role='menu']") === null
       ) {
         const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
@@ -414,7 +412,14 @@ export function DesktopCommandProvider(
         }
       }
       if (event.defaultPrevented || event.repeat) return;
-      for (const command of commands.current.values()) {
+      // Region/context commands intentionally shadow global commands using the
+      // same positional chord. For example, Mod+1…4 focuses a workspace area
+      // globally, then operates the four Top Bar controls while it owns focus.
+      const rankedCommands = [...commands.current.values()].sort((left, right) =>
+        Number(Boolean(right.regions || right.contexts)) -
+        Number(Boolean(left.regions || left.contexts))
+      );
+      for (const command of rankedCommands) {
         if (!command.shortcut || command.when?.() === false) continue;
         if (
           command.contexts && !command.contexts.includes(workspace.focusedPane)

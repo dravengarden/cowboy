@@ -134,28 +134,6 @@ Deno.test("Alt shortcuts use physical keys under macOS Option input", () => {
   }, true));
 });
 
-Deno.test("Cowboy Command namespace uses physical keys under macOS Option input", () => {
-  for (const [shortcut, code] of [
-    ["Shift+Alt+Mod+B", "KeyB"],
-    ["Shift+Alt+Mod+P", "KeyP"],
-    ["Shift+Alt+Mod+C", "KeyC"],
-    ["Shift+Alt+Mod+T", "KeyT"],
-    ["Shift+Alt+Mod+R", "KeyR"],
-    ["Shift+Alt+Mod+U", "KeyU"],
-    ["Shift+Alt+Mod+K", "KeyK"],
-    ["Shift+Alt+Mod+S", "KeyS"],
-  ] as const) {
-    assert(matchesShortcut(parseShortcut(shortcut), {
-      key: "Process",
-      code,
-      metaKey: true,
-      ctrlKey: false,
-      shiftKey: true,
-      altKey: true,
-    }, true));
-  }
-});
-
 Deno.test("bare contextual shortcuts use physical keys only when explicitly safe", () => {
   const shortcut = parseShortcut("P");
   const imeKey = {

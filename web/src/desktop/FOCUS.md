@@ -114,7 +114,7 @@ shortcut.
 
 Shortcut hints follow one shared keycap grammar and three visibility levels:
 
-1. global shortcuts are always visible but quiet (`Shift+Alt+Mod+B/P/C/T`, `Mod+N`,
+1. global shortcuts are always visible but quiet (`Mod+1/2/3/4`, `Mod+N`,
    `Mod+,`) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
    focused (Prompt subregions and list item actions), so they add no layout
@@ -122,9 +122,8 @@ Shortcut hints follow one shared keycap grammar and three visibility levels:
 3. modal actions show their real confirmation/dismissal chord next to the label.
 
 Never invent a hint for an action that is not wired. Contextual hints anchor to
-the bottom-right of their target. Prefer a mnemonic physical key inside the
-collision-resistant Cowboy namespace (`Shift+Alt+Mod`), while retaining native
-semantic chords such as `Mod+S`; avoid browser-owned chords such as `Mod+D`. Put secondary Cowboy-specific actions in
+the bottom-right of their target. Prefer one primary modifier and one positional
+or mnemonic key while retaining native semantic chords such as `Mod+S`. Put secondary Cowboy-specific actions in
 the searchable command palette. Shared modal shells may use the same visual
 primitive, but must hide it on the touch product.
 
@@ -140,10 +139,9 @@ contract and the conventions users depend on in editors and browsers:
 - common application chords may be used only with matching native semantics:
   `Mod+N` creates a session, `Mod+,` opens Settings, `Mod+S` saves a draft,
   and `Mod+1…0` switches session tabs;
-- global Cowboy workspace navigation uses the dedicated `Shift+Alt+Mod`
-  namespace (`B/P/C/T`), and focused Top Bar actions use the same namespace
-  (`R/U/K/S`). This avoids both familiar single-Command chords and Safari's
-  `Alt+Mod+T` toolbar chord;
+- global Cowboy workspace navigation uses positional `Mod+1/2/3/4`. The same
+  four chords operate Run Configuration, Usage, Compact, and Stop while Top Bar
+  owns focus; focused Sessions instead uses `Mod+1…0` for direct session slots;
 - macOS input-source and dead-key chords (`Ctrl+Space`, `Ctrl+Alt+Space`,
   `Alt+E/I/N/U`) are reserved so Cowboy never breaks accent or IME entry;
 - do not assign bare `Q` to Cowboy navigation. A key pressed while Command is

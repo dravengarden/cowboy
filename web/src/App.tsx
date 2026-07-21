@@ -113,7 +113,7 @@ import {
 import { Sheet } from "./Sheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
-import { COWBOY_MOD_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { SegmentedPill } from "./SegmentedPill";
@@ -1472,9 +1472,9 @@ export function App({
             {surface === "desktop" && (
                 <Suspense fallback={null}>
                     <DesktopRegionShortcut
-                        shortcut="Shift+Alt+Mod+B"
+                        shortcut="Mod+1"
                         title="Focus Sessions"
-                        singleKeycap={`${COWBOY_MOD_LABEL}B`}
+                        singleKeycap={`${MOD_LABEL}1`}
                     />
                 </Suspense>
             )}
@@ -1997,9 +1997,9 @@ export function App({
                                     )}
                                     <Suspense fallback={null}>
                                         <DesktopRegionShortcut
-                                            shortcut="Shift+Alt+Mod+T"
+                                            shortcut="Mod+4"
                                             title="Focus Top Bar"
-                                            singleKeycap={`${COWBOY_MOD_LABEL}T`}
+                                            singleKeycap={`${MOD_LABEL}4`}
                                             sx={{ mx: 0.5 }}
                                         />
                                     </Suspense>
