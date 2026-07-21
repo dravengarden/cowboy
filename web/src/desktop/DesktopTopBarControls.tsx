@@ -24,7 +24,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ArrowForwardRounded, ExpandMore, Refresh, Tune } from "@mui/icons-material";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
@@ -392,11 +392,9 @@ function DesktopUsageExtras(
 function ConfigOptionControl({
   option,
   sessionId,
-  compact = false,
 }: {
   option: ConfigOption;
   sessionId: string;
-  compact?: boolean;
 }): React.JSX.Element {
   const label = optionLabel(option);
   const shortcut = label === "Agent mode"
@@ -423,9 +421,19 @@ function ConfigOptionControl({
     });
   };
   return (
-    <Box data-config-shortcut={shortcut?.toLowerCase()} sx={{ minWidth: 0 }}>
+    <Box
+      data-config-row
+      data-config-shortcut={shortcut?.toLowerCase()}
+      sx={{
+        minWidth: 0,
+        display: "grid",
+        gridTemplateColumns: "132px minmax(0, 1fr)",
+        alignItems: "center",
+        gap: 1.25,
+      }}
+    >
       <Tooltip title={option.description ?? ""} placement="right">
-        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.55 }}>
+        <Stack direction="row" alignItems="center" spacing={0.5}>
           <Typography
             variant="caption"
             fontWeight={750}
@@ -444,6 +452,7 @@ function ConfigOptionControl({
         ? (
           <FormControl fullWidth size="small">
             <Select
+              data-config-choice
               value={String(option.currentValue)}
               onChange={(event): void => setValue(String(event.target.value))}
               aria-label="Model"
@@ -517,14 +526,15 @@ function ConfigOptionControl({
           >
             {option.options.map((candidate) => (
               <ToggleButton
+                data-config-choice
                 key={String(candidate.value)}
                 value={String(candidate.value)}
                 sx={{
                   minHeight: 28,
                   minWidth: 0,
-                  px: compact ? 1 : 1.25,
+                  px: 1,
                   py: 0.2,
-                  flex: compact ? "1 1 0" : "0 1 auto",
+                  flex: "1 1 0",
                   fontSize: "0.6875rem",
                   lineHeight: 1.15,
                   textTransform: "none",
@@ -559,6 +569,7 @@ export function DesktopTopBarControls({
   const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
   const [usagePanel, setUsagePanel] = useState<"usage" | "logs">("usage");
+  const configPanelRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
@@ -575,13 +586,6 @@ export function DesktopTopBarControls({
     });
   }, [optionsBySession, sessionId]);
   const configSummary = options.map(compactOptionName).join(" · ");
-  const wideOptions = options.filter((option) => {
-    const label = optionLabel(option);
-    return label === "Agent mode" || label === "Model";
-  });
-  const compactOptions = options.filter((option) =>
-    !wideOptions.includes(option)
-  );
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
     setRefreshing(true);
@@ -606,18 +610,60 @@ export function DesktopTopBarControls({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
       const key = event.key.toLowerCase();
-      if (!["a", "m", "e", "c", "f"].includes(key)) return;
-      const option = document.querySelector<HTMLElement>(
-        `[data-config-shortcut="${key}"]`,
-      );
-      const control = option?.querySelector<HTMLElement>(
-        "[role='combobox'], button:not([disabled])",
-      );
-      if (!control) return;
+      if (document.querySelector("[role='listbox']") !== null) return;
+      const panel = configPanelRef.current;
+      if (!panel) return;
+      const rows = [...panel.querySelectorAll<HTMLElement>("[data-config-row]")];
+      const focusChoice = (row: HTMLElement, preferred = 0): boolean => {
+        const choices = [...row.querySelectorAll<HTMLElement>("[data-config-choice]")]
+          .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
+        if (choices.length === 0) return false;
+        const selected = choices.findIndex((choice) =>
+          choice.classList.contains("Mui-selected") ||
+          choice.getAttribute("aria-selected") === "true"
+        );
+        choices[Math.min(choices.length - 1, Math.max(0, preferred >= 0 ? preferred : selected))]?.focus();
+        return true;
+      };
+      if (["a", "m", "e", "c", "f"].includes(key)) {
+        const row = panel.querySelector<HTMLElement>(`[data-config-shortcut="${key}"]`);
+        if (!row) return;
+        event.preventDefault();
+        event.stopPropagation();
+        focusChoice(row, -1);
+        return;
+      }
+      if (!["h", "j", "k", "l"].includes(key)) return;
+      const active = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      const activeRow = active?.closest<HTMLElement>("[data-config-row]");
+      const rowIndex = activeRow ? rows.indexOf(activeRow) : -1;
       event.preventDefault();
       event.stopPropagation();
-      control.focus();
-      if (control.getAttribute("role") === "combobox") control.click();
+      if (key === "j" || key === "k") {
+        const nextRow = rowIndex < 0
+          ? (key === "j" ? rows[0] : rows.at(-1))
+          : rows[Math.min(rows.length - 1, Math.max(0, rowIndex + (key === "j" ? 1 : -1)))];
+        if (!nextRow) return;
+        const activeChoices = activeRow
+          ? [...activeRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
+          : [];
+        focusChoice(nextRow, Math.max(0, active ? activeChoices.indexOf(active) : 0));
+        return;
+      }
+      if (!activeRow) {
+        if (rows[0]) focusChoice(rows[0], 0);
+        return;
+      }
+      const choices = [...activeRow.querySelectorAll<HTMLElement>("[data-config-choice]")]
+        .filter((choice) => !choice.matches(":disabled, [aria-disabled='true']"));
+      const choiceIndex = active ? choices.indexOf(active) : -1;
+      const nextChoice = choices[Math.min(
+        choices.length - 1,
+        Math.max(0, choiceIndex + (key === "l" ? 1 : -1)),
+      )];
+      nextChoice?.focus();
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void => globalThis.removeEventListener("keydown", onKeyDown, true);
@@ -856,7 +902,7 @@ export function DesktopTopBarControls({
         slotProps={{
           paper: {
             sx: {
-              width: 428,
+              width: 680,
               maxWidth: "calc(100vw - 32px)",
               mt: 0.75,
               p: 0,
@@ -897,7 +943,7 @@ export function DesktopTopBarControls({
           },
         }}
       >
-        <Box>
+        <Box ref={configPanelRef}>
           <Box sx={{ px: 1.5, pt: 1.4, pb: 1.15 }}>
             <Stack direction="row" spacing={0.8} alignItems="center">
               <Tune sx={{ fontSize: 17, color: "primary.main" }} />
@@ -912,42 +958,39 @@ export function DesktopTopBarControls({
           <Divider
             sx={{ borderColor: (theme) => alpha(theme.palette.divider, 0.72) }}
           />
-          <Stack spacing={1.2} sx={{ px: 1.5, pt: 1.2, pb: 1.5 }}>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1.15fr) minmax(0, 0.85fr)",
-                gap: 1.2,
-              }}
-            >
-              {wideOptions.map((option) => (
-                <ConfigOptionControl
-                  key={option.id}
-                  option={option}
-                  sessionId={sessionId}
-                />
-              ))}
-            </Box>
-            {compactOptions.length > 0 && (
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: compactOptions.length === 2
-                    ? "minmax(0, 2fr) minmax(110px, 1fr)"
-                    : "minmax(0, 1fr)",
-                  gap: 1.2,
-                }}
-              >
-                {compactOptions.map((option) => (
-                  <ConfigOptionControl
-                    key={option.id}
-                    option={option}
-                    sessionId={sessionId}
-                    compact
-                  />
-                ))}
-              </Box>
-            )}
+          <Stack spacing={1} sx={{ px: 1.5, pt: 1.2, pb: 1.1 }}>
+            {options.map((option) => (
+              <ConfigOptionControl
+                key={option.id}
+                option={option}
+                sessionId={sessionId}
+              />
+            ))}
+          </Stack>
+          <Divider />
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="flex-end"
+            spacing={1.5}
+            sx={{ px: 1.5, py: 0.8, color: "text.secondary" }}
+          >
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys="J/K" />
+              <Typography variant="caption">Field</Typography>
+            </Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys="H/L" />
+              <Typography variant="caption">Choice</Typography>
+            </Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys={ENTER_LABEL} />
+              <Typography variant="caption">Select</Typography>
+            </Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}>
+              <Kbd keys="Esc" />
+              <Typography variant="caption">Close</Typography>
+            </Stack>
           </Stack>
         </Box>
       </Popover>
