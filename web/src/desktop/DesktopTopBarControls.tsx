@@ -218,21 +218,37 @@ function DesktopUsageExtras(
               const expiresAt = num(credit.expiresAt);
               const actionable = textValue(credit.id) === nearestCreditId;
               const card = (
-                <Box sx={{ minWidth: 0, px: 0.9, py: 0.75, borderRadius: 1.25, bgcolor: "action.hover", textAlign: "left" }}>
-                  <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={0.5}>
+                <Box
+                  sx={{
+                    width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
+                    display: "grid",
+                    gridTemplateColumns: actionable ? "minmax(0, 1fr) auto" : "minmax(0, 1fr)",
+                    alignItems: "center",
+                    gap: 0.75,
+                    px: 0.9,
+                    py: 0.75,
+                    borderRadius: 1.25,
+                    bgcolor: "action.hover",
+                    textAlign: "left",
+                  }}
+                >
+                  <Box sx={{ minWidth: 0 }}>
                     <Typography variant="caption" fontWeight={700} noWrap sx={{ display: "block", minWidth: 0 }}>
                       {textValue(credit.title) ?? "Rate-limit reset"}
                     </Typography>
-                    {actionable && (
-                      <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "primary.main", flexShrink: 0 }}>
-                        <Typography variant="caption" fontWeight={700}>{schedule ? "Scheduled" : "Schedule"}</Typography>
-                        {!schedule && <ArrowForwardRounded sx={{ fontSize: 15 }} />}
-                      </Stack>
-                    )}
-                  </Stack>
-                  <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
-                    {expiresAt === undefined ? "No expiry reported" : `Expires ${fullResetTime(expiresAt)}`}
-                  </Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+                      {expiresAt === undefined ? "No expiry reported" : `Expires ${fullResetTime(expiresAt)}`}
+                    </Typography>
+                  </Box>
+                  {actionable && (
+                    <Stack direction="row" alignItems="center" spacing={0.25} sx={{ color: "primary.main", flexShrink: 0 }}>
+                      <Typography variant="caption" fontWeight={700}>{schedule ? "Scheduled" : "Schedule"}</Typography>
+                      {!schedule && <ArrowForwardRounded sx={{ fontSize: 15 }} />}
+                      {!schedule && <Kbd keys="S" />}
+                    </Stack>
+                  )}
                 </Box>
               );
               return (
@@ -244,10 +260,12 @@ function DesktopUsageExtras(
                     ? (
                       <Tooltip title="Schedule or use the nearest-expiring reset">
                         <ButtonBase
+                          data-desktop-usage-schedule
                           onClick={openResetDialog}
                           aria-label="Schedule nearest full reset"
                           sx={{
                             width: "100%",
+                            display: "block",
                             borderRadius: 1.25,
                             outline: 1,
                             outlineColor: (theme) => alpha(theme.palette.primary.main, 0.24),
@@ -381,6 +399,17 @@ function ConfigOptionControl({
   compact?: boolean;
 }): React.JSX.Element {
   const label = optionLabel(option);
+  const shortcut = label === "Agent mode"
+    ? "A"
+    : label === "Model"
+    ? "M"
+    : label === "Reasoning effort"
+    ? "E"
+    : label === "Collaboration mode"
+    ? "C"
+    : label === "Fast mode"
+    ? "F"
+    : undefined;
   const setValue = (value: string): void => {
     const selected = option.options.find((candidate) =>
       String(candidate.value) === value
@@ -394,21 +423,22 @@ function ConfigOptionControl({
     });
   };
   return (
-    <Box sx={{ minWidth: 0 }}>
+    <Box data-config-shortcut={shortcut?.toLowerCase()} sx={{ minWidth: 0 }}>
       <Tooltip title={option.description ?? ""} placement="right">
-        <Typography
-          variant="caption"
-          fontWeight={750}
-          color="text.secondary"
-          sx={{
-            display: "inline-block",
-            mb: 0.55,
-            cursor: option.description ? "help" : "default",
-            letterSpacing: "0.02em",
-          }}
-        >
-          {label}
-        </Typography>
+        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.55 }}>
+          <Typography
+            variant="caption"
+            fontWeight={750}
+            color="text.secondary"
+            sx={{
+              cursor: option.description ? "help" : "default",
+              letterSpacing: "0.02em",
+            }}
+          >
+            {label}
+          </Typography>
+          {shortcut && <Kbd keys={shortcut} />}
+        </Stack>
       </Tooltip>
       {label === "Model"
         ? (
@@ -571,6 +601,53 @@ export function DesktopTopBarControls({
     const timer = window.setInterval(() => setClock(Date.now()), 30_000);
     return (): void => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (configAnchor === null) return undefined;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (!["a", "m", "e", "c", "f"].includes(key)) return;
+      const option = document.querySelector<HTMLElement>(
+        `[data-config-shortcut="${key}"]`,
+      );
+      const control = option?.querySelector<HTMLElement>(
+        "[role='combobox'], button:not([disabled])",
+      );
+      if (!control) return;
+      event.preventDefault();
+      event.stopPropagation();
+      control.focus();
+      if (control.getAttribute("role") === "combobox") control.click();
+    };
+    globalThis.addEventListener("keydown", onKeyDown, true);
+    return (): void => globalThis.removeEventListener("keydown", onKeyDown, true);
+  }, [configAnchor]);
+  useEffect(() => {
+    if (usageAnchor === null) return undefined;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "u" || key === "l") {
+        event.preventDefault();
+        event.stopPropagation();
+        setUsagePanel(key === "u" ? "usage" : "logs");
+      } else if (key === "r" && usagePanel === "usage" && !refreshing) {
+        event.preventDefault();
+        event.stopPropagation();
+        void loadUsage(true);
+      } else if (key === "s" && usagePanel === "usage") {
+        const scheduleButton = document.querySelector<HTMLButtonElement>(
+          "[data-desktop-usage-schedule]",
+        );
+        if (!scheduleButton) return;
+        event.preventDefault();
+        event.stopPropagation();
+        scheduleButton.click();
+      }
+    };
+    globalThis.addEventListener("keydown", onKeyDown, true);
+    return (): void => globalThis.removeEventListener("keydown", onKeyDown, true);
+  }, [loadUsage, refreshing, usageAnchor, usagePanel]);
   const usage = providerUsage(snapshot, session?.provider);
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const visibleLimits = useMemo(() => topBarUsageLimits(usage), [usage]);
@@ -1007,8 +1084,14 @@ export function DesktopTopBarControls({
           >
             <Box>
               <Stack direction="row" spacing={1.5}>
-                <ButtonBase onClick={() => setUsagePanel("usage")} sx={{ borderBottom: 2, borderColor: usagePanel === "usage" ? "primary.main" : "transparent" }}><Typography variant="subtitle2" fontWeight={750}>Usage</Typography></ButtonBase>
-                <ButtonBase onClick={() => setUsagePanel("logs")} sx={{ borderBottom: 2, borderColor: usagePanel === "logs" ? "primary.main" : "transparent" }}><Typography variant="subtitle2" fontWeight={750}>Logs</Typography></ButtonBase>
+                <ButtonBase onClick={() => setUsagePanel("usage")} sx={{ borderBottom: 2, borderColor: usagePanel === "usage" ? "primary.main" : "transparent" }}>
+                  <Typography variant="subtitle2" fontWeight={750}>Usage</Typography>
+                  <Kbd keys="U" />
+                </ButtonBase>
+                <ButtonBase onClick={() => setUsagePanel("logs")} sx={{ borderBottom: 2, borderColor: usagePanel === "logs" ? "primary.main" : "transparent" }}>
+                  <Typography variant="subtitle2" fontWeight={750}>Logs</Typography>
+                  <Kbd keys="L" />
+                </ButtonBase>
               </Stack>
               <Typography variant="caption" color="text.secondary">
                 {session?.provider ?? "Provider"} ·{" "}
@@ -1028,6 +1111,7 @@ export function DesktopTopBarControls({
               sx={{ textTransform: "none" }}
             >
               Refresh
+              <Kbd keys="R" />
             </Button>}
           </Stack>
           <Divider />
