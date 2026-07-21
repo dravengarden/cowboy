@@ -107,6 +107,7 @@ import {
     ConnectionBanner,
     DetentSheet,
     MobileSheetDismiss,
+    NativeReleaseUpdatePrompt,
     ThemeModeControl,
     useAnyDetentSheetOpen,
 } from "./_shell";
@@ -1554,6 +1555,10 @@ export function App({
                 @shared-utils/ui visual (liveview's 3s-countdown + cache-clearing
                 reload), bound to cowboy's connection store. */}
             <ConnectionBanner store={conn} />
+            <NativeReleaseUpdatePrompt
+                appId="top.thundersparrow.cowboy"
+                manifestUrl="/native-release.json"
+            />
             <Box
                 sx={{
                     display: "flex",
