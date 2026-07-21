@@ -809,6 +809,7 @@ function NewSessionDialog({
             open={open}
             onClose={onClose}
             title="New session"
+            mobileDismiss="none"
             actions={
                 <>
                     <Button onClick={onClose} color="inherit">
@@ -2800,6 +2801,7 @@ function DeleteSessionShell({
             open
             onClose={onClose}
             title="Delete this session?"
+            mobileDismiss="none"
             actions={
                 <>
                     <Button onClick={onClose} color="inherit">
@@ -2941,6 +2943,7 @@ function RenameSessionShell({
             open
             onClose={onClose}
             title="Rename session"
+            mobileDismiss="none"
             actions={
                 <>
                     <Button onClick={onClose} color="inherit">

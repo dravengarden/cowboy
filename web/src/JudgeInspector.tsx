@@ -213,6 +213,7 @@ function JudgeInspector({
       open={open}
       onClose={onClose}
       title="Judge runs"
+      mobileDismiss="none"
       actions={
         <>
           {runs.length > 0 && (
