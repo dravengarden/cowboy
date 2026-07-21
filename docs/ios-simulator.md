@@ -5,10 +5,11 @@ server on Mac port `4171`. The project-owned Mac control surface is
 [`tools/cowboysim.sh`](../tools/cowboysim.sh); the generic Codex plugin only
 provides the SSH transport.
 
-Install or refresh the helper on the Mac:
+Install or refresh the helper from the Cowboy checkout on Hawk:
 
 ```bash
-install -m 0755 tools/cowboysim.sh ~/cowboy-shell/tools/cowboysim.sh
+scp tools/cowboysim.sh macbook-air:/tmp/cowboysim.sh.new
+ssh macbook-air 'install -m 0755 /tmp/cowboysim.sh.new "$HOME/cowboy-shell/tools/cowboysim.sh" && rm /tmp/cowboysim.sh.new'
 ```
 
 From Hawk, invoke it through the repo wrapper, which resolves the installed
