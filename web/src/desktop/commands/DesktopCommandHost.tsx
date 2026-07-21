@@ -172,11 +172,11 @@ export function DesktopCommandHost({
         );
         if (!toggle) return;
         if (workspace.focusedRegion === "prompt.queued") {
-          if (toggle.getAttribute("aria-label") === "collapse") toggle.click();
+          if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
           requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
           return;
         }
-        if (toggle.getAttribute("aria-label") === "expand") toggle.click();
+        if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
         requestAnimationFrame(() => workspace.focusRegion("prompt.queued"));
       },
     },
@@ -190,7 +190,13 @@ export function DesktopCommandHost({
       contexts: ["prompt"],
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
-      run: () => workspace.focusRegion("prompt.draft"),
+      run: () => {
+        const toggle = document.querySelector<HTMLElement>(
+          "[data-desktop-collapse-toggle='draft']",
+        );
+        if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+        requestAnimationFrame(() => workspace.focusRegion("prompt.draft"));
+      },
     },
     {
       id: "prompt.focusEditor",
