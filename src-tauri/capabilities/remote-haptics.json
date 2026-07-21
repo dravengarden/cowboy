@@ -1,12 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "remote-haptics",
-  "description": "Allow the remote cowboy UI (loaded over the tailnet from cowboy.hawk.thundersparrow.top) to invoke native OS haptics and open rendered markdown links through the OS. The remote origin needs its OWN permissions because it is independent of the local loader capability.",
+  "description": "Allow the remote Cowboy UI (loaded over the Stormbird overlay from cowboy.stormbird.xyz) to invoke native OS haptics and open rendered markdown links through the OS. The remote origin needs its own permissions because it is independent of the local loader capability.",
   "windows": ["main"],
   "remote": {
     "urls": [
-      "https://cowboy.hawk.thundersparrow.top",
-      "https://cowboy.hawk.thundersparrow.top/*"
+      "https://cowboy.stormbird.xyz",
+      "https://cowboy.stormbird.xyz/*"
     ]
   },
   "permissions": [

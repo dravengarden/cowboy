@@ -4,7 +4,7 @@ A **thin native WebView wrapper** around the cowboy UI. It bundles no frontend
 and embeds no backend — the window loads the already-https remote UI:
 
 ```
-https://cowboy.hawk.thundersparrow.top   (caddy → localhost:3333, tailnet-only)
+https://cowboy.stormbird.xyz   (caddy → localhost:3333, Stormbird-overlay-only)
 ```
 
 ## Why this exists

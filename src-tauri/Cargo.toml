@@ -4,7 +4,7 @@
 # cowboy's real server (axum + ACP bridge + agent supervisor) only ever runs on
 # hawk — an iPhone can't spawn coding agents. The whole point of this crate is to
 # get a NATIVE WKWebView (iOS) / WKWebView (macOS) around the already-https
-# cowboy UI (https://cowboy.hawk.thundersparrow.top, behind caddy on the
+# cowboy UI (https://cowboy.stormbird.xyz, behind caddy on the
 # tailnet), because a pure-web PWA can't fix the iOS keyboard accessory bar or
 # the file-picker-collapses-keyboard limits — only a native shell can.
 #

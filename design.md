@@ -231,7 +231,7 @@ different widths**, not separate builds.
 
 > **Update (2026-06): a Tauri shell was added** (`src-tauri/`). The web build is
 > still the single source of truth; the Tauri app is a **thin native WKWebView**
-> that loads the already-https remote UI (`https://cowboy.hawk.thundersparrow.top`,
+> that loads the already-https remote UI (`https://cowboy.stormbird.xyz`,
 > caddy on the tailnet) — it bundles no frontend and embeds no backend. Its sole
 > reason to exist is the native shell: a pure-web PWA cannot fix the iOS keyboard
 > accessory bar or the file-picker-collapses-keyboard limits; a WKWebView wrapper

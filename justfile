@@ -46,7 +46,12 @@ lint:
 typecheck:
     cd web && deno task typecheck
 
-check: fmt lint typecheck
+native-shell-check:
+    ! rg -n 'cowboy\.hawk\.thundersparrow\.top' loader src-tauri design.md
+    test "$(jq -r '.build.devUrl' src-tauri/tauri.conf.json)" = "https://cowboy.stormbird.xyz"
+    jq -e '.remote.urls | index("https://cowboy.stormbird.xyz") != null and index("https://cowboy.stormbird.xyz/*") != null' src-tauri/capabilities/remote-haptics.json >/dev/null
+
+check: fmt lint typecheck native-shell-check
     cargo build
 
 # Show sccache cache stats.
