@@ -53,5 +53,6 @@ Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   }
   assertThrows(() => assertMacShortcutAllowed("unrelated", "Mod+B"));
   assertThrows(() => assertMacShortcutAllowed("prompt.focusQueue", "Q"));
-  assertEquals(macShortcutConflict("prompt.focusQueue", "O"), null);
+  assertEquals(macShortcutConflict("prompt.focusQueue", "Mod+Y"), null);
+  assertEquals(macShortcutConflict("prompt.focusDrafts", "Mod+D"), null);
 });

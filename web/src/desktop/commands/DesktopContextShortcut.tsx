@@ -10,12 +10,15 @@ export function DesktopContextShortcut({
   badge,
   shortcut,
   showBadge = true,
+  alwaysVisible = false,
   placement = "below",
   children,
 }: {
   badge: string;
   shortcut: string;
   showBadge?: boolean;
+  /** Keep global shortcuts visible even when their region does not own focus. */
+  alwaysVisible?: boolean;
   placement?: "below" | "corner" | "toolbar" | "inline";
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -65,6 +68,14 @@ export function DesktopContextShortcut({
           ml: inline ? 0.5 : undefined,
           transform: visibleTransform,
         },
+        ...(alwaysVisible && {
+          "& .cowboy-context-shortcut": {
+            opacity: 0.72,
+            maxWidth: inline ? 32 : undefined,
+            ml: inline ? 0.5 : undefined,
+            transform: visibleTransform,
+          },
+        }),
       }}
     >
       {children}

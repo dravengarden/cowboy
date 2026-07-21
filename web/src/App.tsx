@@ -2014,6 +2014,7 @@ export function App({
                                             badge={`${MOD_LABEL},`}
                                             shortcut={`${MOD_LABEL}, · Settings`}
                                             placement="inline"
+                                            alwaysVisible
                                         >
                                             <IconButton
                                                 data-desktop-item="topbar-settings"

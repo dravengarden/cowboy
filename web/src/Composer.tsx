@@ -3018,23 +3018,22 @@ function PendingPanel({
               {kind === "queued" && (
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
-                    shortcut="O"
+                    shortcut="Mod+Y"
                     title={
                       collapsed
                         ? "Open and focus queue"
                         : "Close queue when focused"
                     }
-                    normalOnly
-                    hideWhenRegion="prompt.composer"
+                    singleKeycap={`${MOD_LABEL}Y`}
                   />
                 </Suspense>
               )}
               {kind === "draft" && (
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
-                    shortcut="D"
+                    shortcut="Mod+D"
                     title="Focus drafts"
-                    normalOnly
+                    singleKeycap={`${MOD_LABEL}D`}
                   />
                 </Suspense>
               )}
