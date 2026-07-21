@@ -35,12 +35,12 @@ export const PADDING_PRESETS: number[] = [8, 12, 16, 20, 24, 32, 48];
 // their own fixed leading; this drives the body text's line spacing.
 export const LINE_HEIGHT_PRESETS: number[] = [1.3, 1.4, 1.5, 1.6, 1.8, 2];
 
-export const FONT_SCALE_DEFAULT = 0.85;
-// Default reading comfort: 16px side gutter, 1.8 line-height, 0.85 scale — the
+export const FONT_SCALE_DEFAULT = 0.55;
+// Default reading comfort: 8px side gutter, 1.6 line-height, 0.55 scale — the
 // product-chosen defaults for an unset/garbage value (a user's own picks still
 // win). The system stack is the default face (see fonts.ts DEFAULT_FONT_ID).
-export const PADDING_DEFAULT = 16;
-export const LINE_HEIGHT_DEFAULT = 1.8;
+export const PADDING_DEFAULT = 8;
+export const LINE_HEIGHT_DEFAULT = 1.6;
 
 export interface ReadingSettings {
   /** Multiplier applied to the transcript's reading font size (1 = unchanged). */
