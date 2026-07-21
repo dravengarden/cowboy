@@ -349,9 +349,55 @@ export function DesktopCommandProvider(
         const key = workspaceCommandKey(event);
         const horizontal = region?.dataset.desktopAxis === "horizontal";
         if (!scrollNavigation && items.length > 0) {
-          const active = document.activeElement instanceof HTMLElement
+          let active = document.activeElement instanceof HTMLElement
             ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)
             : -1;
+          // Region focus can arrive one render before DOM focus reaches the row.
+          // Sessions still have an authoritative current item, so anchor Vim
+          // navigation there instead of treating the list as selection-less.
+          if (active < 0 && region?.dataset.desktopRegion === "sessions.list") {
+            active = items.findIndex((item) => item.dataset.desktopCurrent === "true");
+            if (active < 0) active = 0;
+          }
+          const sessionsList = region?.dataset.desktopRegion === "sessions.list";
+          const pinned = sessionsList && region?.dataset.desktopPinned === "true";
+          if (sessionsList && key.toLowerCase() === "p" && !event.repeat) {
+            event.preventDefault();
+            event.stopPropagation();
+            region.querySelector<HTMLElement>("ul")?.dispatchEvent(
+              new CustomEvent("cowboy:desktop-toggle-pin"),
+            );
+            items[active]?.focus({ preventScroll: true });
+            return;
+          }
+          if (sessionsList && pinned && key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            region.querySelector<HTMLElement>("ul")?.dispatchEvent(
+              new CustomEvent("cowboy:desktop-release-pin"),
+            );
+            return;
+          }
+          if (sessionsList && pinned && (key === "j" || key === "k")) {
+            event.preventDefault();
+            event.stopPropagation();
+            items[active]?.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
+              bubbles: true,
+              detail: { delta: key === "j" ? 1 : -1 },
+            }));
+            return;
+          }
+          if (sessionsList && key.toLowerCase() === "h" && !event.repeat) {
+            const actions = items[active]?.querySelector<HTMLElement>(
+              "button[aria-label^='row actions']",
+            );
+            if (actions) {
+              event.preventDefault();
+              event.stopPropagation();
+              actions.click();
+              return;
+            }
+          }
           let next = -1;
           if (itemChord.current !== null) {
             globalThis.clearTimeout(itemChord.current);

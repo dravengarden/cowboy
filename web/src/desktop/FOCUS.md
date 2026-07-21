@@ -27,6 +27,9 @@ same controller state.
 - `Enter`: default item action. In Sessions, `l` and `Enter` open the selected
   session and move focus to its Prompt editor; entering the Sessions region
   always starts on the currently open session.
+- Sessions use `p` to enter or leave Pin reorder mode. While pinned, `j/k`
+  moves the selected session instead of moving selection, and `Esc` releases
+  the mode. `h` opens the selected session's actions popup.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Alt-b/p/c/t`: jump directly to Sessions, Prompt, Conversation or Top Bar.
@@ -41,7 +44,9 @@ same controller state.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
   In Sessions this switches the active session immediately while retaining
   focus in the rail, so the next `j/k` continues from the selected row.
-- `Mod-j/k`: reorder the focused item when its region is reorderable.
+- `Mod-j/k`: reorder the focused Queue or Draft item. Sessions use the more
+  deliberate Pin mode above so ordinary navigation and reordering cannot be
+  confused.
 - Inside Prompt, `E` returns from Plan, Queue, or Drafts to the main editor and
   lands on the Desktop Vim command sink in Normal mode.
 

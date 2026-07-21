@@ -383,6 +383,11 @@ function SessionList({
     loaded: boolean;
     desktop: boolean;
 }): React.JSX.Element {
+    // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
+    // the same keys into spatial reorder commands until P/Esc (or opening a
+    // session) releases it. This is intentionally local UI state, not synced
+    // session metadata.
+    const [pinned, setPinned] = useState(false);
     // Per-row kebab Menu anchor + target. Standard Material list-row
     // pattern: trailing IconButton with MoreVert opens a Menu containing
     // Rename + Delete — two-step gesture (open menu, pick item, confirm
@@ -400,6 +405,21 @@ function SessionList({
         onReorder: reorderSessions,
         scrollContainer: () => listRef.current,
     });
+    useEffect(() => {
+        const list = listRef.current;
+        const region = list?.closest<HTMLElement>("[data-desktop-region='sessions.list']");
+        if (!list || !region || !desktop) return undefined;
+        region.dataset.desktopPinned = pinned ? "true" : "false";
+        const onTogglePin = (): void => setPinned((current) => !current);
+        const onReleasePin = (): void => setPinned(false);
+        list.addEventListener("cowboy:desktop-toggle-pin", onTogglePin);
+        list.addEventListener("cowboy:desktop-release-pin", onReleasePin);
+        return () => {
+            delete region.dataset.desktopPinned;
+            list.removeEventListener("cowboy:desktop-toggle-pin", onTogglePin);
+            list.removeEventListener("cowboy:desktop-release-pin", onReleasePin);
+        };
+    }, [desktop, pinned]);
     useEffect(() => {
         const list = listRef.current;
         if (!list) return undefined;
@@ -439,6 +459,14 @@ function SessionList({
                     New session
                     {desktop && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
                 </Button>
+                {desktop && pinned && (
+                    <Chip
+                        size="small"
+                        color="primary"
+                        label="PIN · J/K reorder · Esc release"
+                        sx={{ mt: 0.75, width: "100%", fontWeight: 650 }}
+                    />
+                )}
             </Box>
             <List
                 dense
@@ -472,7 +500,10 @@ function SessionList({
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
-                        onActivate={(): void => onPick(s.id)}
+                        onActivate={(): void => {
+                            setPinned(false);
+                            onPick(s.id);
+                        }}
                         // Symmetric side gutters so the leading grip + trailing
                         // kebab circles never hug / get clipped by the screen edge
                         // (floored at 12px, but yielding to a larger safe-area

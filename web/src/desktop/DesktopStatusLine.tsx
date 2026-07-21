@@ -66,6 +66,8 @@ function regionHints(region: string | null, status: Status): RegionHint[] {
         { keys: "J/K", label: "Session" },
         { keys: "GG/G", label: "First/last" },
         { keys: "L/Enter", label: "Open prompt" },
+        { keys: "H", label: "Actions" },
+        { keys: "P", label: "Pin reorder" },
       ];
     case "prompt.plan":
       return [
@@ -150,7 +152,8 @@ export function DesktopStatusLine({
     ...(focusedRegion === "sessions.list" && itemCount > 0
       ? [{ keys: "Mod+1…0", label: "Switch" }]
       : []),
-    ...(regionElement?.dataset.desktopReorderable === "true"
+    ...(regionElement?.dataset.desktopReorderable === "true" &&
+        focusedRegion !== "sessions.list"
       ? [{ keys: "Mod+J/K", label: "Reorder" }]
       : []),
     ...(focusedRegion === "conversation.transcript" &&
