@@ -450,6 +450,22 @@ here says otherwise.
     and IME behavior remain unchanged. The top-right ignore-modifications action
     and confirmation dialog stay separate from Save.
 
+21. **The native iOS shell can intermittently leave a gray strip above the
+    keyboard when UIKit's predicted keyboard frame is taller than its final
+    layout.** `UIKeyboardWillChangeFrame` and even `UIKeyboardDidShow` are not a
+    durable geometry source: predictive/IME bars and third-party keyboards can
+    settle in later phases without another dependable notification. The web
+    must keep `--kb-inset` disabled in the native shell; applying
+    `visualViewport` overlap there double-lifts the composer. The native
+    `CowboyKeyboardAvoider` instead follows notification frames during the
+    animation, then reconciles the WKWebView at 0/120/350/700ms against the
+    owning view's authoritative iOS 15+ `keyboardLayoutGuide.layoutFrame`.
+    Generation guards cancel stale corrections on a newer frame or hide. Ignore
+    guide overlaps below 80px so a hidden keyboard's safe-area guide cannot
+    shrink the WebView. Simulator verification must include repeated keyboard
+    close/open cycles, equal layout/visual viewport heights, settled-overlap
+    logs, and a screenshot with no band between app chrome and keyboard.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
