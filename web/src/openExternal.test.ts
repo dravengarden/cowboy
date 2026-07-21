@@ -1,4 +1,4 @@
-import { safeExternalUrl, shouldRouteExternalClick } from "./openExternal";
+import { openExternalUrl, safeExternalUrl } from "./openExternal";
 
 Deno.test("external links allow explicit network and contact protocols", () => {
   for (const url of [
@@ -34,28 +34,38 @@ Deno.test("external links reject relative and malformed values", () => {
   }
 });
 
-Deno.test("plain primary link clicks route through the platform opener", () => {
-  const click = {
-    button: 0,
-    defaultPrevented: false,
-    altKey: false,
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
+Deno.test("Tauri fallback passes open_url its url argument", () => {
+  let command = "";
+  let args: Record<string, unknown> = {};
+  const root = globalThis as typeof globalThis & {
+    __TAURI__?: {
+      core: {
+        invoke: (
+          nextCommand: string,
+          nextArgs: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+    };
   };
-  if (!shouldRouteExternalClick(click)) {
-    throw new Error("expected a plain primary click to use the external opener");
-  }
-  for (const changed of [
-    { button: 1 },
-    { defaultPrevented: true },
-    { altKey: true },
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-  ]) {
-    if (shouldRouteExternalClick({ ...click, ...changed })) {
-      throw new Error(`expected native click semantics for ${JSON.stringify(changed)}`);
+  root.__TAURI__ = {
+    core: {
+      invoke: (nextCommand, nextArgs) => {
+        command = nextCommand;
+        args = nextArgs;
+        return Promise.resolve();
+      },
+    },
+  };
+  try {
+    openExternalUrl("https://example.com/authorize?code=123");
+    if (command !== "plugin:opener|open_url") {
+      throw new Error(`unexpected Tauri command: ${command}`);
     }
+    if (args.url !== "https://example.com/authorize?code=123") {
+      throw new Error(`expected url argument, got ${JSON.stringify(args)}`);
+    }
+    if ("path" in args) throw new Error("open_url must not receive a path argument");
+  } finally {
+    delete root.__TAURI__;
   }
 });

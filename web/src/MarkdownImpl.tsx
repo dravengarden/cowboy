@@ -27,7 +27,6 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkFrontmatter from "remark-frontmatter";
 import { ImageLightbox } from "./_shell";
-import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { copyText } from "./clipboard";
 import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -628,11 +627,10 @@ const MarkdownImpl = memo(function MarkdownImpl({
           href={href ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={(event): void => {
-            if (!href || !shouldRouteExternalClick(event)) return;
-            event.preventDefault();
-            openExternalUrl(href);
-          }}
+          // Keep this a real anchor. Browsers and installed PWAs own navigation;
+          // Tauri's opener plugin injects its own `_blank` click handler for the
+          // native shells. Intercepting here broke both paths by cancelling the
+          // anchor before either platform could handle it.
           // On an inverted (user) bubble the text is white on the primary fill, so
           // the default theme link colour is near-invisible — a link (e.g. a bare
           // `git@github.com` that remark-gfm auto-linked) then reads as "lost". Make
