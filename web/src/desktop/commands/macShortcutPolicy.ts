@@ -4,6 +4,14 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+n", new Set(["session.new"])],
   ["mod+,", new Set(["settings.open"])],
   ["mod+s", new Set(["composer.saveDraft"])],
+  ["mod+b", new Set(["workspace.focusSessions"])],
+  ["mod+e", new Set(["workspace.focusPrompt"])],
+  ["mod+l", new Set(["workspace.focusConversation"])],
+  ["mod+t", new Set(["workspace.focusTopbar"])],
+  ["mod+r", new Set(["topbar.runConfiguration"])],
+  ["mod+u", new Set(["topbar.usage"])],
+  ["mod+k", new Set(["commandPalette.open", "topbar.compact"])],
+  ["mod+.", new Set(["composer.more", "topbar.stop"])],
 ]);
 
 const RESERVED_MAC_SHORTCUTS = new Map<string, string>([

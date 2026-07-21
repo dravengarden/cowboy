@@ -189,11 +189,10 @@ export function DesktopCommandProvider(
       const mod = isMac
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
-      // Within the focused Sessions list, Mod+1…0 switches directly by slot.
-      // Outside that region Mod+1…4 remain the global workspace focus keys.
+      // Sessions are first-level application navigation, so Mod+1…0 switches
+      // directly by slot from anywhere in the workspace.
       if (
-        workspace.mode === "normal" && workspace.focusedRegion === "sessions.list" &&
-        mod && !event.altKey && !event.shiftKey &&
+        workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
         document.querySelector("[role='dialog'], [role='menu']") === null
       ) {
         const match = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
@@ -412,9 +411,8 @@ export function DesktopCommandProvider(
         }
       }
       if (event.defaultPrevented || event.repeat) return;
-      // Region/context commands intentionally shadow global commands using the
-      // same positional chord. For example, Mod+1…4 focuses a workspace area
-      // globally, then operates the four Top Bar controls while it owns focus.
+      // Region/context commands intentionally shadow a global command using the
+      // same chord when the focused surface owns a more specific action.
       const rankedCommands = [...commands.current.values()].sort((left, right) =>
         Number(Boolean(right.regions || right.contexts)) -
         Number(Boolean(left.regions || left.contexts))

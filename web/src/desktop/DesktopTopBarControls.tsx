@@ -609,7 +609,7 @@ export function DesktopTopBarControls({
       id: "topbar.runConfiguration",
       title: "Open Run Configuration",
       group: "Top Bar",
-      shortcut: "Mod+1",
+      shortcut: "Mod+R",
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -624,7 +624,7 @@ export function DesktopTopBarControls({
       id: "topbar.usage",
       title: "Open Usage Limits",
       group: "Top Bar",
-      shortcut: "Mod+2",
+      shortcut: "Mod+U",
       regions: ["topbar.controls"],
       run: () =>
         document.querySelector<HTMLButtonElement>(
@@ -635,7 +635,7 @@ export function DesktopTopBarControls({
       id: "topbar.compact",
       title: "Compact Conversation",
       group: "Top Bar",
-      shortcut: "Mod+3",
+      shortcut: "Mod+K",
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector(
@@ -650,7 +650,7 @@ export function DesktopTopBarControls({
       id: "topbar.stop",
       title: "Stop Current Turn",
       group: "Top Bar",
-      shortcut: "Mod+4",
+      shortcut: "Mod+.",
       regions: ["topbar.controls"],
       when: () =>
         document.querySelector("[data-desktop-topbar-action='stop']") !== null,
@@ -695,8 +695,8 @@ export function DesktopTopBarControls({
         ? <Skeleton variant="rounded" width={300} height={34} />
         : (
           <DesktopContextShortcut
-            badge={`${MOD_LABEL}1`}
-            shortcut={`${MOD_LABEL}1 · Run configuration`}
+            badge={`${MOD_LABEL}R`}
+            shortcut={`${MOD_LABEL}R · Run configuration`}
             placement="inline"
           >
             <Tooltip title={configSummary || "Run configuration"}>
@@ -865,8 +865,8 @@ export function DesktopTopBarControls({
       </Popover>
 
       <DesktopContextShortcut
-        badge={`${MOD_LABEL}2`}
-        shortcut={`${MOD_LABEL}2 · Usage limits`}
+        badge={`${MOD_LABEL}U`}
+        shortcut={`${MOD_LABEL}U · Usage limits`}
         placement="inline"
       >
         <ButtonBase
@@ -1061,8 +1061,8 @@ export function DesktopTopBarControls({
 
       {compactAction && (
         <DesktopContextShortcut
-          badge={`${MOD_LABEL}3`}
-          shortcut={`${MOD_LABEL}3 · Compact conversation`}
+          badge={`${MOD_LABEL}K`}
+          shortcut={`${MOD_LABEL}K · Compact conversation`}
           placement="inline"
         >
           <Tooltip

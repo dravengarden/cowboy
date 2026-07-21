@@ -3926,8 +3926,8 @@ export function AutoScrollAndStop({
         {stopButton && (
           <Suspense fallback={stopButton}>
             <DesktopContextShortcut
-              badge={`${MOD_LABEL}4`}
-              shortcut={`${MOD_LABEL}4 · Stop current turn`}
+              badge={`${MOD_LABEL}.`}
+              shortcut={`${MOD_LABEL}. · Stop current turn`}
               placement="inline"
             >
               {stopButton}

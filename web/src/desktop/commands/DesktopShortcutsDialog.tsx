@@ -21,11 +21,14 @@ interface ShortcutRow {
 }
 
 const NAVIGATION: ShortcutRow[] = [
-  { keys: ["Mod+1"], title: "Focus Sessions" },
-  { keys: ["Mod+2"], title: "Focus Prompt" },
-  { keys: ["Mod+3"], title: "Focus Conversation" },
-  { keys: ["Mod+4"], title: "Focus Top Bar" },
-  { keys: ["Mod+1…4"], title: "Run config / Usage / Compact / Stop in Top Bar" },
+  { keys: ["Mod+B"], title: "Focus Sessions / Sidebar" },
+  { keys: ["Mod+E"], title: "Focus Prompt Editor" },
+  { keys: ["Mod+L"], title: "Focus Conversation Log" },
+  { keys: ["Mod+T"], title: "Focus Top Bar" },
+  { keys: ["Mod+R"], title: "Open Run Configuration in Top Bar" },
+  { keys: ["Mod+U"], title: "Open Usage Limits in Top Bar" },
+  { keys: ["Mod+K"], title: "Compact Conversation in Top Bar" },
+  { keys: ["Mod+."], title: "Stop Current Turn in Top Bar" },
   {
     keys: ["P/O/D/E"],
     title: "Plan / Queue / Drafts / Editor inside Prompt",
@@ -35,7 +38,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },
   { keys: ["Ctrl", "W", "W"], title: "Cycle focus regions" },
   { keys: ["J/K"], title: "Move through items in list regions" },
-  { keys: ["Mod+1…0"], title: "Switch directly to a visible session from Sessions" },
+  { keys: ["Mod+1…0"], title: "Switch directly to a visible session from anywhere" },
   { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },

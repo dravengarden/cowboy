@@ -99,7 +99,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="prompt"
-          shortcut={{ value: "Mod+2", title: "Focus Prompt" }}
+          shortcut={{ value: "Mod+E", title: "Focus Prompt" }}
         >
           Prompt
         </PaneHeader>
@@ -148,7 +148,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="conversation"
-          shortcut={{ value: "Mod+3", title: "Focus Conversation" }}
+          shortcut={{ value: "Mod+L", title: "Focus Conversation" }}
           actions={<DesktopConversationControls sessionId={sessionId} />}
         >
           Conversation
