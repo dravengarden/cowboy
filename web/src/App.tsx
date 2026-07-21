@@ -463,6 +463,80 @@ function SessionList({
         return () =>
             list.removeEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
     }, [byId, desktop, onRequestInfo]);
+    const onDesktopListKeyDown = (event: React.KeyboardEvent<HTMLUListElement>): void => {
+        if (
+            !desktop || event.metaKey || event.ctrlKey || event.altKey ||
+            event.shiftKey || event.repeat
+        ) return;
+        const match = /^Key([A-Z])$/.exec(event.code);
+        const key = match?.[1]?.toLowerCase() ?? event.key;
+        const rows = [...(listRef.current?.querySelectorAll<HTMLElement>(
+            "[data-desktop-item]",
+        ) ?? [])].filter((row) => row.offsetParent !== null);
+        const focused = event.target instanceof Element
+            ? event.target.closest<HTMLElement>("[data-desktop-item]")
+            : null;
+        const current = Math.max(0, focused ? rows.indexOf(focused) : -1);
+        const row = rows[current];
+        if (!row) return;
+        if (key === "j" || key === "k") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (pinned) {
+                row.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
+                    bubbles: true,
+                    detail: { delta: key === "j" ? 1 : -1 },
+                }));
+                return;
+            }
+            const next = Math.min(
+                rows.length - 1,
+                Math.max(0, current + (key === "j" ? 1 : -1)),
+            );
+            rows[next]?.focus({ preventScroll: true });
+            rows[next]?.scrollIntoView({ block: "nearest" });
+            return;
+        }
+        if (key === "p") {
+            event.preventDefault();
+            event.stopPropagation();
+            setPinned((value) => !value);
+            row.focus({ preventScroll: true });
+            return;
+        }
+        if (key === "Escape" && pinned) {
+            event.preventDefault();
+            event.stopPropagation();
+            setPinned(false);
+            return;
+        }
+        const session = row.dataset.desktopItem
+            ? byId.get(row.dataset.desktopItem)
+            : undefined;
+        if (key === "h" && session) {
+            event.preventDefault();
+            event.stopPropagation();
+            onRequestInfo(session);
+            return;
+        }
+        if ((key === "l" || key === "Enter") && session) {
+            // Let a focused grip or kebab retain native Enter activation.
+            if (key === "Enter" && event.target !== row) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setPinned(false);
+            onPick(session.id);
+            requestAnimationFrame(() => {
+                const prompt = document.querySelector<HTMLElement>(
+                    "[data-desktop-region='prompt.composer']",
+                );
+                const target = prompt?.querySelector<HTMLElement>(
+                    "[data-vim-command-sink], .cm-content[contenteditable='true']",
+                );
+                target?.focus({ preventScroll: true });
+            });
+        }
+    };
     return (
         <Stack sx={{ height: "100%" }}>
             <Box sx={{ p: 1 }}>
@@ -487,6 +561,7 @@ function SessionList({
             <List
                 dense
                 ref={listRef}
+                onKeyDownCapture={onDesktopListKeyDown}
                 sx={{
                     flex: 1,
                     overflowY: "auto",
