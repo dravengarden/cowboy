@@ -1,10 +1,10 @@
 //! HTTP / WebSocket server (design §5).
 //!
 //! Every frontend is an **equal subscriber** to one WebSocket stream. On
-//! connect a client receives the session list plus a full snapshot of each
-//! session's event log, then a live tail of all events — so "new session shows
-//! everywhere" and "permission resolves everywhere" are just broadcasts. The
-//! same socket carries inbound commands.
+//! browsers negotiate a lightweight global session index, then hydrate the
+//! focused session over HTTP while the socket carries live events. Legacy and
+//! ACP bridge clients retain the complete bootstrap unless they opt into lazy
+//! mode, preserving wire compatibility.
 //!
 //! v1 has **no auth** and binds `0.0.0.0` by deliberate choice (LAN-only use);
 //! design §9 auth/pairing is a follow-up.
@@ -961,6 +961,7 @@ async fn serve_axum(
         )
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
+        .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/history/{id}", get(api_history))
         .route("/api/artifacts/{name}", get(api_artifact))
@@ -1706,6 +1707,52 @@ struct HistoryResponse {
     reached_start: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct SessionBootstrapResponse {
+    messages: Vec<Outbound>,
+}
+
+/// Hydrate only the session the reader actually opened. The WebSocket connect
+/// path deliberately carries global metadata only; replaying every transcript,
+/// config option, queue, and judge history made mobile reconnects multi-megabyte
+/// affairs. Live events can overlap this response and are deduplicated by seq.
+async fn api_session_bootstrap(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(messages) = focused_session_bootstrap(&state.hub, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(SessionBootstrapResponse { messages }),
+    )
+        .into_response()
+}
+
+fn focused_session_bootstrap(hub: &Hub, session_id: &str) -> Option<Vec<Outbound>> {
+    let (events, reached_start) = hub.snapshot(session_id)?;
+    let mut messages = vec![Outbound::Snapshot {
+        session_id: session_id.to_owned(),
+        events,
+        reached_start,
+    }];
+    if let Some(options) = hub.config_options(session_id) {
+        messages.push(Outbound::ConfigOptions {
+            session_id: session_id.to_owned(),
+            options,
+        });
+    }
+    if let Some(queue) = hub.queue_resync(session_id) {
+        messages.push(queue);
+    }
+    messages.push(Outbound::JudgeHistory {
+        session_id: session_id.to_owned(),
+        runs: hub.judge_history(session_id),
+    });
+    Some(messages)
+}
+
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
     before_seq: u64,
@@ -1896,11 +1943,50 @@ async fn static_handler(
 /// ~2 of these as a dead socket. See [`crate::core::Outbound::Ping`].
 const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
 
-async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
+#[derive(Debug, Default, Deserialize)]
+struct WebSocketQuery {
+    bootstrap: Option<String>,
 }
 
-async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
+async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<WebSocketQuery>,
+) -> impl IntoResponse {
+    let lazy_bootstrap = query.bootstrap.as_deref() == Some("lazy");
+    ws.on_upgrade(move |socket| handle_ws(socket, state, lazy_bootstrap))
+}
+
+fn global_bootstrap(hub: &Hub) -> Vec<Outbound> {
+    let mut messages = vec![
+        Outbound::Sessions {
+            sessions: hub.session_list(),
+        },
+        Outbound::Settings {
+            settings: hub.settings_snapshot(),
+        },
+        Outbound::Skills {
+            skills: hub.skills_snapshot(),
+        },
+    ];
+    messages.extend(hub.sync_resync());
+    messages
+}
+
+fn connect_bootstrap(hub: &Hub, lazy: bool) -> Vec<Outbound> {
+    let mut messages = global_bootstrap(hub);
+    if !lazy {
+        for session in hub.session_list() {
+            if let Some(session_messages) = focused_session_bootstrap(hub, &session.id) {
+                messages.extend(session_messages);
+            }
+        }
+    }
+    messages.push(Outbound::BootstrapComplete);
+    messages
+}
+
+async fn handle_ws(socket: WebSocket, state: Arc<AppState>, lazy_bootstrap: bool) {
     let (mut sink, mut stream) = socket.split();
 
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
@@ -1908,111 +1994,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     let mut rx = state.hub.subscribe();
     let mut shutdown = state.shutdown.clone();
 
-    if send_json(
-        &mut sink,
-        &Outbound::Sessions {
-            sessions: state.hub.session_list(),
-        },
-    )
-    .await
-    .is_err()
-    {
-        return;
-    }
-    // Seed the global settings (auto-resume default + continuation template) so
-    // the client's Settings UI + per-session badge render on first paint.
-    if send_json(
-        &mut sink,
-        &Outbound::Settings {
-            settings: state.hub.settings_snapshot(),
-        },
-    )
-    .await
-    .is_err()
-    {
-        return;
-    }
-    // Seed the static skill registry (prompt + extract) for the Info sheet.
-    if send_json(
-        &mut sink,
-        &Outbound::Skills {
-            skills: state.hub.skills_snapshot(),
-        },
-    )
-    .await
-    .is_err()
-    {
-        return;
-    }
-    // Seed every optimistic-sync state (@shared-utils/sync): one absolute
-    // snapshot patch per state mutated this lifetime, so each of this client's
-    // sync clients starts at the arbiter's version and folds any live overrides.
-    for patch in state.hub.sync_resync() {
-        if send_json(&mut sink, &patch).await.is_err() {
+    for message in connect_bootstrap(&state.hub, lazy_bootstrap) {
+        if send_json(&mut sink, &message).await.is_err() {
             return;
         }
-    }
-    for meta in state.hub.session_list() {
-        if let Some((events, reached_start)) = state.hub.snapshot(&meta.id)
-            && send_json(
-                &mut sink,
-                &Outbound::Snapshot {
-                    session_id: meta.id.clone(),
-                    events,
-                    reached_start,
-                },
-            )
-            .await
-            .is_err()
-        {
-            return;
-        }
-        // Replay the last-seen agent config options so the composer's
-        // mode / model / effort dropdowns hydrate on first paint instead of
-        // waiting for the next `config_option_update` to fire upstream.
-        if let Some(options) = state.hub.config_options(&meta.id)
-            && send_json(
-                &mut sink,
-                &Outbound::ConfigOptions {
-                    session_id: meta.id.clone(),
-                    options,
-                },
-            )
-            .await
-            .is_err()
-        {
-            return;
-        }
-        // Replay the server-authoritative queue + drafts as a resync SyncPatch
-        // (state "queue:<id>") so a freshly-opened terminal renders the same
-        // staged messages and adopts them across a daemon restart.
-        if let Some(patch) = state.hub.queue_resync(&meta.id)
-            && send_json(&mut sink, &patch).await.is_err()
-        {
-            return;
-        }
-        // Seed the confirm-detect judge-run history so the inspector widget
-        // (long-press the turn-status pill) hydrates with the persisted runs on
-        // first paint instead of waiting for the next turn-end judge.
-        if send_json(
-            &mut sink,
-            &Outbound::JudgeHistory {
-                session_id: meta.id.clone(),
-                runs: state.hub.judge_history(&meta.id),
-            },
-        )
-        .await
-        .is_err()
-        {
-            return;
-        }
-    }
-
-    if send_json(&mut sink, &Outbound::BootstrapComplete)
-        .await
-        .is_err()
-    {
-        return;
     }
 
     // Fan-out task: broadcast events → this socket, plus a periodic app-level
@@ -2623,5 +2608,93 @@ mod reset_policy_tests {
             scheduled_reset_failure_policy(false, 2),
             ScheduledResetFailurePolicy::StopFailed
         );
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::{connect_bootstrap, focused_session_bootstrap};
+    use crate::core::{Event, Hub, Outbound, SessionOrigin};
+
+    fn hub_with_sessions() -> Hub {
+        let hub = Hub::new();
+        for id in ["focused", "inactive"] {
+            hub.create_session(
+                id.to_owned(),
+                "codex".to_owned(),
+                "/tmp".to_owned(),
+                id.to_owned(),
+                SessionOrigin::Web,
+                false,
+            );
+            hub.push(
+                id,
+                Event::Update {
+                    update: serde_json::json!({"sessionUpdate": "agent_message_chunk", "messageId": id, "content": {"type": "text", "text": id}}),
+                },
+            );
+        }
+        hub
+    }
+
+    #[test]
+    fn websocket_bootstrap_contains_only_global_state() {
+        let messages = connect_bootstrap(&hub_with_sessions(), true);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Outbound::Sessions { .. }))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Outbound::BootstrapComplete))
+        );
+        assert!(!messages.iter().any(|message| matches!(
+            message,
+            Outbound::Snapshot { .. }
+                | Outbound::ConfigOptions { .. }
+                | Outbound::JudgeHistory { .. }
+        )));
+        assert!(!messages.iter().any(|message| matches!(
+            message,
+            Outbound::SyncPatch { state, .. } if state.starts_with("queue:")
+        )));
+    }
+
+    #[test]
+    fn legacy_websocket_bootstrap_remains_complete() {
+        let messages = connect_bootstrap(&hub_with_sessions(), false);
+        let snapshots = messages
+            .iter()
+            .filter(|message| matches!(message, Outbound::Snapshot { .. }))
+            .count();
+        assert_eq!(snapshots, 2);
+        assert!(matches!(messages.last(), Some(Outbound::BootstrapComplete)));
+    }
+
+    #[test]
+    fn focused_bootstrap_does_not_replay_another_session() {
+        let messages = focused_session_bootstrap(&hub_with_sessions(), "focused")
+            .expect("focused session bootstrap");
+        let snapshots: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Outbound::Snapshot {
+                    session_id, events, ..
+                } => Some((session_id, events)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].0, "focused");
+        assert_eq!(snapshots[0].1.len(), 1);
+        assert!(messages.iter().all(|message| match message {
+            Outbound::Snapshot { session_id, .. }
+            | Outbound::ConfigOptions { session_id, .. }
+            | Outbound::JudgeHistory { session_id, .. } => session_id == "focused",
+            Outbound::SyncPatch { state, .. } => state == "queue:focused",
+            _ => true,
+        }));
     }
 }

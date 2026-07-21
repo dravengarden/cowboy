@@ -215,10 +215,16 @@ export type Outbound =
   // overlay's "raw data" expand). Latest-per-session.
   | ({ type: "judge_result" } & JudgeResult)
   // A session's confirm-detect judge-run HISTORY (newest first), capped. Backs the
-  // inspector widget (long-press the turn-status pill). Sent per session on
-  // connect + re-broadcast on every new run / per-item delete / clear.
+  // inspector widget (long-press the turn-status pill). Hydrated with the focused
+  // session + re-broadcast on every new run / per-item delete / clear.
   | { type: "judge_history"; session_id: string; runs: JudgeRun[] }
   | { type: "error"; session_id?: string; message: string };
+
+/** Focused-session hydration returned by the HTTP bootstrap route. Every item
+ * uses the normal Outbound reducer so HTTP and live WebSocket overlap dedupes. */
+export interface SessionBootstrapResponse {
+  messages: Outbound[];
+}
 
 /** A registered skill as the daemon exposes it — the prompt template + extraction
  *  rule are rendered verbatim in the Info sheet so they're inspectable. */

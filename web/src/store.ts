@@ -2,10 +2,9 @@
 // truth; this store just accumulates what it pushes. Exposed via
 // useSyncExternalStore so any component re-renders on change.
 //
-// All clients are equal subscribers: on connect the daemon sends the session
-// list + a snapshot of each session's log, then a live tail. We dedup events
-// by (session_id, seq) so a reconnect snapshot overlapping the live stream is
-// harmless.
+// All clients are equal subscribers: on connect the daemon sends a lightweight
+// session index and live tail. Only the focused session hydrates its recent log
+// over HTTP. We dedup by (session_id, seq), so HTTP/live overlap is harmless.
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { createConnectionStore } from "./_shell";
@@ -34,6 +33,7 @@ import type {
   JudgeResult,
   JudgeRun,
   Outbound,
+  SessionBootstrapResponse,
   SessionMeta,
   SkillView,
   WireQueued,
@@ -171,6 +171,11 @@ let socket: WebSocket | undefined;
 // re-assert it to the daemon (revive-on-open), recovering the agent after a
 // daemon restart we reconnected across. See openSession + connect's onopen.
 let openedSessionId: string | undefined;
+interface SessionHydration {
+  promise: Promise<void>;
+  controller: AbortController;
+}
+const sessionHydrations = new Map<string, SessionHydration>();
 
 // --- Reconnect bookkeeping --------------------------------------------------
 // The banner + version-probe + outage/reconnect-flash policy now live in `conn`
@@ -754,6 +759,36 @@ function handle(msg: Outbound): void {
   }
 }
 
+async function hydrateSession(sessionId: string, replace = false): Promise<void> {
+  const existing = sessionHydrations.get(sessionId);
+  if (existing && !replace) return existing.promise;
+  existing?.controller.abort();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const promise = (async (): Promise<void> => {
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
+        { cache: "no-store", signal: controller.signal },
+      );
+      if (!response.ok) {
+        throw new Error(`session bootstrap failed: ${String(response.status)}`);
+      }
+      const bootstrap = (await response.json()) as SessionBootstrapResponse;
+      for (const message of bootstrap.messages) handle(message);
+    } catch (error) {
+      if (!controller.signal.aborted) console.warn("session bootstrap failed", error);
+    } finally {
+      clearTimeout(timeout);
+      if (sessionHydrations.get(sessionId)?.controller === controller) {
+        sessionHydrations.delete(sessionId);
+      }
+    }
+  })();
+  sessionHydrations.set(sessionId, { promise, controller });
+  return promise;
+}
+
 /**
  * Surface a client-side notice through the same snackbar the daemon's "error"
  * messages use. `severity` defaults to "error"; pass "warning" for recoverable
@@ -826,7 +861,7 @@ function openSocket(): void {
     return;
   }
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws`);
+  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?bootstrap=lazy`);
   socket = ws;
   // A socket wedged in CONNECTING (a half-open proxy / network that completes the
   // TCP handshake but never the WS upgrade) fires NEITHER onopen NOR onclose, so
@@ -856,6 +891,7 @@ function openSocket(): void {
     // Idempotent server-side when the agent is still alive.
     if (openedSessionId) {
       send({ type: "open_session", session_id: openedSessionId });
+      void hydrateSession(openedSessionId, true);
     }
     // Re-send sync mutations the arbiter never confirmed (sent while the socket
     // was down). Each store re-sends its pending via its own `send` callback (a
@@ -1417,6 +1453,7 @@ function optimisticMessage(sessionId: string, text: string, attachments: Attachm
 export function openSession(id: string): void {
   openedSessionId = id;
   send({ type: "open_session", session_id: id });
+  void hydrateSession(id);
 }
 
 // Mark a session hydrated WITHOUT waiting for a server snapshot — called the

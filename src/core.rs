@@ -796,11 +796,9 @@ pub enum Outbound {
     /// protocol bridges wait for this before accepting client requests, so
     /// `session/list` cannot race an incomplete session cache.
     BootstrapComplete,
-    /// Replay of one session's RECENT log tail (sent on connect, after
-    /// `Sessions`). Capped to the last [`SNAPSHOT_TAIL`] events so a long
-    /// session doesn't ship its whole history on every connect; older pages are
-    /// fetched on demand via `LoadHistory` → `History`. `reached_start` is true
-    /// when these events ARE the whole log (nothing older to page to).
+    /// Replay of one session's RECENT log tail. Lazy browser clients request it
+    /// over HTTP when focused; legacy/bridge WebSockets receive it at connect.
+    /// Capped by count and serialized bytes; older pages are fetched on demand.
     Snapshot {
         session_id: String,
         events: Vec<Envelope>,
