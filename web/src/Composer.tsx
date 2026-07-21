@@ -3928,7 +3928,7 @@ export function AutoScrollAndStop({
             <DesktopContextShortcut
               badge="S"
               shortcut="S · Stop current turn"
-              placement="toolbar"
+              placement="inline"
             >
               {stopButton}
             </DesktopContextShortcut>

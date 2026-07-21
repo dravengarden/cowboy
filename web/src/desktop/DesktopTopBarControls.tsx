@@ -697,6 +697,7 @@ export function DesktopTopBarControls({
           <DesktopContextShortcut
             badge="R"
             shortcut="R · Run configuration"
+            placement="inline"
           >
             <Tooltip title={configSummary || "Run configuration"}>
               <Button
@@ -866,6 +867,7 @@ export function DesktopTopBarControls({
       <DesktopContextShortcut
         badge="U"
         shortcut="U · Usage limits"
+        placement="inline"
       >
         <ButtonBase
           data-desktop-item="topbar-usage"
@@ -1061,6 +1063,7 @@ export function DesktopTopBarControls({
         <DesktopContextShortcut
           badge="C"
           shortcut="C · Compact conversation"
+          placement="inline"
         >
           <Tooltip
             title={compacting

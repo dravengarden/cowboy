@@ -1990,15 +1990,12 @@ export function App({
                                             />
                                         </Suspense>
                                     )}
-                                    <Suspense fallback={null}>
-                                        <DesktopRegionShortcut shortcut="Alt+T" title="Focus Top Bar" />
-                                    </Suspense>
                                     <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
                                             badge={`${MOD_LABEL},`}
                                             shortcut={`${MOD_LABEL}, · Settings`}
-                                            placement="toolbar"
+                                            placement="inline"
                                         >
                                             <IconButton
                                                 data-desktop-item="topbar-settings"
