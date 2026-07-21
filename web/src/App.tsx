@@ -1584,6 +1584,7 @@ export function App({
                     footer={navbarAtBottom
                         ? <MobileSheetDismiss onClose={(): void => setDrawerOpen(false)} />
                         : undefined}
+                    footerOverlay={navbarAtBottom}
                 >
                     {/* DetentSheet's body has no side padding, so the list spans
                         the full width on its own — render it directly. (A former

@@ -115,6 +115,7 @@ export function ComposerToolbarSettings({
       frosted
       surfaceColor={theme.palette.background.default}
       footer={<MobileSheetDismiss onClose={onClose} />}
+      footerOverlay
       header={
         <Box sx={{ px: 1.5, pb: 0.5 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
