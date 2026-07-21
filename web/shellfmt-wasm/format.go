@@ -292,6 +292,12 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 				// payload has been projected, do not discover a duplicate inside it.
 				return false
 			}
+			if payload, foundPayload := shellHeredocPayload(source, statement); foundPayload {
+				found = append(found, payload)
+				// As with embedded-language heredocs, the body belongs to this
+				// statement. Do not walk it again as though it were outer Bash.
+				return false
+			}
 			return true
 		}
 		call, isCall := node.(*syntax.CallExpr)
@@ -715,20 +721,85 @@ var sshOptionsWithValue = map[string]struct{}{
 	"-R": {}, "-S": {}, "-W": {}, "-w": {},
 }
 
-func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) {
-	command, static := staticWord(call.Args[0])
-	if !static || filepath.Base(command) != "ssh" {
+// shellHeredocPayload recognizes source fed to a shell over stdin, regardless
+// of whether the interpreter runs locally or behind an SSH execution boundary.
+// The heredoc AST remains the authority for its exact body and delimiter; the
+// launcher shape only decides whether stdin is source code. Data consumers
+// such as `cat <<EOF` therefore remain ordinary Bash.
+func shellHeredocPayload(source string, stmt *syntax.Stmt) (nestedPayload, bool) {
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 {
 		return nestedPayload{}, false
 	}
-	destination := -1
-	for index := 1; index < len(call.Args); index++ {
-		value, ok := staticWord(call.Args[index])
-		if !ok {
+	args := unwrappedClientArgs(call.Args)
+	if len(args) == 0 {
+		return nestedPayload{}, false
+	}
+	if command, static := staticWord(args[0]); static && filepath.Base(command) == "ssh" {
+		_, remoteStart, found := sshRemoteArgRange(args)
+		if !found {
 			return nestedPayload{}, false
 		}
+		args = unwrappedClientArgs(args[remoteStart:])
+	}
+	if len(args) == 0 || !isShellStdinInterpreter(args) {
+		return nestedPayload{}, false
+	}
+	for _, redirect := range stmt.Redirs {
+		if (redirect.Op != syntax.Hdoc && redirect.Op != syntax.DashHdoc) || redirect.Hdoc == nil {
+			continue
+		}
+		body, static := staticWord(redirect.Hdoc)
+		if !static || strings.TrimSpace(body) == "" {
+			return nestedPayload{}, false
+		}
+		terminator, static := staticWord(redirect.Word)
+		if !static || terminator == "" {
+			return nestedPayload{}, false
+		}
+		launcher := strings.TrimSpace(source[int(call.Pos().Offset()):int(call.End().Offset())])
+		return nestedPayload{
+			start: int(redirect.Hdoc.Pos().Offset()), end: int(redirect.Hdoc.End().Offset()),
+			launcher: launcher, payload: strings.TrimSpace(body), heredoc: true, terminator: terminator,
+		}, true
+	}
+	return nestedPayload{}, false
+}
+
+func isShellStdinInterpreter(args []*syntax.Word) bool {
+	command, static := staticWord(args[0])
+	if !static {
+		return false
+	}
+	if _, shell := shellInterpreterName(command); !shell {
+		return false
+	}
+	for _, word := range args[1:] {
+		value, ok := staticWord(word)
+		if !ok {
+			return false
+		}
+		// Only the short `-c` flag (including clusters such as `-lc`) turns
+		// the following argv into source. Long options such as `--norc` still
+		// leave stdin as the program and must not be rejected by substring.
+		if strings.HasPrefix(value, "-") && !strings.HasPrefix(value, "--") &&
+			strings.Contains(strings.TrimPrefix(value, "-"), "c") {
+			return false
+		}
+	}
+	return true
+}
+
+func sshRemoteArgRange(args []*syntax.Word) (destination, remoteStart int, ok bool) {
+	destination = -1
+	for index := 1; index < len(args); index++ {
+		value, static := staticWord(args[index])
+		if !static {
+			return -1, -1, false
+		}
 		if value == "--" {
-			if index+1 >= len(call.Args) {
-				return nestedPayload{}, false
+			if index+1 >= len(args) {
+				return -1, -1, false
 			}
 			destination = index + 1
 			break
@@ -740,8 +811,8 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) 
 			}
 			if _, consumesValue := sshOptionsWithValue[option]; consumesValue && len(value) == 2 {
 				index++
-				if index >= len(call.Args) {
-					return nestedPayload{}, false
+				if index >= len(args) {
+					return -1, -1, false
 				}
 			}
 			continue
@@ -749,8 +820,17 @@ func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) 
 		destination = index
 		break
 	}
-	remoteStart := destination + 1
-	if destination < 0 || remoteStart >= len(call.Args) {
+	remoteStart = destination + 1
+	return destination, remoteStart, destination >= 0 && remoteStart < len(args)
+}
+
+func sshRemoteShell(source string, call *syntax.CallExpr) (nestedPayload, bool) {
+	command, static := staticWord(call.Args[0])
+	if !static || filepath.Base(command) != "ssh" {
+		return nestedPayload{}, false
+	}
+	_, remoteStart, found := sshRemoteArgRange(call.Args)
+	if !found {
 		return nestedPayload{}, false
 	}
 	remoteArgs := make([]string, 0, len(call.Args)-remoteStart)

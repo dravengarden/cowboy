@@ -720,6 +720,62 @@ PY'`
 	}
 }
 
+func TestExtractsShellHeredocAcrossExecutionBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   string
+		launcher string
+	}{
+		{
+			name:     "local shell",
+			source:   "bash --norc -s <<'EOF'\nset -euo pipefail\nprintf '%s\\n' ready\nEOF\n",
+			launcher: "bash --norc -s",
+		},
+		{
+			name: "ssh shell",
+			source: "ssh -o BatchMode=yes macbook-air bash -s <<'EOF'\n" +
+				"set -euo pipefail\n" +
+				"xcrun devicectl list devices\n" +
+				"xcrun devicectl device info apps --device C3C4A814 | grep -E -i 'Cowboy|LiveView' || true\n" +
+				"EOF\n",
+			launcher: "ssh -o BatchMode=yes macbook-air bash -s",
+		},
+		{
+			name:     "transparent wrapper",
+			source:   "env LC_ALL=C sh -s <<'SCRIPT'\nprepare\nverify && publish\nSCRIPT\n",
+			launcher: "env LC_ALL=C sh -s",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			display, err := formatShellDisplay(test.source, 46)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(display.Frames) != 2 {
+				t.Fatalf("shell stdin should become a nested frame: %#v", display.Frames)
+			}
+			child := display.Frames[1]
+			if child.Launcher != test.launcher || child.Language != "bash" || child.Label != "Bash" {
+				t.Fatalf("unexpected shell frame: %#v", child)
+			}
+			if strings.Contains(child.Text, "EOF") || strings.Contains(child.Text, "SCRIPT") {
+				t.Fatalf("heredoc boundary leaked into child: %q", child.Text)
+			}
+		})
+	}
+}
+
+func TestLeavesDataHeredocInOuterShell(t *testing.T) {
+	display, err := formatShellDisplay("cat <<'EOF'\nalpha\nbeta\nEOF\n", 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 1 {
+		t.Fatalf("data heredoc must not be presented as executable source: %#v", display.Frames)
+	}
+}
+
 func TestExtractsInlineScriptLanguages(t *testing.T) {
 	tests := []struct {
 		source   string
