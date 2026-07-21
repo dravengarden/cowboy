@@ -1922,7 +1922,11 @@ export function App({
                                 spacing={0.75}
                                 sx={{
                                     minWidth: 0,
-                                    flex: surface === "desktop" ? "0 1 280px" : 1,
+                                    // Desktop gives the title only the width its
+                                    // text needs (up to the cap). The old 280px
+                                    // flex basis left a large dead zone after a
+                                    // short title while squeezing the controls.
+                                    flex: surface === "desktop" ? "0 1 auto" : 1,
                                     maxWidth: surface === "desktop" ? 320 : "none",
                                 }}
                             >
@@ -1954,57 +1958,77 @@ export function App({
                             // redundant brand/emoji.
                             <Box sx={{ flex: 1, minWidth: 0 }} />
                         )}
-                        {/* Session-level controls (agent config / auto-scroll / Stop)
-                            live here in the navbar, left of Settings — they act on the
-                            session, not the message being typed, so they were pulled out
-                            of the composer toolbar. */}
-                        {active && surface === "desktop" ? (
-                            <Suspense fallback={null}>
-                                <DesktopTopBarControls
-                                    sessionId={active.id}
-                                    status={active.status}
-                                />
-                            </Suspense>
-                        ) : active ? (
-                            <SessionControls
-                                sessionId={active.id}
-                                status={active.status}
-                            />
-                        ) : null}
-                        {surface === "desktop" && (
-                            <Suspense fallback={null}>
-                                <DesktopRegionShortcut shortcut="Alt+T" title="Focus Top Bar" />
-                            </Suspense>
-                        )}
-                        {surface === "desktop" && (
-                            <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
-                        )}
                         {surface === "desktop" ? (
-                            <Suspense fallback={null}>
-                                <DesktopContextShortcut
-                                    badge={`${MOD_LABEL},`}
-                                    shortcut={`${MOD_LABEL}, · Settings`}
-                                    placement="toolbar"
-                                >
-                                    <IconButton
-                                        data-desktop-item="topbar-settings"
-                                        data-desktop-topbar-action="settings"
-                                        onClick={(): void => openSettings("settings")}
-                                        aria-label="settings"
-                                        title="Settings"
-                                    >
-                                        <SettingsIcon />
-                                    </IconButton>
-                                </DesktopContextShortcut>
-                            </Suspense>
-                        ) : (
-                            <IconButton
-                                onClick={(): void => openSettings("settings")}
-                                aria-label="settings"
-                                title="Settings"
+                            // The complete trailing toolbar owns horizontal
+                            // overflow. Its children retain their calculated
+                            // minimum width; narrow split panes scroll this one
+                            // strip instead of crushing quota/config buttons.
+                            <Box
+                                sx={{
+                                    flex: 1,
+                                    minWidth: 0,
+                                    overflowX: "auto",
+                                    overflowY: "hidden",
+                                    scrollbarWidth: "thin",
+                                    "&::-webkit-scrollbar": { height: 4 },
+                                    "&::-webkit-scrollbar-thumb": {
+                                        bgcolor: "action.disabled",
+                                        borderRadius: 99,
+                                    },
+                                }}
                             >
-                                <SettingsIcon />
-                            </IconButton>
+                                <Stack
+                                    direction="row"
+                                    alignItems="center"
+                                    sx={{ width: "max-content", minWidth: "100%" }}
+                                >
+                                    {active && (
+                                        <Suspense fallback={null}>
+                                            <DesktopTopBarControls
+                                                sessionId={active.id}
+                                                status={active.status}
+                                            />
+                                        </Suspense>
+                                    )}
+                                    <Suspense fallback={null}>
+                                        <DesktopRegionShortcut shortcut="Alt+T" title="Focus Top Bar" />
+                                    </Suspense>
+                                    <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
+                                    <Suspense fallback={null}>
+                                        <DesktopContextShortcut
+                                            badge={`${MOD_LABEL},`}
+                                            shortcut={`${MOD_LABEL}, · Settings`}
+                                            placement="toolbar"
+                                        >
+                                            <IconButton
+                                                data-desktop-item="topbar-settings"
+                                                data-desktop-topbar-action="settings"
+                                                onClick={(): void => openSettings("settings")}
+                                                aria-label="settings"
+                                                title="Settings"
+                                            >
+                                                <SettingsIcon />
+                                            </IconButton>
+                                        </DesktopContextShortcut>
+                                    </Suspense>
+                                </Stack>
+                            </Box>
+                        ) : (
+                            <>
+                                {active && (
+                                    <SessionControls
+                                        sessionId={active.id}
+                                        status={active.status}
+                                    />
+                                )}
+                                <IconButton
+                                    onClick={(): void => openSettings("settings")}
+                                    aria-label="settings"
+                                    title="Settings"
+                                >
+                                    <SettingsIcon />
+                                </IconButton>
+                            </>
                         )}
                     </Toolbar>
                 </AppBar>

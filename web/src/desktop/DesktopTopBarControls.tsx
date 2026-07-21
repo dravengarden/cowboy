@@ -664,6 +664,16 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[1] as DesktopCommand);
   useDesktopCommand(topbarCommands[2] as DesktopCommand);
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
+  // Lower bound for the complete session-control strip. Each quota tile owns
+  // 104px, the freshness tile owns 58px, and run configuration / Compact keep
+  // their full touch targets. The parent toolbar scrolls once less space than
+  // this is available instead of compressing controls into one another.
+  const usageMinWidth = visibleLimits.length > 0
+    ? visibleLimits.length * 104 + Math.max(0, visibleLimits.length - 1) * 4 +
+      58 + 12
+    : 132;
+  const controlsMinWidth = 190 + usageMinWidth +
+    (compactAction ? 126 : 0) + (compactAction ? 12 : 6);
 
   return (
     <Stack
@@ -671,7 +681,7 @@ export function DesktopTopBarControls({
       direction="row"
       alignItems="center"
       spacing={0.75}
-      sx={{ flex: 1, minWidth: 0, ml: 2, overflow: "visible" }}
+      sx={{ flex: "0 0 auto", minWidth: controlsMinWidth, ml: 2, overflow: "visible" }}
     >
       {options.length === 0 && !dead &&
           (status === "starting" || status === "running")
@@ -699,7 +709,7 @@ export function DesktopTopBarControls({
                   px: 1.15,
                   justifyContent: "flex-start",
                   textTransform: "none",
-                  flexShrink: 1,
+                  flexShrink: 0,
                   minWidth: 170,
                   borderRadius: 1.5,
                   color: "text.primary",
