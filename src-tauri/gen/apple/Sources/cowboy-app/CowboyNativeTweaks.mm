@@ -337,9 +337,16 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     UIView *parent = wv.superview;
     if (wv == nil || parent == nil || wv.window == nil) return;
     CGRect kbScreen = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    // Keyboard frame → parent coords; overlap = how far it intrudes from the bottom.
+    // Keyboard frame → parent coords. Only a keyboard attached to the bottom
+    // edge owns viewport resize. Floating/undocked iPad keyboards overlay the
+    // document; trimming the whole WebView to their top creates a huge blank
+    // region below the composer.
     CGRect kbInParent = [parent convertRect:kbScreen fromView:nil];
-    CGFloat overlap = MAX(0, CGRectGetMaxY(parent.bounds) - CGRectGetMinY(kbInParent));
+    CGFloat parentBottom = CGRectGetMaxY(parent.bounds);
+    BOOL dockedToBottom = CGRectGetMaxY(kbInParent) >= parentBottom - 2;
+    CGFloat overlap = dockedToBottom
+        ? MAX(0, parentBottom - CGRectGetMinY(kbInParent))
+        : 0;
     [self applyOverlap:overlap userInfo:note.userInfo];
 }
 
@@ -355,14 +362,25 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     UIView *parent = wv.superview;
     if (wv == nil || parent == nil || wv.window == nil) return;
     if (@available(iOS 15.0, *)) {
+        // The default guide follows only a docked, full-width keyboard. iPad's
+        // split/floating keyboard can therefore settle somewhere completely
+        // different from UIKeyboardFrameEnd while the guide stays collapsed at
+        // the safe area. Opt into the real undocked geometry before measuring.
+        parent.keyboardLayoutGuide.followsUndockedKeyboard = YES;
         [parent layoutIfNeeded];
         CGRect keyboardFrame = parent.keyboardLayoutGuide.layoutFrame;
-        CGFloat overlap =
-            MAX(0, CGRectGetMaxY(parent.bounds) - CGRectGetMinY(keyboardFrame));
-        // A visible software keyboard is substantially taller than the safe-area
-        // guide. Ignore a transient empty/hidden guide rather than collapsing the
-        // web view to a bogus bottom inset.
-        if (overlap < 80) return;
+        CGFloat keyboardHeight = CGRectGetHeight(keyboardFrame);
+        // A collapsed guide is transient/hidden, not authoritative. Keep the
+        // notification animation until a real keyboard frame is available.
+        if (keyboardHeight < 80) return;
+        CGFloat parentBottom = CGRectGetMaxY(parent.bounds);
+        BOOL dockedToBottom = CGRectGetMaxY(keyboardFrame) >= parentBottom - 2;
+        // A genuinely floating keyboard must overlay the document instead of
+        // shortening the entire WKWebView to its top edge. A docked split
+        // keyboard still reaches the bottom and receives the normal overlap.
+        CGFloat overlap = dockedToBottom
+            ? MAX(0, parentBottom - CGRectGetMinY(keyboardFrame))
+            : 0;
         [UIView performWithoutAnimation:^{
             CGRect frame = parent.bounds;
             frame.size.height = MAX(0, frame.size.height - overlap);
@@ -370,7 +388,8 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
             [wv layoutIfNeeded];
         }];
 #if DEBUG
-        NSLog(@"[cowboy] keyboard settled overlap=%.1f webHeight=%.1f",
+        NSLog(@"[cowboy] keyboard settled frame=%@ docked=%d overlap=%.1f webHeight=%.1f",
+              NSStringFromCGRect(keyboardFrame), dockedToBottom,
               overlap, CGRectGetHeight(wv.frame));
 #endif
     }
