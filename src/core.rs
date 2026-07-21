@@ -27,6 +27,11 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 /// How many recent events a fresh client gets over WS (the live tail). Older
 /// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
 pub const SNAPSHOT_TAIL: usize = 200;
+/// Maximum serialized event payload sent for one session during WebSocket
+/// bootstrap. A few tool-heavy sessions can otherwise make every mobile
+/// reconnect replay several megabytes before live fan-out starts. Older events
+/// remain available through cursor-based HTTP history.
+pub const SNAPSHOT_MAX_BYTES: usize = 128 * 1024;
 /// Maximum persisted-history tail retained in the Hub. Older events stay in
 /// Postgres and are fetched by `/api/history`.
 pub const HOT_TAIL: usize = 1_000;
@@ -1577,7 +1582,19 @@ impl Hub {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|s| {
             let len = s.log.len();
-            let start = len.saturating_sub(SNAPSHOT_TAIL);
+            let count_start = len.saturating_sub(SNAPSHOT_TAIL);
+            let mut start = len;
+            let mut serialized_bytes = 0usize;
+            for index in (count_start..len).rev() {
+                let event_bytes = serde_json::to_vec(&s.log[index]).map_or(0, |event| event.len());
+                if serialized_bytes > 0
+                    && serialized_bytes.saturating_add(event_bytes) > SNAPSHOT_MAX_BYTES
+                {
+                    break;
+                }
+                start = index;
+                serialized_bytes = serialized_bytes.saturating_add(event_bytes);
+            }
             (s.log[start..].to_vec(), s.reached_start && start == 0)
         })
     }
@@ -4205,6 +4222,26 @@ mod confirm_hold_tests {
         let (snapshot, reached_start) = hub.snapshot("bounded").expect("session snapshot");
         assert_eq!(snapshot.len(), SNAPSHOT_TAIL);
         assert!(!reached_start);
+    }
+
+    #[test]
+    fn session_snapshot_is_byte_bounded_and_keeps_the_newest_event() {
+        let hub = hub_with_session("byte-bounded");
+        let payload = "x".repeat(96 * 1024);
+        for n in 0..4 {
+            hub.push(
+                "byte-bounded",
+                Event::Update {
+                    update: serde_json::json!({"sessionUpdate": "tool_call_update", "n": n, "payload": payload}),
+                },
+            );
+        }
+
+        let (snapshot, reached_start) = hub.snapshot("byte-bounded").expect("session snapshot");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].seq, 3);
+        assert!(!reached_start);
+        assert!(serde_json::to_vec(&snapshot[0]).unwrap().len() < SNAPSHOT_MAX_BYTES);
     }
 
     #[test]
