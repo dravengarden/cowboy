@@ -1,5 +1,6 @@
 import {
     forwardRef,
+    Fragment,
     lazy,
     memo,
     Suspense,
@@ -732,14 +733,11 @@ function SessionList({
                                     right: index < 10 ? 82 : 42,
                                     top: "50%",
                                     alignItems: "center",
-                                    overflow: "hidden",
                                     border: 1,
-                                    borderColor: (theme) => alpha(theme.palette.primary.main, 0.32),
+                                    borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
                                     borderRadius: "999px",
-                                    bgcolor: (theme) => alpha(theme.palette.background.paper, 0.82),
-                                    boxShadow: (theme) =>
-                                        `0 2px 7px ${alpha(theme.palette.common.black, 0.075)}`,
-                                    backdropFilter: "blur(8px) saturate(1.15)",
+                                    background: (theme) =>
+                                        `linear-gradient(${alpha(theme.palette.primary.main, 0.075)}, ${alpha(theme.palette.primary.main, 0.075)}), ${theme.palette.background.paper}`,
                                     pointerEvents: "none",
                                     opacity: 0,
                                     transform: "translateY(-50%) scale(.96)",
@@ -748,27 +746,34 @@ function SessionList({
                                 }}
                             >
                                 {(pinned ? ["J/K", "Esc"] : ["P", "H", "L"]).map((key, keyIndex) => (
-                                    <Box
-                                        key={key}
-                                        component="span"
-                                        sx={{
-                                            minWidth: key.length > 1 ? 34 : 26,
-                                            height: 26,
-                                            px: 0.65,
-                                            display: "grid",
-                                            placeItems: "center",
-                                            borderLeft: keyIndex === 0 ? 0 : 1,
-                                            borderColor: (theme) => alpha(theme.palette.primary.main, 0.18),
-                                            color: "primary.main",
-                                            fontFamily: "monospace",
-                                            fontSize: "0.68rem",
-                                            fontWeight: 750,
-                                            lineHeight: 1,
-                                            letterSpacing: key.length === 1 ? "0.04em" : 0,
-                                        }}
-                                    >
-                                        {key}
-                                    </Box>
+                                    <Fragment key={key}>
+                                        {keyIndex > 0 && (
+                                            <Typography
+                                                component="span"
+                                                sx={{ color: "text.disabled", fontSize: "0.58rem", lineHeight: 1 }}
+                                            >
+                                                ·
+                                            </Typography>
+                                        )}
+                                        <Typography
+                                            component="span"
+                                            sx={{
+                                                minWidth: key.length > 1 ? 25 : 14,
+                                                height: 20,
+                                                px: 0.35,
+                                                display: "grid",
+                                                placeItems: "center",
+                                                color: "primary.main",
+                                                fontFamily: "monospace",
+                                                fontSize: "0.64rem",
+                                                fontWeight: 750,
+                                                lineHeight: 1,
+                                                letterSpacing: key.length === 1 ? "0.035em" : 0,
+                                            }}
+                                        >
+                                            {key}
+                                        </Typography>
+                                    </Fragment>
                                 ))}
                             </Stack>
                         )}
