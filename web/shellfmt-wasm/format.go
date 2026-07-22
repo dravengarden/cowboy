@@ -648,7 +648,7 @@ func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 	}
 	for index := 1; index+1 < len(args); index++ {
 		option, ok := staticWord(args[index])
-		if !ok || (option != "-c" && option != "--command") {
+		if !ok || !psqlCommandOption(option) {
 			continue
 		}
 		value, ok := staticWord(args[index+1])
@@ -667,6 +667,27 @@ func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 		}, true
 	}
 	return nestedPayload{}, false
+}
+
+// psql accepts its argument-free short options as a cluster, so the command
+// payload flag in real diagnostic invocations is commonly written as `-Atc`
+// rather than a standalone `-c`. Only accept `c` in the final position and
+// whitelist the preceding no-argument options: options such as `-f` and `-v`
+// consume values and must not cause the following word to be interpreted as
+// SQL. Long options remain deliberately explicit.
+func psqlCommandOption(option string) bool {
+	if option == "--command" {
+		return true
+	}
+	if len(option) < 2 || option[0] != '-' || option[1] == '-' || option[len(option)-1] != 'c' {
+		return false
+	}
+	for _, flag := range option[1 : len(option)-1] {
+		if !strings.ContainsRune("aAbeELnqSstxX1", flag) {
+			return false
+		}
+	}
+	return true
 }
 
 // sqlNeedsFrame is viewport-independent so the same command keeps the same

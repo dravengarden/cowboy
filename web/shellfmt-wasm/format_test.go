@@ -601,6 +601,38 @@ func TestExtractsPsqlCommandAsPostgresqlFrame(t *testing.T) {
 	}
 }
 
+func TestExtractsPsqlCommandFromCombinedShortOptions(t *testing.T) {
+	source := `psql 'postgresql:///cowboy?host=/run/postgresql-cowboy&port=5433&user=cowboy' -Atc "select id, title, status from sessions where title ilike '%carrack%' order by updated_at desc"`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range display.Frames {
+		if frame.Language == "sql" {
+			if frame.Dialect != "postgresql" || frame.Launcher != "psql -Atc" {
+				t.Fatalf("expected combined PostgreSQL command metadata: %#v", frame)
+			}
+			if !strings.Contains(frame.Text, "title ilike '%carrack%'") {
+				t.Fatalf("SQL payload was not decoded intact: %q", frame.Text)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected combined -Atc to produce a SQL frame: %#v", display.Frames)
+}
+
+func TestRejectsValueTakingPsqlOptionAsCommandCluster(t *testing.T) {
+	display, err := formatShellDisplay(`psql database -fc 'select id from sessions where active'`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range display.Frames {
+		if frame.Language == "sql" {
+			t.Fatalf("value-taking option cluster must not be treated as -c: %#v", display.Frames)
+		}
+	}
+}
+
 func TestLeavesDynamicPsqlPayloadInShellFrame(t *testing.T) {
 	display, err := formatShellDisplay(`psql database -c "$QUERY"`, 46)
 	if err != nil {
