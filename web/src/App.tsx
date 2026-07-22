@@ -620,22 +620,48 @@ function SessionList({
                             standard-MUI-sized regardless of reading prefs.
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
-                        <IconButton
-                            className="cowboy-session-grip"
-                            {...sortable.handleProps(s.id)}
-                            aria-label="Drag to reorder"
+                        <Box
                             sx={{
+                                position: "relative",
+                                flexShrink: 0,
                                 width: 44,
                                 height: 44,
-                                flexShrink: 0,
-                                // No negative margin — the row's pl (12px) is the
-                                // gutter; a pull-left would re-clip the circle at
-                                // the screen edge.
-                                color: "text.disabled",
                             }}
                         >
-                            <DragIndicator sx={{ fontSize: 24 }} />
-                        </IconButton>
+                            <IconButton
+                                className="cowboy-session-grip"
+                                {...sortable.handleProps(s.id)}
+                                aria-label="Drag to reorder"
+                                sx={{
+                                    width: 44,
+                                    height: 44,
+                                    // No negative margin — the row's pl (12px) is the
+                                    // gutter; a pull-left would re-clip the circle at
+                                    // the screen edge.
+                                    color: "text.disabled",
+                                }}
+                            >
+                                <DragIndicator sx={{ fontSize: 24 }} />
+                            </IconButton>
+                            {desktop && (
+                                <Box
+                                    className="cowboy-session-pin-shortcut"
+                                    title="P · Pin for J/K reorder"
+                                    sx={{
+                                        position: "absolute",
+                                        right: -1,
+                                        bottom: -1,
+                                        display: "inline-flex",
+                                        pointerEvents: "none",
+                                        opacity: 0,
+                                        transform: "translateY(2px) scale(0.92)",
+                                        transition: "opacity 120ms ease, transform 120ms ease",
+                                    }}
+                                >
+                                    <Kbd keys="P" />
+                                </Box>
+                            )}
+                        </Box>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
@@ -1686,6 +1712,10 @@ export function App({
                         },
                         "& .cowboy-session-shortcut": {
                             opacity: "1 !important",
+                        },
+                        "& .cowboy-session-pin-shortcut": {
+                            opacity: 0.92,
+                            transform: "translateY(0) scale(1)",
                         },
                     },
                 }),
