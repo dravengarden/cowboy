@@ -652,6 +652,8 @@ function SessionList({
                                 width: 44,
                                 height: 44,
                                 flexShrink: 0,
+                                display: "grid",
+                                placeItems: "center",
                             }}
                         >
                             <IconButton
