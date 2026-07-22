@@ -3316,9 +3316,15 @@ export function Transcript({
     return () => cancelAnimationFrame(raf);
   }, [sessionId]);
 
-  // After a timeline change (fires per streamed chunk — `timeline` is a fresh
-  // array each envelope). STUCK: follow the bottom, scrollTop 0 (a no-op when the
-  // native bottom anchor already held it there, a safety net if it didn't).
+  // After a PRESENTED timeline change. Normally this fires per streamed chunk;
+  // while native scrolling is active presentation is frozen, then the latest
+  // canonical timeline is flushed atomically when scrolling settles. Keying
+  // this effect to `presentedTimeline` (not the continuously advancing backing
+  // `timeline`) is essential: the flush must restore the detached anchor before
+  // paint, otherwise the accumulated streamed content visibly shifts the reader
+  // once at every scroll-settle boundary.
+  // STUCK: follow the bottom, scrollTop 0 (a no-op when the native bottom anchor
+  // already held it there, a safety net if it didn't).
   // DETACHED: hold the reader's view against the streaming bottom bubble's upward
   // growth by re-asserting the freeze anchor (column-reverse's native anchor only
   // pins the bottom, which is exactly what a scrolled-up reader does NOT want).
@@ -3354,7 +3360,7 @@ export function Transcript({
     // `scrollHeight` is briefly stale this layout pass.
     const sRaf = requestAnimationFrame(() => reportScrollableRef.current());
     return () => cancelAnimationFrame(sRaf);
-  }, [timeline]);
+  }, [presentedTimeline]);
 
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
   // bottom and resume following. Guarded so it only fires on an actual bump
