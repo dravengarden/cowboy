@@ -3139,7 +3139,14 @@ function SettingsShell({
         >
             {/* Mobile keeps progressive-disclosure tabs. Desktop is one visible
                 keyboard workbench, so no information is hidden behind a tab. */}
-            <Box sx={{ position: desktop ? "sticky" : "static", top: desktop ? -1 : "auto", zIndex: 4, bgcolor: "background.paper" }}>
+            <Box
+                sx={{
+                    position: desktop ? "sticky" : "static",
+                    top: desktop ? -1 : "auto",
+                    zIndex: desktop ? 4 : "auto",
+                    bgcolor: desktop ? "background.paper" : "transparent",
+                }}
+            >
             <Box sx={{ display: "flex", alignItems: "center", mt: 0.25, mb: desktop ? 1 : 1.5, py: desktop ? 0.5 : 0 }}>
                 {desktop ? (
                     <Box sx={{ flex: 1 }}>
