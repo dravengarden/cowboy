@@ -87,6 +87,7 @@ import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ShortcutKeycap } from "./ShortcutKeycap";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
@@ -3957,11 +3958,13 @@ export function AutoScrollAndStop({
   status,
   dense = false,
   presentation = "icons",
+  desktopShortcutActive = false,
 }: {
   sessionId: string;
   status: Status;
   dense?: boolean;
   presentation?: "icons" | "desktop-toolbar";
+  desktopShortcutActive?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -3978,25 +3981,16 @@ export function AutoScrollAndStop({
           variant="text"
           startIcon={<Stop fontSize="small" />}
           onClick={(): void => setCancelOpen(true)}
-          sx={{ textTransform: "none", whiteSpace: "nowrap" }}
+          sx={{ minWidth: 78, textTransform: "none", whiteSpace: "nowrap", "& .MuiButton-startIcon": { mr: 0.65 } }}
         >
-          Stop
+          <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
+          <ShortcutKeycap keyLabel="S" variant="global" accent={desktopShortcutActive} sx={{ flexShrink: 0, ml: 0.65 }} />
         </Button>
       )
       : null;
     return (
       <>
-        {stopButton && (
-          <Suspense fallback={stopButton}>
-            <DesktopContextShortcut
-              badge="S"
-              shortcut="S · Stop current turn"
-              placement="inline"
-            >
-              {stopButton}
-            </DesktopContextShortcut>
-          </Suspense>
-        )}
+        {stopButton}
         <StopConfirmDialog
           open={cancelOpen}
           onClose={(): void => setCancelOpen(false)}

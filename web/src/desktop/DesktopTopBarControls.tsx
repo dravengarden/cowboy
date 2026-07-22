@@ -34,6 +34,7 @@ import {
 import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
+import { ShortcutKeycap } from "../ShortcutKeycap";
 import {
   latestAvailableCommands,
   resolveSessionAction,
@@ -60,9 +61,9 @@ import {
   usageLimits,
   type UsageSnapshot,
 } from "../usageLimits";
-import { DesktopContextShortcut } from "./commands/DesktopContextShortcut";
 import { UsageLogs } from "../UsageLogs";
 import { DesktopModal } from "./DesktopModal";
+import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
   useDesktopCommand,
@@ -569,6 +570,8 @@ export function DesktopTopBarControls({
   sessionId: string;
   status: Status;
 }): React.JSX.Element {
+  const workspace = useDesktopWorkspace();
+  const shortcutsActive = workspace.focusedRegion === "topbar.controls";
   const optionsBySession = useStoreSelector((snapshot) =>
     snapshot.configOptions
   );
@@ -870,12 +873,7 @@ export function DesktopTopBarControls({
           (status === "starting" || status === "running")
         ? <Skeleton variant="rounded" width={300} height={34} />
         : (
-          <DesktopContextShortcut
-            badge="R"
-            shortcut="R · Run configuration"
-            placement="inline"
-          >
-            <Tooltip title={configSummary || "Run configuration"}>
+          <Tooltip title={configSummary || "Run configuration"}>
               <Button
                 data-desktop-item="topbar-config"
                 data-desktop-topbar-action="config"
@@ -927,12 +925,12 @@ export function DesktopTopBarControls({
                   "& .MuiButton-endIcon": { ml: "auto" },
                 }}
               >
-                <Typography variant="caption" fontWeight={650} noWrap>
+                <Typography variant="caption" fontWeight={650} noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                   {configSummary || "Run configuration"}
                 </Typography>
+                <ShortcutKeycap keyLabel="R" variant="global" accent={shortcutsActive} sx={{ flexShrink: 0, ml: 0.75 }} />
               </Button>
-            </Tooltip>
-          </DesktopContextShortcut>
+          </Tooltip>
         )}
 
       <DesktopModal
@@ -964,12 +962,7 @@ export function DesktopTopBarControls({
         </Box>
       </DesktopModal>
 
-      <DesktopContextShortcut
-        badge="U"
-        shortcut="U · Usage limits"
-        placement="inline"
-      >
-        <ButtonBase
+      <ButtonBase
           data-desktop-item="topbar-usage"
           data-desktop-topbar-action="usage"
           data-desktop-quota
@@ -977,6 +970,7 @@ export function DesktopTopBarControls({
           sx={{
             height: 38,
             px: 0.75,
+            gap: 0.65,
             borderRadius: 1.25,
             flexShrink: 0,
             "&:hover": { bgcolor: "action.hover" },
@@ -1066,8 +1060,8 @@ export function DesktopTopBarControls({
                 {snapshot ? "Usage unavailable" : "Loading usage…"}
               </Typography>
             )}
+          <ShortcutKeycap keyLabel="U" variant="global" accent={shortcutsActive} sx={{ flexShrink: 0 }} />
         </ButtonBase>
-      </DesktopContextShortcut>
 
       <DesktopModal
         open={usageAnchor !== null}
@@ -1175,12 +1169,7 @@ export function DesktopTopBarControls({
       </DesktopModal>
 
       {compactAction && (
-        <DesktopContextShortcut
-          badge="C"
-          shortcut="C · Compact conversation"
-          placement="inline"
-        >
-          <Tooltip
+        <Tooltip
             title={compacting
               ? "Compacting…"
               : compactTooltip(contextUsed, contextSize)}
@@ -1205,13 +1194,14 @@ export function DesktopTopBarControls({
                 sx={{
                   height: 36,
                   px: 1.1,
+                  minWidth: 126,
                   flexShrink: 0,
                   textTransform: "none",
                   borderColor: "divider",
                   "& .MuiButton-startIcon": { mr: 0.75 },
                 }}
               >
-                <Stack direction="row" spacing={0.65} alignItems="baseline">
+                <Stack direction="row" spacing={0.65} alignItems="center" sx={{ width: "100%" }}>
                   <Typography variant="caption" fontWeight={750}>
                     Compact
                   </Typography>
@@ -1234,11 +1224,11 @@ export function DesktopTopBarControls({
                         {contextPercent}%
                       </Typography>
                     )}
+                  <ShortcutKeycap keyLabel="C" variant="global" accent={shortcutsActive} sx={{ flexShrink: 0, ml: "auto !important" }} />
                 </Stack>
               </Button>
             </span>
           </Tooltip>
-        </DesktopContextShortcut>
       )}
 
       <Dialog
@@ -1296,6 +1286,7 @@ export function DesktopTopBarControls({
         sessionId={sessionId}
         status={status}
         presentation="desktop-toolbar"
+        desktopShortcutActive={shortcutsActive}
       />
     </Stack>
   );
