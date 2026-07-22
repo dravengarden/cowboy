@@ -32,7 +32,10 @@ export function Sheet(
           },
         }}
       >
-        <DialogContent>{props.children}</DialogContent>
+        {/* Desktop workbenches own a sticky command rail as their final child.
+            Remove MUI's trailing content inset so that rail can terminate at
+            the dialog edge instead of leaving a false empty footer below it. */}
+        <DialogContent sx={{ pb: 0 }}>{props.children}</DialogContent>
       </Dialog>
     );
   }

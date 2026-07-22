@@ -3179,7 +3179,6 @@ function SettingsShell({
                         gridTemplateColumns: "minmax(0, 1fr)",
                         gap: 2,
                         alignItems: "start",
-                        pb: 7,
                         "@media (max-width: 1279px)": { gridTemplateColumns: "1fr" },
                     }}
                 >
