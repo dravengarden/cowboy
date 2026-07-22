@@ -462,12 +462,21 @@ function SessionList({
             const session = item?.dataset.desktopItem
                 ? byId.get(item.dataset.desktopItem)
                 : undefined;
-            if (session) onRequestInfo(session);
+            if (session) setMenuAnchor({ row: session, el: item ?? list });
         };
         list.addEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
         return () =>
             list.removeEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
-    }, [byId, desktop, onRequestInfo]);
+    }, [byId, desktop]);
+    useEffect(() => {
+        if (!desktop || !menuAnchor) return undefined;
+        const frame = requestAnimationFrame(() => {
+            document.querySelector<HTMLButtonElement>(
+                "[data-desktop-session-actions] button:not(:disabled)",
+            )?.focus({ preventScroll: true });
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [desktop, menuAnchor?.row.id]);
     const onDesktopListKeyDown = (event: React.KeyboardEvent<HTMLUListElement>): void => {
         if (
             !desktop || event.metaKey || event.ctrlKey || event.altKey ||
@@ -520,7 +529,7 @@ function SessionList({
         if (key === "h" && session) {
             event.preventDefault();
             event.stopPropagation();
-            onRequestInfo(session);
+            setMenuAnchor({ row: session, el: row });
             return;
         }
         if ((key === "l" || key === "Enter") && session) {
@@ -847,8 +856,24 @@ function SessionList({
             <Dialog
                 open={desktop && !!menuAnchor}
                 onClose={(): void => setMenuAnchor(null)}
+                onKeyDown={(event): void => {
+                    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+                    const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
+                    if (key !== "j" && key !== "k") return;
+                    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                        "[data-desktop-session-actions] button:not(:disabled)",
+                    )];
+                    if (items.length === 0) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                    const next = current < 0
+                        ? 0
+                        : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
+                    items[next]?.focus();
+                }}
                 fullWidth
-                maxWidth="sm"
+                maxWidth="md"
                 slotProps={{
                     paper: {
                         sx: { borderRadius: 2.5, overflow: "hidden" },
@@ -856,46 +881,35 @@ function SessionList({
                 }}
             >
                 <DialogTitle sx={{ pb: 1 }}>
-                    <Typography variant="subtitle1" fontWeight={780}>Session actions</Typography>
+                    <Typography variant="subtitle1" fontWeight={780}>Session</Typography>
                     <Typography variant="caption" color="text.secondary" noWrap>
                         {menuAnchor?.row.title} · {menuAnchor?.row.cwd}
                     </Typography>
                 </DialogTitle>
                 <Divider />
-                <DialogContent sx={{ p: 1.5 }}>
-                    <Stack
-                        data-desktop-session-actions
-                        spacing={0.5}
-                        onKeyDown={(event): void => {
-                            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-                            const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
-                            const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
-                            const current = items.indexOf(document.activeElement as HTMLButtonElement);
-                            if (key === "j" || key === "k") {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                const next = current < 0 ? 0 : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
-                                items[next]?.focus();
-                            }
-                        }}
-                    >
-                        <Button autoFocus fullWidth startIcon={<InfoOutlined />} onClick={(): void => { if (menuAnchor) onRequestInfo(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
-                            Info<Box sx={{ flex: 1 }} /><Kbd keys="Enter" />
-                        </Button>
-                        <Button fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
-                            Rename
-                        </Button>
-                        <Divider sx={{ my: 0.5 }} />
-                        <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Auto-resume</Typography>
-                        {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})` }, { v: true, label: "On" }, { v: false, label: "Off" } ] as const).map((opt) => {
-                            const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
-                            return <Button key={String(opt.v)} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => { if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>{opt.label}</Button>;
-                        })}
-                        <Divider sx={{ my: 0.5 }} />
-                        <Button color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { if (menuAnchor) onRequestDelete(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
-                            Delete
-                        </Button>
-                    </Stack>
+                <DialogContent sx={{ p: 2 }}>
+                    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(280px, 0.8fr)", gap: 2.5 }}>
+                        <DesktopSessionInfoPanel session={menuAnchor?.row ?? null} />
+                        <Stack
+                            data-desktop-session-actions
+                            spacing={0.5}
+                        >
+                            <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
+                            <Button autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                Rename
+                            </Button>
+                            <Divider sx={{ my: 0.5 }} />
+                            <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Auto-resume</Typography>
+                            {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})` }, { v: true, label: "On" }, { v: false, label: "Off" } ] as const).map((opt) => {
+                                const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
+                                return <Button key={String(opt.v)} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => { if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>{opt.label}</Button>;
+                            })}
+                            <Divider sx={{ my: 0.5 }} />
+                            <Button color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { if (menuAnchor) onRequestDelete(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                Delete
+                            </Button>
+                        </Stack>
+                    </Box>
                 </DialogContent>
                 <Divider />
                 <Stack direction="row" justifyContent="flex-end" spacing={2} sx={{ px: 2, py: 1, color: "text.secondary" }}>
@@ -3551,6 +3565,69 @@ interface SessionInfoData {
     event_count: number;
     queue_count: number;
     drafts_count: number;
+}
+
+function DesktopSessionInfoPanel(
+    { session }: { session: SessionMeta | null },
+): React.JSX.Element {
+    const [info, setInfo] = useState<SessionInfoData | null>(null);
+    const [error, setError] = useState(false);
+    useEffect(() => {
+        if (!session) {
+            setInfo(null);
+            return undefined;
+        }
+        setInfo(null);
+        setError(false);
+        const ctrl = new AbortController();
+        void fetch(`/api/sessions/${encodeURIComponent(session.id)}/info`, {
+            signal: ctrl.signal,
+        })
+            .then((response) =>
+                response.ok
+                    ? response.json() as Promise<SessionInfoData>
+                    : Promise.reject(new Error("not found"))
+            )
+            .then(setInfo)
+            .catch(() => {
+                if (!ctrl.signal.aborted) setError(true);
+            });
+        return () => ctrl.abort();
+    }, [session?.id]);
+
+    return (
+        <Box
+            aria-label="Session information"
+            sx={{
+                minWidth: 0,
+                p: 2,
+                border: 1,
+                borderColor: "divider",
+                borderRadius: 2,
+                bgcolor: (theme) => alpha(theme.palette.text.primary, 0.025),
+            }}
+        >
+            <Typography variant="overline" color="text.secondary">Overview</Typography>
+            {error
+                ? <Typography color="error" variant="body2" sx={{ mt: 1 }}>Couldn't load session info.</Typography>
+                : !info
+                ? <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Loading…</Typography>
+                : (
+                    <Stack spacing={1.15} sx={{ mt: 1 }}>
+                        <InfoRow k="Title" v={info.title} />
+                        <InfoRow k="Status" v={info.status} />
+                        <InfoRow k="Provider" v={info.provider} />
+                        <InfoRow k="Directory" v={info.cwd} />
+                        <Divider />
+                        <InfoRow k="Events" v={info.event_count.toLocaleString()} />
+                        <InfoRow k="Queued" v={String(info.queue_count)} />
+                        <InfoRow k="Drafts" v={String(info.drafts_count)} />
+                        <Divider />
+                        <InfoRow k="Session ID" v={info.id} />
+                    </Stack>
+                )}
+        </Box>
+    );
 }
 
 function SessionInfoShell(
