@@ -116,6 +116,10 @@ export async function formatEmbeddedFrame(frame: ShellFrame, columns: number): P
       text: await formatEmbeddedSource({ language: frame.language, source: frame.text, columns }),
     };
   }
+  if (frame.language === "perl") {
+    const { reflowPerl } = await import("./perlFormatter.ts");
+    return { ...frame, text: reflowPerl(frame.text, columns) };
+  }
   if (frame.language !== "sql") return frame;
   try {
     // Kept behind the already-lazy shell formatter path: ordinary transcript

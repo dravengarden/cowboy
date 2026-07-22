@@ -840,6 +840,20 @@ func TestExtractsInlineScriptLanguages(t *testing.T) {
 	}
 }
 
+func TestExtractsPerlProgramAfterCombinedInPlaceFlags(t *testing.T) {
+	display, err := formatShellDisplay(`perl -0pi -e 's#/assets/app-v2\.css#/assets/app-v3.css#g; s#/assets/app-v3\.js#/assets/app-v4.js#g' apps/worker/src/lib.rs assets/sw.js`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 {
+		t.Fatalf("combined Perl flags should retain one nested source frame: %#v", display.Frames)
+	}
+	child := display.Frames[1]
+	if child.Language != "perl" || child.Label != "Perl" || !strings.Contains(child.Text, "app-v3") {
+		t.Fatalf("unexpected Perl frame: %#v", child)
+	}
+}
+
 func TestKeepsTrivialEmbeddedProgramsInline(t *testing.T) {
 	for _, source := range []string{`python3 -c 'print(1)'`, `rg 'todo' .`, `rg -o 'cowboy-v[0-9]+' sw.js`, `rg 'a(b|c)[0-9]+' .`, `pgrep -af 'r2-membership-verify|reconcile-lightsail-window'`, `sed 's/a/b/' file`, `awk '{print}' file`} {
 		display, err := formatShellDisplay(source, 46)
