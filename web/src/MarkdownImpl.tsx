@@ -28,6 +28,7 @@ import remarkGfm from "remark-gfm";
 import remarkFrontmatter from "remark-frontmatter";
 import { ImageLightbox } from "./_shell";
 import { copyText } from "./clipboard";
+import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
@@ -627,10 +628,14 @@ const MarkdownImpl = memo(function MarkdownImpl({
           href={href ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
-          // Keep this a real anchor. Browsers and installed PWAs own navigation;
-          // Tauri's opener plugin injects its own `_blank` click handler for the
-          // native shells. Intercepting here broke both paths by cancelling the
-          // anchor before either platform could handle it.
+          onClick={(event): void => {
+            // Browser/PWA navigation remains a real anchor. WKWebView cannot
+            // reliably create a `_blank` window, so native shells alone route
+            // the same user gesture through Tauri's operating-system opener.
+            if (!href || !shouldRouteExternalClick(event)) return;
+            event.preventDefault();
+            openExternalUrl(href);
+          }}
           // On an inverted (user) bubble the text is white on the primary fill, so
           // the default theme link colour is near-invisible — a link (e.g. a bare
           // `git@github.com` that remark-gfm auto-linked) then reads as "lost". Make

@@ -1,4 +1,9 @@
-import { openExternalUrl, safeExternalUrl } from "./openExternal";
+import {
+  hasNativeExternalOpener,
+  openExternalUrl,
+  safeExternalUrl,
+  shouldRouteExternalClick,
+} from "./openExternal";
 
 Deno.test("external links allow explicit network and contact protocols", () => {
   for (const url of [
@@ -67,5 +72,56 @@ Deno.test("Tauri fallback passes open_url its url argument", () => {
     if ("path" in args) throw new Error("open_url must not receive a path argument");
   } finally {
     delete root.__TAURI__;
+  }
+});
+
+Deno.test("Tauri v2 internals open native-shell links with the URL argument", () => {
+  let command = "";
+  let args: Record<string, unknown> = {};
+  const root = globalThis as typeof globalThis & {
+    __TAURI_INTERNALS__?: {
+      invoke: (nextCommand: string, nextArgs: Record<string, unknown>) => Promise<unknown>;
+    };
+  };
+  root.__TAURI_INTERNALS__ = {
+    invoke: (nextCommand, nextArgs) => {
+      command = nextCommand;
+      args = nextArgs;
+      return Promise.resolve();
+    },
+  };
+  try {
+    if (!hasNativeExternalOpener()) throw new Error("expected native opener detection");
+    openExternalUrl("https://example.com/native");
+    if (command !== "plugin:opener|open_url") throw new Error(`unexpected command: ${command}`);
+    if (args.url !== "https://example.com/native") {
+      throw new Error(`expected native URL argument, got ${JSON.stringify(args)}`);
+    }
+  } finally {
+    delete root.__TAURI_INTERNALS__;
+  }
+});
+
+Deno.test("only unmodified native primary clicks override anchor navigation", () => {
+  const root = globalThis as typeof globalThis & {
+    __TAURI_INTERNALS__?: { invoke: () => Promise<unknown> };
+  };
+  const click = {
+    button: 0,
+    defaultPrevented: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+  };
+  if (shouldRouteExternalClick(click)) throw new Error("browser anchor must remain native");
+  root.__TAURI_INTERNALS__ = { invoke: () => Promise.resolve() };
+  try {
+    if (!shouldRouteExternalClick(click)) throw new Error("native primary click must use opener");
+    if (shouldRouteExternalClick({ ...click, metaKey: true })) {
+      throw new Error("modified clicks must retain anchor semantics");
+    }
+  } finally {
+    delete root.__TAURI_INTERNALS__;
   }
 });
