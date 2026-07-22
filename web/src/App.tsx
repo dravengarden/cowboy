@@ -570,7 +570,6 @@ function SessionList({
                             bgcolor: (theme) => alpha(theme.palette.primary.main, 0.055),
                         }}
                     >
-                        <Kbd keys="P" />
                         <Typography
                             variant="caption"
                             sx={{ fontWeight: 750, letterSpacing: "0.045em" }}
@@ -647,22 +646,42 @@ function SessionList({
                             standard-MUI-sized regardless of reading prefs.
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
-                        <IconButton
-                            className="cowboy-session-grip"
-                            {...sortable.handleProps(s.id)}
-                            aria-label="Drag to reorder"
+                        <Box
                             sx={{
+                                position: "relative",
                                 width: 44,
                                 height: 44,
                                 flexShrink: 0,
-                                // No negative margin — the row's pl (12px) is the
-                                // gutter; a pull-left would re-clip the circle at
-                                // the screen edge.
-                                color: "text.disabled",
                             }}
                         >
-                            <DragIndicator sx={{ fontSize: 24 }} />
-                        </IconButton>
+                            <IconButton
+                                className="cowboy-session-grip"
+                                {...sortable.handleProps(s.id)}
+                                aria-label="Drag to reorder"
+                                sx={{ width: 44, height: 44, color: "text.disabled" }}
+                            >
+                                <DragIndicator sx={{ fontSize: 24 }} />
+                            </IconButton>
+                            {desktop && (
+                                <Box
+                                    className="cowboy-session-pin-shortcut"
+                                    title={pinned ? "J/K · Move pinned session" : "P · Pin for reorder"}
+                                    sx={{
+                                        position: "absolute",
+                                        zIndex: 2,
+                                        left: -3,
+                                        top: "50%",
+                                        display: "inline-flex",
+                                        pointerEvents: "none",
+                                        opacity: 0,
+                                        transform: "translate(-35%, -50%) scale(.92)",
+                                        transition: "opacity 120ms ease, transform 140ms ease",
+                                    }}
+                                >
+                                    <Kbd keys={pinned ? "J/K" : "P"} />
+                                </Box>
+                            )}
+                        </Box>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
@@ -709,28 +728,6 @@ function SessionList({
                                 },
                             }}
                         />
-                        {desktop && (
-                            <Box
-                                className="cowboy-session-pin-shortcut"
-                                title={pinned ? "J/K · Move pinned session" : "P · Pin for reorder"}
-                                sx={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    flexShrink: 0,
-                                    maxWidth: 0,
-                                    ml: 0,
-                                    overflow: "hidden",
-                                    pointerEvents: "none",
-                                    opacity: 0,
-                                    transform: "translateX(4px)",
-                                    transition:
-                                        "max-width 140ms ease, margin 140ms ease, opacity 120ms ease, transform 140ms ease",
-                                }}
-                            >
-                                <Kbd keys={pinned ? "J/K" : "P"} />
-                            </Box>
-                        )}
                         {desktop && index < 10 && (
                             <Suspense fallback={null}>
                                 <DesktopSessionShortcut
@@ -1799,9 +1796,7 @@ export function App({
                         },
                         "& .cowboy-session-pin-shortcut": {
                             opacity: 0.92,
-                            maxWidth: 52,
-                            ml: 0.5,
-                            transform: "translateX(0)",
+                            transform: "translate(-35%, -50%) scale(1)",
                         },
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {

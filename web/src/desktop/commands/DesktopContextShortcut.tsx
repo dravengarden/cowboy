@@ -26,14 +26,14 @@ export function DesktopContextShortcut({
   const toolbar = placement === "toolbar";
   const inline = placement === "inline";
   const restingTransform = inline
-    ? "none"
+    ? "translateY(2px) scale(.92)"
     : corner
     ? "translate(1px, 1px) scale(.94)"
     : toolbar
     ? "translate(2px, -50%) scale(.94)"
     : "translate(-50%, 2px) scale(.94)";
   const visibleTransform = inline
-    ? "none"
+    ? "translateY(0) scale(1)"
     : corner
     ? "translate(0, 0) scale(1)"
     : toolbar
@@ -79,25 +79,17 @@ export function DesktopContextShortcut({
         <Box
           className="cowboy-context-shortcut"
           sx={{
-            position: inline ? "static" : "absolute",
+            position: "absolute",
             zIndex: 4,
             top: toolbar ? "50%" : "auto",
-            bottom: toolbar ? "auto" : corner ? -3 : -5,
-            right: corner ? -4 : toolbar ? -9 : "auto",
-            left: corner || toolbar ? "auto" : "50%",
+            bottom: inline ? -3 : toolbar ? "auto" : corner ? -3 : -5,
+            right: inline ? 6 : corner ? -4 : toolbar ? -9 : "auto",
+            left: inline ? "auto" : corner || toolbar ? "auto" : "50%",
             display: "inline-flex",
-            // Inline top-bar hints own a permanent lane. Focus changes only
-            // opacity; it must never reflow the dense control strip.
-            width: inline ? 26 : undefined,
-            minWidth: inline ? 26 : undefined,
-            maxWidth: inline ? 26 : undefined,
-            ml: inline ? 0.5 : 0,
-            overflow: inline ? "hidden" : "visible",
+            overflow: "visible",
             opacity: 0,
             transform: restingTransform,
-            transition: inline
-              ? "opacity 120ms ease"
-              : "opacity 120ms ease, transform 120ms ease",
+            transition: "opacity 120ms ease, transform 120ms ease",
             pointerEvents: "none",
           }}
         >

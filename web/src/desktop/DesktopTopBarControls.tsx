@@ -436,9 +436,10 @@ function ConfigOptionControl({
       sx={{
         minWidth: 0,
         display: "grid",
-        gridTemplateColumns: "132px minmax(0, 1fr)",
+        gridTemplateColumns: "108px minmax(0, 1fr)",
         alignItems: "center",
         gap: 1.25,
+        gridColumn: label === "Reasoning effort" ? "1 / -1" : undefined,
       }}
     >
       <Tooltip title={option.description ?? ""} placement="right">
@@ -940,7 +941,7 @@ export function DesktopTopBarControls({
         title="Run configuration"
         description="Changes apply immediately to this session."
         icon={<Tune sx={{ color: "primary.main" }} />}
-        width={1040}
+        width={900}
         footer={
           <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={2} sx={{ px: 2.25, py: 1, color: "text.secondary" }}>
             <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="J/K" /><Typography variant="caption">Field</Typography></Stack>
@@ -951,7 +952,7 @@ export function DesktopTopBarControls({
         }
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
-          <Stack spacing={1.1} sx={{ px: 2.25, py: 1.75 }}>
+          <Box sx={{ px: 2.25, py: 1.75, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1.25 }}>
             {options.map((option) => (
               <ConfigOptionControl
                 key={option.id}
@@ -959,7 +960,7 @@ export function DesktopTopBarControls({
                 sessionId={sessionId}
               />
             ))}
-          </Stack>
+          </Box>
         </Box>
       </DesktopModal>
 
