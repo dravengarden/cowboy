@@ -13,7 +13,6 @@ import {
   FormControl,
   LinearProgress,
   MenuItem,
-  Popover,
   Select,
   Skeleton,
   Stack,
@@ -63,6 +62,7 @@ import {
 } from "../usageLimits";
 import { DesktopContextShortcut } from "./commands/DesktopContextShortcut";
 import { UsageLogs } from "../UsageLogs";
+import { DesktopModal } from "./DesktopModal";
 import {
   type DesktopCommand,
   useDesktopCommand,
@@ -687,7 +687,6 @@ export function DesktopTopBarControls({
       if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
       const key = workspaceCommandKey(event).toLowerCase();
-      if (document.querySelector("[role='dialog']") !== null) return;
       if (key === "h" || key === "l") {
         event.preventDefault();
         event.stopPropagation();
@@ -935,72 +934,24 @@ export function DesktopTopBarControls({
           </DesktopContextShortcut>
         )}
 
-      <Popover
+      <DesktopModal
         open={configAnchor !== null}
-        anchorEl={configAnchor}
         onClose={(): void => setConfigAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        slotProps={{
-          paper: {
-            sx: {
-              width: 680,
-              maxWidth: "calc(100vw - 32px)",
-              mt: 0.75,
-              p: 0,
-              borderRadius: 2.5,
-              border: 1,
-              borderColor: (theme) => alpha(theme.palette.primary.main, 0.18),
-              bgcolor: (theme) =>
-                alpha(
-                  theme.palette.background.paper,
-                  theme.palette.mode === "dark" ? 0.97 : 0.92,
-                ),
-              backgroundImage: (theme) =>
-                `linear-gradient(145deg, ${
-                  alpha(
-                    theme.palette.common.white,
-                    theme.palette.mode === "dark" ? 0.035 : 0.48,
-                  )
-                }, transparent 52%)`,
-              backdropFilter: "blur(28px) saturate(145%)",
-              WebkitBackdropFilter: "blur(28px) saturate(145%)",
-              boxShadow: (theme) =>
-                [
-                  `0 18px 48px ${
-                    alpha(
-                      theme.palette.common.black,
-                      theme.palette.mode === "dark" ? 0.42 : 0.16,
-                    )
-                  }`,
-                  `0 3px 12px ${alpha(theme.palette.primary.main, 0.1)}`,
-                  `inset 0 1px 0 ${
-                    alpha(
-                      theme.palette.common.white,
-                      theme.palette.mode === "dark" ? 0.06 : 0.7,
-                    )
-                  }`,
-                ].join(", "),
-            },
-          },
-        }}
+        title="Run configuration"
+        description="Changes apply immediately to this session."
+        icon={<Tune sx={{ color: "primary.main" }} />}
+        width={1040}
+        footer={
+          <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={2} sx={{ px: 2.25, py: 1, color: "text.secondary" }}>
+            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="J/K" /><Typography variant="caption">Field</Typography></Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Select</Typography></Stack>
+            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
+          </Stack>
+        }
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
-          <Box sx={{ px: 1.5, pt: 1.4, pb: 1.15 }}>
-            <Stack direction="row" spacing={0.8} alignItems="center">
-              <Tune sx={{ fontSize: 17, color: "primary.main" }} />
-              <Typography variant="subtitle2" fontWeight={780}>
-                Run configuration
-              </Typography>
-            </Stack>
-            <Typography variant="caption" color="text.secondary">
-              Changes apply immediately to this session.
-            </Typography>
-          </Box>
-          <Divider
-            sx={{ borderColor: (theme) => alpha(theme.palette.divider, 0.72) }}
-          />
-          <Stack spacing={1} sx={{ px: 1.5, pt: 1.2, pb: 1.1 }}>
+          <Stack spacing={1.1} sx={{ px: 2.25, py: 1.75 }}>
             {options.map((option) => (
               <ConfigOptionControl
                 key={option.id}
@@ -1009,33 +960,8 @@ export function DesktopTopBarControls({
               />
             ))}
           </Stack>
-          <Divider />
-          <Stack
-            direction="row"
-            alignItems="center"
-            justifyContent="flex-end"
-            spacing={1.5}
-            sx={{ px: 1.5, py: 0.8, color: "text.secondary" }}
-          >
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys="J/K" />
-              <Typography variant="caption">Field</Typography>
-            </Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys="H/L" />
-              <Typography variant="caption">Choice</Typography>
-            </Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys={ENTER_LABEL} />
-              <Typography variant="caption">Select</Typography>
-            </Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys="Esc" />
-              <Typography variant="caption">Close</Typography>
-            </Stack>
-          </Stack>
         </Box>
-      </Popover>
+      </DesktopModal>
 
       <DesktopContextShortcut
         badge="U"
@@ -1142,29 +1068,18 @@ export function DesktopTopBarControls({
         </ButtonBase>
       </DesktopContextShortcut>
 
-      <Popover
+      <DesktopModal
         open={usageAnchor !== null}
-        anchorEl={usageAnchor}
         onClose={(): void => setUsageAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{
-          paper: {
-            sx: {
-              width: 410,
-              maxHeight: "min(720px, calc(100vh - 96px))",
-              overflowY: "auto",
-              mt: 0.75,
-              p: 1.5,
-              borderRadius: 2.5,
-            },
-          },
-        }}
+        title="Usage and activity"
+        description={`${session?.provider ?? "Provider"} · ${usage?.source ?? usage?.status ?? "unavailable"} · Updated ${updatedAgo}`}
+        width={760}
       >
         <Stack
           ref={usagePanelRef}
           data-desktop-shortcut-scope="exclusive"
           spacing={1.25}
+          sx={{ px: 2.25, py: 1.75 }}
         >
           <Stack
             direction="row"
@@ -1182,11 +1097,6 @@ export function DesktopTopBarControls({
                   <Kbd keys="L" />
                 </ButtonBase>
               </Stack>
-              <Typography variant="caption" color="text.secondary">
-                {session?.provider ?? "Provider"} ·{" "}
-                {usage?.source ?? usage?.status ?? "unavailable"} · Updated{" "}
-                {updatedAgo}
-              </Typography>
             </Box>
             {usagePanel === "usage" && <Button
               size="small"
@@ -1261,7 +1171,7 @@ export function DesktopTopBarControls({
             </Stack>
           </Stack>
         </Stack>
-      </Popover>
+      </DesktopModal>
 
       {compactAction && (
         <DesktopContextShortcut

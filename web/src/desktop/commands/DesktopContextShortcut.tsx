@@ -64,15 +64,11 @@ export function DesktopContextShortcut({
         }),
         "[data-desktop-focused='true'] & .cowboy-context-shortcut": {
           opacity: inline ? 0.72 : 0.82,
-          maxWidth: inline ? 32 : undefined,
-          ml: inline ? 0.5 : undefined,
           transform: visibleTransform,
         },
         ...(alwaysVisible && {
           "& .cowboy-context-shortcut": {
             opacity: 0.72,
-            maxWidth: inline ? 32 : undefined,
-            ml: inline ? 0.5 : undefined,
             transform: visibleTransform,
           },
         }),
@@ -90,13 +86,17 @@ export function DesktopContextShortcut({
             right: corner ? -4 : toolbar ? -9 : "auto",
             left: corner || toolbar ? "auto" : "50%",
             display: "inline-flex",
-            maxWidth: inline ? 0 : undefined,
-            ml: 0,
+            // Inline top-bar hints own a permanent lane. Focus changes only
+            // opacity; it must never reflow the dense control strip.
+            width: inline ? 26 : undefined,
+            minWidth: inline ? 26 : undefined,
+            maxWidth: inline ? 26 : undefined,
+            ml: inline ? 0.5 : 0,
             overflow: inline ? "hidden" : "visible",
             opacity: 0,
             transform: restingTransform,
             transition: inline
-              ? "opacity 120ms ease, max-width 120ms ease, margin-left 120ms ease"
+              ? "opacity 120ms ease"
               : "opacity 120ms ease, transform 120ms ease",
             pointerEvents: "none",
           }}

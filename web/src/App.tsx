@@ -18,6 +18,9 @@ import {
     ButtonBase,
     Chip,
     CircularProgress,
+    Dialog,
+    DialogContent,
+    DialogTitle,
     Divider,
     IconButton,
     List,
@@ -772,8 +775,9 @@ function SessionList({
                 )}
             </List>
             <Menu
+                sx={{ display: desktop ? "none" : undefined }}
                 anchorEl={menuAnchor?.el ?? null}
-                open={!!menuAnchor}
+                open={!desktop && !!menuAnchor}
                 onClose={(): void => setMenuAnchor(null)}
                 slotProps={{ paper: { sx: { minWidth: 180 } } }}
             >
@@ -841,6 +845,66 @@ function SessionList({
                     <ListItemText primary="Delete" />
                 </MenuItem>
             </Menu>
+            <Dialog
+                open={desktop && !!menuAnchor}
+                onClose={(): void => setMenuAnchor(null)}
+                fullWidth
+                maxWidth="sm"
+                slotProps={{
+                    paper: {
+                        sx: { borderRadius: 2.5, overflow: "hidden" },
+                    },
+                }}
+            >
+                <DialogTitle sx={{ pb: 1 }}>
+                    <Typography variant="subtitle1" fontWeight={780}>Session actions</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                        {menuAnchor?.row.title} · {menuAnchor?.row.cwd}
+                    </Typography>
+                </DialogTitle>
+                <Divider />
+                <DialogContent sx={{ p: 1.5 }}>
+                    <Stack
+                        data-desktop-session-actions
+                        spacing={0.5}
+                        onKeyDown={(event): void => {
+                            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+                            const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
+                            const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+                            const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                            if (key === "j" || key === "k") {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const next = current < 0 ? 0 : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
+                                items[next]?.focus();
+                            }
+                        }}
+                    >
+                        <Button autoFocus fullWidth startIcon={<InfoOutlined />} onClick={(): void => { if (menuAnchor) onRequestInfo(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                            Info<Box sx={{ flex: 1 }} /><Kbd keys="Enter" />
+                        </Button>
+                        <Button fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                            Rename
+                        </Button>
+                        <Divider sx={{ my: 0.5 }} />
+                        <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Auto-resume</Typography>
+                        {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})` }, { v: true, label: "On" }, { v: false, label: "Off" } ] as const).map((opt) => {
+                            const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
+                            return <Button key={String(opt.v)} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => { if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>{opt.label}</Button>;
+                        })}
+                        <Divider sx={{ my: 0.5 }} />
+                        <Button color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { if (menuAnchor) onRequestDelete(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                            Delete
+                        </Button>
+                    </Stack>
+                </DialogContent>
+                <Divider />
+                <Stack direction="row" justifyContent="flex-end" spacing={2} sx={{ px: 2, py: 1, color: "text.secondary" }}>
+                    <Stack direction="row" spacing={0.5}><Kbd keys="J/K" /><Typography variant="caption">Move</Typography></Stack>
+                    <Stack direction="row" spacing={0.5}><Kbd keys="Enter" /><Typography variant="caption">Select</Typography></Stack>
+                    <Stack direction="row" spacing={0.5}><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
+                </Stack>
+            </Dialog>
         </Stack>
     );
 }
