@@ -673,25 +673,6 @@ function SessionList({
                             >
                                 <DragIndicator sx={{ fontSize: 24 }} />
                             </IconButton>
-                            {desktop && (
-                                <Box
-                                    className="cowboy-session-pin-shortcut"
-                                    title={pinned ? "J/K · Move pinned session" : "P · Pin for reorder"}
-                                    sx={{
-                                        position: "absolute",
-                                        zIndex: 2,
-                                        left: -3,
-                                        top: "50%",
-                                        display: "inline-flex",
-                                        pointerEvents: "none",
-                                        opacity: 0,
-                                        transform: "translate(-35%, -50%) scale(.92)",
-                                        transition: "opacity 120ms ease, transform 140ms ease",
-                                    }}
-                                >
-                                    <Kbd keys={pinned ? "J/K" : "P"} />
-                                </Box>
-                            )}
                         </Box>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
                         <ListItemText
@@ -739,6 +720,37 @@ function SessionList({
                                 },
                             }}
                         />
+                        {desktop && (
+                            <Stack
+                                className="cowboy-session-context-shortcuts"
+                                direction="row"
+                                spacing={0.35}
+                                aria-hidden
+                                sx={{
+                                    position: "absolute",
+                                    zIndex: 2,
+                                    right: index < 10 ? 82 : 42,
+                                    top: "50%",
+                                    alignItems: "center",
+                                    px: 0.45,
+                                    py: 0.3,
+                                    borderRadius: 1,
+                                    bgcolor: (theme) => alpha(theme.palette.background.paper, 0.88),
+                                    boxShadow: (theme) =>
+                                        `0 1px 5px ${alpha(theme.palette.common.black, 0.08)}`,
+                                    backdropFilter: "blur(6px)",
+                                    pointerEvents: "none",
+                                    opacity: 0,
+                                    transform: "translateY(-50%) scale(.96)",
+                                    transformOrigin: "right center",
+                                    transition: "opacity 120ms ease, transform 140ms ease",
+                                }}
+                            >
+                                {pinned
+                                    ? <><Kbd keys="J/K" /><Kbd keys="Esc" /></>
+                                    : <><Kbd keys="P" /><Kbd keys="H" /><Kbd keys="L" /></>}
+                            </Stack>
+                        )}
                         {desktop && index < 10 && (
                             <Suspense fallback={null}>
                                 <DesktopSessionShortcut
@@ -1810,9 +1822,9 @@ export function App({
                         "& .cowboy-session-shortcut": {
                             opacity: "1 !important",
                         },
-                        "& .cowboy-session-pin-shortcut": {
+                        "& .cowboy-session-context-shortcuts": {
                             opacity: 0.92,
-                            transform: "translate(-35%, -50%) scale(1)",
+                            transform: "translateY(-50%) scale(1)",
                         },
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
