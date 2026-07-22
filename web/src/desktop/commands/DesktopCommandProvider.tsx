@@ -159,6 +159,26 @@ export function DesktopCommandProvider(
       // A visible configuration popover advertises and owns its own J/K/H/L
       // map. Relinquish the workspace map before it consumes those keys.
       if (desktopOverlayOwnsShortcuts(document)) return;
+      // Direct Vim window movement. Keep Ctrl-W + motion below for users who
+      // prefer the canonical two-stroke form, while Ctrl-H/J/K/L provides the
+      // fast one-stroke path between Desktop regions. Resolve through
+      // `workspaceCommandKey`, never `event.key`, so a CJK input source cannot
+      // translate or hide the physical navigation keys. An active composition
+      // has already returned above and remains exclusively owned by the IME.
+      if (
+        event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+      ) {
+        const key = workspaceCommandKey(event).toLowerCase();
+        if (["h", "j", "k", "l"].includes(key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (key === "h") workspace.focusAdjacentPane(-1);
+          else if (key === "l") workspace.focusAdjacentPane(1);
+          else if (key === "j") workspace.focusAdjacentRegion(1);
+          else workspace.focusAdjacentRegion(-1);
+          return;
+        }
+      }
       // Standard Vim window navigation. The first Ctrl-W arms a short chord;
       // the following h/l moves panes, j/k moves vertical regions in the current
       // pane, and w cycles every visible region. Capture-phase handling keeps the
