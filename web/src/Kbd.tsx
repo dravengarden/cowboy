@@ -41,7 +41,11 @@ export function Kbd(
 // guard it would self-confirm instantly. A repeat-free press (release, press
 // again) is the deliberate confirm. Also skips while an IME is composing (so
 // confirming a CJK candidate doesn't submit the modal).
-export function useConfirmEnter(open: boolean, onConfirm: () => void): void {
+export function useConfirmEnter(
+  open: boolean,
+  onConfirm: () => void,
+  { suppressBareEnter = true }: { suppressBareEnter?: boolean } = {},
+): void {
   const ref = useRef(onConfirm);
   ref.current = onConfirm;
   useEffect(() => {
@@ -49,11 +53,12 @@ export function useConfirmEnter(open: boolean, onConfirm: () => void): void {
     const onKey = (e: KeyboardEvent): void => {
       const intent = confirmEnterIntent(e);
       if (intent === "ignore") return;
+      if (intent === "suppress" && !suppressBareEnter) return;
       e.preventDefault();
       e.stopPropagation();
       if (intent === "confirm") ref.current();
     };
     globalThis.addEventListener("keydown", onKey, true);
     return (): void => globalThis.removeEventListener("keydown", onKey, true);
-  }, [open]);
+  }, [open, suppressBareEnter]);
 }

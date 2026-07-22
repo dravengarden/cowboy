@@ -132,6 +132,7 @@ import { persisted } from "./_store/mod.ts";
 import { horizontalSwipe, swipeCommits } from "./touchGestures";
 import { haptic } from "./haptic";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -1012,6 +1013,7 @@ function NewSessionDialog({
     onCreated: (sessionId: string) => void;
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>("codex");
+    const desktop = useSurfaceProfile().kind === "desktop";
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
     const [workItemId, setWorkItemId] = useState<string>("");
     // Working-dir choices: start from the hard-coded fallback, then replace with
@@ -1101,6 +1103,11 @@ function NewSessionDialog({
             });
         onClose();
     };
+    // Desktop confirmations consistently require Mod+Enter. Keep bare Enter
+    // available to the Select controls in this form; the title field and
+    // focused Create button suppress their own native bare-Enter activation.
+    // Mobile retains its established single-Enter form behaviour.
+    useConfirmEnter(open && desktop, create, { suppressBareEnter: false });
     // BottomSheet (not a centered Dialog) to match the rest of the modals — they
     // all rise from the bottom on the mobile tier.
     return (
@@ -1116,9 +1123,19 @@ function NewSessionDialog({
                         Cancel
                         <Kbd keys="Esc" />
                     </Button>
-                    <Button onClick={create} variant="contained">
+                    <Button
+                        onClick={create}
+                        onKeyDown={(e): void => {
+                            if (
+                                desktop && e.key === "Enter" &&
+                                !e.metaKey && !e.ctrlKey &&
+                                !isImeKeyEvent(e.nativeEvent)
+                            ) e.preventDefault();
+                        }}
+                        variant="contained"
+                    >
                         Create
-                        <Kbd keys={ENTER_LABEL} />
+                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
             }
@@ -1139,16 +1156,14 @@ function NewSessionDialog({
                         requestAnimationFrame(() => input.select());
                     }}
                     onKeyDown={(e): void => {
-                        // Enter from the title field confirms (matches the ⏎ keycap on
-                        // Create). Field-level, NOT a global useConfirmEnter: this modal
-                        // has Provider/Working-dir Selects, and a global capture handler
-                        // would hijack the Enter that picks an open dropdown option.
+                        // Mobile keeps its touch-form Enter behaviour. Desktop uses the
+                        // modal-wide Mod+Enter handler; bare Enter must never confirm.
                         if (
                             e.key === "Enter" && !e.shiftKey &&
                             !isImeKeyEvent(e.nativeEvent)
                         ) {
                             e.preventDefault();
-                            create();
+                            if (!desktop) create();
                         }
                     }}
                     placeholder="Name this session"
@@ -3667,6 +3682,7 @@ function RenameSessionShell({
     const [value, setValue] = useState("");
     const inputRef = useRef<HTMLInputElement>(null);
     const navbarAtBottom = useNavbarAtBottom();
+    const desktop = useSurfaceProfile().kind === "desktop";
     useEffect(() => {
         if (!session) return undefined;
         setValue(session.title);
@@ -3683,12 +3699,13 @@ function RenameSessionShell({
         }, 120);
         return () => globalThis.clearTimeout(t);
     }, [session?.id, session?.title]);
-    if (!session) return null;
     const trimmed = value.trim();
-    const canSave = trimmed.length > 0 && trimmed !== session.title;
+    const canSave = session !== null && trimmed.length > 0 && trimmed !== session.title;
     const submit = (): void => {
         if (canSave) onConfirm(trimmed);
     };
+    useConfirmEnter(session !== null && desktop, submit, { suppressBareEnter: false });
+    if (!session) return null;
     return (
         <Sheet
             forceSheet={navbarAtBottom}
@@ -3702,9 +3719,20 @@ function RenameSessionShell({
                         Cancel
                         <Kbd keys="Esc" />
                     </Button>
-                    <Button onClick={submit} variant="contained" disabled={!canSave}>
+                    <Button
+                        onClick={submit}
+                        onKeyDown={(e): void => {
+                            if (
+                                desktop && e.key === "Enter" &&
+                                !e.metaKey && !e.ctrlKey &&
+                                !isImeKeyEvent(e.nativeEvent)
+                            ) e.preventDefault();
+                        }}
+                        variant="contained"
+                        disabled={!canSave}
+                    >
                         Save
-                        <Kbd keys={ENTER_LABEL} />
+                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
             }
@@ -3716,9 +3744,12 @@ function RenameSessionShell({
                 value={value}
                 onChange={(e): void => setValue(e.target.value)}
                 onKeyDown={(e): void => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (
+                        e.key === "Enter" && !e.shiftKey &&
+                        !isImeKeyEvent(e.nativeEvent)
+                    ) {
                         e.preventDefault();
-                        submit();
+                        if (!desktop) submit();
                     }
                 }}
                 sx={{ mt: 1 }}
