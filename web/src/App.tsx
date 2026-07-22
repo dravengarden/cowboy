@@ -897,6 +897,15 @@ function SessionList({
                 onKeyDown={(event): void => {
                     if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
                     const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
+                    const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
+                        `[data-session-shortcut="${key}"]`,
+                    );
+                    if (directAction) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        directAction.click();
+                        return;
+                    }
                     if (key !== "j" && key !== "k") return;
                     const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
                         "[data-desktop-session-actions] button:not(:disabled)",
@@ -933,18 +942,23 @@ function SessionList({
                             spacing={0.5}
                         >
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
-                            <Button autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
-                                Rename
+                            <Button data-session-shortcut="r" autoFocus fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (menuAnchor) onRequestRename(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
+                                <Kbd keys="R" />
                             </Button>
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Auto-resume</Typography>
-                            {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})` }, { v: true, label: "On" }, { v: false, label: "Off" } ] as const).map((opt) => {
+                            {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})`, shortcut: "D" }, { v: true, label: "On", shortcut: "O" }, { v: false, label: "Off", shortcut: "F" } ] as const).map((opt) => {
                                 const current = (menuAnchor?.row.auto_resume ?? null) === opt.v;
-                                return <Button key={String(opt.v)} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => { if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>{opt.label}</Button>;
+                                return <Button data-session-shortcut={opt.shortcut.toLowerCase()} key={String(opt.v)} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => { if (menuAnchor) setSessionAutoResume(menuAnchor.row.id, opt.v); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{opt.label}</Box>
+                                    <Kbd keys={opt.shortcut} />
+                                </Button>;
                             })}
                             <Divider sx={{ my: 0.5 }} />
-                            <Button color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { if (menuAnchor) onRequestDelete(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
-                                Delete
+                            <Button data-session-shortcut="x" color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { if (menuAnchor) onRequestDelete(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Delete</Box>
+                                <Kbd keys="X" />
                             </Button>
                         </Stack>
                     </Box>
