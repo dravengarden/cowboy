@@ -40,6 +40,15 @@ const BROADCAST_CAPACITY: usize = 1_024;
 /// Fixed history page size (events) for the cursor-based HTTP history route.
 pub const HISTORY_PAGE: usize = 200;
 
+fn is_user_message_chunk(envelope: &Envelope) -> bool {
+    matches!(
+        &envelope.event,
+        Event::Update { update }
+            if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
+                == Some("user_message_chunk")
+    )
+}
+
 /// Who opened a session. Used by the UI to render an `origin` badge and
 /// (eventually) to decide which sessions belong to which client surface.
 /// `Web` = a browser/phone clicked "New session" on cowboy's own UI.
@@ -1592,6 +1601,18 @@ impl Hub {
                 }
                 start = index;
                 serialized_bytes = serialized_bytes.saturating_add(event_bytes);
+            }
+            // A rich user prompt is echoed as one consecutive event per ACP
+            // content block (typically image, then text). The byte budget may
+            // otherwise cut between those blocks, making the fresh client show
+            // only the text while the image remains stranded in the previous
+            // history page. Keep the prompt atomic at the snapshot boundary;
+            // one user attachment is allowed to exceed the soft bootstrap
+            // budget so the transcript never misrepresents what was sent.
+            if s.log.get(start).is_some_and(is_user_message_chunk) {
+                while start > count_start && is_user_message_chunk(&s.log[start - 1]) {
+                    start -= 1;
+                }
             }
             (s.log[start..].to_vec(), s.reached_start && start == 0)
         })
@@ -4240,6 +4261,52 @@ mod confirm_hold_tests {
         assert_eq!(snapshot[0].seq, 3);
         assert!(!reached_start);
         assert!(serde_json::to_vec(&snapshot[0]).unwrap().len() < SNAPSHOT_MAX_BYTES);
+    }
+
+    #[test]
+    fn session_snapshot_does_not_split_a_rich_user_prompt() {
+        let hub = hub_with_session("rich-prompt-boundary");
+        let payload = "x".repeat(96 * 1024);
+        hub.push(
+            "rich-prompt-boundary",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": { "type": "image", "data": payload, "mimeType": "image/jpeg" }
+                }),
+            },
+        );
+        hub.push(
+            "rich-prompt-boundary",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": { "type": "text", "text": "adjust this image" }
+                }),
+            },
+        );
+        hub.push(
+            "rich-prompt-boundary",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "payload": payload
+                }),
+            },
+        );
+
+        let (snapshot, reached_start) = hub
+            .snapshot("rich-prompt-boundary")
+            .expect("session snapshot");
+        assert_eq!(snapshot.len(), 3);
+        assert_eq!(snapshot[0].seq, 0);
+        assert!(is_user_message_chunk(&snapshot[0]));
+        assert!(is_user_message_chunk(&snapshot[1]));
+        assert!(reached_start);
+        assert!(
+            serde_json::to_vec(&snapshot).unwrap().len() > SNAPSHOT_MAX_BYTES,
+            "message atomicity may exceed the soft byte budget"
+        );
     }
 
     #[test]
