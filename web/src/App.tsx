@@ -3113,6 +3113,7 @@ function SettingsShell({
             forceSheet={useSheetSurface}
             wide
             cover
+            desktopMaxWidth={1440}
         >
             {/* Mobile keeps progressive-disclosure tabs. Desktop is one visible
                 keyboard workbench, so no information is hidden behind a tab. */}
@@ -3148,16 +3149,22 @@ function SettingsShell({
             </Box>
             </Box>
             {desktop ? (
-                <Box ref={settingsPanelRef} data-desktop-settings-workbench>
+                <Box
+                    ref={settingsPanelRef}
+                    data-desktop-settings-workbench
+                    sx={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(720px, 2fr) minmax(360px, 0.9fr)",
+                        gap: 2,
+                        alignItems: "start",
+                        "@media (max-width: 1279px)": { gridTemplateColumns: "1fr" },
+                    }}
+                >
                     <DesktopSettingsContent themeMode={themeMode} onSetThemeMode={onSetThemeMode} />
-                    <Box
+                    <Stack
                         sx={{
-                            display: "grid",
-                            gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, 0.85fr)",
                             gap: 2,
-                            mt: 2,
-                            alignItems: "start",
-                            "@media (max-width: 1180px)": { gridTemplateColumns: "1fr" },
+                            minWidth: 0,
                         }}
                     >
                         <DesktopModalBlock label="Runtime & usage" title="Info" shortcut="I" section="info">
@@ -3166,7 +3173,7 @@ function SettingsShell({
                         <DesktopModalBlock label="Audit trail" title="Logs" shortcut="G" section="logs">
                             <UsageLogs dense />
                         </DesktopModalBlock>
-                    </Box>
+                    </Stack>
                 </Box>
             ) : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
