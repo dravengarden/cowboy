@@ -236,16 +236,20 @@ export function DesktopCommandProvider(
           if (session) {
             event.preventDefault();
             event.stopPropagation();
+            const id = session.dataset.desktopItem;
             session.click();
-            if (workspace.focusedRegion === "sessions.list") {
-              const id = session.dataset.desktopItem;
-              if (id) {
-                requestAnimationFrame(() =>
-                  sessionsRegion?.querySelector<HTMLElement>(
-                    `[data-desktop-item="${CSS.escape(id)}"]`,
-                  )?.focus({ preventScroll: true })
-                );
-              }
+            // Positional session selection also enters the Sessions keyboard
+            // region. The row remains the active list item for J/K, while
+            // L/Enter explicitly opens its Prompt editor. Previously this only
+            // happened when Sessions already owned focus, leaving Mod+number
+            // visually selected but keyboard focus stranded in another pane.
+            workspace.focusRegion("sessions.list");
+            if (id) {
+              requestAnimationFrame(() =>
+                sessionsRegion?.querySelector<HTMLElement>(
+                  `[data-desktop-item="${CSS.escape(id)}"]`,
+                )?.focus({ preventScroll: true })
+              );
             }
             return;
           }
