@@ -1,0 +1,78 @@
+import CheckIcon from "@mui/icons-material/Check";
+import { Box, Button, CircularProgress } from "@mui/material";
+import type { ConnectionStore } from "../_shell";
+
+/**
+ * Mobile owns update activation explicitly. A foreground service-worker check
+ * may discover a deploy while the user is reading or composing; silently
+ * replacing that page is much more disruptive on a phone than on Desktop.
+ * Keep the update visible and let the user choose the safe reload point.
+ */
+export function MobileConnectionBanner(
+  { store }: { readonly store: ConnectionStore },
+): React.JSX.Element | null {
+  const banner = store.useConnectionBanner();
+  if (!banner) return null;
+
+  const isUpdate = banner.kind === "update";
+  const palette = banner.kind === "down"
+    ? "warning"
+    : banner.kind === "reconnected"
+    ? "success"
+    : "info";
+  const label = banner.kind === "down"
+    ? "Connection lost — reconnecting…"
+    : banner.kind === "reconnected"
+    ? "Reconnected"
+    : "New Cowboy version ready";
+
+  return (
+    <Box
+      role="status"
+      aria-live="polite"
+      sx={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 1,
+        px: 2,
+        py: 0.75,
+        pt: "calc(env(safe-area-inset-top, 0px) + 6px)",
+        bgcolor: `${palette}.main`,
+        color: `${palette}.contrastText`,
+        fontSize: "0.8125rem",
+        fontWeight: 600,
+        zIndex: (theme) => theme.zIndex.tooltip + 1,
+      }}
+    >
+      {banner.kind === "down" && (
+        <CircularProgress size={14} color="inherit" thickness={5} />
+      )}
+      {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: "1.125rem" }} />}
+      <span>{label}</span>
+      {isUpdate && (
+        <Button
+          color="inherit"
+          size="small"
+          variant="outlined"
+          onClick={() => void store.applyUpdate()}
+          sx={{
+            ml: 0.5,
+            minHeight: 32,
+            borderColor: "currentColor",
+            borderRadius: 999,
+            fontSize: "inherit",
+            fontWeight: 700,
+            textTransform: "none",
+          }}
+        >
+          Update
+        </Button>
+      )}
+    </Box>
+  );
+}

@@ -114,8 +114,9 @@ globalThis.addEventListener("keydown", (e: KeyboardEvent): void => {
 // a manual reload (the recurring "redeploy doesn't show up" trap). So: re-check
 // for a new SW whenever the app returns to the foreground (the SW's VERSION bumps
 // per web deploy → a new sw.js → install → skipWaiting → activate → claim), and
-// surface the shared 3-second update countdown when that new worker takes
-// control; the banner owns the one cache-clearing reload into the fresh bundle.
+// surface an update notice when that new worker takes control. Desktop keeps its
+// short auto-update countdown; Mobile requires an explicit tap so a foreground
+// check can never replace a page while the user is reading or composing.
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   // Only auto-reload on an UPDATE (a new worker replacing one already in control),
   // never on the first-install claim.
@@ -126,8 +127,8 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
     reloading = true;
     // App/store are already loaded by the time an update installs. Keep this a
     // dynamic edge so main's initial shell stays lean, and route SW detection
-    // into the same visible countdown as /version detection. Never reload here:
-    // doing so made the countdown disappear entirely.
+    // into the surface-owned visible update UI. Never reload here: Desktop owns
+    // its countdown and Mobile owns its explicit Update action.
     void import("./store").then(({ conn }) => conn.updateAvailable()).catch(() => {
       // If the old module graph is already unavailable, a reload is the only
       // recovery path. Normal updates always take the countdown route above.

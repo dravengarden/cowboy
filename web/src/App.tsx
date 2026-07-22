@@ -108,6 +108,7 @@ import {
 import { useNavbarAtBottom } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
+import { MobileConnectionBanner } from "./mobile/MobileConnectionBanner";
 import {
     ConnectionBanner,
     DetentSheet,
@@ -1875,11 +1876,13 @@ export function App({
                 }),
             }}
         >
-            {/* Full-width connection/version banner, above the whole layout so
-                it spans both panes and pushes them down when shown. Shared
-                @shared-utils/ui visual (liveview's 3s-countdown + cache-clearing
-                reload), bound to cowboy's connection store. */}
-            <ConnectionBanner store={conn} />
+            {/* The connection state is shared; activation policy is not.
+                Desktop keeps the short update countdown, while touch surfaces
+                require an explicit Update tap so foreground checks never
+                replace active mobile work. */}
+            {surface === "desktop"
+                ? <ConnectionBanner store={conn} />
+                : <MobileConnectionBanner store={conn} />}
             <NativeReleaseUpdatePrompt
                 appId="top.thundersparrow.cowboy"
                 manifestUrl="/native-release.json"
