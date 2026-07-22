@@ -724,7 +724,7 @@ function SessionList({
                             <Stack
                                 className="cowboy-session-context-shortcuts"
                                 direction="row"
-                                spacing={0.35}
+                                spacing={0}
                                 aria-hidden
                                 sx={{
                                     position: "absolute",
@@ -732,13 +732,14 @@ function SessionList({
                                     right: index < 10 ? 82 : 42,
                                     top: "50%",
                                     alignItems: "center",
-                                    px: 0.45,
-                                    py: 0.3,
-                                    borderRadius: 1,
-                                    bgcolor: (theme) => alpha(theme.palette.background.paper, 0.88),
+                                    overflow: "hidden",
+                                    border: 1,
+                                    borderColor: (theme) => alpha(theme.palette.primary.main, 0.32),
+                                    borderRadius: "999px",
+                                    bgcolor: (theme) => alpha(theme.palette.background.paper, 0.82),
                                     boxShadow: (theme) =>
-                                        `0 1px 5px ${alpha(theme.palette.common.black, 0.08)}`,
-                                    backdropFilter: "blur(6px)",
+                                        `0 2px 7px ${alpha(theme.palette.common.black, 0.075)}`,
+                                    backdropFilter: "blur(8px) saturate(1.15)",
                                     pointerEvents: "none",
                                     opacity: 0,
                                     transform: "translateY(-50%) scale(.96)",
@@ -746,9 +747,29 @@ function SessionList({
                                     transition: "opacity 120ms ease, transform 140ms ease",
                                 }}
                             >
-                                {pinned
-                                    ? <><Kbd keys="J/K" /><Kbd keys="Esc" /></>
-                                    : <><Kbd keys="P" /><Kbd keys="H" /><Kbd keys="L" /></>}
+                                {(pinned ? ["J/K", "Esc"] : ["P", "H", "L"]).map((key, keyIndex) => (
+                                    <Box
+                                        key={key}
+                                        component="span"
+                                        sx={{
+                                            minWidth: key.length > 1 ? 34 : 26,
+                                            height: 26,
+                                            px: 0.65,
+                                            display: "grid",
+                                            placeItems: "center",
+                                            borderLeft: keyIndex === 0 ? 0 : 1,
+                                            borderColor: (theme) => alpha(theme.palette.primary.main, 0.18),
+                                            color: "primary.main",
+                                            fontFamily: "monospace",
+                                            fontSize: "0.68rem",
+                                            fontWeight: 750,
+                                            lineHeight: 1,
+                                            letterSpacing: key.length === 1 ? "0.04em" : 0,
+                                        }}
+                                    >
+                                        {key}
+                                    </Box>
+                                ))}
                             </Stack>
                         )}
                         {desktop && index < 10 && (
