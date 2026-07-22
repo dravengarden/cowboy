@@ -2777,7 +2777,17 @@ function DesktopSettingsContent({
     const settings = useStoreSelector((snapshot) => snapshot.settings);
     const autoResume = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     return (
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, alignItems: "start" }}>
+        <Box
+            sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                gap: 2,
+                alignItems: "start",
+                "@media (max-width: 1279px)": {
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                },
+            }}
+        >
             <DesktopModalBlock label="Appearance">
                 <DesktopSettingsRow shortcut="T" label="Theme" description="Follow the system or pin a palette">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
@@ -2832,8 +2842,20 @@ function DesktopSettingsContent({
                     </Box>
                 </DesktopSettingsRow>
             </DesktopModalBlock>
-            <DesktopModalBlock label="Workflow" sx={{ gridColumn: "1 / -1" }}>
-                <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 2 }}>
+            <DesktopModalBlock
+                label="Workflow"
+                sx={{ "@media (max-width: 1279px)": { gridColumn: "1 / -1" } }}
+            >
+                <Box
+                    sx={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr",
+                        columnGap: 2,
+                        "@media (max-width: 1279px)": {
+                            gridTemplateColumns: "1fr 1fr",
+                        },
+                    }}
+                >
                     <DesktopSettingsRow shortcut="S" label="Sound alert" description="Chime when an agent needs you">
                         <DesktopSettingsChoice active={notify} onClick={() => setNotifySetting(!notify)} ariaLabel="Toggle sound alerts">{notify ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
@@ -3154,26 +3176,24 @@ function SettingsShell({
                     data-desktop-settings-workbench
                     sx={{
                         display: "grid",
-                        gridTemplateColumns: "minmax(720px, 2fr) minmax(360px, 0.9fr)",
+                        gridTemplateColumns: "minmax(0, 1fr)",
                         gap: 2,
                         alignItems: "start",
+                        pb: 7,
                         "@media (max-width: 1279px)": { gridTemplateColumns: "1fr" },
                     }}
                 >
                     <DesktopSettingsContent themeMode={themeMode} onSetThemeMode={onSetThemeMode} />
-                    <Stack
-                        sx={{
-                            gap: 2,
-                            minWidth: 0,
-                        }}
-                    >
-                        <DesktopModalBlock label="Runtime & usage" title="Info" shortcut="I" section="info">
-                            <InfoContent />
-                        </DesktopModalBlock>
-                        <DesktopModalBlock label="Audit trail" title="Logs" shortcut="G" section="logs">
-                            <UsageLogs dense />
-                        </DesktopModalBlock>
-                    </Stack>
+                    <DesktopModalBlock label="Runtime, usage & audit" title="Info" shortcut="I" section="info">
+                        <InfoContent
+                            desktop
+                            aside={
+                                <DesktopModalBlock label="Audit trail" title="Logs" shortcut="G" section="logs">
+                                    <UsageLogs dense />
+                                </DesktopModalBlock>
+                            }
+                        />
+                    </DesktopModalBlock>
                 </Box>
             ) : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
@@ -3454,36 +3474,48 @@ function SettingsShell({
             </Stack>
             )}
             {desktop && (
-                <Stack
-                    direction="row"
+                <Box
                     alignItems="center"
-                    justifyContent="space-between"
                     sx={{
                         position: "sticky",
-                        bottom: -1,
-                        zIndex: 3,
-                        mt: 1.5,
-                        mx: -1,
-                        px: 2,
-                        py: 1,
+                        bottom: 0,
+                        zIndex: 5,
+                        mt: 2,
+                        mx: "auto",
+                        px: 1,
+                        py: 0.75,
                         borderTop: 1,
+                        borderLeft: 1,
+                        borderRight: 1,
                         borderColor: "divider",
+                        borderRadius: "16px 16px 0 0",
                         bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
                         backdropFilter: "blur(16px)",
+                        boxShadow: "0 -8px 24px rgba(0,0,0,0.05)",
+                        display: "flex",
+                        justifyContent: "center",
+                        width: "fit-content",
+                        maxWidth: "100%",
                     }}
                 >
-                    <Stack direction="row" spacing={1.75} color="text.secondary">
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Next / previous</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Activate</Typography></Stack>
+                    <Stack
+                        direction="row"
+                        divider={<Divider orientation="vertical" flexItem />}
+                        sx={{ color: "text.secondary", minWidth: 0 }}
+                    >
+                        <Stack direction="row" spacing={1.25} sx={{ px: 1.25 }}>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Move</Typography></Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Apply</Typography></Stack>
+                        </Stack>
+                        <Stack direction="row" spacing={1.25} sx={{ px: 1.25 }}>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="T F Z P R S V M A" /><Typography variant="caption">Jump</Typography></Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="I" /><Typography variant="caption">Info</Typography></Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="G" /><Typography variant="caption">Logs</Typography></Stack>
+                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
+                        </Stack>
                     </Stack>
-                    <Stack direction="row" spacing={1.75} color="text.secondary">
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="T F Z P R S V M A" /><Typography variant="caption">Setting</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="I" /><Typography variant="caption">Info</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="G" /><Typography variant="caption">Logs</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
-                    </Stack>
-                </Stack>
+                </Box>
             )}
         </Sheet>
     );

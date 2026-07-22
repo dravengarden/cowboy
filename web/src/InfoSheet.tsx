@@ -447,14 +447,30 @@ function StorageInfoSection(): React.JSX.Element {
 
 // The Info tab's body — rendered inside the merged Settings sheet (no own Sheet
 // wrapper). Holds the classifier/skills viewer and daemon system info.
-export function InfoContent(): React.JSX.Element {
+export function InfoContent({
+  desktop = false,
+  aside,
+}: {
+  desktop?: boolean;
+  aside?: React.ReactNode;
+} = {}): React.JSX.Element {
   const skills = useSkills();
 
   return (
-    <Stack spacing={2.5} sx={{ mt: 1 }}>
-        <UsageInfoSection />
-        <Divider />
-        <Box>
+    <Box
+      sx={desktop
+        ? {
+          mt: 1,
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1.55fr) minmax(280px, 0.85fr)",
+          gap: 2,
+          alignItems: "start",
+        }
+        : { mt: 1, display: "flex", flexDirection: "column", gap: 2.5 }}
+    >
+        <Box sx={desktop ? { gridRow: "1 / span 4" } : undefined}><UsageInfoSection /></Box>
+        {!desktop && <Divider />}
+        <Box sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
           <Typography variant="overline" color="text.secondary">
             Turn classifier
           </Typography>
@@ -469,7 +485,7 @@ export function InfoContent(): React.JSX.Element {
         {/* Skills — provider-agnostic capability units run at turn-end. Each is
             expandable to show the exact prompt + how the output is extracted, so
             the judgment logic is inspectable (not a black box). */}
-        <Box>
+        <Box sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
           <Typography variant="overline" color="text.secondary">
             Skills
           </Typography>
@@ -534,16 +550,16 @@ export function InfoContent(): React.JSX.Element {
           </Stack>
         </Box>
 
-        <Divider />
-        <Stack spacing={1}>
+        {!desktop && <Divider />}
+        <Stack spacing={1} sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
           <Typography variant="overline" color="text.secondary">
             Storage
           </Typography>
           <StorageInfoSection />
         </Stack>
 
-        <Divider />
-        <Stack spacing={0.5}>
+        {!desktop && <Divider />}
+        <Stack spacing={0.5} sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
           <Typography variant="overline" color="text.secondary">
             About
           </Typography>
@@ -551,6 +567,7 @@ export function InfoContent(): React.JSX.Element {
             cowboy v0.1 — multi-agent panel driving Claude Code / Codex over ACP.
           </Typography>
         </Stack>
-      </Stack>
+        {aside}
+      </Box>
   );
 }
