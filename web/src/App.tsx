@@ -3481,35 +3481,34 @@ function SettingsShell({
                         bottom: 0,
                         zIndex: 5,
                         mt: 2,
-                        mx: "auto",
-                        px: 1,
-                        py: 0.75,
+                        mx: -1,
+                        px: 2,
+                        py: 1,
                         borderTop: 1,
-                        borderLeft: 1,
-                        borderRight: 1,
                         borderColor: "divider",
-                        borderRadius: "16px 16px 0 0",
                         bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
                         backdropFilter: "blur(16px)",
-                        boxShadow: "0 -8px 24px rgba(0,0,0,0.05)",
                         display: "flex",
-                        justifyContent: "center",
-                        width: "fit-content",
-                        maxWidth: "100%",
+                        width: "calc(100% + 16px)",
                     }}
                 >
                     <Stack
                         direction="row"
-                        divider={<Divider orientation="vertical" flexItem />}
-                        sx={{ color: "text.secondary", minWidth: 0 }}
+                        alignItems="center"
+                        justifyContent="space-between"
+                        sx={{ color: "text.secondary", minWidth: 0, width: "100%" }}
                     >
-                        <Stack direction="row" spacing={1.25} sx={{ px: 1.25 }}>
+                        <Stack direction="row" spacing={1.25} alignItems="center">
+                            <Typography variant="overline" sx={{ opacity: 0.7, mr: 0.25 }}>Navigate</Typography>
                             <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Move</Typography></Stack>
                             <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
                             <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Apply</Typography></Stack>
                         </Stack>
-                        <Stack direction="row" spacing={1.25} sx={{ px: 1.25 }}>
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="T F Z P R S V M A" /><Typography variant="caption">Jump</Typography></Stack>
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                            <Typography variant="overline" sx={{ opacity: 0.7 }}>Jump</Typography>
+                            <Kbd keys="T F Z P R S V M A" />
+                        </Stack>
+                        <Stack direction="row" spacing={1.25} alignItems="center">
                             <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="I" /><Typography variant="caption">Info</Typography></Stack>
                             <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="G" /><Typography variant="caption">Logs</Typography></Stack>
                             <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
