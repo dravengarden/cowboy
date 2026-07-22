@@ -1453,7 +1453,7 @@ export function ComposerWorkspace({
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
-              shortcut="E"
+              shortcut="I"
               title="Focus editor in Vim Normal mode"
               showWhenPane="prompt"
               hideWhenRegion="prompt.composer"

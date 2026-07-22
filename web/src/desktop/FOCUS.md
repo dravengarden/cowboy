@@ -36,8 +36,8 @@ same controller state.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Alt-b/p/c/t`: jump directly to Sessions, Prompt, Conversation or Top Bar.
-- `p/o/d/e`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
-  The composer keeps native Vim `p/o/d/e`; these region jumps are available
+- `p/o/d/i`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
+  The composer keeps native Vim `p/o/d/i`; these region jumps are available
   only while a non-editor Prompt region owns focus. One scoped exception keeps
   the visible Plan hint honest: `p` may leave a completely empty Normal-mode
   composer for Plan; once the editor has text or attachments, it is Vim paste.

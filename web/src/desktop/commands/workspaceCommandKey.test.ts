@@ -12,6 +12,27 @@ Deno.test("workspace Vim motions use physical keys under an IME input source", (
   );
 });
 
+Deno.test("every workspace letter shortcut uses physical identity under an IME", () => {
+  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    assert.equal(
+      workspaceCommandKey({
+        code: `Key${letter}`,
+        key: "Process",
+        shiftKey: false,
+      }),
+      letter.toLowerCase(),
+    );
+    assert.equal(
+      workspaceCommandKey({
+        code: `Key${letter}`,
+        key: "Process",
+        shiftKey: true,
+      }),
+      letter,
+    );
+  }
+});
+
 Deno.test("workspace Vim motions preserve shifted G and native non-letter keys", () => {
   assert.equal(
     workspaceCommandKey({ code: "KeyG", key: "Process", shiftKey: true }),

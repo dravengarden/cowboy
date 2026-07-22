@@ -395,7 +395,7 @@ here says otherwise.
     line as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
     upstream behavior. This runtime remains dynamically imported by Desktop
     only; Mobile receives neither the focus reset nor the macro UI. Prompt's
-    bare `P/O/D/E` region shortcuts must also yield while the command sink owns
+    bare `P/O/D/I` region shortcuts must also yield while the command sink owns
     focus, or they shadow native Vim paste, macro, delete, and motion commands.
     The sole narrow exception is `P` on a completely empty main composer in
     Normal mode: there is no document-relative paste target, so the visible Plan
@@ -406,6 +406,15 @@ here says otherwise.
     that sink may receive `event.key=Process` / keyCode 229 even though it cannot
     compose; match the physical `KeyP` there. Never enable physical bare-key
     matching on `.cm-content`, where it would steal real Insert-mode text.
+    The same CJK input source can mark any physical Normal-mode keydown on the
+    non-editable sink as `isComposing`/229 even though no marked-text transaction
+    exists there. Do not discard those events: route the complete letter,
+    punctuation, motion, operator, count, and special-key map through
+    `event.code` and `vimCommandKey`. Only the runtime's actual
+    `compositionstart`/`compositionend` lifecycle (and `EditorView.composing`)
+    may suspend sink commands. Workspace/list/config shortcuts follow the same
+    physical-key rule outside editable targets; real composition inside
+    `.cm-content`, input, or textarea remains exclusively owned by the IME.
 
 17. **Queue/Draft disclosure motion must preserve mounted editor state.** These
     panels use the same MUI `Collapse` motion as Plan. Keep its default mounted

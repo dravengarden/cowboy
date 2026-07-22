@@ -339,7 +339,13 @@ export function createImeAutoInsertVim(): {
     }
 
     private readonly onKeyDown = (event: KeyboardEvent): void => {
-      if (!this.cm || this.cm.state?.vim?.insertMode || event.isComposing) return;
+      // This sink is non-editable and cannot own marked text. macOS may still
+      // report isComposing/229 for physical Normal-mode keys under a CJK input
+      // source, so trust the editor's real composition lifecycle instead.
+      if (
+        !this.cm || this.cm.state?.vim?.insertMode || composing ||
+        this.view.composing
+      ) return;
       const key = vimCommandKey(event);
       if (!key) return;
       event.preventDefault();

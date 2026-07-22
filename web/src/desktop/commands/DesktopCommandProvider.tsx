@@ -180,7 +180,7 @@ export function DesktopCommandProvider(
       }
       if (
         event.ctrlKey && !event.metaKey && !event.altKey &&
-        event.key.toLowerCase() === "w"
+        workspaceCommandKey(event).toLowerCase() === "w"
       ) {
         event.preventDefault();
         event.stopPropagation();
@@ -237,7 +237,8 @@ export function DesktopCommandProvider(
         : null;
       if (
         workspace.mode === "normal" && scrollNavigation && region &&
-        event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey
+        workspaceCommandKey(event) === "Tab" && !event.ctrlKey &&
+        !event.metaKey && !event.altKey
       ) {
         const current = activeWidget ? widgets.indexOf(activeWidget) : -1;
         const nearest = nearestConversationWidget(region, widgets);

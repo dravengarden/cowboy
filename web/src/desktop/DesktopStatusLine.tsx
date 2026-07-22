@@ -143,7 +143,7 @@ export function DesktopStatusLine({
       { keys: "P", label: "Plan" },
       { keys: "O", label: "Queue" },
       { keys: "D", label: "Drafts" },
-      { keys: "E", label: "Editor" },
+      { keys: "I", label: "Editor" },
     ]
     : [];
   const hints = [

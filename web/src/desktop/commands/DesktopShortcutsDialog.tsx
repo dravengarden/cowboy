@@ -30,7 +30,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["C"], title: "Compact Conversation in Top Bar" },
   { keys: ["S"], title: "Stop Current Turn in Top Bar" },
   {
-    keys: ["P/O/D/E"],
+    keys: ["P/O/D/I"],
     title: "Plan / Queue / Drafts / Editor inside Prompt",
     description: "Available from Prompt lists; the composer keeps native Vim commands",
   },

@@ -13,6 +13,46 @@ Deno.test("physical v and V stay stable under an IME input source", () => {
   }
 });
 
+Deno.test("every physical Vim letter stays stable under an IME input source", () => {
+  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    const code = `Key${letter}`;
+    const lower = letter.toLowerCase();
+    if (vimCommandKey(key(code, { key: "Process", keyCode: 229 })) !== lower) {
+      throw new Error(`physical ${lower} was not preserved`);
+    }
+    if (
+      vimCommandKey(key(code, {
+        key: "Process",
+        keyCode: 229,
+        shiftKey: true,
+      })) !== letter
+    ) {
+      throw new Error(`physical ${letter} was not preserved`);
+    }
+  }
+});
+
+Deno.test("every physical Vim punctuation key stays stable under an IME input source", () => {
+  const expected = new Map([
+    ["Backquote", "`"],
+    ["Backslash", "\\"],
+    ["BracketLeft", "["],
+    ["BracketRight", "]"],
+    ["Comma", ","],
+    ["Equal", "="],
+    ["Minus", "-"],
+    ["Period", "."],
+    ["Quote", "'"],
+    ["Semicolon", ";"],
+    ["Slash", "/"],
+  ]);
+  for (const [code, command] of expected) {
+    if (vimCommandKey(key(code, { key: "Process", keyCode: 229 })) !== command) {
+      throw new Error(`physical ${code} was not preserved`);
+    }
+  }
+});
+
 Deno.test("all standard Vim visual exits reach codemirror-vim", () => {
   const exits = [
     vimCommandKey(key("Escape")),

@@ -126,6 +126,7 @@ import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "
 import { persisted } from "./_store/mod.ts";
 import { horizontalSwipe, swipeCommits } from "./touchGestures";
 import { haptic } from "./haptic";
+import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -469,8 +470,7 @@ function SessionList({
             !desktop || event.metaKey || event.ctrlKey || event.altKey ||
             event.shiftKey || event.repeat
         ) return;
-        const match = /^Key([A-Z])$/.exec(event.code);
-        const key = match?.[1]?.toLowerCase() ?? event.key;
+        const key = workspaceCommandKey(event.nativeEvent);
         const rows = [...(listRef.current?.querySelectorAll<HTMLElement>(
             "[data-desktop-item]",
         ) ?? [])].filter((row) => row.offsetParent !== null);
@@ -551,12 +551,35 @@ function SessionList({
                     {desktop && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
                 </Button>
                 {desktop && pinned && (
-                    <Chip
-                        size="small"
-                        color="primary"
-                        label="PIN · J/K reorder · Esc release"
-                        sx={{ mt: 0.75, width: "100%", fontWeight: 650 }}
-                    />
+                    <Box
+                        role="status"
+                        sx={{
+                            mt: 0.75,
+                            minHeight: 32,
+                            px: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 0.75,
+                            border: 1,
+                            borderColor: "primary.main",
+                            borderRadius: 1.25,
+                            color: "primary.main",
+                            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.055),
+                        }}
+                    >
+                        <Kbd keys="P" />
+                        <Typography
+                            variant="caption"
+                            sx={{ fontWeight: 750, letterSpacing: "0.045em" }}
+                        >
+                            REORDER
+                        </Typography>
+                        <Box sx={{ flex: 1 }} />
+                        <Kbd keys="J/K" />
+                        <Typography variant="caption" color="text.secondary">Move</Typography>
+                        <Kbd keys="Esc" />
+                        <Typography variant="caption" color="text.secondary">Done</Typography>
+                    </Box>
                 )}
             </Box>
             <List
@@ -589,6 +612,7 @@ function SessionList({
                         key={s.id}
                         data-desktop-item={s.id}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
+                        data-desktop-pin-active={desktop && pinned ? "true" : undefined}
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
@@ -646,19 +670,20 @@ function SessionList({
                             {desktop && (
                                 <Box
                                     className="cowboy-session-pin-shortcut"
-                                    title="P · Pin for J/K reorder"
+                                    title={pinned ? "J/K · Move pinned session" : "P · Pin for reorder"}
                                     sx={{
                                         position: "absolute",
-                                        right: -1,
-                                        bottom: -1,
+                                        inset: 0,
                                         display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
                                         pointerEvents: "none",
                                         opacity: 0,
-                                        transform: "translateY(2px) scale(0.92)",
+                                        transform: "scale(0.92)",
                                         transition: "opacity 120ms ease, transform 120ms ease",
                                     }}
                                 >
-                                    <Kbd keys="P" />
+                                    <Kbd keys={pinned ? "J/K" : "P"} />
                                 </Box>
                             )}
                         </Box>
@@ -1709,14 +1734,22 @@ export function App({
                             `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.3)}, 0 2px 10px ${alpha(t.palette.primary.main, 0.055)}`,
                         "& .cowboy-session-grip": {
                             color: "primary.main",
+                            "& .MuiSvgIcon-root": {
+                                opacity: 0,
+                            },
                         },
                         "& .cowboy-session-shortcut": {
                             opacity: "1 !important",
                         },
                         "& .cowboy-session-pin-shortcut": {
                             opacity: 0.92,
-                            transform: "translateY(0) scale(1)",
+                            transform: "scale(1)",
                         },
+                    },
+                    "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
+                        boxShadow: (t) =>
+                            `inset 0 0 0 2px ${alpha(t.palette.primary.main, 0.48)}, 0 3px 14px ${alpha(t.palette.primary.main, 0.09)}`,
                     },
                 }),
             }}
@@ -2835,10 +2868,10 @@ function SettingsShell({
             }
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (isImeKeyEvent(event) || event.metaKey || event.ctrlKey || event.altKey) return;
+            if (event.metaKey || event.ctrlKey || event.altKey) return;
             const target = event.target;
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
-            const key = event.key.toLowerCase();
+            const key = workspaceCommandKey(event).toLowerCase();
             const tabs = ["settings", "info", "logs"] as const;
             if (key === "[" || key === "]") {
                 event.preventDefault();
