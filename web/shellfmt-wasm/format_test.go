@@ -216,6 +216,25 @@ func TestExtractsNixBashCommandPayload(t *testing.T) {
 	}
 }
 
+func TestExtractsNixBashPayloadAcrossVariableQuoteBridge(t *testing.T) {
+	source := `carrack_explain_d1_dir="$(mktemp -d)"
+nix develop -c bash -c 'pnpm control:format && pnpm --filter @carrack/control-worker exec wrangler d1 migrations apply CONTROL_DB --local --persist-to "'$carrack_explain_d1_dir'" && just control-check'`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(display.Frames) != 2 {
+		t.Fatalf("expected outer assignment and extracted child script, got %#v", display.Frames)
+	}
+	child := display.Frames[1]
+	if child.Launcher != "nix develop -c bash -c" {
+		t.Fatalf("unexpected child launcher %q", child.Launcher)
+	}
+	if !strings.Contains(child.Text, "$carrack_explain_d1_dir") || !strings.Contains(child.Text, "&&\n") {
+		t.Fatalf("expected parameter and command structure in child frame, got %q", child.Text)
+	}
+}
+
 func TestProjectsNestedShellsAsSourceFrames(t *testing.T) {
 	display, err := formatShellDisplay(`set -e; nix develop -c bash -lc 'ssh host sh -c "printf ok && cargo test"'; echo done`, 46)
 	if err != nil {

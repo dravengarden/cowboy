@@ -347,6 +347,15 @@ func nestedPayloads(source string, file *syntax.File) []nestedPayload {
 			}
 			option, optionStatic := staticWord(call.Args[index+1])
 			payloadValue, payloadStatic := staticWord(call.Args[index+2])
+			if !payloadStatic {
+				// A common safe quote bridge passes an outer-shell variable into
+				// an otherwise static child script, for example
+				// `'tool --dir "'$tmpdir'" && check'`. The exact runtime value is
+				// neither needed nor available for presentation; retaining the
+				// parameter expression gives the child parser the real command
+				// structure while Source and copy keep the original bytes.
+				payloadValue, payloadStatic = shellPayloadWord(source, call.Args[index+2])
+			}
 			if !optionStatic || !payloadStatic {
 				continue
 			}
@@ -1147,6 +1156,45 @@ func staticWord(word *syntax.Word) (string, bool) {
 		default:
 			return "", false
 		}
+	}
+	return value.String(), true
+}
+
+// shellPayloadWord decodes a shell-interpreter payload while preserving simple
+// parameter expansions as expressions. Unlike staticWord this is deliberately
+// limited to `bash -c`-style child source: callers must never treat the result
+// as a resolved argv value.
+func shellPayloadWord(source string, word *syntax.Word) (string, bool) {
+	var value strings.Builder
+	var appendParts func([]syntax.WordPart) bool
+	appendParts = func(parts []syntax.WordPart) bool {
+		for _, rawPart := range parts {
+			switch part := rawPart.(type) {
+			case *syntax.Lit:
+				value.WriteString(decodeUnquotedLiteral(part.Value))
+			case *syntax.SglQuoted:
+				value.WriteString(part.Value)
+			case *syntax.DblQuoted:
+				for _, nested := range part.Parts {
+					switch quoted := nested.(type) {
+					case *syntax.Lit:
+						value.WriteString(decodeDoubleQuotedLiteral(quoted.Value))
+					case *syntax.ParamExp:
+						value.WriteString(source[int(quoted.Pos().Offset()):int(quoted.End().Offset())])
+					default:
+						return false
+					}
+				}
+			case *syntax.ParamExp:
+				value.WriteString(source[int(part.Pos().Offset()):int(part.End().Offset())])
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	if !appendParts(word.Parts) {
+		return "", false
 	}
 	return value.String(), true
 }
