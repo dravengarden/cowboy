@@ -2711,6 +2711,57 @@ function DesktopSettingsRow({
     );
 }
 
+// Desktop modal primitive: a dense, keyboard-addressable block with one visual
+// boundary, an optional mnemonic, and a stable landmark for jump navigation.
+// Desktop settings, information, and logs deliberately share this shape so a
+// modal reads as one workbench rather than a collection of unrelated sheets.
+function DesktopModalBlock({
+    label,
+    title,
+    shortcut,
+    section,
+    children,
+    sx,
+}: {
+    label: string;
+    title?: string;
+    shortcut?: string;
+    section?: "info" | "logs";
+    children: React.ReactNode;
+    sx?: SxProps<Theme>;
+}): React.JSX.Element {
+    const focusable = section !== undefined;
+    return (
+        <Box
+            {...(section === "info" ? { "data-settings-info": true } : {})}
+            {...(section === "logs" ? { "data-settings-logs": true } : {})}
+            tabIndex={focusable ? 0 : undefined}
+            role={focusable ? "region" : undefined}
+            aria-label={focusable ? `${label} ${title ?? ""}`.trim() : undefined}
+            sx={[
+                {
+                    border: 1,
+                    borderColor: "divider",
+                    borderRadius: 2,
+                    p: section ? 2 : 1,
+                    scrollMarginTop: 76,
+                    "&:focus-visible": desktopFocusBoundary,
+                },
+                ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+            ]}
+        >
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: section ? 0 : 1.5, mb: title ? 1 : 0 }}>
+                <Box>
+                    <Typography variant="overline" color="text.secondary">{label}</Typography>
+                    {title && <Typography variant="body2" fontWeight={750}>{title}</Typography>}
+                </Box>
+                {shortcut && <Kbd keys={shortcut} />}
+            </Stack>
+            {children}
+        </Box>
+    );
+}
+
 function DesktopSettingsContent({
     themeMode,
     onSetThemeMode,
@@ -2727,8 +2778,7 @@ function DesktopSettingsContent({
     const autoResume = settings[AUTO_RESUME_DEFAULT_KEY] === true;
     return (
         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, alignItems: "start" }}>
-            <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, p: 1 }}>
-                <Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>Appearance</Typography>
+            <DesktopModalBlock label="Appearance">
                 <DesktopSettingsRow shortcut="T" label="Theme" description="Follow the system or pin a palette">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
                         {(["system", "light", "dark"] as const).map((mode) => (
@@ -2764,9 +2814,8 @@ function DesktopSettingsContent({
                         Make the common path fast. 阅读输出时，密度、节奏和字形会立即反映在这里。
                     </Typography>
                 </Box>
-            </Box>
-            <Box sx={{ border: 1, borderColor: "divider", borderRadius: 2, p: 1 }}>
-                <Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>Density</Typography>
+            </DesktopModalBlock>
+            <DesktopModalBlock label="Density">
                 <DesktopSettingsRow shortcut="Z" label="Font size" description="Scale application text">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
                         {FONT_SCALE_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.fontScale, FONT_SCALE_PRESETS) === value} onClick={() => setFontScale(value)} ariaLabel={`${Math.round(value * 100)} percent font size`}>{Math.round(value * 100)}%</DesktopSettingsChoice>)}
@@ -2782,9 +2831,8 @@ function DesktopSettingsContent({
                         {LINE_HEIGHT_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.lineHeight, LINE_HEIGHT_PRESETS) === value} onClick={() => setLineHeight(value)} ariaLabel={`${value.toFixed(1)} line height`}>{value.toFixed(1)}</DesktopSettingsChoice>)}
                     </Box>
                 </DesktopSettingsRow>
-            </Box>
-            <Box sx={{ gridColumn: "1 / -1", border: 1, borderColor: "divider", borderRadius: 2, p: 1 }}>
-                <Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>Workflow</Typography>
+            </DesktopModalBlock>
+            <DesktopModalBlock label="Workflow" sx={{ gridColumn: "1 / -1" }}>
                 <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 2 }}>
                     <DesktopSettingsRow shortcut="S" label="Sound alert" description="Chime when an agent needs you">
                         <DesktopSettingsChoice active={notify} onClick={() => setNotifySetting(!notify)} ariaLabel="Toggle sound alerts">{notify ? "On" : "Off"}</DesktopSettingsChoice>
@@ -2801,7 +2849,7 @@ function DesktopSettingsContent({
                 </Box>
                 <Divider sx={{ my: 1 }} />
                 <AutoResumeSettings showToggle={false} />
-            </Box>
+            </DesktopModalBlock>
         </Box>
     );
 }
@@ -2984,9 +3032,7 @@ function SettingsShell({
     useEffect(() => {
         if (!open || !desktop) return undefined;
         const focusFirst = requestAnimationFrame(() => {
-            if (tab === "settings") {
-                settingsPanelRef.current?.querySelector<HTMLElement>("[data-settings-choice]")?.focus();
-            }
+            settingsPanelRef.current?.querySelector<HTMLElement>("[data-settings-choice]")?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
             if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -2994,15 +3040,26 @@ function SettingsShell({
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
             const key = workspaceCommandKey(event).toLowerCase();
             const tabs = ["settings", "info", "logs"] as const;
-            if (key === "[" || key === "]") {
+            if (!desktop && (key === "[" || key === "]")) {
                 event.preventDefault();
                 const index = tabs.indexOf(tab);
                 setTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
                 return;
             }
-            if (tab !== "settings") return;
             const panel = settingsPanelRef.current;
             if (!panel) return;
+            if (desktop && (key === "i" || key === "g")) {
+                const section = panel.querySelector<HTMLElement>(
+                    key === "i" ? "[data-settings-info]" : "[data-settings-logs]",
+                );
+                if (section) {
+                    event.preventDefault();
+                    section.scrollIntoView({ block: "start", behavior: "smooth" });
+                    section.focus({ preventScroll: true });
+                }
+                return;
+            }
+            if (!desktop && tab !== "settings") return;
             const rows = [...panel.querySelectorAll<HTMLElement>("[data-settings-row]")];
             const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             const activeRow = active?.closest<HTMLElement>("[data-settings-row]");
@@ -3019,6 +3076,15 @@ function SettingsShell({
             }
             if (!["h", "j", "k", "l"].includes(key)) return;
             event.preventDefault();
+            if (desktop && !activeRow) {
+                const controls = [...panel.querySelectorAll<HTMLElement>(
+                    'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
+                )].filter((control) => control.offsetParent !== null);
+                const controlIndex = active ? controls.indexOf(active) : -1;
+                const delta = key === "j" || key === "l" ? 1 : -1;
+                controls[Math.max(0, Math.min(controls.length - 1, controlIndex + delta))]?.focus();
+                return;
+            }
             const rowIndex = activeRow ? rows.indexOf(activeRow) : -1;
             if (key === "j" || key === "k") {
                 const next = rowIndex < 0
@@ -3048,19 +3114,21 @@ function SettingsShell({
             wide
             cover
         >
-            {/* Tab switcher + close, rendered in the BODY rather than the shared
-                sheet title row. That row pairs the title with a fixed 40px close
-                button, so its height + padding forced an over-tall header with too
-                much space above/below the pill; here cowboy owns the spacing. The
-                flex:1 spacers either side keep the pill dead-centred with the close
-                at the trailing edge; mt/mb tune the top/bottom whitespace directly. */}
-            <Box sx={{ display: "flex", alignItems: "center", mt: 0.25, mb: 1.5 }}>
-                <Box sx={{ flex: 1 }} />
-                <SegmentedPill
+            {/* Mobile keeps progressive-disclosure tabs. Desktop is one visible
+                keyboard workbench, so no information is hidden behind a tab. */}
+            <Box sx={{ position: desktop ? "sticky" : "static", top: desktop ? -1 : "auto", zIndex: 4, bgcolor: "background.paper" }}>
+            <Box sx={{ display: "flex", alignItems: "center", mt: 0.25, mb: desktop ? 1 : 1.5, py: desktop ? 0.5 : 0 }}>
+                {desktop ? (
+                    <Box sx={{ flex: 1 }}>
+                        <Typography variant="h6" fontWeight={780}>Cowboy control center</Typography>
+                        <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
+                    </Box>
+                ) : <Box sx={{ flex: 1 }} />}
+                {!desktop && <SegmentedPill
                     value={tab}
                     onChange={setTab}
                     options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
-                />
+                />}
                 <Box
                     sx={{
                         flex: 1,
@@ -3078,11 +3146,29 @@ function SettingsShell({
                     </Box>
                 </Box>
             </Box>
-            {tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : desktop ? (
-                <Box ref={settingsPanelRef}>
+            </Box>
+            {desktop ? (
+                <Box ref={settingsPanelRef} data-desktop-settings-workbench>
                     <DesktopSettingsContent themeMode={themeMode} onSetThemeMode={onSetThemeMode} />
+                    <Box
+                        sx={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, 0.85fr)",
+                            gap: 2,
+                            mt: 2,
+                            alignItems: "start",
+                            "@media (max-width: 1180px)": { gridTemplateColumns: "1fr" },
+                        }}
+                    >
+                        <DesktopModalBlock label="Runtime & usage" title="Info" shortcut="I" section="info">
+                            <InfoContent />
+                        </DesktopModalBlock>
+                        <DesktopModalBlock label="Audit trail" title="Logs" shortcut="G" section="logs">
+                            <UsageLogs dense />
+                        </DesktopModalBlock>
+                    </Box>
                 </Box>
-            ) : (
+            ) : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 
@@ -3380,13 +3466,14 @@ function SettingsShell({
                     }}
                 >
                     <Stack direction="row" spacing={1.75} color="text.secondary">
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Field</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Next / previous</Typography></Stack>
                         <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Apply</Typography></Stack>
-                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="[/]" /><Typography variant="caption">Tab</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Activate</Typography></Stack>
                     </Stack>
                     <Stack direction="row" spacing={1.75} color="text.secondary">
-                        {tab === "settings" && <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="T F Z P R S V M A" /><Typography variant="caption">Jump</Typography></Stack>}
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="T F Z P R S V M A" /><Typography variant="caption">Setting</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="I" /><Typography variant="caption">Info</Typography></Stack>
+                        <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="G" /><Typography variant="caption">Logs</Typography></Stack>
                         <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
                     </Stack>
                 </Stack>
