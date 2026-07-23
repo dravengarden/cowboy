@@ -252,50 +252,44 @@ function TranscriptSkeleton({
   );
 }
 
-// A retained mobile tail can leave a large, perfectly valid blank region above
-// the newest turns while the first older page is in flight. Keep the feedback
-// OUT of transcript layout: reserving guessed history height changes
-// `scrollHeight` when the real page replaces it and makes iOS' bottom anchor
-// jump. This quiet outline occupies only the already-empty visual region,
-// ignores touch, and disappears without moving a single transcript row.
-function HistoryBackfillPlaceholder({
-  topInset,
+// Mobile's bottom-anchored transcript naturally leaves unused space above a
+// short live tail. During agent work or the first older-page restore, turn that
+// otherwise ambiguous void into a quiet conversation outline. This is a FLEX
+// filler, not guessed history height: it consumes only free viewport space,
+// shrinks one-for-one as real rows grow, and reaches zero before the transcript
+// overflows. It therefore never adds scroll range or disturbs iOS' anchor.
+function TranscriptLoadingFill({
+  label,
 }: {
-  topInset?: string | undefined;
+  label: string;
 }): React.JSX.Element {
   return (
     <Box
+      data-transcript-loading-fill
       role="status"
       aria-live="polite"
-      aria-label="Restoring earlier conversation"
+      aria-label={label}
       sx={{
-        position: "absolute",
-        top: topInset ? `calc(${topInset} + 18px)` : 22,
-        left: 0,
-        right: 0,
-        bottom: "52%",
-        zIndex: 1,
         pointerEvents: "none",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        px: 3.5,
-        // Never cover the first real row on a short landscape viewport.
-        minHeight: 72,
-        maxHeight: 190,
+        position: "relative",
+        minHeight: 0,
         overflow: "hidden",
       }}
     >
       <Stack
-        spacing={1.15}
         sx={{
-          width: "100%",
+          position: "absolute",
+          inset: "12px 20px",
+          mx: "auto",
           maxWidth: 560,
-          opacity: 0.72,
+          minHeight: 0,
+          justifyContent: "space-evenly",
+          gap: 1.1,
+          opacity: 0.62,
           maskImage:
-            "linear-gradient(to bottom, transparent 0%, black 22%, black 78%, transparent 100%)",
+            "linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)",
           WebkitMaskImage:
-            "linear-gradient(to bottom, transparent 0%, black 22%, black 78%, transparent 100%)",
+            "linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)",
         }}
       >
         <Stack direction="row" spacing={1} alignItems="center">
@@ -309,21 +303,43 @@ function HistoryBackfillPlaceholder({
             variant="caption"
             sx={{ color: "text.secondary", fontWeight: 600 }}
           >
-            Restoring earlier conversation
+            {label}
           </Typography>
         </Stack>
-        {["78%", "92%", "57%"].map((width) => (
-          <Skeleton
-            key={width}
-            variant="rounded"
-            animation={false}
-            width={width}
-            height={10}
+        {[
+          ["84%", "63%"],
+          ["46%"],
+          ["91%", "72%", "54%"],
+        ].map((lines, turn) => (
+          <Stack
+            // Static outline with no reordering.
+            key={turn}
+            spacing={0.8}
             sx={{
-              borderRadius: 99,
-              bgcolor: (theme) => alpha(theme.palette.text.secondary, 0.11),
+              width: turn === 1 ? "58%" : "100%",
+              alignSelf: turn === 1 ? "flex-end" : "stretch",
+              p: turn === 1 ? 1.15 : 0,
+              borderRadius: turn === 1 ? 2.5 : 0,
+              bgcolor: turn === 1
+                ? (theme) => alpha(theme.palette.primary.main, 0.045)
+                : "transparent",
             }}
-          />
+          >
+            {lines.map((width) => (
+              <Skeleton
+                key={width}
+                variant="rounded"
+                animation={false}
+                width={width}
+                height={9}
+                sx={{
+                  borderRadius: 99,
+                  bgcolor: (theme) =>
+                    alpha(theme.palette.text.secondary, 0.105),
+                }}
+              />
+            ))}
+          </Stack>
         ))}
       </Stack>
     </Box>
@@ -3601,6 +3617,13 @@ export function Transcript({
           // their intrinsic content height so overflow increases scrollHeight
           // instead of compressing siblings.
           "& > *": { flex: "0 0 auto" },
+          // The loading outline is the sole intentional flexible child. A zero
+          // basis + minHeight:0 means it can consume exactly the unused area but
+          // contributes no intrinsic height once real transcript rows fill it.
+          "& > [data-transcript-loading-fill]": {
+            flex: "1 1 0",
+            minHeight: 0,
+          },
         }}
       >
         {loading && items.length === 0
@@ -3734,6 +3757,13 @@ export function Transcript({
                     />
                   </Box>
                 ))}
+              {!desktopNavigation && (working || showBackfillStatus) && (
+                <TranscriptLoadingFill
+                  label={working
+                    ? "Agent is working"
+                    : "Restoring earlier conversation"}
+                />
+              )}
             </>
           )}
       </Box>
@@ -3753,7 +3783,7 @@ export function Transcript({
           scroll flow) so it gives feedback without adding height that would
           shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
       }
-      {paging?.loadingOlder && (
+      {paging?.loadingOlder && (desktopNavigation || !showBackfillStatus) && (
         <Box
           sx={{
             position: "absolute",
@@ -3770,9 +3800,6 @@ export function Transcript({
             sx={{ color: "text.disabled" }}
           />
         </Box>
-      )}
-      {!desktopNavigation && showBackfillStatus && items.length > 0 && (
-        <HistoryBackfillPlaceholder topInset={topInset} />
       )}
       {
         /* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
