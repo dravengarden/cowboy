@@ -499,6 +499,15 @@ here says otherwise.
     otherwise unused balanced-dock slot while preserving the exact-centre primary
     action and the native caret/IME ownership rules above.
 
+24. **Mobile session-title editing is explicitly saved from the sheet footer.**
+    While the title field is focused or contains an unsaved change, replace the
+    centred liquid-glass Close glyph with a check-shaped Save action. A plain
+    soft-keyboard Enter must never rename the session; only tapping Save commits.
+    Keep the pending action mounted through pointer-down so WebKit cannot blur
+    the input, swap the footer back to Close, and swallow the tap. Closing the
+    sheet discards the local title draft. This transaction is separate from the
+    CM6 composer and must not add editor keymaps or IME interception.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

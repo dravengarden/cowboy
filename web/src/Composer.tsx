@@ -174,6 +174,10 @@ import type {
 } from "./protocol";
 import { Sheet } from "./Sheet";
 import {
+  FloatingActionIsland,
+  MobileSheetDismiss,
+} from "./_shell";
+import {
   persisted,
   type Store,
   useStore as usePrefStore,
@@ -4179,19 +4183,81 @@ function ComposerSheet({
   const useSheetSurface = useMediaQuery(
     "(max-width: 767.95px), (min-width: 768px) and (max-width: 1023.95px) and (pointer: coarse)",
   );
+  const displayTitle = session?.title.startsWith(`${session.provider} · `)
+    ? session.title.slice(session.provider.length + 3)
+    : session?.title ?? "";
+  const [title, setTitle] = useState(displayTitle);
+  const [titleFocused, setTitleFocused] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    setTitle(displayTitle);
+    setTitleFocused(false);
+  }, [displayTitle, open]);
+  const trimmedTitle = title.trim();
+  const titleDirty = trimmedTitle !== displayTitle;
+  const saveTitle = (): void => {
+    if (session && trimmedTitle && titleDirty) {
+      renameSession(session.id, trimmedTitle);
+    } else if (!trimmedTitle) {
+      setTitle(displayTitle);
+    }
+    titleInputRef.current?.blur();
+    setTitleFocused(false);
+  };
+  const close = (): void => {
+    setTitle(displayTitle);
+    setTitleFocused(false);
+    onClose();
+  };
+  const editingTitle = titleFocused || titleDirty;
   return (
     <Sheet
       open={open}
-      onClose={onClose}
+      onClose={close}
       forceSheet={useSheetSurface}
       wide
+      mobileDismiss={useSheetSurface ? "none" : "header"}
+      actions={useSheetSurface
+        ? (
+          editingTitle
+            ? (
+              <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                <FloatingActionIsland maxWidth={54}>
+                  <ButtonBase
+                    aria-label="save session title"
+                    disabled={!trimmedTitle}
+                    onPointerDown={(event): void => {
+                      // Keep the title input mounted and focused until click. If
+                      // WebKit blurs first, the footer changes back to Close and
+                      // swallows the intended Save tap.
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onClick={saveTitle}
+                    sx={{
+                      width: 46,
+                      height: 46,
+                      borderRadius: 999,
+                      color: "text.primary",
+                      "&:active": { transform: "scale(0.97)" },
+                      "&.Mui-disabled": { color: "text.disabled" },
+                    }}
+                  >
+                    <Check fontSize="small" />
+                  </ButtonBase>
+                </FloatingActionIsland>
+              </Box>
+            )
+            : <MobileSheetDismiss onClose={close} />
+        )
+        : undefined}
       title={useSheetSurface ? undefined : (
         <Stack direction="row" alignItems="center" justifyContent="space-between">
           <Typography variant="h6" component="span" sx={{ fontWeight: 700 }}>
             Session settings
           </Typography>
           <Box sx={{ position: "relative", display: "inline-flex" }}>
-            <IconButton aria-label="close session settings" onClick={onClose} size="small">
+            <IconButton aria-label="close session settings" onClick={close} size="small">
               <Close fontSize="small" />
             </IconButton>
             <Kbd keys="Esc" floating />
@@ -4199,7 +4265,17 @@ function ComposerSheet({
         </Stack>
       )}
     >
-      {session && <SessionInfoSection session={session} />}
+      {session && (
+        <SessionInfoSection
+          session={session}
+          title={title}
+          titleInputRef={titleInputRef}
+          onTitleChange={setTitle}
+          onTitleFocusChange={setTitleFocused}
+          onTitleSave={saveTitle}
+          saveOnBlur={!useSheetSurface}
+        />
+      )}
       {session && <QueueSection session={session} />}
       {(loading || options.length > 0) && (
         <>
@@ -4256,27 +4332,27 @@ function ComposerSheet({
 // section only renders inside the compact-tier sheet.
 function SessionInfoSection({
   session,
+  title,
+  titleInputRef,
+  onTitleChange,
+  onTitleFocusChange,
+  onTitleSave,
+  saveOnBlur,
 }: {
   session: SessionMeta;
+  title: string;
+  titleInputRef: React.RefObject<HTMLInputElement | null>;
+  onTitleChange: (title: string) => void;
+  onTitleFocusChange: (focused: boolean) => void;
+  onTitleSave: () => void;
+  saveOnBlur: boolean;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
   // Strip the auto "provider · " prefix like the navbar does, so you edit the
-  // DISPLAY title, not the machine string; saving a custom title drops the prefix
-  // for good. Local draft so store echoes don't fight typing; committed via
-  // renameSession on Enter (blurs → onBlur) or when focus leaves.
-  const displayTitle = session.title.startsWith(`${session.provider} · `)
-    ? session.title.slice(session.provider.length + 3)
-    : session.title;
-  const [title, setTitle] = useState(displayTitle);
-  useEffect(() => {
-    setTitle(displayTitle);
-  }, [displayTitle]);
-  const commit = (): void => {
-    const t = title.trim();
-    if (t && t !== displayTitle) renameSession(session.id, t);
-    else setTitle(displayTitle); // empty / unchanged → revert the field
-  };
+  // DISPLAY title, not the machine string. The parent owns the draft because
+  // mobile replaces the footer Close action with an explicit Save action while
+  // this field is being edited. Plain Enter is intentionally not a commit path.
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Provider", value: session.provider },
     { label: "Working dir", value: session.cwd, mono: true },
@@ -4296,11 +4372,13 @@ function SessionInfoSection({
         </Typography>
       </Box>
       <TextField
+        inputRef={titleInputRef}
         size="small"
         label="Title"
         value={title}
-        onChange={(e): void => setTitle(e.target.value)}
+        onChange={(e): void => onTitleChange(e.target.value)}
         onFocus={(e): void => {
+          onTitleFocusChange(true);
           // Select the whole title on focus, so tapping it to rename lets you
           // replace it in one go (instead of fiddling a caret into a long string).
           // Deferred a frame — iOS collapses a synchronous select() back to a caret
@@ -4308,9 +4386,16 @@ function SessionInfoSection({
           const input = e.target as HTMLInputElement;
           requestAnimationFrame(() => input.select());
         }}
-        onBlur={commit}
-        onKeyDown={(e): void => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        onBlur={(): void => {
+          onTitleFocusChange(false);
+          if (saveOnBlur) onTitleSave();
+        }}
+        onKeyDown={(event): void => {
+          // Desktop retains its compact field convention. Mobile Enter belongs
+          // to the system keyboard and never submits the rename.
+          if (saveOnBlur && event.key === "Enter") {
+            (event.target as HTMLInputElement).blur();
+          }
         }}
         fullWidth
         sx={{ mt: 1, mb: 0.5 }}
