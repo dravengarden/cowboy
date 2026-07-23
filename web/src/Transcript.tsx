@@ -2934,6 +2934,8 @@ export function Transcript({
   const viewportBackfillAllowanceRef = useRef(1);
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
+  const historyLoadingHideTimerRef = useRef<number | null>(null);
+  const requestOlderPageRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
@@ -2973,32 +2975,54 @@ export function Transcript({
   // screen. Keep this distinct from ordinary scrollback loading: it is only the
   // automatic, followed-mode viewport bootstrap below.
   const [backfillingViewport, setBackfillingViewport] = useState(false);
+  const [scrollbackLoading, setScrollbackLoading] = useState(false);
   const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
   const historyPageLoading = backfillingViewport ||
+    scrollbackLoading ||
     paging?.loadingOlder === true;
   useEffect(() => {
     if (!historyPageLoading) {
       setShowHistoryLoadingFill(false);
       return undefined;
     }
-    // Cached pages usually land inside one frame. Delay the outline just enough
-    // to keep cache hits visually silent, but make a real network wait legible
-    // before the upper blank region can read as missing content. This includes
-    // both automatic viewport refill and deliberate scrollback pagination.
-    const timer = globalThis.setTimeout(
-      () => setShowHistoryLoadingFill(true),
-      140,
-    );
-    return () => globalThis.clearTimeout(timer);
+    // A history response is often faster than one frame, while decoding and
+    // laying out its large payload is not. Show the reserved-space skeleton
+    // immediately so the upper viewport never reads as a broken blank wall.
+    setShowHistoryLoadingFill(true);
+    return undefined;
   }, [historyPageLoading]);
+  requestOlderPageRef.current = (): void => {
+    if (historyLoadingHideTimerRef.current !== null) {
+      globalThis.clearTimeout(historyLoadingHideTimerRef.current);
+      historyLoadingHideTimerRef.current = null;
+    }
+    const shownAt = performance.now();
+    setScrollbackLoading(true);
+    void loadOlder(sessionIdRef.current).finally(() => {
+      // Keep the acknowledgement visible long enough to survive React batching
+      // and one WebKit paint, without delaying the page or blocking scrolling.
+      const remaining = Math.max(0, 280 - (performance.now() - shownAt));
+      historyLoadingHideTimerRef.current = globalThis.setTimeout(() => {
+        setScrollbackLoading(false);
+        historyLoadingHideTimerRef.current = null;
+      }, remaining);
+    });
+  };
   useEffect(() => {
     setBackfillingViewport(false);
+    setScrollbackLoading(false);
     setShowHistoryLoadingFill(false);
     viewportBackfillCursorRef.current = null;
     viewportBackfillAllowanceRef.current = 1;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
     requestViewportBackfillRef.current(false);
+    return () => {
+      if (historyLoadingHideTimerRef.current !== null) {
+        globalThis.clearTimeout(historyLoadingHideTimerRef.current);
+        historyLoadingHideTimerRef.current = null;
+      }
+    };
   }, [sessionId]);
 
   // Bootstrap at most one history page for a newly opened session, and grant
@@ -3245,8 +3269,22 @@ export function Transcript({
     };
     const onTouchStart = (): void => {
       touching = true;
+      // Each new finger gesture is one explicit request opportunity. A page
+      // landing while the reader remains near the beginning must not recursively
+      // drain the transcript, but the next upward swipe should fetch the next
+      // page without first forcing the reader away from the threshold.
+      historyPrefetchArmedRef.current = true;
       markNativeScrollActive();
       detach();
+      const fromBottom = Math.abs(el.scrollTop);
+      const prefetch = historyPrefetchTransition({
+        detached: true,
+        armed: historyPrefetchArmedRef.current,
+        fromTop: el.scrollHeight - el.clientHeight - fromBottom,
+        threshold: el.clientHeight * 2,
+      });
+      historyPrefetchArmedRef.current = prefetch.armed;
+      if (prefetch.request) requestOlderPageRef.current();
     };
     const onTouchEnd = (): void => {
       touching = false;
@@ -3296,7 +3334,7 @@ export function Transcript({
       });
       historyPrefetchArmedRef.current = prefetch.armed;
       if (prefetch.request) {
-        void loadOlder(sessionIdRef.current);
+        requestOlderPageRef.current();
       }
       reportScrollableRef.current();
     };
