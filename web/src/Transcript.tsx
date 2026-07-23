@@ -102,7 +102,10 @@ import {
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
-import { shouldBackfillTranscriptViewport } from "./transcriptViewport";
+import {
+  historyPrefetchTransition,
+  shouldBackfillTranscriptViewport,
+} from "./transcriptViewport";
 import { FloatingActionIsland, ImageLightbox } from "./_shell";
 import { Kbd } from "./Kbd";
 import { Sheet } from "./Sheet";
@@ -2834,6 +2837,9 @@ export function Transcript({
   const reportScrollableRef = useRef<() => void>(() => undefined);
   const viewportBackfillRafRef = useRef(0);
   const viewportBackfillCursorRef = useRef<number | null>(null);
+  const viewportBackfillAllowanceRef = useRef(1);
+  const viewportHeightRef = useRef<number | null>(null);
+  const historyPrefetchArmedRef = useRef(true);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
@@ -2888,13 +2894,16 @@ export function Transcript({
     setBackfillingViewport(false);
     setShowBackfillStatus(false);
     viewportBackfillCursorRef.current = null;
+    viewportBackfillAllowanceRef.current = 1;
+    viewportHeightRef.current = null;
+    historyPrefetchArmedRef.current = true;
+    requestViewportBackfillRef.current(false);
   }, [sessionId]);
 
-  // Bootstrap history until the viewport is actually filled, then repeat the
-  // same check when a Mobile/iPad viewport grows after keyboard, split-view, or
-  // rotation changes. Keep the measurement imperative and RAF-coalesced: WebKit
-  // emits a ResizeObserver burst for every keyboard animation frame, and none
-  // of those intermediate frames should become React render state.
+  // Bootstrap at most one history page for a newly opened session, and grant
+  // one more page only when the actual viewport height grows. A page landing
+  // changes content height and React state; it must never recursively authorize
+  // the next page or one short retained tail can download the whole transcript.
   requestViewportBackfillRef.current = (fromResize: boolean): void => {
     if (viewportBackfillRafRef.current !== 0) return;
     viewportBackfillRafRef.current = requestAnimationFrame(() => {
@@ -2905,6 +2914,7 @@ export function Transcript({
         return;
       }
       const needsOlderPage = shouldBackfillTranscriptViewport({
+        allowed: viewportBackfillAllowanceRef.current > 0,
         desktop: desktopNavigation,
         fromResize,
         reachedStart: paging.reachedStart,
@@ -2919,6 +2929,7 @@ export function Transcript({
         paging.beforeSeq !== viewportBackfillCursorRef.current
       ) {
         const requestedCursor = paging.beforeSeq;
+        viewportBackfillAllowanceRef.current -= 1;
         viewportBackfillCursorRef.current = requestedCursor;
         void loadOlder(sessionId).finally(() => {
           if (viewportBackfillCursorRef.current === requestedCursor) {
@@ -2929,9 +2940,8 @@ export function Transcript({
     });
   };
 
-  // Re-check after every page lands and stop as soon as content overflows or the
-  // server says we reached the beginning. requestAnimationFrame lets Markdown
-  // and the column-reverse flex layout publish their final height first.
+  // Re-check after layout changes, but the allowance above means a page landing
+  // can only stop backfill; it cannot chain another request.
   useLayoutEffect(() => {
     requestViewportBackfillRef.current(false);
   }, [
@@ -3173,12 +3183,18 @@ export function Transcript({
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
       if (!stick.current) captureAnchor();
-      // Near the top (oldest): prefetch the next older page 2 screens early so
-      // the prepend lands before the user reaches it. column-reverse keeps the
-      // viewport put when it lands (added at the visual top, away from the bottom
-      // anchor), so there's no anchor row to capture. `loadOlder` self-guards.
+      // Fetch one page per deliberate entry into the top threshold. Remaining
+      // inside the zone while a page lands must not chain through the entire
+      // session; the reader must move away and approach the top again.
       const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
-      if (fromTop < el.clientHeight * 2) {
+      const prefetch = historyPrefetchTransition({
+        detached: !stick.current,
+        armed: historyPrefetchArmedRef.current,
+        fromTop,
+        threshold: el.clientHeight * 2,
+      });
+      historyPrefetchArmedRef.current = prefetch.armed;
+      if (prefetch.request) {
         void loadOlder(sessionIdRef.current);
       }
       reportScrollableRef.current();
@@ -3285,7 +3301,17 @@ export function Transcript({
     };
     const ro = new ResizeObserver(() => {
       reportScrollableRef.current(); // viewport resized → overflow may have flipped
-      if (!desktopNavigation) requestViewportBackfillRef.current(true);
+      const previousHeight = viewportHeightRef.current;
+      const nextHeight = el.clientHeight;
+      viewportHeightRef.current = nextHeight;
+      if (
+        !desktopNavigation &&
+        previousHeight !== null &&
+        nextHeight > previousHeight + 1
+      ) {
+        viewportBackfillAllowanceRef.current = 1;
+        requestViewportBackfillRef.current(true);
+      }
       if (!stick.current) {
         // Detached: don't follow the bottom — hold the reader's view against the
         // streaming bottom bubble's upward growth (see FREEZE-WHILE-DETACHED).

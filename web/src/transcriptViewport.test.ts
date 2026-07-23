@@ -1,9 +1,13 @@
 import { assertEquals } from "jsr:@std/assert";
-import { shouldBackfillTranscriptViewport } from "./transcriptViewport.ts";
+import {
+  historyPrefetchTransition,
+  shouldBackfillTranscriptViewport,
+} from "./transcriptViewport.ts";
 
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
+      allowed: true,
       desktop: false,
       fromResize: true,
       reachedStart: false,
@@ -19,6 +23,7 @@ Deno.test("mobile transcript refills when an iPad viewport grows", () => {
 Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
+      allowed: true,
       desktop: true,
       fromResize: true,
       reachedStart: false,
@@ -33,6 +38,7 @@ Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
 
 Deno.test("transcript refill stops while a page is loading or history is exhausted", () => {
   const base = {
+    allowed: true,
     desktop: false,
     fromResize: true,
     beforeSeq: 854_903,
@@ -54,5 +60,44 @@ Deno.test("transcript refill stops while a page is loading or history is exhaust
       loadingOlder: false,
     }),
     false,
+  );
+  assertEquals(
+    shouldBackfillTranscriptViewport({
+      ...base,
+      allowed: false,
+      reachedStart: false,
+      loadingOlder: false,
+    }),
+    false,
+  );
+});
+
+Deno.test("history prefetch requests once per entry into the top threshold", () => {
+  assertEquals(
+    historyPrefetchTransition({
+      detached: true,
+      armed: true,
+      fromTop: 100,
+      threshold: 500,
+    }),
+    { armed: false, request: true },
+  );
+  assertEquals(
+    historyPrefetchTransition({
+      detached: true,
+      armed: false,
+      fromTop: 100,
+      threshold: 500,
+    }),
+    { armed: false, request: false },
+  );
+  assertEquals(
+    historyPrefetchTransition({
+      detached: true,
+      armed: false,
+      fromTop: 800,
+      threshold: 500,
+    }),
+    { armed: true, request: false },
   );
 });

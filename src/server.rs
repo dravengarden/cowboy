@@ -1758,9 +1758,9 @@ struct HistoryQuery {
     before_seq: u64,
 }
 
-/// One seq-aligned page of a session's history (events `[k·HISTORY_PAGE,
-/// (k+1)·HISTORY_PAGE)`). The client pages UP from the WS tail; older pages
-/// arrive here. A COMPLETE past page never changes again, so it's served
+/// One cursor-addressed, event- and byte-bounded page of a session's history.
+/// The client pages UP from the WS tail; older pages arrive here. A COMPLETE
+/// past page never changes again, so it's served
 /// `immutable` (one year) — the browser + service worker then satisfy any
 /// re-fetch (scroll back, reload, post-recycle reload) with ZERO network. The
 /// still-growing latest page is `no-store`, but the client never asks for it

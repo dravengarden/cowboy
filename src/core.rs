@@ -32,13 +32,19 @@ pub const SNAPSHOT_TAIL: usize = 200;
 /// reconnect replay several megabytes before live fan-out starts. Older events
 /// remain available through cursor-based HTTP history.
 pub const SNAPSHOT_MAX_BYTES: usize = 128 * 1024;
+/// Soft serialized-byte budget for one cursor history response. Event count
+/// alone is not a useful bound: screenshots and large tool results can make a
+/// 200-event page tens of megabytes and terminate an iOS WebContent process.
+/// One oversized event is still returned so the cursor always advances.
+pub const HISTORY_MAX_BYTES: usize = 512 * 1024;
 /// Maximum persisted-history tail retained in the Hub. Older events stay in
 /// Postgres and are fetched by `/api/history`.
 pub const HOT_TAIL: usize = 1_000;
 const HOT_TAIL_TRIM_BATCH: usize = 200;
 const BROADCAST_CAPACITY: usize = 1_024;
-/// Fixed history page size (events) for the cursor-based HTTP history route.
-pub const HISTORY_PAGE: usize = 200;
+/// Event-count ceiling for the cursor-based HTTP history route. The byte budget
+/// above is the primary bound; this limits render work for many tiny events.
+pub const HISTORY_PAGE: usize = 64;
 
 fn is_user_message_chunk(envelope: &Envelope) -> bool {
     matches!(
@@ -47,6 +53,24 @@ fn is_user_message_chunk(envelope: &Envelope) -> bool {
             if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
                 == Some("user_message_chunk")
     )
+}
+
+pub(crate) fn bound_history_page(mut events: Vec<Envelope>) -> Vec<Envelope> {
+    let mut start = events.len();
+    let mut serialized_bytes = 0usize;
+    for index in (0..events.len()).rev() {
+        let event_bytes = serde_json::to_vec(&events[index]).map_or(0, |event| event.len());
+        if serialized_bytes > 0 && serialized_bytes.saturating_add(event_bytes) > HISTORY_MAX_BYTES
+        {
+            break;
+        }
+        start = index;
+        serialized_bytes = serialized_bytes.saturating_add(event_bytes);
+    }
+    if start > 0 {
+        events.drain(..start);
+    }
+    events
 }
 
 /// Who opened a session. Used by the UI to render an `origin` badge and
@@ -1631,9 +1655,12 @@ impl Hub {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|s| {
             let end = s.log.partition_point(|e| e.seq < before_seq);
-            let start = end.saturating_sub(HISTORY_PAGE);
-            let events = s.log[start..end].to_vec();
-            let reached_start = s.reached_start && start == 0;
+            let count_start = end.saturating_sub(HISTORY_PAGE);
+            let candidates = s.log[count_start..end].to_vec();
+            let candidate_count = candidates.len();
+            let events = bound_history_page(candidates);
+            let reached_start =
+                s.reached_start && count_start == 0 && events.len() == candidate_count;
             let next_before_seq =
                 (!reached_start).then(|| events.first().map_or(before_seq, |event| event.seq));
             (events, next_before_seq, reached_start)
@@ -4327,16 +4354,57 @@ mod confirm_hold_tests {
                 .collect();
             session.reached_start = true;
         }
-        let (newer, cursor, reached_start) = hub.history_page("cursor", u64::MAX).unwrap();
-        assert_eq!(newer.len(), HISTORY_PAGE);
+        let mut cursor = Some(u64::MAX);
+        let mut seen = Vec::new();
+        while let Some(before_seq) = cursor {
+            let (page, next, reached_start) = hub.history_page("cursor", before_seq).unwrap();
+            assert!(!page.is_empty());
+            assert!(page.len() <= HISTORY_PAGE);
+            seen.splice(0..0, page.iter().map(|event| event.seq));
+            cursor = next;
+            if reached_start {
+                assert_eq!(cursor, None);
+                break;
+            }
+        }
+        assert_eq!(seen.len(), 450);
+        assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn cursor_history_is_byte_bounded_and_always_advances() {
+        let hub = hub_with_session("history-bytes");
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions.get_mut("history-bytes").expect("session");
+            session.log = (0..3)
+                .map(|seq| Envelope {
+                    session_id: "history-bytes".to_owned(),
+                    seq,
+                    event: Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "tool_call",
+                            "toolCallId": format!("tool-{seq}"),
+                            "content": "x".repeat(300 * 1024),
+                        }),
+                    },
+                    cmid: None,
+                })
+                .collect();
+            session.reached_start = true;
+        }
+
+        let (newest, cursor, reached_start) = hub.history_page("history-bytes", u64::MAX).unwrap();
+        assert_eq!(newest.len(), 1);
+        assert_eq!(newest[0].seq, 2);
         assert!(!reached_start);
-        let (older, cursor, reached_start) = hub.history_page("cursor", cursor.unwrap()).unwrap();
-        assert_eq!(older.len(), HISTORY_PAGE);
+
+        let (middle, next, reached_start) =
+            hub.history_page("history-bytes", cursor.unwrap()).unwrap();
+        assert_eq!(middle.len(), 1);
+        assert_eq!(middle[0].seq, 1);
         assert!(!reached_start);
-        let (oldest, cursor, reached_start) = hub.history_page("cursor", cursor.unwrap()).unwrap();
-        assert_eq!(oldest.len(), 50);
-        assert!(reached_start);
-        assert_eq!(cursor, None);
+        assert!(next.unwrap() < 2);
     }
 
     #[tokio::test]

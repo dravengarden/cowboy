@@ -1,4 +1,5 @@
 export interface TranscriptViewportBackfillInput {
+  allowed: boolean;
   desktop: boolean;
   fromResize: boolean;
   reachedStart: boolean;
@@ -12,6 +13,7 @@ export function shouldBackfillTranscriptViewport(
   input: TranscriptViewportBackfillInput,
 ): boolean {
   if (
+    !input.allowed ||
     input.reachedStart ||
     input.loadingOlder ||
     input.beforeSeq === null ||
@@ -20,4 +22,20 @@ export function shouldBackfillTranscriptViewport(
     return false;
   }
   return input.scrollHeight <= input.clientHeight + 1;
+}
+
+export interface HistoryPrefetchInput {
+  detached: boolean;
+  armed: boolean;
+  fromTop: number;
+  threshold: number;
+}
+
+export function historyPrefetchTransition(
+  input: HistoryPrefetchInput,
+): { armed: boolean; request: boolean } {
+  if (!input.detached) return { armed: true, request: false };
+  if (input.fromTop >= input.threshold) return { armed: true, request: false };
+  if (input.armed) return { armed: false, request: true };
+  return { armed: false, request: false };
 }

@@ -489,31 +489,53 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
   return next;
 }
 
-// Bulk merge a run of events (a snapshot tail or an older history page) into one
-// session's timeline: dedup by seq, keep seq-ordered, in a single pass (vs
-// applyEnvelope per event). Overlap between an unaligned tail and an aligned
-// page is harmless — the dedup drops it.
+// Merge two seq-ordered runs in linear time while preserving object identity
+// for existing events. Scrollback used to scan the whole window for every
+// incoming event and then sort the combined window on every page, making
+// progressively older history increasingly expensive.
 function mergeEvents(
   timelines: Map<string, Envelope[]>,
   sessionId: string,
   events: Envelope[],
 ): Map<string, Envelope[]> {
+  const existing = timelines.get(sessionId) ?? [];
+  const merged: Envelope[] = [];
+  let current = 0;
+  let incoming = 0;
+  while (current < existing.length || incoming < events.length) {
+    const oldEvent = existing[current];
+    const newEvent = events[incoming];
+    if (oldEvent === undefined) {
+      if (newEvent !== undefined) merged.push(newEvent);
+      incoming += 1;
+    } else if (newEvent === undefined) {
+      merged.push(oldEvent);
+      current += 1;
+    } else if (oldEvent.seq < newEvent.seq) {
+      merged.push(oldEvent);
+      current += 1;
+    } else if (newEvent.seq < oldEvent.seq) {
+      merged.push(newEvent);
+      incoming += 1;
+    } else {
+      merged.push(oldEvent);
+      current += 1;
+      incoming += 1;
+    }
+  }
+  if (
+    merged.length === existing.length &&
+    merged.every((event, index) => event === existing[index])
+  ) {
+    return timelines;
+  }
   const next = new Map(timelines);
-  const existing = next.get(sessionId) ?? [];
-  const fresh = events.filter((event) => !containsSeq(existing, event.seq));
-  if (fresh.length === 0 && existing.length > 0) return next;
-  const merged = linkTimeline(
-    [...existing, ...fresh].sort((a, b) => a.seq - b.seq),
-    existing,
-  );
-  next.set(sessionId, merged);
+  next.set(sessionId, linkTimeline(merged, existing));
   return next;
 }
 
-// History page size — MUST match the server's HISTORY_PAGE (src/core.rs). Pages
-// are seq-aligned so each has a stable, cacheable URL.
 // Fetch the next OLDER page of a session's history and prepend it. Pages come
-// from the immutable HTTP route (GET /api/history/:id/:page) so a re-fetch
+// from the immutable HTTP route (GET /api/history/:id) so a re-fetch
 // (scroll back, reload, post-recycle) is a cache hit — zero network. One fetch
 // at a time per session; no-op once the window already reaches the first event.
 //

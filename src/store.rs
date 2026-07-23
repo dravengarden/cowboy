@@ -28,7 +28,10 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-use crate::core::{Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, SessionOrigin, Status};
+use crate::core::{
+    Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, SessionOrigin, Status,
+    bound_history_page,
+};
 
 /// Strip NUL (`U+0000`) code points from every string (and object key) inside a
 /// JSON value, in place.
@@ -427,6 +430,7 @@ impl Store {
                 ),
             }
         }
+        let events = bound_history_page(events);
         let oldest = events.first().map(|event| event.seq);
         let reached_start = match oldest {
             Some(seq) => !sqlx::query_scalar::<_, bool>(
