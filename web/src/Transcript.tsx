@@ -2973,21 +2973,27 @@ export function Transcript({
   // screen. Keep this distinct from ordinary scrollback loading: it is only the
   // automatic, followed-mode viewport bootstrap below.
   const [backfillingViewport, setBackfillingViewport] = useState(false);
-  const [showBackfillStatus, setShowBackfillStatus] = useState(false);
+  const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
+  const historyPageLoading = backfillingViewport ||
+    paging?.loadingOlder === true;
   useEffect(() => {
-    if (!backfillingViewport) {
-      setShowBackfillStatus(false);
+    if (!historyPageLoading) {
+      setShowHistoryLoadingFill(false);
       return undefined;
     }
     // Cached pages usually land inside one frame. Delay the outline just enough
     // to keep cache hits visually silent, but make a real network wait legible
-    // before the upper blank region can read as missing content.
-    const timer = globalThis.setTimeout(() => setShowBackfillStatus(true), 140);
+    // before the upper blank region can read as missing content. This includes
+    // both automatic viewport refill and deliberate scrollback pagination.
+    const timer = globalThis.setTimeout(
+      () => setShowHistoryLoadingFill(true),
+      140,
+    );
     return () => globalThis.clearTimeout(timer);
-  }, [backfillingViewport]);
+  }, [historyPageLoading]);
   useEffect(() => {
     setBackfillingViewport(false);
-    setShowBackfillStatus(false);
+    setShowHistoryLoadingFill(false);
     viewportBackfillCursorRef.current = null;
     viewportBackfillAllowanceRef.current = 1;
     viewportHeightRef.current = null;
@@ -3757,7 +3763,7 @@ export function Transcript({
                     />
                   </Box>
                 ))}
-              {!desktopNavigation && (working || showBackfillStatus) && (
+              {!desktopNavigation && (working || showHistoryLoadingFill) && (
                 <TranscriptLoadingFill
                   label={working
                     ? "Agent is working"
@@ -3783,7 +3789,8 @@ export function Transcript({
           scroll flow) so it gives feedback without adding height that would
           shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
       }
-      {paging?.loadingOlder && (desktopNavigation || !showBackfillStatus) && (
+      {paging?.loadingOlder &&
+        (desktopNavigation || !showHistoryLoadingFill) && (
         <Box
           sx={{
             position: "absolute",
