@@ -252,6 +252,84 @@ function TranscriptSkeleton({
   );
 }
 
+// A retained mobile tail can leave a large, perfectly valid blank region above
+// the newest turns while the first older page is in flight. Keep the feedback
+// OUT of transcript layout: reserving guessed history height changes
+// `scrollHeight` when the real page replaces it and makes iOS' bottom anchor
+// jump. This quiet outline occupies only the already-empty visual region,
+// ignores touch, and disappears without moving a single transcript row.
+function HistoryBackfillPlaceholder({
+  topInset,
+}: {
+  topInset?: string | undefined;
+}): React.JSX.Element {
+  return (
+    <Box
+      role="status"
+      aria-live="polite"
+      aria-label="Restoring earlier conversation"
+      sx={{
+        position: "absolute",
+        top: topInset ? `calc(${topInset} + 18px)` : 22,
+        left: 0,
+        right: 0,
+        bottom: "52%",
+        zIndex: 1,
+        pointerEvents: "none",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        px: 3.5,
+        // Never cover the first real row on a short landscape viewport.
+        minHeight: 72,
+        maxHeight: 190,
+        overflow: "hidden",
+      }}
+    >
+      <Stack
+        spacing={1.15}
+        sx={{
+          width: "100%",
+          maxWidth: 560,
+          opacity: 0.72,
+          maskImage:
+            "linear-gradient(to bottom, transparent 0%, black 22%, black 78%, transparent 100%)",
+          WebkitMaskImage:
+            "linear-gradient(to bottom, transparent 0%, black 22%, black 78%, transparent 100%)",
+        }}
+      >
+        <Stack direction="row" spacing={1} alignItems="center">
+          <CircularProgress
+            size={13}
+            thickness={4}
+            color="inherit"
+            aria-hidden
+          />
+          <Typography
+            variant="caption"
+            sx={{ color: "text.secondary", fontWeight: 600 }}
+          >
+            Restoring earlier conversation
+          </Typography>
+        </Stack>
+        {["78%", "92%", "57%"].map((width) => (
+          <Skeleton
+            key={width}
+            variant="rounded"
+            animation={false}
+            width={width}
+            height={10}
+            sx={{
+              borderRadius: 99,
+              bgcolor: (theme) => alpha(theme.palette.text.secondary, 0.11),
+            }}
+          />
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 // Shown when a session has NO messages yet but IS live — a freshly created
 // session (`new_session` spawns the agent right away, so it's Running and idle,
 // waiting for the first prompt; no history is coming, so the skeleton would be
@@ -2885,9 +2963,10 @@ export function Transcript({
       setShowBackfillStatus(false);
       return undefined;
     }
-    // Cached pages usually land inside one frame. Delay the status so fast
-    // restores stay visually silent instead of flashing a pill.
-    const timer = globalThis.setTimeout(() => setShowBackfillStatus(true), 280);
+    // Cached pages usually land inside one frame. Delay the outline just enough
+    // to keep cache hits visually silent, but make a real network wait legible
+    // before the upper blank region can read as missing content.
+    const timer = globalThis.setTimeout(() => setShowBackfillStatus(true), 140);
     return () => globalThis.clearTimeout(timer);
   }, [backfillingViewport]);
   useEffect(() => {
@@ -3693,48 +3772,7 @@ export function Transcript({
         </Box>
       )}
       {!desktopNavigation && showBackfillStatus && items.length > 0 && (
-        <Box
-          role="status"
-          aria-live="polite"
-          sx={{
-            position: "absolute",
-            inset: 0,
-            zIndex: 1,
-            pointerEvents: "none",
-            display: "grid",
-            placeItems: "center",
-            px: 3,
-          }}
-        >
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            sx={{
-              px: 1.5,
-              py: 0.9,
-              borderRadius: 99,
-              color: "text.secondary",
-              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.84),
-              border: 1,
-              borderColor: "divider",
-              boxShadow: (theme) =>
-                `0 8px 24px ${alpha(theme.palette.common.black, 0.08)}`,
-              backdropFilter: "blur(10px)",
-              WebkitBackdropFilter: "blur(10px)",
-            }}
-          >
-            <CircularProgress
-              size={14}
-              thickness={4}
-              color="inherit"
-              aria-hidden
-            />
-            <Typography variant="caption" sx={{ fontWeight: 550 }}>
-              Restoring earlier context…
-            </Typography>
-          </Stack>
-        </Box>
+        <HistoryBackfillPlaceholder topInset={topInset} />
       )}
       {
         /* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
