@@ -102,6 +102,7 @@ import {
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
+import { shouldBackfillTranscriptViewport } from "./transcriptViewport";
 import { FloatingActionIsland, ImageLightbox } from "./_shell";
 import { Kbd } from "./Kbd";
 import { Sheet } from "./Sheet";
@@ -2831,6 +2832,10 @@ export function Transcript({
   onScrollableChangeRef.current = onScrollableChange;
   const lastScrollableRef = useRef<boolean | null>(null);
   const reportScrollableRef = useRef<() => void>(() => undefined);
+  const viewportBackfillRafRef = useRef(0);
+  const requestViewportBackfillRef = useRef<
+    (fromResize: boolean) => void
+  >(() => undefined);
   reportScrollableRef.current = (): void => {
     const el = parentRef.current;
     if (!el) return;
@@ -2883,28 +2888,39 @@ export function Transcript({
     setShowBackfillStatus(false);
   }, [sessionId]);
 
-  // Bootstrap history until the viewport is actually filled. Older pages were
-  // previously requested only from the scroll listener below; when the initial
-  // compacted tail was shorter than one screen there was no overflow, therefore
-  // no scroll event, therefore no way to fetch the thousands of older events.
+  // Bootstrap history until the viewport is actually filled, then repeat the
+  // same check when a Mobile/iPad viewport grows after keyboard, split-view, or
+  // rotation changes. Keep the measurement imperative and RAF-coalesced: WebKit
+  // emits a ResizeObserver burst for every keyboard animation frame, and none
+  // of those intermediate frames should become React render state.
+  requestViewportBackfillRef.current = (fromResize: boolean): void => {
+    if (viewportBackfillRafRef.current !== 0) return;
+    viewportBackfillRafRef.current = requestAnimationFrame(() => {
+      viewportBackfillRafRef.current = 0;
+      const el = parentRef.current;
+      if (!el || !paging) {
+        setBackfillingViewport(false);
+        return;
+      }
+      const needsOlderPage = shouldBackfillTranscriptViewport({
+        desktop: desktopNavigation,
+        fromResize,
+        reachedStart: paging.reachedStart,
+        loadingOlder: paging.loadingOlder,
+        beforeSeq: paging.beforeSeq,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      });
+      setBackfillingViewport(needsOlderPage);
+      if (needsOlderPage) void loadOlder(sessionId);
+    });
+  };
+
   // Re-check after every page lands and stop as soon as content overflows or the
   // server says we reached the beginning. requestAnimationFrame lets Markdown
   // and the column-reverse flex layout publish their final height first.
   useLayoutEffect(() => {
-    const el = parentRef.current;
-    if (!el || !paging || paging.reachedStart || paging.beforeSeq === null) {
-      setBackfillingViewport(false);
-      return undefined;
-    }
-    if (paging.loadingOlder) return undefined;
-    const raf = requestAnimationFrame(() => {
-      const needsOlderPage = el.scrollHeight <= el.clientHeight + 1;
-      setBackfillingViewport(needsOlderPage);
-      if (needsOlderPage) {
-        void loadOlder(sessionId);
-      }
-    });
-    return () => cancelAnimationFrame(raf);
+    requestViewportBackfillRef.current(false);
   }, [
     items.length,
     paging?.beforeSeq,
@@ -3256,6 +3272,7 @@ export function Transcript({
     };
     const ro = new ResizeObserver(() => {
       reportScrollableRef.current(); // viewport resized → overflow may have flipped
+      if (!desktopNavigation) requestViewportBackfillRef.current(true);
       if (!stick.current) {
         // Detached: don't follow the bottom — hold the reader's view against the
         // streaming bottom bubble's upward growth (see FREEZE-WHILE-DETACHED).
@@ -3291,6 +3308,10 @@ export function Transcript({
       nativeScrollActiveRef.current = false;
       setRenderPausedForScroll(false);
       if (roRaf !== 0) cancelAnimationFrame(roRaf);
+      if (viewportBackfillRafRef.current !== 0) {
+        cancelAnimationFrame(viewportBackfillRafRef.current);
+        viewportBackfillRafRef.current = 0;
+      }
     };
   }, []);
 
