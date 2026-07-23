@@ -2833,6 +2833,7 @@ export function Transcript({
   const lastScrollableRef = useRef<boolean | null>(null);
   const reportScrollableRef = useRef<() => void>(() => undefined);
   const viewportBackfillRafRef = useRef(0);
+  const viewportBackfillCursorRef = useRef<number | null>(null);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
   >(() => undefined);
@@ -2886,6 +2887,7 @@ export function Transcript({
   useEffect(() => {
     setBackfillingViewport(false);
     setShowBackfillStatus(false);
+    viewportBackfillCursorRef.current = null;
   }, [sessionId]);
 
   // Bootstrap history until the viewport is actually filled, then repeat the
@@ -2912,7 +2914,18 @@ export function Transcript({
         clientHeight: el.clientHeight,
       });
       setBackfillingViewport(needsOlderPage);
-      if (needsOlderPage) void loadOlder(sessionId);
+      if (
+        needsOlderPage &&
+        paging.beforeSeq !== viewportBackfillCursorRef.current
+      ) {
+        const requestedCursor = paging.beforeSeq;
+        viewportBackfillCursorRef.current = requestedCursor;
+        void loadOlder(sessionId).finally(() => {
+          if (viewportBackfillCursorRef.current === requestedCursor) {
+            viewportBackfillCursorRef.current = null;
+          }
+        });
+      }
     });
   };
 
