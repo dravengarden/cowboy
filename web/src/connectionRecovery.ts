@@ -7,6 +7,17 @@ export function shouldReconnectOnForeground(
   readyState: number | undefined,
   silenceMs: number,
   staleMs: number,
+  forceOpenSocket = false,
 ): boolean {
-  return readyState !== WEBSOCKET_OPEN || silenceMs > staleMs;
+  return forceOpenSocket || readyState !== WEBSOCKET_OPEN || silenceMs > staleMs;
+}
+
+export function isAppleTouchWebView(
+  userAgent: string,
+  platform: string,
+  maxTouchPoints: number,
+): boolean {
+  if (maxTouchPoints < 1) return false;
+  return /iPhone|iPad|iPod/i.test(userAgent) ||
+    (/Mac/i.test(platform) && maxTouchPoints > 1);
 }

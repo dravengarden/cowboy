@@ -18,7 +18,10 @@ import {
 } from "./_sync/mod.ts";
 import { idbListKeys, idbPersistence } from "./_sync-idb/mod.ts";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
-import { shouldReconnectOnForeground } from "./connectionRecovery.ts";
+import {
+  isAppleTouchWebView,
+  shouldReconnectOnForeground,
+} from "./connectionRecovery.ts";
 import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
 import { notifyHaptic } from "./haptic";
@@ -204,8 +207,10 @@ function clearReconnectTimer(): void {
 // browser's close-handshake timeout).
 const STALE_MS = 60_000; // ~2.4 missed 25s heartbeats → dead (conservative)
 const FOREGROUND_STALE_MS = 30_000; // on app-foreground, suspend likely killed it
+const FOREGROUND_RECOVERY_COALESCE_MS = 1_000;
 const LIVENESS_CHECK_MS = 15_000;
 let lastMessageAt = 0;
+let lastForegroundRecoveryAt = 0;
 let livenessTimer: ReturnType<typeof setInterval> | undefined;
 
 function markAlive(): void {
@@ -252,19 +257,33 @@ function reconnectNow(): void {
 // Keep the liveness and reconnect policy unchanged while hidden so background
 // turn notifications retain their existing delivery behaviour.
 if (typeof document !== "undefined") {
-  document.addEventListener("visibilitychange", () => {
+  const appleTouchWebView = isAppleTouchWebView(
+    globalThis.navigator?.userAgent ?? "",
+    globalThis.navigator?.platform ?? "",
+    globalThis.navigator?.maxTouchPoints ?? 0,
+  );
+  const recoverForeground = (): void => {
     if (document.visibilityState !== "visible") return;
     if (notifyScheduled) flushNotify();
+    const now = Date.now();
+    // iOS can dispatch both visibilitychange and pageshow for one foreground
+    // transition. Coalesce them so the forced Apple reconnect never replaces
+    // its own in-flight successor.
+    if (now - lastForegroundRecoveryAt < FOREGROUND_RECOVERY_COALESCE_MS) return;
     if (
       shouldReconnectOnForeground(
         socket?.readyState,
-        Date.now() - lastMessageAt,
+        now - lastMessageAt,
         FOREGROUND_STALE_MS,
+        appleTouchWebView,
       )
     ) {
+      lastForegroundRecoveryAt = now;
       reconnectNow();
     }
-  });
+  };
+  document.addEventListener("visibilitychange", recoverForeground);
+  globalThis.addEventListener("pageshow", recoverForeground);
   globalThis.addEventListener("online", reconnectNow);
 }
 
