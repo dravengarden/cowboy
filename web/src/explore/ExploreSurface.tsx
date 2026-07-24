@@ -430,7 +430,7 @@ export function MobilePageDock({
   );
   const [open, setOpen] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
-    fromId: string;
+    anchorItemKey: string;
     requestedBeforeSeq: number | null;
   } | null>(null);
   const previous = pages[currentIndex - 1];
@@ -475,7 +475,9 @@ export function MobilePageDock({
     // One answer can span several bounded HTTP history pages. Keep loading
     // under this single user action until the preceding question boundary is
     // found, rather than making the reader tap once per transport page.
-    setPendingPrevious({ fromId: current.id, requestedBeforeSeq: null });
+    const anchorItemKey = current.itemKeys.at(-1);
+    if (!anchorItemKey) return;
+    setPendingPrevious({ anchorItemKey, requestedBeforeSeq: null });
   };
 
   useEffect(() => {
@@ -484,7 +486,12 @@ export function MobilePageDock({
 
   useEffect(() => {
     if (!pendingPrevious || loadingEarlier) return;
-    const fromIndex = pages.findIndex((page) => page.id === pendingPrevious.fromId);
+    // A bounded tail can begin midway through the current answer. Its
+    // provisional page id changes when the real user prompt is loaded, so
+    // anchor navigation to an immutable item inside that answer instead.
+    const fromIndex = pages.findIndex((page) =>
+      page.itemKeys.includes(pendingPrevious.anchorItemKey)
+    );
     const loadedPrevious = pages[fromIndex - 1];
     if (loadedPrevious) {
       navigate(loadedPrevious.id);
