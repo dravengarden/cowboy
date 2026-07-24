@@ -5,6 +5,7 @@ export type TranscriptProjection = "history" | "explore";
 interface ExploreSessionState {
   projection: TranscriptProjection;
   pageId: string | null;
+  pageStartId: string | null;
   transitionAnchorKey: string | null;
   pageParents: Record<string, string>;
   pendingFollowUp: {
@@ -19,6 +20,7 @@ const listeners = new Set<() => void>();
 const DEFAULT_STATE: ExploreSessionState = {
   projection: "history",
   pageId: null,
+  pageStartId: null,
   transitionAnchorKey: null,
   pageParents: {},
   pendingFollowUp: null,
@@ -35,6 +37,7 @@ function restore(): void {
       states.set(sessionId, {
         projection: state.projection === "explore" ? "explore" : "history",
         pageId: typeof state.pageId === "string" ? state.pageId : null,
+        pageStartId: null,
         transitionAnchorKey: null,
         pageParents: state.pageParents && typeof state.pageParents === "object"
           ? state.pageParents
@@ -77,6 +80,7 @@ function update(
   if (
     current.projection === next.projection &&
     current.pageId === next.pageId &&
+    current.pageStartId === next.pageStartId &&
     current.transitionAnchorKey === next.transitionAnchorKey &&
     current.pageParents === next.pageParents &&
     current.pendingFollowUp === next.pendingFollowUp
@@ -96,6 +100,14 @@ export function setTranscriptProjection(
 
 export function setExplorePage(sessionId: string, pageId: string | null): void {
   update(sessionId, { pageId });
+}
+
+export function navigateExplorePage(sessionId: string, pageId: string): void {
+  update(sessionId, { pageId, pageStartId: pageId });
+}
+
+export function resolveExplorePageStart(sessionId: string): void {
+  update(sessionId, { pageStartId: null });
 }
 
 export function resolveProjectionAnchor(

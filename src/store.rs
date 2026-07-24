@@ -447,6 +447,29 @@ impl Store {
         Ok((events, next_before_seq, reached_start))
     }
 
+    /// Count canonical question pages without transferring transcript payloads.
+    /// A rich prompt may contain several consecutive user-message content
+    /// blocks; only the first block starts a page.
+    pub async fn question_page_count(&self, session_id: &str) -> Result<u64> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "WITH ordered AS ( \
+               SELECT payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 \
+             ) \
+             SELECT COUNT(*) FROM ordered \
+             WHERE payload->>'kind' = 'update' \
+               AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+               AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+               AND previous_update IS DISTINCT FROM 'user_message_chunk'",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("COUNT question pages for {session_id}"))?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
     /// Insert a brand-new session. Caller is expected to set `next_seq = 0`
     /// (the row default does it too).
     ///

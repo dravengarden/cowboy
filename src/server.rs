@@ -961,6 +961,7 @@ async fn serve_axum(
         )
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
+        .route("/api/sessions/{id}/question-pages", get(api_question_pages))
         .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/history/{id}", get(api_history))
@@ -1708,6 +1709,12 @@ struct HistoryResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct QuestionPagesResponse {
+    total: u64,
+    exact: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct SessionBootstrapResponse {
     messages: Vec<Outbound>,
 }
@@ -1801,6 +1808,46 @@ async fn api_history(
         }),
     )
         .into_response()
+}
+
+async fn api_question_pages(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    if state.hub.session_info(&session_id).is_none() {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    }
+    let result = match &state.store {
+        Some(store) => store
+            .question_page_count(&session_id)
+            .await
+            .map(|total| QuestionPagesResponse { total, exact: true }),
+        None => Ok(state.hub.question_page_count(&session_id).map_or(
+            QuestionPagesResponse {
+                total: 0,
+                exact: false,
+            },
+            |(total, exact)| QuestionPagesResponse {
+                total: u64::try_from(total).unwrap_or(u64::MAX),
+                exact,
+            },
+        )),
+    };
+    match result {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => {
+            tracing::warn!(
+                session = %session_id,
+                error = %error,
+                "question page count query failed"
+            );
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "question pages unavailable",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn api_artifact(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> Response {

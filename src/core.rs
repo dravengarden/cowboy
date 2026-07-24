@@ -55,6 +55,17 @@ fn is_user_message_chunk(envelope: &Envelope) -> bool {
     )
 }
 
+fn is_human_question_chunk(envelope: &Envelope) -> bool {
+    matches!(
+        &envelope.event,
+        Event::Update { update }
+            if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
+                == Some("user_message_chunk")
+                && update.get("autoResumed").and_then(serde_json::Value::as_bool)
+                    != Some(true)
+    )
+}
+
 pub(crate) fn bound_history_page(mut events: Vec<Envelope>) -> Vec<Envelope> {
     let mut start = events.len();
     let mut serialized_bytes = 0usize;
@@ -1664,6 +1675,25 @@ impl Hub {
             let next_before_seq =
                 (!reached_start).then(|| events.first().map_or(before_seq, |event| event.seq));
             (events, next_before_seq, reached_start)
+        })
+    }
+
+    /// Count question-page roots in the retained log. Consecutive ACP content
+    /// blocks belong to one rich prompt, matching the frontend derivation.
+    #[must_use]
+    pub fn question_page_count(&self, session_id: &str) -> Option<(usize, bool)> {
+        let sessions = self.inner.sessions.lock();
+        sessions.get(session_id).map(|session| {
+            let mut previous_was_user_chunk = false;
+            let mut count = 0usize;
+            for envelope in &session.log {
+                let is_user_chunk = is_user_message_chunk(envelope);
+                if is_human_question_chunk(envelope) && !previous_was_user_chunk {
+                    count += 1;
+                }
+                previous_was_user_chunk = is_user_chunk;
+            }
+            (count, session.reached_start)
         })
     }
 

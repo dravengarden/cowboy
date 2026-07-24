@@ -11,26 +11,26 @@ import {
   Box,
   Button,
   CircularProgress,
-  Divider,
   Drawer,
   IconButton,
   InputAdornment,
   List,
   ListItemButton,
   ListItemText,
-  Paper,
   Stack,
   TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import { loadOlder, useStoreSelector } from "../store";
 import { Transcript } from "../Transcript";
 import {
   setExplorePage,
+  navigateExplorePage,
+  resolveExplorePageStart,
   resolveProjectionAnchor,
   resolveExploreFollowUp,
   useExploreSessionState,
@@ -66,6 +66,7 @@ function usePages(
   current: QuestionPage | null;
   currentIndex: number;
   select: (id: string) => void;
+  navigate: (id: string) => void;
 } {
   const {
     pageId,
@@ -109,6 +110,7 @@ function usePages(
     current,
     currentIndex,
     select: (id: string): void => setExplorePage(sessionId, id),
+    navigate: (id: string): void => navigateExplorePage(sessionId, id),
   };
 }
 
@@ -218,6 +220,22 @@ export function ExploreTranscript(
   );
   const atTail = currentIndex === pages.length - 1;
   const rootRef = useRef<HTMLDivElement>(null);
+  const { pageStartId } = useExploreSessionState(props.sessionId);
+
+  useLayoutEffect(() => {
+    if (!current || pageStartId !== current.id) return;
+    const frame = requestAnimationFrame(() => {
+      const firstKey = current.itemKeys[0];
+      const row = firstKey
+        ? rootRef.current?.querySelector<HTMLElement>(
+          `[data-key="${CSS.escape(firstKey)}"]`,
+        )
+        : null;
+      row?.scrollIntoView({ block: "start", behavior: "instant" });
+      resolveExplorePageStart(props.sessionId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [current, pageStartId, props.sessionId]);
 
   useEffect(() => {
     if (!props.desktop) return undefined;
@@ -406,7 +424,10 @@ export function MobilePageDock({
   const pagination = useStoreSelector((snapshot) =>
     snapshot.pagination.get(sessionId)
   );
-  const { pages, current, currentIndex, select } = usePages(sessionId, timeline);
+  const { pages, current, currentIndex, navigate } = usePages(sessionId, timeline);
+  const [pageIndex, setPageIndex] = useState<{ total: number; exact: boolean } | null>(
+    null,
+  );
   const [open, setOpen] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
     fromId: string;
@@ -419,10 +440,34 @@ export function MobilePageDock({
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
   const onlyCompletePage = pages.length <= 1 && !hasEarlierHistory;
+  const total = Math.max(pages.length, pageIndex?.total ?? 0);
+  const currentOrdinal = Math.max(
+    1,
+    total - Math.max(0, pages.length - 1 - currentIndex),
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/question-pages`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!response.ok) throw new Error(`question pages: ${String(response.status)}`);
+        return response.json() as Promise<{ total: number; exact: boolean }>;
+      })
+      .then(setPageIndex)
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("Failed to load exact question page count", error);
+        }
+      });
+    return () => controller.abort();
+  }, [sessionId, pages.at(-1)?.id]);
 
   const goPrevious = (): void => {
     if (previous) {
-      select(previous.id);
+      navigate(previous.id);
       return;
     }
     if (!hasEarlierHistory || loadingEarlier || !current) return;
@@ -442,87 +487,76 @@ export function MobilePageDock({
     ) return;
     const fromIndex = pages.findIndex((page) => page.id === pendingPrevious.fromId);
     const loadedPrevious = pages[fromIndex - 1];
-    if (loadedPrevious) select(loadedPrevious.id);
+    if (loadedPrevious) navigate(loadedPrevious.id);
     setPendingPrevious(null);
-  }, [hasEarlierHistory, loadingEarlier, pages, pendingPrevious, select]);
+  }, [hasEarlierHistory, loadingEarlier, navigate, pages, pendingPrevious]);
 
   return (
     <>
-      <Paper
+      <Box
         component="nav"
         aria-label="Question pages"
-        elevation={0}
         sx={{
-          mx: "max(env(safe-area-inset-left), 16px)",
-          width: "min(calc(100% - 32px), 296px)",
-          alignSelf: "center",
-          my: 0.75,
-          height: 48,
-          px: 0.25,
-          display: "flex",
+          width: "100%",
+          height: 52,
+          px: "max(env(safe-area-inset-left), 12px)",
+          pr: "max(env(safe-area-inset-right), 12px)",
+          display: "grid",
+          gridTemplateColumns: "1fr auto 1fr",
           alignItems: "center",
-          border: 1,
-          borderColor: (theme) => alpha(theme.palette.primary.main, 0.22),
-          borderRadius: 999,
-          overflow: "hidden",
-          bgcolor: (theme) => alpha(theme.palette.background.paper, 0.72),
-          boxShadow: (theme) =>
-            `0 8px 28px ${alpha(theme.palette.common.black, 0.16)}, inset 0 1px 0 ${
-              alpha(theme.palette.common.white, 0.12)
-            }`,
-          backdropFilter: "blur(28px) saturate(170%)",
-          WebkitBackdropFilter: "blur(28px) saturate(170%)",
+          borderTop: 1,
+          borderColor: "divider",
+          bgcolor: "background.default",
         }}
       >
-        {!onlyCompletePage && (
-          <>
-            <Tooltip title={hasEarlierHistory && !previous
-              ? "Load earlier questions"
-              : "Previous page"}
-            >
-              <span>
-                <IconButton
-                  aria-label={hasEarlierHistory && !previous
-                    ? "Load earlier questions"
-                    : "Previous page"}
-                  disabled={(!previous && !hasEarlierHistory) || loadingEarlier}
-                  onClick={goPrevious}
-                  sx={{ width: 46, height: 46 }}
-                >
-                  {loadingEarlier
-                    ? <CircularProgress size={17} />
-                    : <ChevronLeft fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Divider orientation="vertical" sx={{ height: 22, alignSelf: "center" }} />
-            <Tooltip title="Next page">
-              <span>
-                <IconButton
-                  aria-label="Next page"
-                  disabled={!next}
-                  onClick={(): void => next && select(next.id)}
-                  sx={{ width: 46, height: 46 }}
-                >
-                  <ChevronRight fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Divider orientation="vertical" sx={{ height: 22, alignSelf: "center" }} />
-          </>
-        )}
+        <Stack direction="row" sx={{ justifySelf: "start" }}>
+          {!onlyCompletePage && (
+            <>
+              <Tooltip title={hasEarlierHistory && !previous
+                ? "Load earlier questions"
+                : "Previous page"}
+              >
+                <span>
+                  <IconButton
+                    aria-label={hasEarlierHistory && !previous
+                      ? "Load earlier questions"
+                      : "Previous page"}
+                    disabled={(!previous && !hasEarlierHistory) || loadingEarlier}
+                    onClick={goPrevious}
+                    sx={{ width: 44, height: 44 }}
+                  >
+                    {loadingEarlier
+                      ? <CircularProgress size={17} />
+                      : <ChevronLeft fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Next page">
+                <span>
+                  <IconButton
+                    aria-label="Next page"
+                    disabled={!next}
+                    onClick={(): void => next && navigate(next.id)}
+                    sx={{ width: 44, height: 44 }}
+                  >
+                    <ChevronRight fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
+          )}
+        </Stack>
         <Button
           aria-label="Open question pages"
           onClick={(): void => setOpen(true)}
           startIcon={<ListAltOutlined fontSize="small" />}
           sx={{
-            minWidth: 0,
-            flex: 1,
-            height: 46,
-            px: 1.25,
-            borderRadius: 999,
+            minWidth: 92,
+            height: 44,
+            px: 1,
+            borderRadius: 1.5,
             textTransform: "none",
-            overflow: "hidden",
+            color: "text.primary",
           }}
         >
           <Typography
@@ -532,27 +566,26 @@ export function MobilePageDock({
           >
             {pages.length === 0
               ? "Pages"
-              : `${String(currentIndex + 1)} / ${String(pages.length)}${
-                hasEarlierHistory ? "+" : ""
+              : `${String(currentOrdinal)} / ${String(total)}${
+                pageIndex?.exact === false ? "+" : ""
               }`}
           </Typography>
         </Button>
-        <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
         <Tooltip title="Latest page and type">
           <IconButton
             color="primary"
             aria-label="Latest page and type"
             onClick={(): void => {
               const latest = pages.at(-1);
-              if (latest) select(latest.id);
+              if (latest) navigate(latest.id);
               onCompose("new_page", null, knownPageIds);
             }}
-            sx={{ width: 46, height: 46 }}
+            sx={{ width: 44, height: 44, justifySelf: "end" }}
           >
             <EditOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
-      </Paper>
+      </Box>
       <Drawer
         anchor="bottom"
         open={open}
@@ -601,7 +634,7 @@ export function MobilePageDock({
             pages={pages}
             currentId={current?.id ?? null}
             onSelect={(id): void => {
-              select(id);
+              navigate(id);
               setOpen(false);
             }}
           />
@@ -611,7 +644,7 @@ export function MobilePageDock({
           onClick={(): void => {
             setOpen(false);
             const latest = pages.at(-1);
-            if (latest) select(latest.id);
+            if (latest) navigate(latest.id);
             onCompose("new_page", null, knownPageIds);
           }}
           sx={{ mx: 2, mb: 1, minHeight: 48, textTransform: "none" }}
