@@ -36,6 +36,7 @@ import {
   useExploreSessionState,
 } from "./exploreStore";
 import {
+  completePageBeforeItem,
   deriveQuestionPages,
   groupQuestionPages,
   pageContainingItemKey,
@@ -495,10 +496,10 @@ export function MobilePageDock({
     // A bounded tail can begin midway through the current answer. Its
     // provisional page id changes when the real user prompt is loaded, so
     // anchor navigation to an immutable item inside that answer instead.
-    const fromIndex = pages.findIndex((page) =>
-      page.itemKeys.includes(pendingPrevious.anchorItemKey)
+    const loadedPrevious = completePageBeforeItem(
+      pages,
+      pendingPrevious.anchorItemKey,
     );
-    const loadedPrevious = pages[fromIndex - 1];
     if (loadedPrevious) {
       navigate(loadedPrevious.id);
       setPendingPrevious(null);

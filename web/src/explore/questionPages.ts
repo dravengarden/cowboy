@@ -118,3 +118,21 @@ export function pageContainingItemKey(
   if (!itemKey) return undefined;
   return pages.find((page) => page.itemKeys.includes(itemKey));
 }
+
+/**
+ * Resolve the preceding complete question page for history navigation.
+ * A bounded history response may expose a provisional leading answer before
+ * its user prompt arrives. That placeholder is renderable, but it is not a
+ * valid navigation destination: callers must keep loading until derivation
+ * attaches those rows to a real user-rooted page.
+ */
+export function completePageBeforeItem(
+  pages: QuestionPage[],
+  itemKey: string,
+): QuestionPage | undefined {
+  const currentIndex = pages.findIndex((page) =>
+    page.itemKeys.includes(itemKey)
+  );
+  const previous = pages[currentIndex - 1];
+  return previous?.questionCount ? previous : undefined;
+}

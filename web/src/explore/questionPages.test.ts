@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import type { RenderItem } from "../derive";
 import {
+  completePageBeforeItem,
   deriveQuestionPages,
   groupQuestionPages,
   pageContainingItemKey,
@@ -99,4 +100,27 @@ Deno.test("a partial history tail keeps leading answer rows addressable", () => 
   assertEquals(pages[0]?.title, "Earlier question");
   assertEquals(pages[0]?.itemKeys, ["answer-tail"]);
   assertEquals(pageContainingItemKey(pages, "answer-tail")?.id, "answer-tail");
+});
+
+Deno.test("previous navigation waits for the real user question boundary", () => {
+  const partial = deriveQuestionPages([
+    assistant("answer-tail", "The question is on the next history batch"),
+    user("current-question", "Current"),
+    assistant("current-answer", "Current answer"),
+  ]);
+  assertEquals(
+    completePageBeforeItem(partial, "current-answer"),
+    undefined,
+  );
+
+  const complete = deriveQuestionPages([
+    user("previous-question", "Previous"),
+    assistant("answer-tail", "The question is now loaded"),
+    user("current-question", "Current"),
+    assistant("current-answer", "Current answer"),
+  ]);
+  assertEquals(
+    completePageBeforeItem(complete, "current-answer")?.id,
+    "previous-question",
+  );
 });
