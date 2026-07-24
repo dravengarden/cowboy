@@ -227,6 +227,7 @@ export function ExploreTranscript(
     if (!current || pageStartId !== current.id) return;
     let frame = 0;
     let attempts = 0;
+    let positionedFrames = 0;
     const positionAtStart = (): void => {
       const firstKey = current.itemKeys[0];
       const row = firstKey
@@ -248,6 +249,13 @@ export function ExploreTranscript(
       // question page can reopen in the middle of its answer. The visual
       // beginning is the negative scroll extent.
       scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
+      if (positionedFrames++ < 2) {
+        // Transcript also initializes its column-reverse position in a layout
+        // effect. Reassert across the following paint frames so cached page
+        // switches cannot be overwritten back to the newest edge.
+        frame = requestAnimationFrame(positionAtStart);
+        return;
+      }
       resolveExplorePageStart(props.sessionId);
     };
     frame = requestAnimationFrame(positionAtStart);
