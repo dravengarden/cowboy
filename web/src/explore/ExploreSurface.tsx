@@ -432,6 +432,7 @@ export function MobilePageDock({
   const [pendingPrevious, setPendingPrevious] = useState<{
     anchorItemKey: string;
     requestedBeforeSeq: number | null;
+    requestComplete: boolean;
   } | null>(null);
   const previous = pages[currentIndex - 1];
   const next = pages[currentIndex + 1];
@@ -477,7 +478,11 @@ export function MobilePageDock({
     // found, rather than making the reader tap once per transport page.
     const anchorItemKey = current.itemKeys.at(-1);
     if (!anchorItemKey) return;
-    setPendingPrevious({ anchorItemKey, requestedBeforeSeq: null });
+    setPendingPrevious({
+      anchorItemKey,
+      requestedBeforeSeq: null,
+      requestComplete: true,
+    });
   };
 
   useEffect(() => {
@@ -503,13 +508,24 @@ export function MobilePageDock({
       setPendingPrevious(null);
       return;
     }
+    if (!pendingPrevious.requestComplete) return;
     if (beforeSeq === pendingPrevious.requestedBeforeSeq) {
       // The request failed without advancing its immutable cursor.
       setPendingPrevious(null);
       return;
     }
-    setPendingPrevious({ ...pendingPrevious, requestedBeforeSeq: beforeSeq });
-    void loadOlder(sessionId);
+    setPendingPrevious({
+      ...pendingPrevious,
+      requestedBeforeSeq: beforeSeq,
+      requestComplete: false,
+    });
+    void loadOlder(sessionId).finally(() => {
+      setPendingPrevious((value) =>
+        value?.requestedBeforeSeq === beforeSeq
+          ? { ...value, requestComplete: true }
+          : value
+      );
+    });
   }, [
     hasEarlierHistory,
     loadingEarlier,
