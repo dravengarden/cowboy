@@ -67,6 +67,7 @@ import { claimKeyboard } from "./keyboardClaim";
 import { Transcript } from "./Transcript";
 import {
     PROVIDERS,
+    type Envelope,
     type SessionMeta,
     type Status,
 } from "./protocol";
@@ -108,6 +109,17 @@ import {
 import { useNavbarAtBottom } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
+import {
+    ExploreTranscript,
+    MobilePageDock,
+} from "./explore/ExploreSurface";
+import {
+    setTranscriptProjection,
+    captureTranscriptViewportAnchor,
+    resolveProjectionAnchor,
+    queueExploreFollowUp,
+    useExploreSessionState,
+} from "./explore/exploreStore";
 import { MobileConnectionBanner } from "./mobile/MobileConnectionBanner";
 import {
     ConnectionBanner,
@@ -1220,6 +1232,8 @@ function NewSessionDialog({
     );
 }
 
+const EMPTY_TRANSCRIPT_TIMELINE: Envelope[] = [];
+
 const StoreTranscript = memo(function StoreTranscript({
     sessionId,
     status,
@@ -1250,12 +1264,13 @@ const StoreTranscript = memo(function StoreTranscript({
         snapshot.hydrated.has(sessionId)
     );
     const connected = useStoreSelector((snapshot) => snapshot.connected);
+    const { projection, transitionAnchorKey } = useExploreSessionState(sessionId);
 
-    return (
-        <Transcript
-            desktopNavigation={desktopNavigation}
+    return projection === "explore" ? (
+        <ExploreTranscript
+            desktop={desktopNavigation}
             sessionId={sessionId}
-            timeline={timeline ?? []}
+            timeline={timeline ?? EMPTY_TRANSCRIPT_TIMELINE}
             status={status}
             provider={provider}
             cwd={cwd}
@@ -1264,6 +1279,22 @@ const StoreTranscript = memo(function StoreTranscript({
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}
+        />
+    ) : (
+        <Transcript
+            desktopNavigation={desktopNavigation}
+            sessionId={sessionId}
+            timeline={timeline ?? EMPTY_TRANSCRIPT_TIMELINE}
+            status={status}
+            provider={provider}
+            cwd={cwd}
+            loading={!hydrated}
+            connected={connected}
+            topInset={topInset}
+            bottomInset={bottomInset}
+            onScrollableChange={onScrollableChange}
+            restoreAnchorKey={transitionAnchorKey}
+            onAnchorRestored={(): void => resolveProjectionAnchor(sessionId)}
         />
     );
 });
@@ -1327,6 +1358,7 @@ export function App({
     // newest pinned just above the growing panel).
     const columnRef = useRef<HTMLDivElement>(null);
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
+    const [exploreAtTail, setExploreAtTail] = useState(false);
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
     // vars on the column. The glass follows every animation frame, while the
@@ -1444,6 +1476,11 @@ export function App({
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [exploreComposeIntent, setExploreComposeIntent] = useState<{
+        kind: "follow_up" | "new_page";
+        targetPageId: string | null;
+        knownPageIds: string[];
+    } | null>(null);
 
     // Mobile's session list is a spatial layer to the left of the conversation.
     // A deliberate swipe from the left edge reveals it; requiring both an edge
@@ -1598,6 +1635,18 @@ export function App({
     // Default to the first session once one exists.
     const active =
         sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
+    const exploreState = useExploreSessionState(active?.id ?? "__none__");
+    const changeTranscriptProjection = useCallback((
+        sessionId: string,
+        projection: "history" | "explore",
+    ): void => {
+        const anchor = captureTranscriptViewportAnchor(sessionId);
+        setTranscriptProjection(sessionId, projection, anchor);
+    }, []);
+    useEffect(() => {
+        setExploreComposeIntent(null);
+        setExploreAtTail(false);
+    }, [active?.id, exploreState.projection]);
     const previousActiveRef = useRef<string | null>(null);
     useEffect(() => {
         const previous = previousActiveRef.current;
@@ -2378,6 +2427,9 @@ export function App({
                                     <SessionControls
                                         sessionId={active.id}
                                         status={active.status}
+                                        projection={exploreState.projection}
+                                        onProjectionChange={(projection): void =>
+                                            changeTranscriptProjection(active.id, projection)}
                                     />
                                 )}
                                 <IconButton
@@ -2406,6 +2458,9 @@ export function App({
                                 resizing={colResizing}
                                 onResizeStart={startColResize}
                                 sessionId={active.id}
+                                projection={exploreState.projection}
+                                onProjectionChange={(projection): void =>
+                                    changeTranscriptProjection(active.id, projection)}
                                 prompt={active.system ? (
                                     <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                         View-only system session — managed by cowboy
@@ -2493,13 +2548,79 @@ export function App({
                                 <Box sx={{ p: 1.5, textAlign: "center", fontSize: 13, opacity: 0.6 }}>
                                     View-only system session — managed by cowboy
                                 </Box>
-                            ) : (
-                                    <MobileComposer
-                                        key={active.id}
+                            ) : exploreState.projection === "explore" ? (
+                                <>
+                                    {(exploreAtTail || exploreComposeIntent !== null) && (
+                                    <>
+                                        {exploreComposeIntent !== null && (
+                                            <Stack
+                                                direction="row"
+                                                alignItems="center"
+                                                sx={{ px: 1.5, pt: 0.5 }}
+                                            >
+                                                <Typography
+                                                    variant="caption"
+                                                    sx={{ fontWeight: 750, color: "text.secondary" }}
+                                                >
+                                                    {exploreComposeIntent?.kind === "follow_up"
+                                                        ? "Follow up"
+                                                        : "New question"}
+                                                </Typography>
+                                                <Box sx={{ flex: 1 }} />
+                                                <IconButton
+                                                    aria-label="Close new question"
+                                                    onClick={(): void => setExploreComposeIntent(null)}
+                                                    size="small"
+                                                >
+                                                    <CloseIcon fontSize="small" />
+                                                </IconButton>
+                                            </Stack>
+                                        )}
+                                        <MobileComposer
+                                            key={active.id}
+                                            sessionId={active.id}
+                                            status={active.status}
+                                            autoFocus={exploreComposeIntent !== null}
+                                            onSubmitted={(): void => {
+                                                if (
+                                                    exploreComposeIntent?.kind === "follow_up" &&
+                                                    exploreComposeIntent.targetPageId
+                                                ) {
+                                                    queueExploreFollowUp(
+                                                        active.id,
+                                                        exploreComposeIntent.targetPageId,
+                                                        exploreComposeIntent.knownPageIds,
+                                                    );
+                                                }
+                                                setExploreComposeIntent(null);
+                                            }}
+                                        />
+                                    </>
+                                    )}
+                                    <MobilePageDock
                                         sessionId={active.id}
-                                        status={active.status}
+                                        onTailChange={setExploreAtTail}
+                                        onCompose={(kind, targetPageId, knownPageIds): void => {
+                                            // Page Dock actions are explicit typing
+                                            // gestures. Claim the iOS keyboard before
+                                            // mounting the conditional composer, then
+                                            // let its autoFocus transfer focus to CM6.
+                                            claimKeyboard();
+                                            setExploreComposeIntent({
+                                                kind,
+                                                targetPageId,
+                                                knownPageIds,
+                                            });
+                                        }}
                                     />
-                                )}
+                                </>
+                            ) : (
+                                <MobileComposer
+                                    key={active.id}
+                                    sessionId={active.id}
+                                    status={active.status}
+                                />
+                            )}
                         </Box>
                     </>
                     )

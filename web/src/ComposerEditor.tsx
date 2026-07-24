@@ -211,6 +211,7 @@ export const ComposerEditor = forwardRef<
     commands: () => AvailableCommand[];
     placeholder?: string;
     disabled?: boolean;
+    autoFocus?: boolean;
     vim?: boolean;
     /// Called when the vim mode changes (normal / insert / visual). Drives the
     /// NORMAL/INSERT hint in the composer card. Only wired when vim is on.
@@ -262,6 +263,7 @@ export const ComposerEditor = forwardRef<
     commands,
     placeholder,
     disabled,
+    autoFocus = false,
     vim,
     onVimMode,
     onEscape,
@@ -858,6 +860,7 @@ export const ComposerEditor = forwardRef<
         value={ensureTrailingImageLine(value)}
         onChange={onChange}
         editable={!disabled}
+        autoFocus={autoFocus}
         // `none` disables @uiw's built-in light theme (which paints the editor
         // white); our cmTheme keeps it transparent so it inherits the lavender
         // composer surface — no white box.

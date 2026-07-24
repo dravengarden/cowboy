@@ -2815,6 +2815,10 @@ export function Transcript({
   bottomInset,
   onScrollableChange,
   desktopNavigation = false,
+  visibleItemKeys,
+  liveTail = true,
+  restoreAnchorKey,
+  onAnchorRestored,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -2849,6 +2853,15 @@ export function Transcript({
   /** Desktop-only item navigation. Mobile keeps its touch-first transcript and
    * does not expose rows to the Desktop focus registry. */
   desktopNavigation?: boolean;
+  /** Explore projection: render only this page's canonical item keys. History
+   * omits the prop and retains the established full-timeline path. */
+  visibleItemKeys?: ReadonlySet<string> | undefined;
+  /** Whether this projection contains the live timeline tail. Old Explore pages
+   * must not show the current turn's spinner or streaming caret. */
+  liveTail?: boolean | undefined;
+  /** Projection transition: restore this canonical row near the viewport centre. */
+  restoreAnchorKey?: string | null | undefined;
+  onAnchorRestored?: (() => void) | undefined;
 }): React.JSX.Element {
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
@@ -2862,7 +2875,14 @@ export function Transcript({
   const presentedTimelineRef = useRef(timeline);
   if (!renderPausedForScroll) presentedTimelineRef.current = timeline;
   const presentedTimeline = presentedTimelineRef.current;
-  const items = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
+  const allItems = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
+  const items = useMemo(
+    () =>
+      visibleItemKeys
+        ? allItems.filter((item) => visibleItemKeys.has(item.key))
+        : allItems,
+    [allItems, visibleItemKeys],
+  );
   const runs = useMemo(() => toolRuns(items), [items]);
   const tools = useMemo(() => runs.flatMap((run) => run.tools), [runs]);
   const [selectedToolKey, setSelectedToolKey] = useState<string | null>(null);
@@ -2906,7 +2926,7 @@ export function Transcript({
   // connection: while the WS is down the last-known status is stale, so a perpetual
   // spinner is wrong; the ConnectionBanner conveys the disconnect and reconnect
   // re-broadcasts the real status.
-  const working = connected && busy;
+  const working = connected && busy && liveTail;
   // No messages yet + a LIVE session (a freshly created session is Running-idle,
   // waiting for the first prompt) → show the "send a message to start" empty state
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
@@ -2937,6 +2957,21 @@ export function Transcript({
   const showTrailingDots = working && !lastIsStreamingAssistant &&
     !compacting && !compactedAtTail;
   const parentRef = useRef<HTMLDivElement>(null);
+  // Switching from Explore remounts the History transcript. Remember whether
+  // that mount carries a viewport hand-off so the ordinary "new session starts
+  // at latest" initializer below cannot overwrite the restored reading point.
+  const restoringProjectionMountRef = useRef(Boolean(restoreAnchorKey));
+  useLayoutEffect(() => {
+    if (!restoreAnchorKey) return;
+    const row = parentRef.current?.querySelector<HTMLElement>(
+      `[data-key="${CSS.escape(restoreAnchorKey)}"]`,
+    );
+    if (!row) return;
+    stick.current = false;
+    setSticky(sessionId, false);
+    row.scrollIntoView({ block: "center", behavior: "auto" });
+    onAnchorRestored?.();
+  }, [items, onAnchorRestored, restoreAnchorKey, sessionId]);
   // Report scroll-overflow (content taller than the viewport) to the parent so
   // the composer slab can gate its up-shadow on real scrollable content. Kept in
   // refs so the once-wired scroll effect calls the latest callback without
@@ -3516,6 +3551,11 @@ export function Transcript({
   // needs an explicit reset; a few frames cover the initial lazy image/markdown
   // settle (0 stays pinned to the bottom as they grow).
   useLayoutEffect(() => {
+    if (restoringProjectionMountRef.current) {
+      stick.current = false;
+      setSticky(sessionId, false);
+      return undefined;
+    }
     stick.current = true;
     // A (re)opened session starts pinned + following, regardless of a prior
     // detached state (REQ: default on).
@@ -3616,6 +3656,7 @@ export function Transcript({
     >
       <Box
         ref={parentRef}
+        data-transcript-session={sessionId}
         data-desktop-transcript-scroller={desktopNavigation
           ? "true"
           : undefined}

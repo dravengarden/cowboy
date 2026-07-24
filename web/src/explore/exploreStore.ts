@@ -1,0 +1,178 @@
+import { useSyncExternalStore } from "react";
+
+export type TranscriptProjection = "history" | "explore";
+
+interface ExploreSessionState {
+  projection: TranscriptProjection;
+  pageId: string | null;
+  transitionAnchorKey: string | null;
+  pageParents: Record<string, string>;
+  pendingFollowUp: {
+    targetPageId: string;
+    knownPageIds: string[];
+  } | null;
+}
+
+const STORAGE_KEY = "cowboy:transcript-projections:v1";
+const states = new Map<string, ExploreSessionState>();
+const listeners = new Set<() => void>();
+const DEFAULT_STATE: ExploreSessionState = {
+  projection: "history",
+  pageId: null,
+  transitionAnchorKey: null,
+  pageParents: {},
+  pendingFollowUp: null,
+};
+
+function restore(): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<
+      string,
+      Partial<ExploreSessionState>
+    >;
+    for (const [sessionId, state] of Object.entries(raw)) {
+      states.set(sessionId, {
+        projection: state.projection === "explore" ? "explore" : "history",
+        pageId: typeof state.pageId === "string" ? state.pageId : null,
+        transitionAnchorKey: null,
+        pageParents: state.pageParents && typeof state.pageParents === "object"
+          ? state.pageParents
+          : {},
+        pendingFollowUp: state.pendingFollowUp &&
+            typeof state.pendingFollowUp === "object"
+          ? state.pendingFollowUp
+          : null,
+      });
+    }
+  } catch {
+    // A stale preference must never prevent Cowboy from rendering History.
+  }
+}
+
+restore();
+
+function persist(): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify(Object.fromEntries(states.entries())),
+  );
+}
+
+function emit(): void {
+  for (const listener of listeners) listener();
+}
+
+function get(sessionId: string): ExploreSessionState {
+  return states.get(sessionId) ?? DEFAULT_STATE;
+}
+
+function update(
+  sessionId: string,
+  patch: Partial<ExploreSessionState>,
+): void {
+  const current = get(sessionId);
+  const next = { ...current, ...patch };
+  if (
+    current.projection === next.projection &&
+    current.pageId === next.pageId &&
+    current.transitionAnchorKey === next.transitionAnchorKey &&
+    current.pageParents === next.pageParents &&
+    current.pendingFollowUp === next.pendingFollowUp
+  ) return;
+  states.set(sessionId, next);
+  persist();
+  emit();
+}
+
+export function setTranscriptProjection(
+  sessionId: string,
+  projection: TranscriptProjection,
+  transitionAnchorKey: string | null = null,
+): void {
+  update(sessionId, { projection, transitionAnchorKey });
+}
+
+export function setExplorePage(sessionId: string, pageId: string | null): void {
+  update(sessionId, { pageId });
+}
+
+export function resolveProjectionAnchor(
+  sessionId: string,
+  pageId?: string | null,
+): void {
+  update(sessionId, {
+    ...(pageId === undefined ? {} : { pageId }),
+    transitionAnchorKey: null,
+  });
+}
+
+export function captureTranscriptViewportAnchor(
+  sessionId: string,
+): string | null {
+  if (typeof document === "undefined") return null;
+  const scroller = document.querySelector<HTMLElement>(
+    `[data-transcript-session="${CSS.escape(sessionId)}"]`,
+  );
+  if (!scroller) return null;
+  const viewport = scroller.getBoundingClientRect();
+  const centre = viewport.top + viewport.height / 2;
+  let nearest: { key: string; distance: number } | null = null;
+  for (const row of scroller.querySelectorAll<HTMLElement>("[data-key]")) {
+    const key = row.dataset["key"];
+    if (!key) continue;
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom < viewport.top || rect.top > viewport.bottom) continue;
+    const distance = centre < rect.top
+      ? rect.top - centre
+      : centre > rect.bottom
+      ? centre - rect.bottom
+      : 0;
+    if (!nearest || distance < nearest.distance) nearest = { key, distance };
+    if (distance === 0) break;
+  }
+  return nearest?.key ?? null;
+}
+
+export function queueExploreFollowUp(
+  sessionId: string,
+  targetPageId: string,
+  knownPageIds: string[],
+): void {
+  update(sessionId, {
+    pendingFollowUp: { targetPageId, knownPageIds },
+  });
+}
+
+export function resolveExploreFollowUp(
+  sessionId: string,
+  pageIds: string[],
+): void {
+  const state = get(sessionId);
+  const pending = state.pendingFollowUp;
+  if (!pending) return;
+  const nextPageId = pageIds.find((id) => !pending.knownPageIds.includes(id));
+  if (!nextPageId) return;
+  update(sessionId, {
+    pageId: pending.targetPageId,
+    pageParents: {
+      ...state.pageParents,
+      [nextPageId]: pending.targetPageId,
+    },
+    pendingFollowUp: null,
+  });
+}
+
+export function useExploreSessionState(
+  sessionId: string,
+): ExploreSessionState {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => get(sessionId),
+    () => DEFAULT_STATE,
+  );
+}

@@ -7,4 +7,6 @@ export interface ComposerWorkspaceProps {
   status: Status;
   variant?: ComposerVariant;
   surface?: "desktop" | "mobile";
+  autoFocus?: boolean;
+  onSubmitted?: (() => void) | undefined;
 }

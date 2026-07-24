@@ -113,6 +113,7 @@ import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { useCompactionContext } from "./useCompactionContext";
+import type { TranscriptProjection } from "./explore/exploreStore";
 import { desktopFocusBoundary, desktopFocusFill } from "./theme";
 import {
   type Attachment,
@@ -728,6 +729,8 @@ export function ComposerWorkspace({
   status,
   variant = "overlay",
   surface = "mobile",
+  autoFocus = false,
+  onSubmitted,
 }: ComposerWorkspaceProps): React.JSX.Element {
   /// "overlay" (default): the composer floats over the transcript at the bottom
   /// (single-column / mobile). "column": the desktop two-column layout — the
@@ -771,6 +774,11 @@ export function ComposerWorkspace({
     saveAsDraft,
     scheduleNew,
   } = useComposerDraftController(sessionId, editorRef);
+  const submitAndNotify = useCallback((): boolean => {
+    const submitted = submit();
+    if (submitted) onSubmitted?.();
+    return submitted;
+  }, [onSubmitted, submit]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const drafts = useStoreSelector((snapshot) => snapshot.drafts);
   const queues = useStoreSelector((snapshot) => snapshot.queues);
@@ -1080,7 +1088,7 @@ export function ComposerWorkspace({
       lpFired.current = false;
       return;
     }
-    submit();
+    submitAndNotify();
   }
   function confirmForce(): void {
     setForceAnchor(null);
@@ -1525,10 +1533,11 @@ export function ComposerWorkspace({
           >
           <PlatformComposerEditor
             ref={editorRef}
+            autoFocus={autoFocus}
             // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
             value={initialDraftText.current}
             onChange={setText}
-            onSubmit={submit}
+            onSubmit={submitAndNotify}
             onSaveDraft={saveDraft}
             borderless
             expanded={expanded}
@@ -2314,7 +2323,7 @@ export function ComposerWorkspace({
           value={text}
           onChange={setText}
           onSubmit={(): void => {
-            submit();
+            submitAndNotify();
             setComposeFs(false);
           }}
           onSaveDraft={(): void => {
@@ -4080,9 +4089,13 @@ export function AutoScrollAndStop({
 export function SessionControls({
   sessionId,
   status,
+  projection,
+  onProjectionChange,
 }: {
   sessionId: string;
   status: Status;
+  projection?: TranscriptProjection | undefined;
+  onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
 }): React.JSX.Element {
   const configOptions = useStoreSelector((snapshot) =>
     snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
@@ -4141,6 +4154,8 @@ export function SessionControls({
           options={options}
           loading={showSkeleton}
           dead={dead}
+          projection={projection}
+          onProjectionChange={onProjectionChange}
           onSelectOption={(configId, value): void => {
             send({
               type: "set_config_option",
@@ -4168,6 +4183,8 @@ function ComposerSheet({
   options,
   loading,
   dead,
+  projection,
+  onProjectionChange,
   onSelectOption,
 }: {
   open: boolean;
@@ -4176,6 +4193,8 @@ function ComposerSheet({
   options: ConfigOption[];
   loading: boolean;
   dead: boolean;
+  projection?: TranscriptProjection | undefined;
+  onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
   onSelectOption: (configId: string, value: string | boolean) => void;
 }): React.JSX.Element {
   // Phones and portrait touch tablets keep the bottom sheet. Pointer-driven
@@ -4277,6 +4296,56 @@ function ComposerSheet({
         />
       )}
       {session && <QueueSection session={session} />}
+      {projection && onProjectionChange && (
+        <>
+          <Divider />
+          <Box sx={{ py: 1.5 }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
+            >
+              Transcript view
+            </Typography>
+            <Paper
+              variant="outlined"
+              sx={{
+                mt: 1,
+                p: 0.5,
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 0.5,
+                borderRadius: 2,
+                bgcolor: "action.hover",
+              }}
+            >
+              {(["history", "explore"] as const).map((view) => (
+                <Button
+                  key={view}
+                  variant={projection === view ? "contained" : "text"}
+                  color={projection === view ? "primary" : "inherit"}
+                  onClick={(): void => onProjectionChange(view)}
+                  sx={{
+                    minHeight: 42,
+                    borderRadius: 1.5,
+                    textTransform: "none",
+                    boxShadow: "none",
+                  }}
+                >
+                  {view === "history" ? "History" : "Explore"}
+                </Button>
+              ))}
+            </Paper>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", mt: 0.75 }}
+            >
+              Explore presents the same transcript as question-and-answer pages.
+            </Typography>
+          </Box>
+        </>
+      )}
       {(loading || options.length > 0) && (
         <>
           <Divider />

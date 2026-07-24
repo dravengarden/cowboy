@@ -3,6 +3,8 @@ import type { DesktopPane } from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
 import { MOD_LABEL } from "../platform";
+import type { TranscriptProjection } from "../explore/exploreStore";
+import { DesktopProjectionToggle } from "../explore/ProjectionToggle";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -57,6 +59,8 @@ export function DesktopWorkspace({
   prompt,
   conversation,
   sessionId,
+  projection,
+  onProjectionChange,
 }: {
   promptWidth: number;
   resizing: boolean;
@@ -64,6 +68,8 @@ export function DesktopWorkspace({
   prompt: React.ReactNode;
   conversation: React.ReactNode;
   sessionId: string;
+  projection: TranscriptProjection;
+  onProjectionChange: (projection: TranscriptProjection) => void;
 }): React.JSX.Element {
   return (
     <Box
@@ -149,7 +155,15 @@ export function DesktopWorkspace({
         <PaneHeader
           pane="conversation"
           shortcut={{ value: "Mod+L", title: "Focus Conversation" }}
-          actions={<DesktopConversationControls sessionId={sessionId} />}
+          actions={(
+            <>
+              <DesktopProjectionToggle
+                projection={projection}
+                onChange={onProjectionChange}
+              />
+              <DesktopConversationControls sessionId={sessionId} />
+            </>
+          )}
         >
           Conversation
         </PaneHeader>
