@@ -461,7 +461,9 @@ export function MobilePageDock({
     requestedBeforeSeq: number | null;
     requestComplete: boolean;
   } | null>(null);
-  const previous = pages[currentIndex - 1];
+  const previous = current
+    ? completePageBeforeItem(pages, current.itemKeys.at(-1) ?? "")
+    : undefined;
   const next = pages[currentIndex + 1];
   const knownPageIds = pages.map((page) => page.id);
   const atTail = pages.length === 0 || currentIndex === pages.length - 1;
