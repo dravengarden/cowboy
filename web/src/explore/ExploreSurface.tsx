@@ -431,7 +431,7 @@ export function MobilePageDock({
   const [open, setOpen] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
     fromId: string;
-    loadedPageCount: number;
+    requestedBeforeSeq: number | null;
   } | null>(null);
   const previous = pages[currentIndex - 1];
   const next = pages[currentIndex + 1];
@@ -439,6 +439,7 @@ export function MobilePageDock({
   const atTail = pages.length === 0 || currentIndex === pages.length - 1;
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
+  const loadingPrevious = loadingEarlier || pendingPrevious !== null;
   const onlyCompletePage = pages.length <= 1 && !hasEarlierHistory;
   const total = Math.max(pages.length, pageIndex?.total ?? 0);
   const currentOrdinal = Math.max(
@@ -470,9 +471,11 @@ export function MobilePageDock({
       navigate(previous.id);
       return;
     }
-    if (!hasEarlierHistory || loadingEarlier || !current) return;
-    setPendingPrevious({ fromId: current.id, loadedPageCount: pages.length });
-    void loadOlder(sessionId);
+    if (!hasEarlierHistory || loadingPrevious || !current) return;
+    // One answer can span several bounded HTTP history pages. Keep loading
+    // under this single user action until the preceding question boundary is
+    // found, rather than making the reader tap once per transport page.
+    setPendingPrevious({ fromId: current.id, requestedBeforeSeq: null });
   };
 
   useEffect(() => {
@@ -480,16 +483,35 @@ export function MobilePageDock({
   }, [atTail, onTailChange]);
 
   useEffect(() => {
-    if (
-      !pendingPrevious ||
-      loadingEarlier ||
-      (pages.length <= pendingPrevious.loadedPageCount && hasEarlierHistory)
-    ) return;
+    if (!pendingPrevious || loadingEarlier) return;
     const fromIndex = pages.findIndex((page) => page.id === pendingPrevious.fromId);
     const loadedPrevious = pages[fromIndex - 1];
-    if (loadedPrevious) navigate(loadedPrevious.id);
-    setPendingPrevious(null);
-  }, [hasEarlierHistory, loadingEarlier, navigate, pages, pendingPrevious]);
+    if (loadedPrevious) {
+      navigate(loadedPrevious.id);
+      setPendingPrevious(null);
+      return;
+    }
+    const beforeSeq = pagination?.beforeSeq ?? null;
+    if (!hasEarlierHistory || beforeSeq === null) {
+      setPendingPrevious(null);
+      return;
+    }
+    if (beforeSeq === pendingPrevious.requestedBeforeSeq) {
+      // The request failed without advancing its immutable cursor.
+      setPendingPrevious(null);
+      return;
+    }
+    setPendingPrevious({ ...pendingPrevious, requestedBeforeSeq: beforeSeq });
+    void loadOlder(sessionId);
+  }, [
+    hasEarlierHistory,
+    loadingEarlier,
+    navigate,
+    pages,
+    pagination?.beforeSeq,
+    pendingPrevious,
+    sessionId,
+  ]);
 
   return (
     <>
@@ -521,11 +543,11 @@ export function MobilePageDock({
                     aria-label={hasEarlierHistory && !previous
                       ? "Load earlier questions"
                       : "Previous page"}
-                    disabled={(!previous && !hasEarlierHistory) || loadingEarlier}
+                    disabled={(!previous && !hasEarlierHistory) || loadingPrevious}
                     onClick={goPrevious}
                     sx={{ width: 44, height: 44 }}
                   >
-                    {loadingEarlier
+                    {loadingPrevious
                       ? <CircularProgress size={17} />
                       : <ChevronLeft fontSize="small" />}
                   </IconButton>
