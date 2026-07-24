@@ -508,6 +508,22 @@ here says otherwise.
     sheet discards the local title draft. This transaction is separate from the
     CM6 composer and must not add editor keymaps or IME interception.
 
+25. **The first iPad keyboard presentation after rotating needs current-orientation
+    native geometry.** A keyboard notification can briefly combine the new
+    full-width keyboard with an old-orientation bottom coordinate. Treating that
+    frame as undocked leaves the WKWebView full-height, so the docked keyboard
+    covers the composer until a second, warm presentation. On a real orientation
+    change, `CowboyKeyboardAvoider` must invalidate the old generation, restore
+    the WebView to the parent's current bounds, and then settle from
+    `keyboardLayoutGuide`. A substantial full-width notification is a docked
+    fallback even if its transient bottom coordinate misses the edge; genuinely
+    floating iPad keyboards remain narrow and continue to overlay. Reconcile the
+    guide for a bounded two-second window because iPad interface coordinates may
+    settle after the old 700ms final sample. Ignore face-up/face-down device
+    motion so ordinary handling cannot reset a visible keyboard. Verify the exact
+    cold sequence: keyboard hidden → rotate → first focus, in both directions,
+    plus a floating keyboard regression.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
