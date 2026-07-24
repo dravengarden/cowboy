@@ -4301,51 +4301,31 @@ function ComposerSheet({
           <Divider />
           <Box
             sx={{
-              py: 1,
+              py: 0.75,
+              minHeight: 56,
               display: "flex",
               alignItems: "center",
-              gap: 1.5,
+              gap: 1,
             }}
           >
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                Transcript view
+                Question pages
               </Typography>
-              <Typography variant="caption" color="text.secondary">
-                History or question pages
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", lineHeight: 1.35 }}
+              >
+                One question and answer per page
               </Typography>
             </Box>
-            <Paper
-              variant="outlined"
-              sx={{
-                p: 0.375,
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 0.25,
-                width: 196,
-                flexShrink: 0,
-                borderRadius: 999,
-                bgcolor: (theme) => alpha(theme.palette.action.hover, 0.7),
-              }}
-            >
-              {(["history", "explore"] as const).map((view) => (
-                <Button
-                  key={view}
-                  variant={projection === view ? "contained" : "text"}
-                  color={projection === view ? "primary" : "inherit"}
-                  onClick={(): void => onProjectionChange(view)}
-                  sx={{
-                    minHeight: 38,
-                    px: 1,
-                    borderRadius: 999,
-                    textTransform: "none",
-                    boxShadow: "none",
-                  }}
-                >
-                  {view === "history" ? "History" : "Explore"}
-                </Button>
-              ))}
-            </Paper>
+            <Switch
+              inputProps={{ "aria-label": "Question pages" }}
+              checked={projection === "explore"}
+              onChange={(_event, checked): void =>
+                onProjectionChange(checked ? "explore" : "history")}
+            />
           </Box>
         </>
       )}

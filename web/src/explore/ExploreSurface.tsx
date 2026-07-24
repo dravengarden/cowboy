@@ -1,6 +1,7 @@
 import {
   ChevronLeft,
   ChevronRight,
+  EditOutlined,
   ListAltOutlined,
   Search,
   VerticalAlignBottom,
@@ -9,6 +10,7 @@ import {
   alpha,
   Box,
   Button,
+  CircularProgress,
   Divider,
   Drawer,
   IconButton,
@@ -25,7 +27,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
-import { useStoreSelector } from "../store";
+import { loadOlder, useStoreSelector } from "../store";
 import { Transcript } from "../Transcript";
 import {
   setExplorePage,
@@ -401,16 +403,48 @@ export function MobilePageDock({
   const timeline = useStoreSelector((snapshot) =>
     snapshot.timelines.get(sessionId) ?? EMPTY_TIMELINE
   );
+  const pagination = useStoreSelector((snapshot) =>
+    snapshot.pagination.get(sessionId)
+  );
   const { pages, current, currentIndex, select } = usePages(sessionId, timeline);
   const [open, setOpen] = useState(false);
+  const [pendingPrevious, setPendingPrevious] = useState<{
+    fromId: string;
+    loadedPageCount: number;
+  } | null>(null);
   const previous = pages[currentIndex - 1];
   const next = pages[currentIndex + 1];
   const knownPageIds = pages.map((page) => page.id);
   const atTail = pages.length === 0 || currentIndex === pages.length - 1;
+  const hasEarlierHistory = pagination?.reachedStart === false;
+  const loadingEarlier = pagination?.loadingOlder === true;
+  const onlyCompletePage = pages.length <= 1 && !hasEarlierHistory;
+
+  const goPrevious = (): void => {
+    if (previous) {
+      select(previous.id);
+      return;
+    }
+    if (!hasEarlierHistory || loadingEarlier || !current) return;
+    setPendingPrevious({ fromId: current.id, loadedPageCount: pages.length });
+    void loadOlder(sessionId);
+  };
 
   useEffect(() => {
     onTailChange?.(atTail);
   }, [atTail, onTailChange]);
+
+  useEffect(() => {
+    if (
+      !pendingPrevious ||
+      loadingEarlier ||
+      (pages.length <= pendingPrevious.loadedPageCount && hasEarlierHistory)
+    ) return;
+    const fromIndex = pages.findIndex((page) => page.id === pendingPrevious.fromId);
+    const loadedPrevious = pages[fromIndex - 1];
+    if (loadedPrevious) select(loadedPrevious.id);
+    setPendingPrevious(null);
+  }, [hasEarlierHistory, loadingEarlier, pages, pendingPrevious, select]);
 
   return (
     <>
@@ -420,6 +454,8 @@ export function MobilePageDock({
         elevation={0}
         sx={{
           mx: "max(env(safe-area-inset-left), 16px)",
+          width: "min(calc(100% - 32px), 296px)",
+          alignSelf: "center",
           my: 0.75,
           height: 48,
           px: 0.25,
@@ -438,32 +474,43 @@ export function MobilePageDock({
           WebkitBackdropFilter: "blur(28px) saturate(170%)",
         }}
       >
-        <Tooltip title="Previous page">
-          <span>
-            <IconButton
-              aria-label="Previous page"
-              disabled={!previous}
-              onClick={(): void => previous && select(previous.id)}
-              sx={{ width: 46, height: 46 }}
+        {!onlyCompletePage && (
+          <>
+            <Tooltip title={hasEarlierHistory && !previous
+              ? "Load earlier questions"
+              : "Previous page"}
             >
-              <ChevronLeft fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
-        <Tooltip title="Next page">
-          <span>
-            <IconButton
-              aria-label="Next page"
-              disabled={!next}
-              onClick={(): void => next && select(next.id)}
-              sx={{ width: 46, height: 46 }}
-            >
-              <ChevronRight fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
+              <span>
+                <IconButton
+                  aria-label={hasEarlierHistory && !previous
+                    ? "Load earlier questions"
+                    : "Previous page"}
+                  disabled={(!previous && !hasEarlierHistory) || loadingEarlier}
+                  onClick={goPrevious}
+                  sx={{ width: 46, height: 46 }}
+                >
+                  {loadingEarlier
+                    ? <CircularProgress size={17} />
+                    : <ChevronLeft fontSize="small" />}
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Divider orientation="vertical" sx={{ height: 22, alignSelf: "center" }} />
+            <Tooltip title="Next page">
+              <span>
+                <IconButton
+                  aria-label="Next page"
+                  disabled={!next}
+                  onClick={(): void => next && select(next.id)}
+                  sx={{ width: 46, height: 46 }}
+                >
+                  <ChevronRight fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Divider orientation="vertical" sx={{ height: 22, alignSelf: "center" }} />
+          </>
+        )}
         <Button
           aria-label="Open question pages"
           onClick={(): void => setOpen(true)}
@@ -485,14 +532,16 @@ export function MobilePageDock({
           >
             {pages.length === 0
               ? "Pages"
-              : `${String(currentIndex + 1)} of ${String(pages.length)}`}
+              : `${String(currentIndex + 1)} / ${String(pages.length)}${
+                hasEarlierHistory ? "+" : ""
+              }`}
           </Typography>
         </Button>
         <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
-        <Tooltip title="Return to latest page and type">
+        <Tooltip title="Latest page and type">
           <IconButton
             color="primary"
-            aria-label="Return to latest page and type"
+            aria-label="Latest page and type"
             onClick={(): void => {
               const latest = pages.at(-1);
               if (latest) select(latest.id);
@@ -500,7 +549,7 @@ export function MobilePageDock({
             }}
             sx={{ width: 46, height: 46 }}
           >
-            <VerticalAlignBottom fontSize="small" />
+            <EditOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
       </Paper>
@@ -532,9 +581,21 @@ export function MobilePageDock({
         <Stack direction="row" alignItems="baseline" sx={{ px: 2, pt: 1.5 }}>
           <Typography variant="h6" sx={{ fontWeight: 750 }}>Pages</Typography>
           <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-            {String(pages.length)}
+            {`${String(pages.length)}${hasEarlierHistory ? "+" : ""}`}
           </Typography>
         </Stack>
+        {hasEarlierHistory && (
+          <Button
+            disabled={loadingEarlier}
+            startIcon={loadingEarlier
+              ? <CircularProgress size={16} />
+              : <ChevronLeft />}
+            onClick={(): void => void loadOlder(sessionId)}
+            sx={{ mx: 2, mt: 1, minHeight: 40, textTransform: "none" }}
+          >
+            {loadingEarlier ? "Loading…" : "Load earlier questions"}
+          </Button>
+        )}
         <Box sx={{ flex: 1, minHeight: 0 }}>
           <PageList
             pages={pages}
