@@ -519,13 +519,17 @@ export function MobilePageDock({
       requestedBeforeSeq: beforeSeq,
       requestComplete: false,
     });
-    void loadOlder(sessionId).finally(() => {
-      setPendingPrevious((value) =>
-        value?.requestedBeforeSeq === beforeSeq
-          ? { ...value, requestComplete: true }
-          : value
-      );
-    });
+    // Yield between transport pages so a long answer cannot monopolize
+    // WKWebView's main thread while React derives the growing page window.
+    window.setTimeout(() => {
+      void loadOlder(sessionId).finally(() => {
+        setPendingPrevious((value) =>
+          value?.requestedBeforeSeq === beforeSeq
+            ? { ...value, requestComplete: true }
+            : value
+        );
+      });
+    }, 32);
   }, [
     hasEarlierHistory,
     loadingEarlier,
