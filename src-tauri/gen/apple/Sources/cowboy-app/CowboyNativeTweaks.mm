@@ -262,6 +262,7 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 @implementation CowboyKeyboardAvoider {
     NSUInteger _settleGeneration;
     BOOL _keyboardVisible;
+    UIDeviceOrientation _lastDeviceOrientation;
 }
 
 + (instancetype)shared {
@@ -294,6 +295,16 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
         [nc addObserver:self
                selector:@selector(onKeyboardDidShow:)
                    name:UIKeyboardDidShowNotification
+                 object:nil];
+        // Rotation invalidates both a pending keyboard notification frame and
+        // any WebView height derived from the old interface coordinates. This
+        // is especially visible on iPad: the first keyboard open after rotating
+        // can otherwise leave the full-width keyboard covering the composer
+        // until a second open delivers warm coordinates.
+        [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
+        [nc addObserver:self
+               selector:@selector(onDeviceOrientationDidChange:)
+                   name:UIDeviceOrientationDidChangeNotification
                  object:nil];
     }
     return self;
@@ -344,9 +355,25 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     CGRect kbInParent = [parent convertRect:kbScreen fromView:nil];
     CGFloat parentBottom = CGRectGetMaxY(parent.bounds);
     BOOL dockedToBottom = CGRectGetMaxY(kbInParent) >= parentBottom - 2;
+    // During the first keyboard presentation after an interface rotation,
+    // UIKeyboardFrameEnd can briefly use the new full-width keyboard geometry
+    // with an old-orientation bottom coordinate. Treat a substantial full-width
+    // keyboard as docked as well. A truly floating iPad keyboard is narrow, so
+    // it continues to overlay the document without resizing the WebView.
+    CGFloat parentWidth = CGRectGetWidth(parent.bounds);
+    BOOL fullWidthDockCandidate =
+        CGRectGetHeight(kbInParent) >= 80 &&
+        CGRectGetWidth(kbInParent) >= parentWidth * 0.8;
+    dockedToBottom = dockedToBottom || fullWidthDockCandidate;
     CGFloat overlap = dockedToBottom
         ? MAX(0, parentBottom - CGRectGetMinY(kbInParent))
         : 0;
+    overlap = MIN(overlap, CGRectGetHeight(parent.bounds));
+#if DEBUG
+    NSLog(@"[cowboy] keyboard note frame=%@ parent=%@ docked=%d fullWidth=%d overlap=%.1f",
+          NSStringFromCGRect(kbInParent), NSStringFromCGRect(parent.bounds),
+          dockedToBottom, fullWidthDockCandidate, overlap);
+#endif
     [self applyOverlap:overlap userInfo:note.userInfo];
 }
 
@@ -397,16 +424,44 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 
 - (void)scheduleSettledCorrections {
     NSUInteger generation = ++_settleGeneration;
-    // Cover the normal animation completion plus late predictive/third-party
-    // keyboard phases. Generation checks make every older schedule harmless
-    // after a new frame or hide event.
-    for (NSNumber *delay in @[@0.0, @0.12, @0.35, @0.70]) {
+    // Follow the guide for a bounded two-second settling window. Four fixed
+    // samples were enough for an ordinary first-open prediction, but an iPad
+    // rotation can finish reconciling interface coordinates after the final
+    // 700ms sample. Frequent reads are layout-only, generation-cancelled, and
+    // stop after 2s; frame writes remain idempotent.
+    for (NSUInteger step = 0; step <= 20; step++) {
+        NSTimeInterval delay = (NSTimeInterval)step * 0.1;
         dispatch_after(
             dispatch_time(DISPATCH_TIME_NOW,
-                          (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                          (int64_t)(delay * NSEC_PER_SEC)),
             dispatch_get_main_queue(), ^{
                 [self applySettledLayoutGuide:generation];
             });
+    }
+}
+
+- (void)onDeviceOrientationDidChange:(NSNotification *)note {
+    (void)note;
+    UIDeviceOrientation orientation = UIDevice.currentDevice.orientation;
+    if (!UIDeviceOrientationIsPortrait(orientation) &&
+        !UIDeviceOrientationIsLandscape(orientation)) {
+        return;
+    }
+    if (orientation == _lastDeviceOrientation) return;
+    _lastDeviceOrientation = orientation;
+    ++_settleGeneration;
+    WKWebView *wv = gCowboyWebView;
+    UIView *parent = wv.superview;
+    if (wv == nil || parent == nil || wv.window == nil) return;
+    // Drop geometry owned by the previous orientation immediately. UIKit will
+    // lay out the parent's new bounds independently; the next keyboard frame or
+    // guide sample may then shrink only the current orientation.
+    [UIView performWithoutAnimation:^{
+        wv.frame = parent.bounds;
+        [wv layoutIfNeeded];
+    }];
+    if (_keyboardVisible) {
+        [self scheduleSettledCorrections];
     }
 }
 
