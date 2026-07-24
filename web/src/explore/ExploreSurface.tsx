@@ -232,7 +232,14 @@ export function ExploreTranscript(
           `[data-key="${CSS.escape(firstKey)}"]`,
         )
         : null;
-      row?.scrollIntoView({ block: "start", behavior: "instant" });
+      const scroller = row?.parentElement;
+      if (scroller) {
+        // Transcript is a column-reverse scroller. WebKit's scrollIntoView()
+        // treats block:start as the flex start (the newest edge), so a long
+        // question page can reopen in the middle of its answer. The visual
+        // beginning is the negative scroll extent.
+        scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
+      }
       resolveExplorePageStart(props.sessionId);
     });
     return () => cancelAnimationFrame(frame);
