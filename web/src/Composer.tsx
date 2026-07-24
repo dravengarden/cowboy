@@ -4299,24 +4299,33 @@ function ComposerSheet({
       {projection && onProjectionChange && (
         <>
           <Divider />
-          <Box sx={{ py: 1.5 }}>
-            <Typography
-              variant="overline"
-              color="text.secondary"
-              sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
-            >
-              Transcript view
-            </Typography>
+          <Box
+            sx={{
+              py: 1,
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+            }}
+          >
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                Transcript view
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                History or question pages
+              </Typography>
+            </Box>
             <Paper
               variant="outlined"
               sx={{
-                mt: 1,
-                p: 0.5,
+                p: 0.375,
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
-                gap: 0.5,
-                borderRadius: 2,
-                bgcolor: "action.hover",
+                gap: 0.25,
+                width: 196,
+                flexShrink: 0,
+                borderRadius: 999,
+                bgcolor: (theme) => alpha(theme.palette.action.hover, 0.7),
               }}
             >
               {(["history", "explore"] as const).map((view) => (
@@ -4326,8 +4335,9 @@ function ComposerSheet({
                   color={projection === view ? "primary" : "inherit"}
                   onClick={(): void => onProjectionChange(view)}
                   sx={{
-                    minHeight: 42,
-                    borderRadius: 1.5,
+                    minHeight: 38,
+                    px: 1,
+                    borderRadius: 999,
                     textTransform: "none",
                     boxShadow: "none",
                   }}
@@ -4336,13 +4346,6 @@ function ComposerSheet({
                 </Button>
               ))}
             </Paper>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", mt: 0.75 }}
-            >
-              Explore presents the same transcript as question-and-answer pages.
-            </Typography>
           </Box>
         </>
       )}

@@ -358,6 +358,7 @@ export function ExploreTranscript(
           onScrollableChange={props.onScrollableChange}
           visibleItemKeys={visibleItemKeys}
           liveTail={atTail}
+          shortContentAtTop
         />
         {props.desktop && (
           <Stack
@@ -418,83 +419,76 @@ export function MobilePageDock({
         aria-label="Question pages"
         elevation={0}
         sx={{
-          mx: "max(env(safe-area-inset-left), 12px)",
-          my: 1,
-          minHeight: 56,
-          px: 0.75,
+          mx: "max(env(safe-area-inset-left), 16px)",
+          my: 0.75,
+          height: 48,
+          px: 0.25,
           display: "flex",
           alignItems: "center",
-          gap: 0.5,
           border: 1,
-          borderColor: "divider",
-          borderRadius: 2.5,
-          bgcolor: (theme) => alpha(theme.palette.background.paper, 0.78),
-          backdropFilter: "blur(24px) saturate(180%)",
-          WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          borderColor: (theme) => alpha(theme.palette.primary.main, 0.22),
+          borderRadius: 999,
+          overflow: "hidden",
+          bgcolor: (theme) => alpha(theme.palette.background.paper, 0.72),
+          boxShadow: (theme) =>
+            `0 8px 28px ${alpha(theme.palette.common.black, 0.16)}, inset 0 1px 0 ${
+              alpha(theme.palette.common.white, 0.12)
+            }`,
+          backdropFilter: "blur(28px) saturate(170%)",
+          WebkitBackdropFilter: "blur(28px) saturate(170%)",
         }}
       >
-        <Stack
-          direction="row"
+        <Tooltip title="Previous page">
+          <span>
+            <IconButton
+              aria-label="Previous page"
+              disabled={!previous}
+              onClick={(): void => previous && select(previous.id)}
+              sx={{ width: 46, height: 46 }}
+            >
+              <ChevronLeft fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
+        <Tooltip title="Next page">
+          <span>
+            <IconButton
+              aria-label="Next page"
+              disabled={!next}
+              onClick={(): void => next && select(next.id)}
+              sx={{ width: 46, height: 46 }}
+            >
+              <ChevronRight fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
+        <Button
+          aria-label="Open question pages"
+          onClick={(): void => setOpen(true)}
+          startIcon={<ListAltOutlined fontSize="small" />}
           sx={{
-            flex: 1,
             minWidth: 0,
-            height: 44,
-            border: 1,
-            borderColor: "divider",
-            borderRadius: 1.75,
+            flex: 1,
+            height: 46,
+            px: 1.25,
+            borderRadius: 999,
+            textTransform: "none",
             overflow: "hidden",
           }}
         >
-          <Tooltip title="Previous page">
-            <span>
-              <IconButton
-                aria-label="Previous page"
-                disabled={!previous}
-                onClick={(): void => previous && select(previous.id)}
-                sx={{ width: 44, height: 44, borderRadius: 0 }}
-              >
-                <ChevronLeft />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Divider orientation="vertical" flexItem />
-          <Tooltip title="Next page">
-            <span>
-              <IconButton
-                aria-label="Next page"
-                disabled={!next}
-                onClick={(): void => next && select(next.id)}
-                sx={{ width: 44, height: 44, borderRadius: 0 }}
-              >
-                <ChevronRight />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Divider orientation="vertical" flexItem />
-          <Button
-            aria-label="Open question pages"
-            onClick={(): void => setOpen(true)}
-            startIcon={<ListAltOutlined />}
-            sx={{
-              minWidth: 0,
-              flex: 1,
-              px: 1,
-              borderRadius: 0,
-              textTransform: "none",
-              overflow: "hidden",
-            }}
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
           >
-            <Typography
-              variant="caption"
-              noWrap
-              sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
-            >
-              {pages.length === 0
-                ? "Pages"
-                : `${String(currentIndex + 1)} / ${String(pages.length)}`}
-            </Typography>
-          </Button>
-        </Stack>
+            {pages.length === 0
+              ? "Pages"
+              : `${String(currentIndex + 1)} of ${String(pages.length)}`}
+          </Typography>
+        </Button>
+        <Divider orientation="vertical" sx={{ height: 24, alignSelf: "center" }} />
         <Tooltip title="Return to latest page and type">
           <IconButton
             color="primary"
@@ -504,9 +498,9 @@ export function MobilePageDock({
               if (latest) select(latest.id);
               onCompose("new_page", null, knownPageIds);
             }}
-            sx={{ width: 44, height: 44 }}
+            sx={{ width: 46, height: 46 }}
           >
-            <VerticalAlignBottom />
+            <VerticalAlignBottom fontSize="small" />
           </IconButton>
         </Tooltip>
       </Paper>

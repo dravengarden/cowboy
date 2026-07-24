@@ -2817,6 +2817,7 @@ export function Transcript({
   desktopNavigation = false,
   visibleItemKeys,
   liveTail = true,
+  shortContentAtTop = false,
   restoreAnchorKey,
   onAnchorRestored,
 }: {
@@ -2859,6 +2860,11 @@ export function Transcript({
   /** Whether this projection contains the live timeline tail. Old Explore pages
    * must not show the current turn's spinner or streaming caret. */
   liveTail?: boolean | undefined;
+  /** Page projections read like documents: when one page is shorter than the
+   * viewport, keep it at the visual top. History deliberately remains anchored
+   * beside the composer. In the column-reverse scroller a DOM-first flexible
+   * spacer occupies the visual bottom without changing overflow behaviour. */
+  shortContentAtTop?: boolean | undefined;
   /** Projection transition: restore this canonical row near the viewport centre. */
   restoreAnchorKey?: string | null | undefined;
   onAnchorRestored?: (() => void) | undefined;
@@ -3743,6 +3749,13 @@ export function Transcript({
             // item's STABLE key (first envelope seq) so prepending older history
             // doesn't re-mount/jump rows.
             <>
+              {shortContentAtTop && (
+                <Box
+                  aria-hidden
+                  data-transcript-page-spacer
+                  sx={{ flex: "1 1 0 !important", minHeight: 0 }}
+                />
+              )}
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.
