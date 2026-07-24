@@ -249,10 +249,11 @@ export function ExploreTranscript(
       // question page can reopen in the middle of its answer. The visual
       // beginning is the negative scroll extent.
       scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
-      if (positionedFrames++ < 2) {
+      if (positionedFrames++ < 11) {
         // Transcript also initializes its column-reverse position in a layout
-        // effect. Reassert across the following paint frames so cached page
-        // switches cannot be overwritten back to the newest edge.
+        // effect and may commit a deferred derived row set after several
+        // paints. Reassert through that hand-off so cached page switches cannot
+        // be overwritten back to the newest edge.
         frame = requestAnimationFrame(positionAtStart);
         return;
       }
