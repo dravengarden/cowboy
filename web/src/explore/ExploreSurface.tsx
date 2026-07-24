@@ -225,7 +225,9 @@ export function ExploreTranscript(
 
   useLayoutEffect(() => {
     if (!current || pageStartId !== current.id) return;
-    const frame = requestAnimationFrame(() => {
+    let frame = 0;
+    let attempts = 0;
+    const positionAtStart = (): void => {
       const firstKey = current.itemKeys[0];
       const row = firstKey
         ? rootRef.current?.querySelector<HTMLElement>(
@@ -233,15 +235,22 @@ export function ExploreTranscript(
         )
         : null;
       const scroller = row?.parentElement;
-      if (scroller) {
-        // Transcript is a column-reverse scroller. WebKit's scrollIntoView()
-        // treats block:start as the flex start (the newest edge), so a long
-        // question page can reopen in the middle of its answer. The visual
-        // beginning is the negative scroll extent.
-        scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
+      if (!scroller && attempts++ < 12) {
+        // Transcript derives and swaps the filtered rows after this parent
+        // changes page. Do not consume the start request against the outgoing
+        // DOM; wait until the target question row actually exists.
+        frame = requestAnimationFrame(positionAtStart);
+        return;
       }
+      if (!scroller) return;
+      // Transcript is a column-reverse scroller. WebKit's scrollIntoView()
+      // treats block:start as the flex start (the newest edge), so a long
+      // question page can reopen in the middle of its answer. The visual
+      // beginning is the negative scroll extent.
+      scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
       resolveExplorePageStart(props.sessionId);
-    });
+    };
+    frame = requestAnimationFrame(positionAtStart);
     return () => cancelAnimationFrame(frame);
   }, [current, pageStartId, props.sessionId]);
 
