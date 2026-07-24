@@ -366,6 +366,7 @@ export function ExploreTranscript(
         )}
         <Transcript
           desktopNavigation={props.desktop}
+          historyPaging="page"
           sessionId={props.sessionId}
           timeline={props.timeline}
           status={props.status}

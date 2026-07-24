@@ -7,6 +7,7 @@ import {
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
+      managed: true,
       allowed: true,
       desktop: false,
       fromResize: true,
@@ -23,6 +24,7 @@ Deno.test("mobile transcript refills when an iPad viewport grows", () => {
 Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
   assertEquals(
     shouldBackfillTranscriptViewport({
+      managed: true,
       allowed: true,
       desktop: true,
       fromResize: true,
@@ -38,6 +40,7 @@ Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
 
 Deno.test("transcript refill stops while a page is loading or history is exhausted", () => {
   const base = {
+    managed: true,
     allowed: true,
     desktop: false,
     fromResize: true,
@@ -75,6 +78,7 @@ Deno.test("transcript refill stops while a page is loading or history is exhaust
 Deno.test("history prefetch requests once per entry into the top threshold", () => {
   assertEquals(
     historyPrefetchTransition({
+      managed: true,
       detached: true,
       armed: true,
       fromTop: 100,
@@ -84,6 +88,7 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
   );
   assertEquals(
     historyPrefetchTransition({
+      managed: true,
       detached: true,
       armed: false,
       fromTop: 100,
@@ -93,11 +98,39 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
   );
   assertEquals(
     historyPrefetchTransition({
+      managed: true,
       detached: true,
       armed: false,
       fromTop: 800,
       threshold: 500,
     }),
     { armed: true, request: false },
+  );
+});
+
+Deno.test("page projection never invokes transcript-managed history loading", () => {
+  assertEquals(
+    shouldBackfillTranscriptViewport({
+      managed: false,
+      allowed: true,
+      desktop: false,
+      fromResize: false,
+      reachedStart: false,
+      loadingOlder: false,
+      beforeSeq: 854_903,
+      scrollHeight: 320,
+      clientHeight: 1_020,
+    }),
+    false,
+  );
+  assertEquals(
+    historyPrefetchTransition({
+      managed: false,
+      detached: true,
+      armed: true,
+      fromTop: 0,
+      threshold: 2_040,
+    }),
+    { armed: false, request: false },
   );
 });

@@ -2815,6 +2815,7 @@ export function Transcript({
   bottomInset,
   onScrollableChange,
   desktopNavigation = false,
+  historyPaging = "scroll",
   visibleItemKeys,
   liveTail = true,
   shortContentAtTop = false,
@@ -2854,6 +2855,10 @@ export function Transcript({
   /** Desktop-only item navigation. Mobile keeps its touch-first transcript and
    * does not expose rows to the Desktop focus registry. */
   desktopNavigation?: boolean;
+  /** History owns scroll-threshold and viewport-fill pagination. Page View
+   * owns question-boundary loading outside this shared renderer, so ordinary
+   * scrolling must never mutate its retained event window. */
+  historyPaging?: "scroll" | "page";
   /** Explore projection: render only this page's canonical item keys. History
    * omits the prop and retains the established full-timeline path. */
   visibleItemKeys?: ReadonlySet<string> | undefined;
@@ -2963,6 +2968,9 @@ export function Transcript({
   const showTrailingDots = working && !lastIsStreamingAssistant &&
     !compacting && !compactedAtTail;
   const parentRef = useRef<HTMLDivElement>(null);
+  const managesScrollHistory = historyPaging === "scroll";
+  const managesScrollHistoryRef = useRef(managesScrollHistory);
+  managesScrollHistoryRef.current = managesScrollHistory;
   // Switching from Explore remounts the History transcript. Remember whether
   // that mount carries a viewport hand-off so the ordinary "new session starts
   // at latest" initializer below cannot overwrite the restored reading point.
@@ -3034,9 +3042,10 @@ export function Transcript({
   const [backfillingViewport, setBackfillingViewport] = useState(false);
   const [scrollbackLoading, setScrollbackLoading] = useState(false);
   const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
-  const historyPageLoading = backfillingViewport ||
-    scrollbackLoading ||
-    paging?.loadingOlder === true;
+  const historyPageLoading = managesScrollHistory &&
+    (backfillingViewport ||
+      scrollbackLoading ||
+      paging?.loadingOlder === true);
   useEffect(() => {
     if (!historyPageLoading) {
       setShowHistoryLoadingFill(false);
@@ -3049,6 +3058,7 @@ export function Transcript({
     return undefined;
   }, [historyPageLoading]);
   requestOlderPageRef.current = (): void => {
+    if (!managesScrollHistoryRef.current) return;
     if (historyLoadingHideTimerRef.current !== null) {
       globalThis.clearTimeout(historyLoadingHideTimerRef.current);
       historyLoadingHideTimerRef.current = null;
@@ -3087,6 +3097,10 @@ export function Transcript({
   // changes content height and React state; it must never recursively authorize
   // the next page or one short retained tail can download the whole transcript.
   requestViewportBackfillRef.current = (fromResize: boolean): void => {
+    if (!managesScrollHistoryRef.current) {
+      setBackfillingViewport(false);
+      return;
+    }
     if (viewportBackfillRafRef.current !== 0) return;
     viewportBackfillRafRef.current = requestAnimationFrame(() => {
       viewportBackfillRafRef.current = 0;
@@ -3096,6 +3110,7 @@ export function Transcript({
         return;
       }
       const needsOlderPage = shouldBackfillTranscriptViewport({
+        managed: managesScrollHistoryRef.current,
         allowed: viewportBackfillAllowanceRef.current > 0,
         desktop: desktopNavigation,
         fromResize,
@@ -3197,6 +3212,7 @@ export function Transcript({
   };
   const scheduleHistoryRelease = (): void => {
     cancelHistoryRelease();
+    if (!managesScrollHistoryRef.current) return;
     historyReleaseTimerRef.current = globalThis.setTimeout(() => {
       historyReleaseTimerRef.current = undefined;
       const el = parentRef.current;
@@ -3215,11 +3231,17 @@ export function Transcript({
     // Do not fight the short-history bootstrap above: it deliberately pages
     // until the viewport fills. Once there is real overflow, the recent tail is
     // already sufficient to fill the reader and can safely replace deep rows.
-    if (selectedToolKey === null && stick.current && el && el.scrollHeight > el.clientHeight + 1) {
+    if (
+      managesScrollHistory &&
+      selectedToolKey === null &&
+      stick.current &&
+      el &&
+      el.scrollHeight > el.clientHeight + 1
+    ) {
       scheduleHistoryRelease();
     }
     return cancelHistoryRelease;
-  }, [sessionId, timeline.length, selectedToolKey]);
+  }, [managesScrollHistory, sessionId, timeline.length, selectedToolKey]);
 
   // SCROLL MODEL: the scroll container is `flex-direction: column-reverse`, so
   // the browser anchors the viewport FROM THE BOTTOM natively. We render rows
@@ -3335,6 +3357,7 @@ export function Transcript({
       detach();
       const fromBottom = Math.abs(el.scrollTop);
       const prefetch = historyPrefetchTransition({
+        managed: managesScrollHistoryRef.current,
         detached: true,
         armed: historyPrefetchArmedRef.current,
         fromTop: el.scrollHeight - el.clientHeight - fromBottom,
@@ -3384,6 +3407,7 @@ export function Transcript({
       // session; the reader must move away and approach the top again.
       const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
       const prefetch = historyPrefetchTransition({
+        managed: managesScrollHistoryRef.current,
         detached: !stick.current,
         armed: historyPrefetchArmedRef.current,
         fromTop,
