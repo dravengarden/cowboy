@@ -371,7 +371,8 @@ function SessionProjectionBadge({
         <Chip
             size="small"
             icon={<ListAltOutlined />}
-            label="Pages"
+            label="Page"
+            aria-label="Question page view"
             color="primary"
             sx={{
                 height: "1.5rem",
