@@ -13,6 +13,7 @@ import {
   CircularProgress,
   IconButton,
   InputAdornment,
+  LinearProgress,
   List,
   ListItemButton,
   ListItemText,
@@ -209,17 +210,17 @@ function PageList({
   }, [currentId]);
 
   useEffect(() => {
-    if (wasLoadingRef.current && !loadingEarlier) {
-      loadArmedRef.current = true;
-    }
+    const completedLoad = wasLoadingRef.current && !loadingEarlier;
     wasLoadingRef.current = loadingEarlier;
     if (query.trim() || !hasEarlier || loadingEarlier) return undefined;
     const frame = requestAnimationFrame(() => {
       const list = listRef.current;
-      if (
-        !list || list.scrollHeight > list.clientHeight + 1 ||
-        !loadArmedRef.current
-      ) return;
+      if (!list || list.scrollHeight > list.clientHeight + 1) return;
+      // Only a genuinely unfilled viewport may chain another batch after a
+      // prepend. A scrollable directory stays disarmed until the reader moves
+      // away from the leading edge and deliberately approaches it again.
+      if (completedLoad) loadArmedRef.current = true;
+      if (!loadArmedRef.current) return;
       // Like Transcript's viewport backfill: a short directory should fill
       // itself rather than presenting a pull gesture that cannot physically
       // scroll yet.
@@ -254,84 +255,99 @@ function PageList({
         }}
         sx={{ m: dense ? 1 : 2, mb: 1 }}
       />
-      <List
-        ref={listRef}
-        dense={dense}
-        onScroll={(event): void => {
-          const list = event.currentTarget;
-          const threshold = Math.max(96, list.clientHeight * 0.3);
-          if (list.scrollTop > threshold) {
-            loadArmedRef.current = true;
-            return;
-          }
-          if (
-            query.trim() || !hasEarlier || loadingEarlier ||
-            !loadArmedRef.current
-          ) return;
-          loadArmedRef.current = false;
-          onReachStart?.();
-        }}
+      <Box
         sx={{
           flex: 1,
           minHeight: 0,
-          overflowY: "auto",
-          px: dense ? 0.75 : 1,
-          overflowAnchor: "auto",
+          position: "relative",
         }}
       >
         {loadingEarlier && !query.trim() && (
-          <Stack
+          <LinearProgress
             aria-label="Loading earlier questions"
-            spacing={0.75}
-            sx={{ px: 1.5, py: 1 }}
-          >
-            <Skeleton variant="text" width="58%" />
-            <Skeleton variant="text" width="38%" />
-          </Stack>
+            sx={{
+              position: "absolute",
+              top: 0,
+              left: dense ? 6 : 8,
+              right: dense ? 6 : 8,
+              zIndex: 1,
+              height: 2,
+              borderRadius: 1,
+              pointerEvents: "none",
+            }}
+          />
         )}
-        {filtered.map((page) => {
-          const selected = page.id === currentId;
-          return (
-            <ListItemButton
-              key={page.id}
-              ref={selected ? selectedRef : undefined}
-              selected={selected}
-              onClick={(): void => onSelect(page.id)}
-              sx={{
-                borderRadius: 1.5,
-                mb: 0.5,
-                alignItems: "flex-start",
-                border: 1,
-                borderColor: selected ? "primary.main" : "transparent",
-                "&.Mui-selected": {
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.09),
-                },
-              }}
-            >
-              <Typography
-                variant="caption"
-                color={selected ? "primary.main" : "text.secondary"}
-                sx={{ width: 28, pt: 0.25, fontVariantNumeric: "tabular-nums" }}
-              >
-                {String(ordinalById.get(page.id) ?? 1)}
-              </Typography>
-              <ListItemText
-                primary={page.title}
-                secondary={`${String(page.questionCount)} question${
-                  page.questionCount === 1 ? "" : "s"
-                }`}
-                slotProps={{
-                  primary: {
-                    noWrap: true,
-                    fontWeight: selected ? 700 : 500,
+        <List
+          ref={listRef}
+          dense={dense}
+          onScroll={(event): void => {
+            const list = event.currentTarget;
+            const threshold = Math.max(96, list.clientHeight * 0.3);
+            if (list.scrollTop > threshold) {
+              // A completed prepend remains disarmed while the reader is still
+              // at the leading edge. Require a deliberate move away before the
+              // next approach can request another batch.
+              loadArmedRef.current = true;
+              return;
+            }
+            if (
+              query.trim() || !hasEarlier || loadingEarlier ||
+              !loadArmedRef.current
+            ) return;
+            loadArmedRef.current = false;
+            onReachStart?.();
+          }}
+          sx={{
+            height: "100%",
+            overflowY: "auto",
+            px: dense ? 0.75 : 1,
+            overflowAnchor: "auto",
+          }}
+        >
+          {filtered.map((page) => {
+            const selected = page.id === currentId;
+            return (
+              <ListItemButton
+                key={page.id}
+                ref={selected ? selectedRef : undefined}
+                selected={selected}
+                onClick={(): void => onSelect(page.id)}
+                sx={{
+                  borderRadius: 1.5,
+                  mb: 0.5,
+                  alignItems: "flex-start",
+                  border: 1,
+                  borderColor: selected ? "primary.main" : "transparent",
+                  "&.Mui-selected": {
+                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.09),
                   },
-                  secondary: { noWrap: true },
                 }}
-              />
-            </ListItemButton>
-          );
-        })}
-      </List>
+              >
+                <Typography
+                  variant="caption"
+                  color={selected ? "primary.main" : "text.secondary"}
+                  sx={{ width: 28, pt: 0.25, fontVariantNumeric: "tabular-nums" }}
+                >
+                  {String(ordinalById.get(page.id) ?? 1)}
+                </Typography>
+                <ListItemText
+                  primary={page.title}
+                  secondary={`${String(page.questionCount)} question${
+                    page.questionCount === 1 ? "" : "s"
+                  }`}
+                  slotProps={{
+                    primary: {
+                      noWrap: true,
+                      fontWeight: selected ? 700 : 500,
+                    },
+                    secondary: { noWrap: true },
+                  }}
+                />
+              </ListItemButton>
+            );
+          })}
+        </List>
+      </Box>
     </Stack>
   );
 }
