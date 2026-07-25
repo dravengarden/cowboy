@@ -266,12 +266,12 @@ function TranscriptSkeleton({
   );
 }
 
-// During the first older-page restore, turn otherwise ambiguous unused space
-// into a quiet loading outline. Agent work is deliberately excluded: its real
-// status/thinking/tool rows already communicate progress, and a persistent
-// skeleton falsely reads as stalled data loading. This is a FLEX filler, not
-// guessed history height: it consumes only free viewport space, shrinks
-// one-for-one as real rows grow, and reaches zero before the transcript
+// During the first older-page restore or while a live turn still has a short
+// transcript, turn otherwise ambiguous unused space into a quiet loading
+// outline. Its label describes the data arriving, never the agent's execution
+// state (the real status/thinking/tool rows already do that). This is a FLEX
+// filler, not guessed history height: it consumes only free viewport space,
+// shrinks one-for-one as real rows grow, and reaches zero before the transcript
 // overflows. It therefore never adds scroll range or disturbs iOS' anchor.
 function TranscriptLoadingFill({
   label,
@@ -4029,7 +4029,8 @@ export function Transcript({
                     />
                   </Box>
                 ))}
-              {!desktopNavigation && showHistoryLoadingFill && (
+              {!desktopNavigation &&
+                (showHistoryLoadingFill || working) && (
                 <TranscriptLoadingFill label="Loading conversation data" />
               )}
             </>
