@@ -4,14 +4,12 @@ import {
   EditOutlined,
   ListAltOutlined,
   Search,
-  VerticalAlignBottom,
 } from "@mui/icons-material";
 import {
   alpha,
   Box,
   Button,
   CircularProgress,
-  Drawer,
   IconButton,
   InputAdornment,
   List,
@@ -24,6 +22,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { DetentSheet, MobileSheetDismiss } from "../_shell";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
@@ -718,72 +717,52 @@ export function MobilePageDock({
           </IconButton>
         </Tooltip>
       </Paper>
-      <Drawer
-        anchor="bottom"
+      <DetentSheet
         open={open}
         onClose={(): void => setOpen(false)}
-        PaperProps={{
-          sx: {
-            height: "min(78dvh, 760px)",
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            overflow: "hidden",
-            pb: "env(safe-area-inset-bottom)",
-          },
-        }}
+        ariaLabel="Question pages"
+        frosted
+        footer={<MobileSheetDismiss onClose={(): void => setOpen(false)} />}
+        footerOverlay
       >
         <Box
-          aria-hidden
           sx={{
-            width: 44,
-            height: 5,
-            borderRadius: 99,
-            bgcolor: "text.disabled",
-            mx: "auto",
-            mt: 1.25,
+            height: "min(72dvh, 700px)",
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
           }}
-        />
-        <Stack direction="row" alignItems="baseline" sx={{ px: 2, pt: 1.5 }}>
-          <Typography variant="h6" sx={{ fontWeight: 750 }}>Pages</Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-            {`${String(pages.length)}${hasEarlierHistory ? "+" : ""}`}
-          </Typography>
-        </Stack>
-        {hasEarlierHistory && (
-          <Button
-            disabled={loadingEarlier}
-            startIcon={loadingEarlier
-              ? <CircularProgress size={16} />
-              : <ChevronLeft />}
-            onClick={(): void => void loadOlder(sessionId)}
-            sx={{ mx: 2, mt: 1, minHeight: 40, textTransform: "none" }}
-          >
-            {loadingEarlier ? "Loading…" : "Load earlier questions"}
-          </Button>
-        )}
-        <Box sx={{ flex: 1, minHeight: 0 }}>
-          <PageList
-            pages={pages}
-            currentId={current?.id ?? null}
-            onSelect={(id): void => {
-              navigate(id);
-              setOpen(false);
-            }}
-          />
-        </Box>
-        <Button
-          startIcon={<VerticalAlignBottom />}
-          onClick={(): void => {
-            setOpen(false);
-            const latest = pages.at(-1);
-            if (latest) navigate(latest.id);
-            onCompose("new_page", null, knownPageIds);
-          }}
-          sx={{ mx: 2, mb: 1, minHeight: 48, textTransform: "none" }}
         >
-          Return to latest page and type
-        </Button>
-      </Drawer>
+          <Stack direction="row" alignItems="baseline" sx={{ px: 2, pt: 1.5 }}>
+            <Typography variant="h6" sx={{ fontWeight: 750 }}>Pages</Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+              {`${String(pages.length)}${hasEarlierHistory ? "+" : ""}`}
+            </Typography>
+          </Stack>
+          {hasEarlierHistory && (
+            <Button
+              disabled={loadingEarlier}
+              startIcon={loadingEarlier
+                ? <CircularProgress size={16} />
+                : <ChevronLeft />}
+              onClick={(): void => void loadOlder(sessionId)}
+              sx={{ mx: 2, mt: 1, minHeight: 40, textTransform: "none" }}
+            >
+              {loadingEarlier ? "Loading…" : "Load earlier questions"}
+            </Button>
+          )}
+          <Box sx={{ flex: 1, minHeight: 0 }}>
+            <PageList
+              pages={pages}
+              currentId={current?.id ?? null}
+              onSelect={(id): void => {
+                navigate(id);
+                setOpen(false);
+              }}
+            />
+          </Box>
+        </Box>
+      </DetentSheet>
     </>
   );
 }
