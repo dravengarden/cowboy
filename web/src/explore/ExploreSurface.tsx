@@ -511,13 +511,11 @@ export function ExploreTranscript(
   }, [current?.id, props.desktop, props.sessionId]);
 
   const scrollPageToTop = (): void => {
-    const scroller = rootRef.current?.querySelector<HTMLElement>(
-      `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
-    );
-    if (!scroller) return;
-    // WebKit clamps a negative `scrollTo({ top })` target to zero even though
-    // column-reverse exposes its visual start at a negative scrollTop.
-    scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
+    if (!current) return;
+    // Reuse page navigation's multi-frame positioning handshake. Transcript
+    // also owns this column-reverse scroller, so a one-off scrollTop write can
+    // otherwise lose a race to its deferred derived-row commit on WebKit.
+    navigateExplorePage(props.sessionId, current.id);
     setShowPageTop(false);
   };
 
