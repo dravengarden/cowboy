@@ -822,6 +822,7 @@ export function MobilePageDock({
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
+  const closePageDirectory = useCallback((): void => setOpen(false), []);
 
   const goPrevious = (): void => {
     if (previous) {
@@ -1049,7 +1050,7 @@ export function MobilePageDock({
       </Paper>
       <DetentSheet
         open={open}
-        onClose={(): void => setOpen(false)}
+        onClose={closePageDirectory}
         ariaLabel="Question pages"
         frosted
       >
@@ -1101,7 +1102,7 @@ export function MobilePageDock({
               hasEarlier={hasEarlierHistory}
               loadingEarlier={loadingEarlier}
               onReachStart={(): void => void loadOlder(sessionId)}
-              onDismiss={(): void => setOpen(false)}
+              onDismiss={closePageDirectory}
               onSelect={(id): void => {
                 navigate(id);
                 setOpen(false);
