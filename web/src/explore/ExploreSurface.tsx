@@ -470,7 +470,8 @@ function PageList({
             <Box
               ref={startSentinelRef}
               aria-hidden
-              sx={{ height: 1, pointerEvents: "none" }}
+              // MUI's sizing transform interprets numeric 1 as 100%.
+              sx={{ height: "1px", pointerEvents: "none" }}
             />
           )}
           {filtered.map((page) => {
