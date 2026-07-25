@@ -3166,10 +3166,10 @@ export function Transcript({
   // - Treat user intent as a separate signal: a wheel / arrow key moving AWAY
   //   from the bottom, or a touchstart, means "I am leaving the bottom" — set
   //   stick=false *immediately*, before any subsequent programmatic scroll can
-  //   confuse us. Bottom-bound wheel/key repeat is ignored so its tail can't
-  //   undo the scroll listener's automatic re-enable at the boundary.
-  // - scroll-event only re-enables stick when the resulting position is
-  //   actually at the bottom (the user manually scrolled all the way back).
+  //   confuse us. Bottom-bound wheel/key repeat is ignored because reaching the
+  //   boundary is navigation, not a request to change follow intent.
+  // - Reaching the bottom never changes follow intent. Once detached, only the
+  //   explicit composer follow action re-enables sticky mode.
   // - Auto-snap on new items uses the **`stick` value at the time of the
   //   commit** — i.e. via a ref so we don't re-render to keep it.
   // - The on/off state is mirrored to the per-session stickyStore so the
@@ -3268,18 +3268,7 @@ export function Transcript({
   useEffect(() => {
     const el = parentRef.current;
     if (!el) return undefined;
-    // True while a finger is down on the transcript. A scroll-up gesture begins
-    // NEAR the bottom, so the very first scroll events still read `fromBottom <
-    // 24` — which would re-stick the moment after `touchstart` detached, leaving
-    // the toggle stuck "active" all the way up (the reported bug). Gate the
-    // re-stick on this so it only fires once the gesture SETTLES at the bottom.
-    let touching = false;
-    let magneticArmed = false;
     let nativeScrollSettleTimer: number | undefined;
-    const magneticThreshold = (): number => {
-      const lineHeight = Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
-      return Math.max(40, lineHeight * 2);
-    };
     const detach = (): void => {
       cancelHistoryRelease();
       if (stick.current) {
@@ -3316,30 +3305,6 @@ export function Transcript({
         globalThis.clearTimeout(nativeScrollSettleTimer);
       }
       nativeScrollSettleTimer = globalThis.setTimeout(() => {
-        const fromBottom = Math.abs(el.scrollTop);
-        if (!touching && !stick.current && fromBottom <= magneticThreshold()) {
-          // Crossing the final two-line magnetic zone is a single state change:
-          // tactile confirmation, compositor-thread glide, then live following.
-          stick.current = true;
-          setSticky(sessionIdRef.current, true);
-          freezeRef.current.key = null;
-          el.scrollTo({
-            top: 0,
-            behavior: globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
-              ? "auto"
-              : "smooth",
-          });
-          scheduleHistoryRelease();
-          // Keep presentation frozen through the compositor animation. Native
-          // scroll events replace this fallback with the normal settle timer;
-          // the fallback covers engines that omit events for a tiny correction.
-          nativeScrollSettleTimer = globalThis.setTimeout(() => {
-            nativeScrollActiveRef.current = false;
-            setRenderPausedForScroll(false);
-            nativeScrollSettleTimer = undefined;
-          }, 360);
-          return;
-        }
         // Capture first, then hand ownership back to chunk/resize anchoring.
         // The next stream update therefore preserves the exact settled view.
         if (!stick.current) captureAnchor();
@@ -3349,7 +3314,6 @@ export function Transcript({
       }, 240);
     };
     const onTouchStart = (): void => {
-      touching = true;
       // Each new finger gesture is one explicit request opportunity. A page
       // landing while the reader remains near the beginning must not recursively
       // drain the transcript, but the next upward swipe should fetch the next
@@ -3367,9 +3331,6 @@ export function Transcript({
       });
       historyPrefetchArmedRef.current = prefetch.armed;
       if (prefetch.request) requestOlderPageRef.current();
-    };
-    const onTouchEnd = (): void => {
-      touching = false;
     };
     const onWheel = (event: WheelEvent): void => {
       // A wheel/trackpad gesture that continues toward the bottom can still
@@ -3398,9 +3359,6 @@ export function Transcript({
       markNativeScrollActive();
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
-      const insideMagneticZone = !stick.current && fromBottom <= magneticThreshold();
-      if (insideMagneticZone && !magneticArmed) haptic(12);
-      magneticArmed = insideMagneticZone;
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
       if (!stick.current) captureAnchor();
@@ -3501,8 +3459,6 @@ export function Transcript({
     };
     el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
     globalThis.addEventListener(
@@ -3574,8 +3530,6 @@ export function Transcript({
     return () => {
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchend", onTouchEnd);
-      el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener(
         "cowboy:desktop-transcript-nav",
