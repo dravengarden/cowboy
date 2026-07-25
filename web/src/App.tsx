@@ -598,7 +598,20 @@ function SessionList({
         }
     };
     return (
-        <Stack sx={{ height: "100%" }}>
+        <Stack
+            sx={{
+                // DetentSheet keeps trailing clearance for generic overlay
+                // footers. Sessions owns an inner scrolling list, so consume
+                // that clearance here: the list continues behind the floating
+                // Close island instead of ending in a footer-shaped blank band.
+                height: desktop
+                    ? "100%"
+                    : "calc(100% + 76px + env(safe-area-inset-bottom, 0px))",
+                mb: desktop
+                    ? 0
+                    : "calc(-76px - env(safe-area-inset-bottom, 0px))",
+            }}
+        >
             <Box sx={{ p: 1 }}>
                 <Button
                     fullWidth
