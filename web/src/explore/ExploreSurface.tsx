@@ -584,10 +584,6 @@ export function ExploreTranscript(
   const atTail = currentIndex === pages.length - 1;
   const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
-  const currentOrdinal = Math.max(
-    1,
-    total - Math.max(0, pages.length - 1 - currentIndex),
-  );
   const rootRef = useRef<HTMLDivElement>(null);
   const { pageStartId } = useExploreSessionState(props.sessionId);
 
@@ -773,42 +769,6 @@ export function ExploreTranscript(
         </>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {current && (
-          <Box
-            sx={{
-              minHeight: props.desktop
-                ? 40
-                : `calc(40px + ${props.topInset ?? "0px"})`,
-              pt: props.desktop ? 0 : props.topInset,
-              px: { xs: 2, md: 2.5 },
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              borderBottom: 1,
-              borderColor: "divider",
-              flexShrink: 0,
-            }}
-          >
-            {pageIndex.loading && pageIndex.data === null
-              ? (
-                <Skeleton
-                  aria-label="Loading page position"
-                  variant="text"
-                  width="4.5em"
-                  sx={{ fontSize: "0.75rem", flexShrink: 0 }}
-                />
-              )
-              : (
-                <Typography
-                  variant="caption"
-                  color="primary.main"
-                  sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
-                >
-                  {String(currentOrdinal)} / {String(total)}
-                </Typography>
-              )}
-          </Box>
-        )}
         {unresolvedQuestionRoot
           ? (
             <Stack
@@ -837,8 +797,6 @@ export function ExploreTranscript(
             </Stack>
           )
           : (
-            // The Page header already consumes the safe-area/top-bar inset;
-            // do not pass topInset again and duplicate the blank band.
             <Transcript
               desktopNavigation={props.desktop}
               historyPaging="page"
@@ -849,6 +807,7 @@ export function ExploreTranscript(
               cwd={props.cwd}
               loading={props.loading}
               connected={props.connected}
+              topInset={props.topInset}
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}
               visibleItemKeys={visibleItemKeys}
