@@ -234,9 +234,10 @@ export function TurnStatusOverlay({
         display: "flex",
         justifyContent: "center",
         px: 2,
-        // ComposerWorkspace owns the single inter-panel gap. Adding padding
-        // here doubled status -> queue/editor spacing on touch layouts.
-        pb: 0,
+        // This layer is absolutely positioned outside the composer's normal
+        // stack, so it does not receive the container rowGap. Reuse the same
+        // token explicitly to keep status -> queue/editor spacing consistent.
+        pb: "var(--mobile-composer-stack-gap, 8px)",
         pointerEvents: "none",
         zIndex: 3,
       }}

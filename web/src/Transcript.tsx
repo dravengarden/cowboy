@@ -3879,9 +3879,12 @@ export function Transcript({
                     />
                   </Box>
                 ))}
-              {!desktopNavigation && showHistoryLoadingFill && (
+              {!desktopNavigation &&
+                (showHistoryLoadingFill || working) && (
                 <TranscriptLoadingFill
-                  label="Loading conversation"
+                  label={showHistoryLoadingFill
+                    ? "Loading conversation"
+                    : "Agent is working"}
                 />
               )}
             </>
@@ -3904,7 +3907,7 @@ export function Transcript({
           shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
       }
       {paging?.loadingOlder &&
-        (desktopNavigation || !showHistoryLoadingFill) && (
+        (desktopNavigation || (!showHistoryLoadingFill && !working)) && (
         <Box
           sx={{
             position: "absolute",
