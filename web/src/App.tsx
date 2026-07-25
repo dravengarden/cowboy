@@ -56,7 +56,6 @@ import {
     ExpandLess,
     ExpandMore,
     InfoOutlined,
-    ListAltOutlined,
     Menu as MenuIcon,
     MoreVert,
     Schedule,
@@ -370,24 +369,22 @@ function SessionProjectionBadge({
     return (
         <Chip
             size="small"
-            icon={<ListAltOutlined />}
-            label="Page"
+            label="PAGE"
             aria-label="Question page view"
             color="primary"
             sx={{
-                height: "1.5rem",
+                height: "1.65em",
+                minWidth: "4.2em",
                 flexShrink: 0,
                 bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
                 color: "primary.main",
-                fontSize: "0.75rem",
+                fontSize: "0.72em",
                 fontWeight: 700,
-                "& .MuiChip-icon": {
-                    ml: "0.4rem",
-                    mr: "-0.2rem",
-                    fontSize: "1rem",
-                    color: "inherit",
+                letterSpacing: "0.06em",
+                "& .MuiChip-label": {
+                    px: "0.65em",
+                    overflow: "visible",
                 },
-                "& .MuiChip-label": { px: "0.5rem" },
             }}
         />
     );
