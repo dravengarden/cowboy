@@ -196,8 +196,8 @@ function PageList({
   const loadArmedRef = useRef(true);
   const wasLoadingRef = useRef(loadingEarlier);
   const prependAnchorRef = useRef<{
-    id: string;
-    offset: number;
+    scrollHeight: number;
+    scrollTop: number;
     pageCount: number;
   } | null>(null);
   const ordinalById = useMemo(
@@ -218,16 +218,11 @@ function PageList({
     if (!onReachStart) return;
     const list = listRef.current;
     if (list) {
-      const listTop = list.getBoundingClientRect().top;
-      const firstVisible = [...list.querySelectorAll<HTMLElement>("[data-page-id]")]
-        .find((item) => item.getBoundingClientRect().bottom > listTop);
-      if (firstVisible?.dataset["pageId"]) {
-        prependAnchorRef.current = {
-          id: firstVisible.dataset["pageId"],
-          offset: firstVisible.getBoundingClientRect().top - listTop,
-          pageCount: pages.length,
-        };
-      }
+      prependAnchorRef.current = {
+        scrollHeight: list.scrollHeight,
+        scrollTop: list.scrollTop,
+        pageCount: pages.length,
+      };
     }
     onReachStart();
   };
@@ -236,13 +231,11 @@ function PageList({
     const anchor = prependAnchorRef.current;
     const list = listRef.current;
     if (!anchor || !list || pages.length <= anchor.pageCount) return;
-    const item = [...list.querySelectorAll<HTMLElement>("[data-page-id]")]
-      .find((candidate) => candidate.dataset["pageId"] === anchor.id);
-    if (item) {
-      const nextOffset = item.getBoundingClientRect().top -
-        list.getBoundingClientRect().top;
-      list.scrollTop += nextOffset - anchor.offset;
-    }
+    // The page projection may regroup while older events are prepended, so an
+    // item id is not a reliable visual anchor. Preserve the exact viewport by
+    // adding only the newly inserted height to the prior scroll position.
+    list.scrollTop = anchor.scrollTop +
+      Math.max(0, list.scrollHeight - anchor.scrollHeight);
     prependAnchorRef.current = null;
   }, [pages.length]);
 
@@ -326,7 +319,14 @@ function PageList({
           dense={dense}
           onScroll={(event): void => {
             const list = event.currentTarget;
-            const threshold = Math.max(96, list.clientHeight * 0.3);
+            const availableTravel = Math.max(
+              0,
+              list.scrollHeight - list.clientHeight,
+            );
+            const threshold = Math.min(
+              Math.max(32, list.clientHeight * 0.12),
+              Math.max(16, availableTravel * 0.6),
+            );
             if (list.scrollTop > threshold) {
               // A completed prepend remains disarmed while the reader is still
               // at the leading edge. Require a deliberate move away before the
