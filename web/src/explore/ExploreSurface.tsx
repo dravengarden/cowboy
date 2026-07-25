@@ -357,9 +357,7 @@ function PageList({
             overflowY: "auto",
             px: dense ? 0.75 : 1,
             pt: 0.5,
-            pb: onDismiss
-              ? "calc(72px + env(safe-area-inset-bottom, 0px))"
-              : 0.5,
+            pb: 0.5,
             overflowAnchor: "auto",
           }}
         >
