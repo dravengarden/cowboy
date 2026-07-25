@@ -99,12 +99,12 @@ function usePages(
   );
   const transitionPage = pageContainingItemKey(pages, transitionAnchorKey);
   const selectedPageId = transitionPage?.id ?? pageId;
-  const currentIndex = Math.max(
-    0,
-    selectedPageId
-      ? pages.findIndex((page) => page.id === selectedPageId)
-      : pages.length - 1,
-  );
+  const selectedIndex = selectedPageId
+    ? pages.findIndex((page) => page.id === selectedPageId)
+    : -1;
+  const currentIndex = selectedIndex >= 0
+    ? selectedIndex
+    : Math.max(0, pages.length - 1);
   const current = pages[currentIndex] ?? null;
 
   useEffect(() => {
