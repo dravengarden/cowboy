@@ -56,6 +56,7 @@ import {
     ExpandLess,
     ExpandMore,
     InfoOutlined,
+    ListAltOutlined,
     Menu as MenuIcon,
     MoreVert,
     Schedule,
@@ -356,6 +357,38 @@ function ScheduleBadge({ meta }: { meta: SessionMeta }): React.JSX.Element | nul
         <Tooltip title={`定时发送 · ${fireLabel(ms)}（${fireRel(ms)}）`} enterDelay={300}>
             <Schedule sx={{ fontSize: 15, flexShrink: 0, color: "info.main" }} />
         </Tooltip>
+    );
+}
+
+function SessionProjectionBadge({
+    sessionId,
+}: {
+    sessionId: string;
+}): React.JSX.Element | null {
+    const { projection } = useExploreSessionState(sessionId);
+    if (projection !== "explore") return null;
+    return (
+        <Chip
+            size="small"
+            icon={<ListAltOutlined />}
+            label="Pages"
+            color="primary"
+            sx={{
+                height: "1.5rem",
+                flexShrink: 0,
+                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
+                color: "primary.main",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                "& .MuiChip-icon": {
+                    ml: "0.4rem",
+                    mr: "-0.2rem",
+                    fontSize: "1rem",
+                    color: "inherit",
+                },
+                "& .MuiChip-label": { px: "0.5rem" },
+            }}
+        />
     );
 }
 
@@ -722,6 +755,7 @@ function SessionList({
                                             }}
                                         />
                                     )}
+                                    <SessionProjectionBadge sessionId={s.id} />
                                     <AutoResumeBadge meta={s} defaultOn={autoResumeDefault} />
                                     <ScheduleBadge meta={s} />
                                 </Stack>

@@ -3045,21 +3045,16 @@ export function Transcript({
   const [backfillingViewport, setBackfillingViewport] = useState(false);
   const [scrollbackLoading, setScrollbackLoading] = useState(false);
   const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
-  const historyPageLoading = managesScrollHistory &&
-    (backfillingViewport ||
-      scrollbackLoading ||
-      paging?.loadingOlder === true);
   useEffect(() => {
-    if (!historyPageLoading) {
+    if (!backfillingViewport) {
       setShowHistoryLoadingFill(false);
       return undefined;
     }
-    // A history response is often faster than one frame, while decoding and
-    // laying out its large payload is not. Show the reserved-space skeleton
-    // immediately so the upper viewport never reads as a broken blank wall.
+    // Only the initial viewport bootstrap reserves the otherwise-empty reading
+    // area. User-initiated scrollback uses the geometry-neutral overlay below.
     setShowHistoryLoadingFill(true);
     return undefined;
-  }, [historyPageLoading]);
+  }, [backfillingViewport]);
   requestOlderPageRef.current = (): void => {
     if (!managesScrollHistoryRef.current) return;
     if (historyLoadingHideTimerRef.current !== null) {
@@ -3906,23 +3901,43 @@ export function Transcript({
           scroll flow) so it gives feedback without adding height that would
           shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
       }
-      {paging?.loadingOlder &&
-        (desktopNavigation || (!showHistoryLoadingFill && !working)) && (
+      {managesScrollHistory &&
+        !backfillingViewport &&
+        (scrollbackLoading || paging?.loadingOlder === true) && (
         <Box
+          role="status"
+          aria-live="polite"
+          aria-label="Loading earlier messages"
           sx={{
             position: "absolute",
-            top: 8,
+            top: desktopNavigation ? 12 : "max(env(safe-area-inset-top), 12px)",
             left: "50%",
             transform: "translateX(-50%)",
-            zIndex: 2,
+            zIndex: 5,
             display: "flex",
+            alignItems: "center",
+            gap: 1,
+            px: 1.5,
+            minHeight: 34,
+            borderRadius: 999,
+            color: "text.secondary",
+            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.78),
+            border: 1,
+            borderColor: "divider",
+            boxShadow: 2,
+            backdropFilter: "blur(16px) saturate(1.25)",
+            WebkitBackdropFilter: "blur(16px) saturate(1.25)",
+            pointerEvents: "none",
           }}
         >
           <CircularProgress
-            size={16}
+            size={15}
             thickness={5}
-            sx={{ color: "text.disabled" }}
+            color="inherit"
           />
+          <Typography variant="caption" sx={{ fontWeight: 650, whiteSpace: "nowrap" }}>
+            Loading earlier messages
+          </Typography>
         </Box>
       )}
       {

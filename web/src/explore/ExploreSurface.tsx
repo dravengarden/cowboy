@@ -13,7 +13,6 @@ import {
   Box,
   Button,
   CircularProgress,
-  Fab,
   IconButton,
   InputAdornment,
   LinearProgress,
@@ -504,7 +503,6 @@ export function ExploreTranscript(
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
   const rootRef = useRef<HTMLDivElement>(null);
-  const [showPageTop, setShowPageTop] = useState(false);
   const { pageStartId } = useExploreSessionState(props.sessionId);
 
   useLayoutEffect(() => {
@@ -597,48 +595,6 @@ export function ExploreTranscript(
     root.addEventListener("keydown", onKeyDown);
     return () => root.removeEventListener("keydown", onKeyDown);
   }, [currentIndex, pages, props.desktop, select]);
-
-  useEffect(() => {
-    if (props.desktop) return undefined;
-    let frame = 0;
-    let scroller: HTMLElement | null = null;
-    const update = (): void => {
-      if (!scroller) return;
-      const visualStart = scroller.clientHeight - scroller.scrollHeight;
-      setShowPageTop(
-        scroller.scrollTop - visualStart > scroller.clientHeight * 0.75,
-      );
-    };
-    const bind = (): void => {
-      scroller = rootRef.current?.querySelector<HTMLElement>(
-        `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
-      ) ?? null;
-      if (!scroller) {
-        // ExploreTranscript mounts before Transcript commits its scroll node.
-        // Retry instead of silently losing the listener for the page lifetime.
-        frame = requestAnimationFrame(bind);
-        return;
-      }
-      update();
-      scroller.addEventListener("scroll", update, { passive: true });
-    };
-    frame = requestAnimationFrame(bind);
-    return () => {
-      cancelAnimationFrame(frame);
-      scroller?.removeEventListener("scroll", update);
-    };
-  }, [current?.id, props.desktop, props.sessionId]);
-
-  const scrollPageToTop = (): void => {
-    if (!current) return;
-    // Reuse page navigation's multi-frame positioning handshake. Transcript
-    // also owns this column-reverse scroller, so a one-off scrollTop write can
-    // otherwise lose a race to its deferred derived-row commit on WebKit.
-    const pageId = current.id;
-    resolveExplorePageStart(props.sessionId);
-    requestAnimationFrame(() => navigateExplorePage(props.sessionId, pageId));
-    setShowPageTop(false);
-  };
 
   if (!current && !props.loading) {
     return (
@@ -745,32 +701,6 @@ export function ExploreTranscript(
           liveTail={atTail}
           shortContentAtTop
         />
-        {!props.desktop && showPageTop && (
-          <Fab
-            size="small"
-            color="default"
-            aria-label="Back to page top"
-            onClick={scrollPageToTop}
-            sx={{
-              position: "absolute",
-              right: "max(env(safe-area-inset-right), 16px)",
-              bottom: props.bottomInset
-                ? `calc(${props.bottomInset} + 12px)`
-                : 12,
-              width: 42,
-              height: 42,
-              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.82),
-              backdropFilter: "blur(18px) saturate(1.3)",
-              WebkitBackdropFilter: "blur(18px) saturate(1.3)",
-              border: 1,
-              borderColor: "divider",
-              boxShadow: 3,
-              zIndex: 4,
-            }}
-          >
-            <ArrowUpward sx={{ fontSize: "1.25em" }} />
-          </Fab>
-        )}
         {props.desktop && (
           <Stack
             direction="row"
@@ -814,6 +744,7 @@ export function MobilePageDock({
   const { pages, current, currentIndex, navigate } = usePages(sessionId, timeline);
   const pageIndex = useQuestionPageIndex(sessionId, pages.at(-1)?.id);
   const [open, setOpen] = useState(false);
+  const [showPageTop, setShowPageTop] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
     anchorItemKey: string;
     requestedBeforeSeq: number | null;
@@ -834,6 +765,44 @@ export function MobilePageDock({
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
   const closePageDirectory = useCallback((): void => setOpen(false), []);
+
+  useEffect(() => {
+    let frame = 0;
+    let scroller: HTMLElement | null = null;
+    const update = (): void => {
+      if (!scroller) return;
+      const visualStart = scroller.clientHeight - scroller.scrollHeight;
+      setShowPageTop(
+        scroller.scrollTop - visualStart > scroller.clientHeight * 0.75,
+      );
+    };
+    const bind = (): void => {
+      scroller = document.querySelector<HTMLElement>(
+        `[data-transcript-session="${CSS.escape(sessionId)}"]`,
+      );
+      if (!scroller) {
+        frame = requestAnimationFrame(bind);
+        return;
+      }
+      update();
+      scroller.addEventListener("scroll", update, { passive: true });
+    };
+    frame = requestAnimationFrame(bind);
+    return () => {
+      cancelAnimationFrame(frame);
+      scroller?.removeEventListener("scroll", update);
+    };
+  }, [current?.id, sessionId]);
+
+  const scrollPageToTop = (): void => {
+    if (!current) return;
+    // Reuse the page-start handshake so WebKit cannot race this navigation
+    // against Transcript's deferred column-reverse layout.
+    const pageId = current.id;
+    resolveExplorePageStart(sessionId);
+    requestAnimationFrame(() => navigateExplorePage(sessionId, pageId));
+    setShowPageTop(false);
+  };
 
   const goPrevious = (): void => {
     if (previous) {
@@ -1035,29 +1004,55 @@ export function MobilePageDock({
               </Typography>
             )}
         </Button>
-        <Tooltip title={composeOpen ? "Close question editor" : "Open question editor"}>
-          <IconButton
-            color="primary"
-            aria-label={composeOpen ? "Close question editor" : "Open question editor"}
-            aria-pressed={composeOpen}
-            onClick={(): void => onComposeToggle(knownPageIds)}
-            sx={{
-              width: "max(40px, 2.5rem)",
-              height: "max(40px, 2.5rem)",
-              m: 0.25,
-              justifySelf: "end",
-              border: 1,
-              borderColor: "divider",
-              borderRadius: "50%",
-              bgcolor: "action.hover",
-              "&:active": { bgcolor: "action.selected" },
-            }}
-          >
-            {composeOpen
-              ? <Close sx={{ fontSize: "1.25em" }} />
-              : <EditOutlined sx={{ fontSize: "1.25em" }} />}
-          </IconButton>
-        </Tooltip>
+        <Stack
+          direction="row"
+          spacing={0.25}
+          alignItems="center"
+          sx={{ justifySelf: "end" }}
+        >
+          {showPageTop && (
+            <Tooltip title="Back to page top">
+              <IconButton
+                aria-label="Back to page top"
+                onClick={scrollPageToTop}
+                sx={{
+                  width: "max(40px, 2.5rem)",
+                  height: "max(40px, 2.5rem)",
+                  m: 0.25,
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: "50%",
+                  bgcolor: "action.hover",
+                  "&:active": { bgcolor: "action.selected" },
+                }}
+              >
+                <ArrowUpward sx={{ fontSize: "1.25em" }} />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Tooltip title={composeOpen ? "Close question editor" : "Open question editor"}>
+            <IconButton
+              color="primary"
+              aria-label={composeOpen ? "Close question editor" : "Open question editor"}
+              aria-pressed={composeOpen}
+              onClick={(): void => onComposeToggle(knownPageIds)}
+              sx={{
+                width: "max(40px, 2.5rem)",
+                height: "max(40px, 2.5rem)",
+                m: 0.25,
+                border: 1,
+                borderColor: "divider",
+                borderRadius: "50%",
+                bgcolor: "action.hover",
+                "&:active": { bgcolor: "action.selected" },
+              }}
+            >
+              {composeOpen
+                ? <Close sx={{ fontSize: "1.25em" }} />
+                : <EditOutlined sx={{ fontSize: "1.25em" }} />}
+            </IconButton>
+          </Tooltip>
+        </Stack>
       </Paper>
       <DetentSheet
         open={open}
