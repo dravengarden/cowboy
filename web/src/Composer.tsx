@@ -3975,12 +3975,14 @@ function StopConfirmDialog({
 export function AutoScrollAndStop({
   sessionId,
   status,
+  projection = "history",
   dense = false,
   presentation = "icons",
   desktopShortcutActive = false,
 }: {
   sessionId: string;
   status: Status;
+  projection?: TranscriptProjection | undefined;
   dense?: boolean;
   presentation?: "icons" | "desktop-toolbar";
   desktopShortcutActive?: boolean;
@@ -4038,6 +4040,14 @@ export function AutoScrollAndStop({
           color={sticky ? "primary" : "default"}
           onClick={(): void => {
             haptic();
+            if (projection === "explore") {
+              globalThis.dispatchEvent(
+                new CustomEvent("cowboy:explore-current-page-bottom", {
+                  detail: { sessionId },
+                }),
+              );
+              return;
+            }
             if (sticky) setSticky(sessionId, false);
             else requestStickToBottom(sessionId);
           }}
@@ -4145,7 +4155,13 @@ export function SessionControls({
       )}
       {/* Auto-scroll + Stop ride the navbar on MOBILE; desktop puts them in the
           bottom status bar instead (see AppStatusBar), so gate them to touch here. */}
-      {touchInput && <AutoScrollAndStop sessionId={sessionId} status={status} />}
+      {touchInput && (
+        <AutoScrollAndStop
+          sessionId={sessionId}
+          status={status}
+          projection={projection}
+        />
+      )}
       {/* Portal to <body>: SessionControls lives inside the navbar (a low z-index
           stacking context), but the mobile config sheet is a NON-portaled DetentSheet
           (position:fixed + zIndex.modal, rendered inline). Mounted in the navbar it

@@ -94,7 +94,9 @@ export function PermissionOverlay({
         display: "flex",
         justifyContent: "center",
         px: 2,
-        pb: 1,
+        // ComposerWorkspace owns the single inter-panel gap. Keep this
+        // absolutely positioned overlay from contributing a second gap.
+        pb: 0,
         pointerEvents: "none",
         zIndex: 3,
         fontFamily: "var(--cowboy-reading-font, inherit)",

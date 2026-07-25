@@ -3176,6 +3176,8 @@ export function Transcript({
   //   composer's sticky toggle reflects + drives it (it shows active when
   //   stuck, and a tap bumps scrollNonce → we scroll to the bottom below).
   const stick = useRef(true);
+  const workingRef = useRef(working);
+  workingRef.current = working;
   // Transcript is NOT remounted per session (it re-pins via the sessionId
   // effect), so the once-wired scroll listeners would capture a stale
   // sessionId. Read it through a ref that tracks the latest prop.
@@ -3453,6 +3455,23 @@ export function Transcript({
       scheduleHistoryRelease();
       requestStickToBottom(sessionIdRef.current);
     };
+    const onExploreCurrentPageBottom = (rawEvent: Event): void => {
+      const requestedSessionId = (
+        rawEvent as CustomEvent<{ sessionId?: string }>
+      ).detail?.sessionId;
+      if (requestedSessionId !== sessionIdRef.current) return;
+      if (workingRef.current) {
+        // The newest page is actively streaming: preserve History View's
+        // Following toggle semantics.
+        if (stick.current) detach();
+        else followLatest();
+        return;
+      }
+      // A settled or older Explore page is a bounded reading surface. Move to
+      // the end of that page without enabling Following or changing pages.
+      freezeRef.current.key = null;
+      el.scrollTo({ top: 0, behavior: "smooth" });
+    };
     const onDesktopNavigation = (rawEvent: Event): void => {
       const action = (rawEvent as CustomEvent<{ action?: string }>).detail
         ?.action;
@@ -3486,6 +3505,10 @@ export function Transcript({
     el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
+    globalThis.addEventListener(
+      "cowboy:explore-current-page-bottom",
+      onExploreCurrentPageBottom,
+    );
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
     el.addEventListener("keydown", onKeyDown);
@@ -3557,6 +3580,10 @@ export function Transcript({
       el.removeEventListener(
         "cowboy:desktop-transcript-nav",
         onDesktopNavigation,
+      );
+      globalThis.removeEventListener(
+        "cowboy:explore-current-page-bottom",
+        onExploreCurrentPageBottom,
       );
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
