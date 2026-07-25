@@ -460,9 +460,7 @@ function PageList({
             overflowY: "auto",
             px: dense ? 0.75 : 1,
             pt: 0.5,
-            pb: onDismiss
-              ? "calc(84px + env(safe-area-inset-bottom, 0px))"
-              : 0.5,
+            pb: 0.5,
             overflowAnchor: "none",
           }}
         >
@@ -563,16 +561,6 @@ function PageList({
                 </FloatingActionIsland>
               </Box>
             )}
-            <Box
-              sx={{
-                position: "absolute",
-                left: "50%",
-                transform: "translateX(-50%)",
-                pointerEvents: "auto",
-              }}
-            >
-              <MobileSheetDismiss onClose={onDismiss} />
-            </Box>
           </Box>
         )}
       </Box>
@@ -1201,6 +1189,8 @@ export function MobilePageDock({
         ariaLabel="Question pages"
         frosted
         cover
+        footer={<MobileSheetDismiss onClose={closePageDirectory} />}
+        footerOverlay
       >
         <Box
           sx={{
