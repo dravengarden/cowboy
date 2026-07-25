@@ -3193,6 +3193,10 @@ export function Transcript({
   sessionIdRef.current = sessionId;
   const pageIdRef = useRef(pageId);
   pageIdRef.current = pageId;
+  const pageWorkingRef = useRef({
+    key: `${sessionId}:${pageId ?? ""}`,
+    working,
+  });
   const locateTool = useCallback((key: string): void => {
     setSelectedToolKey(null);
     stick.current = false;
@@ -3693,6 +3697,42 @@ export function Transcript({
     raf = requestAnimationFrame(position);
     return () => cancelAnimationFrame(raf);
   }, [managesScrollHistory, pageId, sessionId]);
+
+  // A live Page is allowed to follow only for the duration of its active turn.
+  // As soon as that turn settles, freeze it as an ordinary reading page at its
+  // current position. This also clears the shared highlight state so returning
+  // to History cannot inherit a stale Page-only follow intent.
+  useLayoutEffect(() => {
+    const key = `${sessionId}:${pageId ?? ""}`;
+    const previous = pageWorkingRef.current;
+    pageWorkingRef.current = { key, working };
+    if (
+      managesScrollHistory || previous.key !== key ||
+      !previous.working || working
+    ) return undefined;
+
+    stick.current = false;
+    setSticky(sessionId, false);
+    let raf = 0;
+    let tries = 0;
+    const freezeSettledPage = (): void => {
+      const el = parentRef.current;
+      if (el) {
+        captureFreezeAnchor(el, freezeRef.current);
+        saveTranscriptViewport({
+          sessionId,
+          mode: "page",
+          pageId: pageId ?? null,
+          anchorKey: freezeRef.current.key,
+          anchorOffset: freezeRef.current.top,
+          following: false,
+        });
+      }
+      if (++tries < 5) raf = requestAnimationFrame(freezeSettledPage);
+    };
+    raf = requestAnimationFrame(freezeSettledPage);
+    return () => cancelAnimationFrame(raf);
+  }, [managesScrollHistory, pageId, sessionId, working]);
 
   // After a PRESENTED timeline change. Normally this fires per streamed chunk;
   // while native scrolling is active presentation is frozen, then the latest
