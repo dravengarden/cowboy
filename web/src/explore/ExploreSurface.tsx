@@ -195,6 +195,11 @@ function PageList({
   const listRef = useRef<HTMLUListElement | null>(null);
   const loadArmedRef = useRef(true);
   const wasLoadingRef = useRef(loadingEarlier);
+  const prependAnchorRef = useRef<{
+    id: string;
+    offset: number;
+    pageCount: number;
+  } | null>(null);
   const ordinalById = useMemo(
     () => new Map(pages.map((page, index) => [page.id, firstOrdinal + index])),
     [firstOrdinal, pages],
@@ -208,6 +213,45 @@ function PageList({
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "center" });
   }, [currentId]);
+
+  const requestEarlier = (): void => {
+    if (!onReachStart) return;
+    const list = listRef.current;
+    if (list) {
+      const listTop = list.getBoundingClientRect().top;
+      const firstVisible = [...list.querySelectorAll<HTMLElement>("[data-page-id]")]
+        .find((item) => item.getBoundingClientRect().bottom > listTop);
+      if (firstVisible?.dataset["pageId"]) {
+        prependAnchorRef.current = {
+          id: firstVisible.dataset["pageId"],
+          offset: firstVisible.getBoundingClientRect().top - listTop,
+          pageCount: pages.length,
+        };
+      }
+    }
+    onReachStart();
+  };
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    const list = listRef.current;
+    if (!anchor || !list || pages.length <= anchor.pageCount) return;
+    const item = [...list.querySelectorAll<HTMLElement>("[data-page-id]")]
+      .find((candidate) => candidate.dataset["pageId"] === anchor.id);
+    if (item) {
+      const nextOffset = item.getBoundingClientRect().top -
+        list.getBoundingClientRect().top;
+      list.scrollTop += nextOffset - anchor.offset;
+    }
+    prependAnchorRef.current = null;
+  }, [pages.length]);
+
+  useEffect(() => {
+    const anchor = prependAnchorRef.current;
+    if (!loadingEarlier && anchor && pages.length <= anchor.pageCount) {
+      prependAnchorRef.current = null;
+    }
+  }, [loadingEarlier, pages.length]);
 
   useEffect(() => {
     const completedLoad = wasLoadingRef.current && !loadingEarlier;
@@ -225,7 +269,7 @@ function PageList({
       // itself rather than presenting a pull gesture that cannot physically
       // scroll yet.
       loadArmedRef.current = false;
-      onReachStart?.();
+      requestEarlier();
     });
     return () => cancelAnimationFrame(frame);
   }, [
@@ -295,7 +339,7 @@ function PageList({
               !loadArmedRef.current
             ) return;
             loadArmedRef.current = false;
-            onReachStart?.();
+            requestEarlier();
           }}
           sx={{
             height: "100%",
@@ -309,6 +353,7 @@ function PageList({
             return (
               <ListItemButton
                 key={page.id}
+                data-page-id={page.id}
                 ref={selected ? selectedRef : undefined}
                 selected={selected}
                 onClick={(): void => onSelect(page.id)}
