@@ -277,6 +277,14 @@ function PageList({
         else if (rowBottom > list.scrollTop + list.clientHeight) {
           list.scrollTop = rowBottom - list.clientHeight;
         }
+        const close = list
+          .closest<HTMLElement>('[role="dialog"][aria-label="Question pages"]')
+          ?.querySelector<HTMLElement>('button[aria-label="Close"]');
+        if (close) {
+          const overlap = selected.getBoundingClientRect().bottom -
+            (close.getBoundingClientRect().top - 12);
+          if (overlap > 0) list.scrollTop += overlap;
+        }
       }
       if (onDismiss && selected) {
         positionedForActivationRef.current = true;
@@ -284,7 +292,7 @@ function PageList({
     }
     const frame = window.requestAnimationFrame(updateBottomAffordance);
     return () => window.cancelAnimationFrame(frame);
-  }, [active, currentId, onDismiss, updateBottomAffordance]);
+  }, [active, currentId, filtered.length, onDismiss, updateBottomAffordance]);
 
   useLayoutEffect(() => {
     const frame = window.requestAnimationFrame(updateBottomAffordance);
