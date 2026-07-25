@@ -68,7 +68,7 @@ export const PlanDock = memo(function PlanDock({
         border: 1,
         borderColor: "divider",
         borderRadius: 1.5,
-        mb: 1,
+        mb: desktop ? 1 : 0,
         bgcolor: "background.default",
         overflow: "hidden",
         ...(desktop && {

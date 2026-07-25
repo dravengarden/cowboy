@@ -1141,10 +1141,14 @@ export function ComposerWorkspace({
         // tap — an earlier `inset − 20px` let them reach into the indicator /
         // rounded-corner zone, which read as "hard to tap" on iPad. Floored to 10px
         // off-device.
-        // Match the inter-panel gap (PendingPanel mb: 1 = 8px): the space above
-        // the first pending panel reads as the same "panel spacing" as between
-        // the queue + drafts panels, instead of a tighter xs top.
+        // Mobile owns all vertical rhythm at this container boundary: top
+        // padding and rowGap are the same token, while Plan/Pending cards carry
+        // no private margin. This keeps transcript → Plan → Queue/Drafts →
+        // editor spacing identical as those optional regions mount/unmount.
         pt: 1,
+        display: "flex",
+        flexDirection: "column",
+        rowGap: desktop ? 0 : 1,
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain (tight) gap.
@@ -1306,6 +1310,8 @@ export function ComposerWorkspace({
             overflowY: "auto",
             overscrollBehavior: "contain",
             maxHeight: "40vh",
+            display: "grid",
+            rowGap: 1,
           }}
         >
           {/* Queued prompts: while the agent is busy, messages stack here and
@@ -2947,7 +2953,7 @@ function PendingPanel({
         }
         : {})}
       sx={{
-        mb: 1,
+        mb: desktop ? 1 : 0,
         // The original framed container, KEPT (the user liked it): a soft tinted,
         // rounded, bordered box that groups the rows. Its OUTER edge sits at the
         // composer's content gutter — exactly where the input box's outer border is
