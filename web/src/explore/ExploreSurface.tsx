@@ -15,7 +15,6 @@ import {
   CircularProgress,
   IconButton,
   InputAdornment,
-  LinearProgress,
   List,
   ListItemButton,
   ListItemText,
@@ -210,10 +209,14 @@ function PageList({
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [showEarlierLoading, setShowEarlierLoading] = useState(false);
   const selectedRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
   const startSentinelRef = useRef<HTMLDivElement | null>(null);
   const positionedForActivationRef = useRef(false);
+  const earlierRequestArmedRef = useRef(true);
+  const earlierLoadingShownAtRef = useRef(0);
+  const earlierLoadingHideTimerRef = useRef<number | null>(null);
   const prependAnchorRef = useRef<{
     scrollHeight: number;
     scrollTop: number;
@@ -238,6 +241,9 @@ function PageList({
     setAwayFromBottom(
       list.scrollHeight - list.scrollTop - list.clientHeight > 48,
     );
+    // One upward approach loads one batch. Once prepending has moved the
+    // viewport clear of the boundary, arm the next deliberate approach.
+    if (list.scrollTop > 120) earlierRequestArmedRef.current = true;
   }, [onDismiss]);
 
   useEffect(() => {
@@ -265,7 +271,12 @@ function PageList({
   }, [filtered.length, loadingEarlier, updateBottomAffordance]);
 
   const requestEarlier = useCallback((): void => {
-    if (!onReachStart) return;
+    if (!onReachStart || !earlierRequestArmedRef.current) return;
+    earlierRequestArmedRef.current = false;
+    if (!showEarlierLoading) {
+      earlierLoadingShownAtRef.current = performance.now();
+      setShowEarlierLoading(true);
+    }
     const list = listRef.current;
     if (list) {
       prependAnchorRef.current = {
@@ -275,7 +286,32 @@ function PageList({
       };
     }
     onReachStart();
-  }, [onReachStart, pages.length]);
+  }, [onReachStart, pages.length, showEarlierLoading]);
+
+  useEffect(() => {
+    if (loadingEarlier) {
+      if (!showEarlierLoading) {
+        earlierLoadingShownAtRef.current = performance.now();
+        setShowEarlierLoading(true);
+      }
+      return undefined;
+    }
+    if (!showEarlierLoading) return undefined;
+    const remaining = Math.max(
+      0,
+      420 - (performance.now() - earlierLoadingShownAtRef.current),
+    );
+    earlierLoadingHideTimerRef.current = globalThis.setTimeout(() => {
+      setShowEarlierLoading(false);
+      earlierLoadingHideTimerRef.current = null;
+    }, remaining);
+    return () => {
+      if (earlierLoadingHideTimerRef.current !== null) {
+        globalThis.clearTimeout(earlierLoadingHideTimerRef.current);
+        earlierLoadingHideTimerRef.current = null;
+      }
+    };
+  }, [loadingEarlier, showEarlierLoading]);
 
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
@@ -342,28 +378,42 @@ function PageList({
           position: "relative",
         }}
       >
-        <LinearProgress
-          aria-label={loadingEarlier && !query.trim()
+        <Box
+          role={showEarlierLoading && !query.trim() ? "status" : undefined}
+          aria-live={showEarlierLoading && !query.trim() ? "polite" : undefined}
+          aria-label={showEarlierLoading && !query.trim()
             ? "Loading earlier questions"
             : undefined}
-          aria-hidden={!loadingEarlier || !!query.trim()}
+          aria-hidden={!showEarlierLoading || !!query.trim()}
           sx={{
             position: "absolute",
-            top: 0,
+            top: 8,
             left: "50%",
-            width: dense ? 48 : 64,
             transform: "translateX(-50%)",
-            zIndex: 1,
-            height: 2,
+            zIndex: 4,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            px: 1.5,
+            minHeight: 34,
             borderRadius: 999,
+            color: "text.secondary",
+            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.78),
+            border: 1,
+            borderColor: "divider",
+            boxShadow: 2,
+            backdropFilter: "blur(16px) saturate(1.25)",
+            WebkitBackdropFilter: "blur(16px) saturate(1.25)",
             pointerEvents: "none",
-            // Keep MUI's indeterminate animation mounted between small cursor
-            // pages. Recreating it for every 30 ms request restarts both bars
-            // at frame zero and reads as a flashing/jumping rail on WebKit.
-            opacity: loadingEarlier && !query.trim() ? 0.72 : 0,
+            opacity: showEarlierLoading && !query.trim() ? 1 : 0,
             transition: "opacity 140ms ease",
           }}
-        />
+        >
+          <CircularProgress size={15} thickness={5} color="inherit" />
+          <Typography variant="caption" sx={{ fontWeight: 650, whiteSpace: "nowrap" }}>
+            Loading earlier questions
+          </Typography>
+        </Box>
         <List
           ref={listRef}
           dense={dense}
@@ -373,7 +423,9 @@ function PageList({
             overflowY: "auto",
             px: dense ? 0.75 : 1,
             pt: 0.5,
-            pb: 0.5,
+            pb: onDismiss
+              ? "calc(84px + env(safe-area-inset-bottom, 0px))"
+              : 0.5,
             overflowAnchor: "auto",
           }}
         >

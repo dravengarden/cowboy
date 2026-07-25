@@ -3325,7 +3325,10 @@ export function Transcript({
         detached: true,
         armed: historyPrefetchArmedRef.current,
         fromTop: el.scrollHeight - el.clientHeight - fromBottom,
-        threshold: el.clientHeight * 2,
+        // Begin both the fetch and its geometry-neutral overlay before the
+        // reader reaches the retained boundary. Three viewports gives mobile
+        // radios and WebKit enough lead time without draining history.
+        threshold: el.clientHeight * 3,
       });
       historyPrefetchArmedRef.current = prefetch.armed;
       if (prefetch.request) requestOlderPageRef.current();
@@ -3369,7 +3372,7 @@ export function Transcript({
         detached: !stick.current,
         armed: historyPrefetchArmedRef.current,
         fromTop,
-        threshold: el.clientHeight * 2,
+        threshold: el.clientHeight * 3,
       });
       historyPrefetchArmedRef.current = prefetch.armed;
       if (prefetch.request) {
