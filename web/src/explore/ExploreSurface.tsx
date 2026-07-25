@@ -566,10 +566,17 @@ function PageList({
 export function ExploreTranscript(
   props: ExploreTranscriptProps,
 ): React.JSX.Element {
+  const pagination = useStoreSelector((snapshot) =>
+    snapshot.pagination.get(props.sessionId)
+  );
   const { pages, current, currentIndex, select } = usePages(
     props.sessionId,
     props.timeline,
   );
+  const unresolvedQuestionRoot = current?.questionCount === 0 &&
+    pagination?.reachedStart === false &&
+    pagination.beforeSeq !== null;
+  const requestedRootCursor = useRef<string | null>(null);
   const visibleItemKeys = useMemo(
     () => new Set(current?.itemKeys ?? []),
     [current?.itemKeys],
@@ -583,6 +590,30 @@ export function ExploreTranscript(
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const { pageStartId } = useExploreSessionState(props.sessionId);
+
+  useEffect(() => {
+    if (!unresolvedQuestionRoot) {
+      requestedRootCursor.current = null;
+      return;
+    }
+    if (pagination?.loadingOlder || pagination?.beforeSeq === null) return;
+    const requestKey = `${props.sessionId}:${String(pagination.beforeSeq)}`;
+    if (requestedRootCursor.current === requestKey) return;
+    requestedRootCursor.current = requestKey;
+    // A retained live tail can begin in the middle of the latest answer. Fetch
+    // question-aware history pages until its immutable user-message root is
+    // present; rendering the provisional answer before then produces a false
+    // "Earlier question" page and a large column-reverse blank region.
+    const timer = window.setTimeout(() => {
+      void loadPreviousQuestionPage(props.sessionId);
+    }, 32);
+    return () => window.clearTimeout(timer);
+  }, [
+    pagination?.beforeSeq,
+    pagination?.loadingOlder,
+    props.sessionId,
+    unresolvedQuestionRoot,
+  ]);
 
   useLayoutEffect(() => {
     setExploreAtTail(props.sessionId, atTail);
@@ -776,28 +807,68 @@ export function ExploreTranscript(
                   {String(currentOrdinal)} / {String(total)}
                 </Typography>
               )}
-            <Typography variant="body2" noWrap sx={{ fontWeight: 650 }}>
-              {current.title}
-            </Typography>
+            {unresolvedQuestionRoot
+              ? (
+                <Skeleton
+                  aria-label="Loading question"
+                  variant="text"
+                  width="min(42vw, 18em)"
+                  sx={{ fontSize: "0.875rem" }}
+                />
+              )
+              : (
+                <Typography variant="body2" noWrap sx={{ fontWeight: 650 }}>
+                  {current.title}
+                </Typography>
+              )}
           </Box>
         )}
-        <Transcript
-          desktopNavigation={props.desktop}
-          historyPaging="page"
-          sessionId={props.sessionId}
-          timeline={props.timeline}
-          status={props.status}
-          provider={props.provider}
-          cwd={props.cwd}
-          loading={props.loading}
-          connected={props.connected}
-          topInset={props.topInset}
-          bottomInset={props.bottomInset}
-          onScrollableChange={props.onScrollableChange}
-          visibleItemKeys={visibleItemKeys}
-          liveTail={atTail}
-          shortContentAtTop
-        />
+        {unresolvedQuestionRoot
+          ? (
+            <Stack
+              role="status"
+              aria-label="Loading question history"
+              spacing={2.25}
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                px: { xs: 2, md: 3 },
+                pt: { xs: 3, md: 4 },
+                overflow: "hidden",
+              }}
+            >
+              <Skeleton variant="rounded" width="38%" height="2.75em" sx={{ alignSelf: "flex-end" }} />
+              <Stack spacing={0.75}>
+                <Skeleton variant="text" width="92%" />
+                <Skeleton variant="text" width="74%" />
+                <Skeleton variant="text" width="84%" />
+              </Stack>
+              <Skeleton variant="rounded" width="100%" height="8em" />
+              <Stack spacing={0.75}>
+                <Skeleton variant="text" width="88%" />
+                <Skeleton variant="text" width="68%" />
+              </Stack>
+            </Stack>
+          )
+          : (
+            <Transcript
+              desktopNavigation={props.desktop}
+              historyPaging="page"
+              sessionId={props.sessionId}
+              timeline={props.timeline}
+              status={props.status}
+              provider={props.provider}
+              cwd={props.cwd}
+              loading={props.loading}
+              connected={props.connected}
+              topInset={props.topInset}
+              bottomInset={props.bottomInset}
+              onScrollableChange={props.onScrollableChange}
+              visibleItemKeys={visibleItemKeys}
+              liveTail={atTail}
+              shortContentAtTop
+            />
+          )}
         {props.desktop && (
           <Stack
             direction="row"
