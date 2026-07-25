@@ -308,11 +308,12 @@ function PageList({
           sx={{
             position: "absolute",
             top: 0,
-            left: dense ? 6 : 8,
-            right: dense ? 6 : 8,
+            left: "50%",
+            width: dense ? 48 : 64,
+            transform: "translateX(-50%)",
             zIndex: 1,
             height: 2,
-            borderRadius: 1,
+            borderRadius: 999,
             pointerEvents: "none",
             // Keep MUI's indeterminate animation mounted between small cursor
             // pages. Recreating it for every 30 ms request restarts both bars
@@ -328,6 +329,7 @@ function PageList({
             height: "100%",
             overflowY: "auto",
             px: dense ? 0.75 : 1,
+            py: 0.5,
             overflowAnchor: "auto",
           }}
         >
@@ -348,34 +350,54 @@ function PageList({
                 selected={selected}
                 onClick={(): void => onSelect(page.id)}
                 sx={{
-                  borderRadius: 1.5,
-                  mb: 0.5,
-                  alignItems: "flex-start",
-                  border: 1,
-                  borderColor: selected ? "primary.main" : "transparent",
+                  position: "relative",
+                  minHeight: dense ? 44 : 52,
+                  px: dense ? 1 : 1.25,
+                  py: dense ? 0.625 : 0.875,
+                  mb: 0.25,
+                  borderRadius: 1.25,
+                  alignItems: "center",
+                  transition: "background-color 120ms ease",
                   "&.Mui-selected": {
-                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.09),
+                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
+                  },
+                  "&.Mui-selected::before": {
+                    content: '""',
+                    position: "absolute",
+                    left: 0,
+                    top: dense ? 8 : 10,
+                    bottom: dense ? 8 : 10,
+                    width: 3,
+                    borderRadius: "0 3px 3px 0",
+                    bgcolor: "primary.main",
+                  },
+                  "&:not(.Mui-selected):hover": {
+                    bgcolor: "action.hover",
                   },
                 }}
               >
                 <Typography
                   variant="caption"
                   color={selected ? "primary.main" : "text.secondary"}
-                  sx={{ width: 28, pt: 0.25, fontVariantNumeric: "tabular-nums" }}
+                  sx={{
+                    width: dense ? 30 : 38,
+                    flexShrink: 0,
+                    fontVariantNumeric: "tabular-nums",
+                    lineHeight: 1,
+                    opacity: selected ? 1 : 0.72,
+                  }}
                 >
                   {String(ordinalById.get(page.id) ?? 1)}
                 </Typography>
                 <ListItemText
                   primary={page.title}
-                  secondary={`${String(page.questionCount)} question${
-                    page.questionCount === 1 ? "" : "s"
-                  }`}
+                  sx={{ my: 0, minWidth: 0 }}
                   slotProps={{
                     primary: {
                       noWrap: true,
-                      fontWeight: selected ? 700 : 500,
+                      fontWeight: selected ? 650 : 500,
+                      lineHeight: 1.35,
                     },
-                    secondary: { noWrap: true },
                   }}
                 />
               </ListItemButton>

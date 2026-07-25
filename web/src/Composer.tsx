@@ -1145,10 +1145,11 @@ export function ComposerWorkspace({
         // padding and rowGap are the same token, while Plan/Pending cards carry
         // no private margin. This keeps transcript → Plan → Queue/Drafts →
         // editor spacing identical as those optional regions mount/unmount.
-        pt: 1,
+        "--mobile-composer-stack-gap": "8px",
+        pt: desktop ? 1 : "var(--mobile-composer-stack-gap)",
         display: "flex",
         flexDirection: "column",
-        rowGap: desktop ? 0 : 1,
+        rowGap: desktop ? 0 : "var(--mobile-composer-stack-gap)",
         // Bottom inset only when the composer is the bottom-most element. With
         // the navbar at the bottom it sits below us and owns the home-indicator
         // inset, so we drop to a plain (tight) gap.
@@ -1311,7 +1312,12 @@ export function ComposerWorkspace({
             overscrollBehavior: "contain",
             maxHeight: "40vh",
             display: "grid",
-            rowGap: 1,
+            rowGap: "var(--mobile-composer-stack-gap)",
+            // The outer Composer owns the space before and after this group.
+            // Keep this nested scroller flush so one optional Queue/Draft panel
+            // cannot introduce a different-looking gap above the editor.
+            m: 0,
+            p: 0,
           }}
         >
           {/* Queued prompts: while the agent is busy, messages stack here and
