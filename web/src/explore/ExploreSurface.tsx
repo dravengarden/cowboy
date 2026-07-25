@@ -195,6 +195,7 @@ function PageList({
   loadingEarlier = false,
   onReachStart,
   onDismiss,
+  active = true,
 }: {
   pages: QuestionPage[];
   currentId: string | null;
@@ -205,12 +206,14 @@ function PageList({
   loadingEarlier?: boolean;
   onReachStart?: (() => void) | undefined;
   onDismiss?: (() => void) | undefined;
+  active?: boolean;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const selectedRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
   const startSentinelRef = useRef<HTMLDivElement | null>(null);
+  const positionedForActivationRef = useRef(false);
   const prependAnchorRef = useRef<{
     scrollHeight: number;
     scrollTop: number;
@@ -238,10 +241,23 @@ function PageList({
   }, [onDismiss]);
 
   useEffect(() => {
-    selectedRef.current?.scrollIntoView({ block: "center" });
+    if (!active) {
+      positionedForActivationRef.current = false;
+      return undefined;
+    }
+    // A mobile directory should position its selected row once when the sheet
+    // opens. Older-page fetches can regroup the projection and change the
+    // selected page id; following every such change yanks a user who is
+    // browsing backwards straight back to the newest row.
+    if (!onDismiss || !positionedForActivationRef.current) {
+      selectedRef.current?.scrollIntoView({ block: "center" });
+      if (onDismiss && selectedRef.current) {
+        positionedForActivationRef.current = true;
+      }
+    }
     const frame = window.requestAnimationFrame(updateBottomAffordance);
     return () => window.cancelAnimationFrame(frame);
-  }, [currentId, updateBottomAffordance]);
+  }, [active, currentId, onDismiss, updateBottomAffordance]);
 
   useLayoutEffect(() => {
     const frame = window.requestAnimationFrame(updateBottomAffordance);
@@ -438,19 +454,13 @@ function PageList({
                 position: "absolute",
                 left: "50%",
                 transform: "translateX(-50%)",
+                display: "flex",
+                alignItems: "center",
+                gap: 1.25,
                 pointerEvents: "auto",
               }}
             >
-              <MobileSheetDismiss onClose={onDismiss} />
-            </Box>
-            {awayFromBottom && (
-              <Box
-                sx={{
-                  position: "absolute",
-                  right: 14,
-                  pointerEvents: "auto",
-                }}
-              >
+              {awayFromBottom && (
                 <FloatingActionIsland maxWidth={54}>
                   <IconButton
                     aria-label="Scroll to latest question"
@@ -465,8 +475,9 @@ function PageList({
                     <ArrowDownward sx={{ fontSize: "1.25em" }} />
                   </IconButton>
                 </FloatingActionIsland>
-              </Box>
-            )}
+              )}
+              <MobileSheetDismiss onClose={onDismiss} />
+            </Box>
           </Box>
         )}
       </Box>
@@ -743,7 +754,9 @@ export function ExploreTranscript(
             sx={{
               position: "absolute",
               right: "max(env(safe-area-inset-right), 16px)",
-              bottom: 12,
+              bottom: props.bottomInset
+                ? `calc(${props.bottomInset} + 12px)`
+                : 12,
               width: 42,
               height: 42,
               bgcolor: (theme) => alpha(theme.palette.background.paper, 0.82),
@@ -1094,6 +1107,7 @@ export function MobilePageDock({
           </Stack>
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
+              active={open}
               pages={pages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - pages.length + 1)}
