@@ -7,7 +7,10 @@ import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
-import { createServiceWorkerUpdateCheck } from "./serviceWorkerUpdates";
+import {
+  bundleEntryChanged,
+  createServiceWorkerUpdateCheck,
+} from "./serviceWorkerUpdates";
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
@@ -137,7 +140,28 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
   });
   window.addEventListener("load", () => {
     void navigator.serviceWorker.register("/sw.js").then((reg) => {
-      const check = createServiceWorkerUpdateCheck(() => reg.update());
+      const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
+        'script[type="module"][src]',
+      )?.getAttribute("src") ?? undefined;
+      const check = createServiceWorkerUpdateCheck(async () => {
+        const swUpdate = reg.update();
+        const staleBundle = bundleEntryChanged(
+          loadedEntry,
+          () =>
+            globalThis.fetch(
+              `/?cowboy-bundle-probe=${Date.now()}`,
+              { cache: "no-store" },
+            ),
+        );
+        const [, bundleResult] = await Promise.allSettled([
+          swUpdate,
+          staleBundle,
+        ]);
+        if (bundleResult.status === "fulfilled" && bundleResult.value) {
+          const { conn } = await import("./store");
+          conn.updateAvailable();
+        }
+      });
       const checkForUpdate = (): void => {
         // WKWebView can remain `visible` through an app background/resume, so
         // only suppress checks when it explicitly reports `hidden`.

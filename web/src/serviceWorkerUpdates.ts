@@ -2,6 +2,33 @@ const UPDATE_DEDUPE_MS = 5_000;
 
 export type ServiceWorkerUpdateCheck = () => void;
 
+/** Extract Vite's module entry without depending on a browser DOM parser. */
+export function moduleEntryFromHtml(html: string): string | undefined {
+  for (const match of html.matchAll(/<script\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (!/\btype\s*=\s*["']module["']/i.test(tag)) continue;
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (src) return src;
+  }
+  return undefined;
+}
+
+/**
+ * Detect a resumed stale page by comparing its loaded entry bundle with the
+ * current network index. This is independent of Service Worker controller
+ * lifecycle events, which iOS can omit or turn into a first-time claim.
+ */
+export async function bundleEntryChanged(
+  loadedEntry: string | undefined,
+  fetchIndex: () => Promise<Response>,
+): Promise<boolean> {
+  if (!loadedEntry) return false;
+  const response = await fetchIndex();
+  if (!response.ok) return false;
+  const currentEntry = moduleEntryFromHtml(await response.text());
+  return currentEntry !== undefined && currentEntry !== loadedEntry;
+}
+
 /** Coalesce the burst of lifecycle signals emitted while a window resumes. */
 export function createServiceWorkerUpdateCheck(
   update: () => Promise<unknown>,
@@ -23,4 +50,3 @@ export function createServiceWorkerUpdateCheck(
     });
   };
 }
-

@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { createServiceWorkerUpdateCheck } from "./serviceWorkerUpdates.ts";
+import {
+  bundleEntryChanged,
+  createServiceWorkerUpdateCheck,
+  moduleEntryFromHtml,
+} from "./serviceWorkerUpdates.ts";
 
 function deferred(): {
   promise: Promise<void>;
@@ -53,4 +57,46 @@ Deno.test("failed update checks retry immediately after network recovery", async
   await Promise.resolve();
   check();
   assertEquals(calls, 2);
+});
+
+Deno.test("module entry extraction tolerates generated attribute order", () => {
+  assertEquals(
+    moduleEntryFromHtml(
+      `<script crossorigin src="/assets/index-new.js" type="module"></script>`,
+    ),
+    "/assets/index-new.js",
+  );
+  assertEquals(
+    moduleEntryFromHtml(
+      `<script type='module' defer src='./assets/index-other.js'></script>`,
+    ),
+    "./assets/index-other.js",
+  );
+});
+
+Deno.test("bundle entry probe detects a stale resumed page", async () => {
+  assertEquals(
+    await bundleEntryChanged(
+      "/assets/index-old.js",
+      () =>
+        Promise.resolve(
+          new Response(
+            `<script type="module" src="/assets/index-new.js"></script>`,
+          ),
+        ),
+    ),
+    true,
+  );
+  assertEquals(
+    await bundleEntryChanged(
+      "/assets/index-new.js",
+      () =>
+        Promise.resolve(
+          new Response(
+            `<script type="module" src="/assets/index-new.js"></script>`,
+          ),
+        ),
+    ),
+    false,
+  );
 });
