@@ -745,7 +745,10 @@ export function ExploreTranscript(
         {current && (
           <Box
             sx={{
-              minHeight: 40,
+              minHeight: props.desktop
+                ? 40
+                : `calc(40px + ${props.topInset ?? "0px"})`,
+              pt: props.desktop ? 0 : props.topInset,
               px: { xs: 2, md: 2.5 },
               display: "flex",
               alignItems: "center",
