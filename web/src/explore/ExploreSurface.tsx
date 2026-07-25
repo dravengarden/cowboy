@@ -17,6 +17,7 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  Paper,
   Stack,
   TextField,
   Tooltip,
@@ -575,20 +576,24 @@ export function MobilePageDock({
 
   return (
     <>
-      <Box
+      <Paper
         component="nav"
         aria-label="Question pages"
+        variant="outlined"
+        elevation={0}
         sx={{
-          width: "100%",
           height: 52,
-          px: "max(env(safe-area-inset-left), 12px)",
-          pr: "max(env(safe-area-inset-right), 12px)",
+          mx: "max(env(safe-area-inset-left), 12px)",
+          mr: "max(env(safe-area-inset-right), 12px)",
+          mb: 0.75,
+          px: 0.5,
           display: "grid",
           gridTemplateColumns: "1fr auto 1fr",
           alignItems: "center",
-          borderTop: 1,
           borderColor: "divider",
-          bgcolor: "background.default",
+          borderRadius: 2,
+          overflow: "hidden",
+          bgcolor: "transparent",
         }}
       >
         <Stack direction="row" sx={{ justifySelf: "start" }}>
@@ -667,7 +672,7 @@ export function MobilePageDock({
             <EditOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
-      </Box>
+      </Paper>
       <Drawer
         anchor="bottom"
         open={open}
