@@ -85,8 +85,13 @@ export function useComposerDraftController(
     // ComposerEditor is intentionally uncontrolled. Clearing React state alone
     // would leave its document visible and feeding `value` back would break IME.
     editorRef.current?.clear();
-    setText("");
+    textRef.current = "";
+    setTextState("");
     setAttachments([]);
+    // Page View can intentionally unmount the composer immediately after send.
+    // Persist the cleared value synchronously so a later remount cannot restore
+    // the pre-send draft before React's effects get a chance to run.
+    setDraft(sessionId, { text: "", attachments: [] });
   };
 
   const sendable = text.trim().length > 0 || attachments.length > 0;

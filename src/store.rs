@@ -467,6 +467,8 @@ impl Store {
              WHERE payload->>'kind' = 'update' \
                AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+               AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                   NOT IN ('/compact', '/compress') \
                AND previous_update IS DISTINCT FROM 'user_message_chunk'",
         )
         .bind(session_id)
@@ -515,6 +517,8 @@ impl Store {
                WHERE payload->>'kind' = 'update' \
                  AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                  AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                     NOT IN ('/compact', '/compress') \
                  AND previous_update IS DISTINCT FROM 'user_message_chunk')",
         )
         .bind(session_id)
@@ -543,6 +547,8 @@ impl Store {
              WHERE payload->>'kind' = 'update' \
                AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
                AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+               AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                   NOT IN ('/compact', '/compress') \
                AND previous_update IS DISTINCT FROM 'user_message_chunk'",
         )
         .bind(session_id)

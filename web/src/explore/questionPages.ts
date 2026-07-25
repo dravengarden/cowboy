@@ -18,6 +18,12 @@ function messageText(item: RenderItem): string {
     .trim();
 }
 
+function isContextManagementCommand(item: RenderItem): boolean {
+  if (item.kind !== "message" || item.role !== "user") return false;
+  const text = messageText(item);
+  return text === "/compact" || text === "/compress";
+}
+
 export function questionTitle(item: RenderItem, ordinal: number): string {
   const text = messageText(item)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
@@ -42,7 +48,7 @@ export function deriveQuestionPages(items: RenderItem[]): QuestionPage[] {
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
     const beginsPage = item.kind === "message" && item.role === "user" &&
-      item.autoResumed !== true;
+      item.autoResumed !== true && !isContextManagementCommand(item);
 
     if (beginsPage) {
       if (current) {

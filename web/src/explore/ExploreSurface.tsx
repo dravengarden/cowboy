@@ -80,10 +80,14 @@ function usePages(
     pendingFollowUp,
     transitionAnchorKey,
   } = useExploreSessionState(sessionId);
-  const basePages = useMemo(
-    () => deriveQuestionPages(derive(timeline)),
-    [timeline],
-  );
+  const basePages = useMemo(() => {
+    const derived = deriveQuestionPages(derive(timeline));
+    const rooted = derived.filter((page) => page.questionCount > 0);
+    // A bounded history window may begin with lifecycle events whose question
+    // root is older. Once a real root is present, that provisional projection
+    // must not become a separately navigable Page View page.
+    return rooted.length > 0 ? rooted : derived;
+  }, [timeline]);
   useEffect(() => {
     if (pendingFollowUp) {
       resolveExploreFollowUp(sessionId, basePages.map((page) => page.id));
@@ -585,7 +589,7 @@ export function MobilePageDock({
           height: 52,
           mx: "max(env(safe-area-inset-left), 12px)",
           mr: "max(env(safe-area-inset-right), 12px)",
-          mt: 0.75,
+          mt: 1.5,
           mb: 0.75,
           px: 0.5,
           display: "grid",
@@ -617,7 +621,7 @@ export function MobilePageDock({
                       m: 0.25,
                       border: 1,
                       borderColor: "divider",
-                      borderRadius: 1.25,
+                      borderRadius: "50%",
                       bgcolor: "action.hover",
                       "&:active": { bgcolor: "action.selected" },
                       "&.Mui-disabled": {
@@ -644,7 +648,7 @@ export function MobilePageDock({
                       m: 0.25,
                       border: 1,
                       borderColor: "divider",
-                      borderRadius: 1.25,
+                      borderRadius: "50%",
                       bgcolor: "action.hover",
                       "&:active": { bgcolor: "action.selected" },
                       "&.Mui-disabled": {
@@ -670,7 +674,7 @@ export function MobilePageDock({
             px: 1.25,
             border: 1,
             borderColor: "divider",
-            borderRadius: 1.25,
+            borderRadius: 20,
             bgcolor: "action.hover",
             textTransform: "none",
             color: "text.primary",
@@ -705,7 +709,7 @@ export function MobilePageDock({
               justifySelf: "end",
               border: 1,
               borderColor: "divider",
-              borderRadius: 1.25,
+              borderRadius: "50%",
               bgcolor: "action.hover",
               "&:active": { bgcolor: "action.selected" },
             }}

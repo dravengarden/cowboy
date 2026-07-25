@@ -63,6 +63,11 @@ fn is_human_question_chunk(envelope: &Envelope) -> bool {
                 == Some("user_message_chunk")
                 && update.get("autoResumed").and_then(serde_json::Value::as_bool)
                     != Some(true)
+                && !matches!(
+                    update.pointer("/content/text").and_then(serde_json::Value::as_str)
+                        .map(str::trim),
+                    Some("/compact" | "/compress")
+                )
     )
 }
 
@@ -4493,6 +4498,36 @@ mod confirm_hold_tests {
         );
         assert_eq!(cursor, None);
         assert!(reached_start);
+    }
+
+    #[test]
+    fn context_management_commands_are_not_question_pages() {
+        let hub = hub_with_session("question-commands");
+        for text in ["first question", "/compact", "second question"] {
+            hub.push(
+                "question-commands",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "user_message_chunk",
+                        "content": {"text": text},
+                    }),
+                },
+            );
+            hub.push(
+                "question-commands",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"text": "response"},
+                    }),
+                },
+            );
+        }
+
+        assert_eq!(
+            hub.question_page_count("question-commands"),
+            Some((2, true))
+        );
     }
 
     #[tokio::test]
