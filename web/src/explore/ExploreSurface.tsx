@@ -300,21 +300,27 @@ function PageList({
           position: "relative",
         }}
       >
-        {loadingEarlier && !query.trim() && (
-          <LinearProgress
-            aria-label="Loading earlier questions"
-            sx={{
-              position: "absolute",
-              top: 0,
-              left: dense ? 6 : 8,
-              right: dense ? 6 : 8,
-              zIndex: 1,
-              height: 2,
-              borderRadius: 1,
-              pointerEvents: "none",
-            }}
-          />
-        )}
+        <LinearProgress
+          aria-label={loadingEarlier && !query.trim()
+            ? "Loading earlier questions"
+            : undefined}
+          aria-hidden={!loadingEarlier || !!query.trim()}
+          sx={{
+            position: "absolute",
+            top: 0,
+            left: dense ? 6 : 8,
+            right: dense ? 6 : 8,
+            zIndex: 1,
+            height: 2,
+            borderRadius: 1,
+            pointerEvents: "none",
+            // Keep MUI's indeterminate animation mounted between small cursor
+            // pages. Recreating it for every 30 ms request restarts both bars
+            // at frame zero and reads as a flashing/jumping rail on WebKit.
+            opacity: loadingEarlier && !query.trim() ? 0.72 : 0,
+            transition: "opacity 140ms ease",
+          }}
+        />
         <List
           ref={listRef}
           dense={dense}
