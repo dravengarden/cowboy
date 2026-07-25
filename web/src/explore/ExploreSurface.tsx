@@ -807,20 +807,6 @@ export function ExploreTranscript(
                   {String(currentOrdinal)} / {String(total)}
                 </Typography>
               )}
-            {unresolvedQuestionRoot
-              ? (
-                <Skeleton
-                  aria-label="Loading question"
-                  variant="text"
-                  width="min(42vw, 18em)"
-                  sx={{ fontSize: "0.875rem" }}
-                />
-              )
-              : (
-                <Typography variant="body2" noWrap sx={{ fontWeight: 650 }}>
-                  {current.title}
-                </Typography>
-              )}
           </Box>
         )}
         {unresolvedQuestionRoot
@@ -851,6 +837,8 @@ export function ExploreTranscript(
             </Stack>
           )
           : (
+            // The Page header already consumes the safe-area/top-bar inset;
+            // do not pass topInset again and duplicate the blank band.
             <Transcript
               desktopNavigation={props.desktop}
               historyPaging="page"
@@ -861,7 +849,6 @@ export function ExploreTranscript(
               cwd={props.cwd}
               loading={props.loading}
               connected={props.connected}
-              topInset={props.topInset}
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}
               visibleItemKeys={visibleItemKeys}
