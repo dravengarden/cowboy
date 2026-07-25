@@ -585,6 +585,7 @@ export function MobilePageDock({
           height: 52,
           mx: "max(env(safe-area-inset-left), 12px)",
           mr: "max(env(safe-area-inset-right), 12px)",
+          mt: 0.75,
           mb: 0.75,
           px: 0.5,
           display: "grid",
@@ -610,11 +611,24 @@ export function MobilePageDock({
                       : "Previous page"}
                     disabled={(!previous && !hasEarlierHistory) || loadingPrevious}
                     onClick={goPrevious}
-                    sx={{ width: 44, height: 44 }}
+                    sx={{
+                      width: 40,
+                      height: 40,
+                      m: 0.25,
+                      border: 1,
+                      borderColor: "divider",
+                      borderRadius: 1.25,
+                      bgcolor: "action.hover",
+                      "&:active": { bgcolor: "action.selected" },
+                      "&.Mui-disabled": {
+                        borderColor: "transparent",
+                        bgcolor: "transparent",
+                      },
+                    }}
                   >
                     {loadingPrevious
-                      ? <CircularProgress size={17} />
-                      : <ChevronLeft fontSize="small" />}
+                      ? <CircularProgress size="1.0625rem" />
+                      : <ChevronLeft sx={{ fontSize: "1.25rem" }} />}
                   </IconButton>
                 </span>
               </Tooltip>
@@ -624,9 +638,22 @@ export function MobilePageDock({
                     aria-label="Next page"
                     disabled={!next}
                     onClick={(): void => next && navigate(next.id)}
-                    sx={{ width: 44, height: 44 }}
+                    sx={{
+                      width: 40,
+                      height: 40,
+                      m: 0.25,
+                      border: 1,
+                      borderColor: "divider",
+                      borderRadius: 1.25,
+                      bgcolor: "action.hover",
+                      "&:active": { bgcolor: "action.selected" },
+                      "&.Mui-disabled": {
+                        borderColor: "transparent",
+                        bgcolor: "transparent",
+                      },
+                    }}
                   >
-                    <ChevronRight fontSize="small" />
+                    <ChevronRight sx={{ fontSize: "1.25rem" }} />
                   </IconButton>
                 </span>
               </Tooltip>
@@ -636,14 +663,18 @@ export function MobilePageDock({
         <Button
           aria-label="Open question pages"
           onClick={(): void => setOpen(true)}
-          startIcon={<ListAltOutlined fontSize="small" />}
+          startIcon={<ListAltOutlined sx={{ fontSize: "1.25rem" }} />}
           sx={{
             minWidth: 92,
-            height: 44,
-            px: 1,
-            borderRadius: 1.5,
+            height: 40,
+            px: 1.25,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1.25,
+            bgcolor: "action.hover",
             textTransform: "none",
             color: "text.primary",
+            "&:active": { bgcolor: "action.selected" },
           }}
         >
           <Typography
@@ -667,9 +698,19 @@ export function MobilePageDock({
               if (latest) navigate(latest.id);
               onCompose("new_page", null, knownPageIds);
             }}
-            sx={{ width: 44, height: 44, justifySelf: "end" }}
+            sx={{
+              width: 40,
+              height: 40,
+              m: 0.25,
+              justifySelf: "end",
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1.25,
+              bgcolor: "action.hover",
+              "&:active": { bgcolor: "action.selected" },
+            }}
           >
-            <EditOutlined fontSize="small" />
+            <EditOutlined sx={{ fontSize: "1.25rem" }} />
           </IconButton>
         </Tooltip>
       </Paper>
