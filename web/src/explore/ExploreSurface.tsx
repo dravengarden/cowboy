@@ -515,10 +515,10 @@ export function ExploreTranscript(
       `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
     );
     if (!scroller) return;
-    scroller.scrollTo({
-      top: scroller.clientHeight - scroller.scrollHeight,
-      behavior: "smooth",
-    });
+    // WebKit clamps a negative `scrollTo({ top })` target to zero even though
+    // column-reverse exposes its visual start at a negative scrollTop.
+    scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
+    setShowPageTop(false);
   };
 
   if (!current && !props.loading) {
