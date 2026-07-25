@@ -17,6 +17,7 @@ import {
   ListItemButton,
   ListItemText,
   Paper,
+  Skeleton,
   Stack,
   TextField,
   Tooltip,
@@ -49,6 +50,37 @@ import {
 } from "./questionPages";
 
 const EMPTY_TIMELINE: Envelope[] = [];
+
+function useQuestionPageIndex(
+  sessionId: string,
+  revisionKey: string | undefined,
+): { total: number; exact: boolean } | null {
+  const [pageIndex, setPageIndex] = useState<{
+    total: number;
+    exact: boolean;
+  } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/question-pages`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`question pages: ${String(response.status)}`);
+        }
+        return response.json() as Promise<{ total: number; exact: boolean }>;
+      })
+      .then(setPageIndex)
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("Failed to load exact question page count", error);
+        }
+      });
+    return () => controller.abort();
+  }, [sessionId, revisionKey]);
+  return pageIndex;
+}
 
 export interface ExploreTranscriptProps {
   sessionId: string;
@@ -129,14 +161,29 @@ function PageList({
   currentId,
   onSelect,
   dense = false,
+  firstOrdinal = 1,
+  hasEarlier = false,
+  loadingEarlier = false,
+  onReachStart,
 }: {
   pages: QuestionPage[];
   currentId: string | null;
   onSelect: (id: string) => void;
   dense?: boolean;
+  firstOrdinal?: number;
+  hasEarlier?: boolean;
+  loadingEarlier?: boolean;
+  onReachStart?: (() => void) | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const selectedRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const loadArmedRef = useRef(true);
+  const wasLoadingRef = useRef(loadingEarlier);
+  const ordinalById = useMemo(
+    () => new Map(pages.map((page, index) => [page.id, firstOrdinal + index])),
+    [firstOrdinal, pages],
+  );
   const filtered = query.trim()
     ? pages.filter((page) =>
       page.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
@@ -146,6 +193,33 @@ function PageList({
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "center" });
   }, [currentId]);
+
+  useEffect(() => {
+    if (wasLoadingRef.current && !loadingEarlier) {
+      loadArmedRef.current = true;
+    }
+    wasLoadingRef.current = loadingEarlier;
+    if (query.trim() || !hasEarlier || loadingEarlier) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const list = listRef.current;
+      if (
+        !list || list.scrollHeight > list.clientHeight + 1 ||
+        !loadArmedRef.current
+      ) return;
+      // Like Transcript's viewport backfill: a short directory should fill
+      // itself rather than presenting a pull gesture that cannot physically
+      // scroll yet.
+      loadArmedRef.current = false;
+      onReachStart?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    hasEarlier,
+    loadingEarlier,
+    onReachStart,
+    pages.length,
+    query,
+  ]);
 
   return (
     <Stack sx={{ minHeight: 0, height: "100%" }}>
@@ -167,10 +241,41 @@ function PageList({
         sx={{ m: dense ? 1 : 2, mb: 1 }}
       />
       <List
+        ref={listRef}
         dense={dense}
-        sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: dense ? 0.75 : 1 }}
+        onScroll={(event): void => {
+          const list = event.currentTarget;
+          const threshold = Math.max(96, list.clientHeight * 0.3);
+          if (list.scrollTop > threshold) {
+            loadArmedRef.current = true;
+            return;
+          }
+          if (
+            query.trim() || !hasEarlier || loadingEarlier ||
+            !loadArmedRef.current
+          ) return;
+          loadArmedRef.current = false;
+          onReachStart?.();
+        }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          px: dense ? 0.75 : 1,
+          overflowAnchor: "auto",
+        }}
       >
-        {filtered.map((page, index) => {
+        {loadingEarlier && !query.trim() && (
+          <Stack
+            aria-label="Loading earlier questions"
+            spacing={0.75}
+            sx={{ px: 1.5, py: 1 }}
+          >
+            <Skeleton variant="text" width="58%" />
+            <Skeleton variant="text" width="38%" />
+          </Stack>
+        )}
+        {filtered.map((page) => {
           const selected = page.id === currentId;
           return (
             <ListItemButton
@@ -194,7 +299,7 @@ function PageList({
                 color={selected ? "primary.main" : "text.secondary"}
                 sx={{ width: 28, pt: 0.25, fontVariantNumeric: "tabular-nums" }}
               >
-                {String(index + 1)}
+                {String(ordinalById.get(page.id) ?? 1)}
               </Typography>
               <ListItemText
                 primary={page.title}
@@ -229,6 +334,12 @@ export function ExploreTranscript(
     [current?.itemKeys],
   );
   const atTail = currentIndex === pages.length - 1;
+  const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
+  const total = Math.max(pages.length, pageIndex?.total ?? 0);
+  const currentOrdinal = Math.max(
+    1,
+    total - Math.max(0, pages.length - 1 - currentIndex),
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const { pageStartId } = useExploreSessionState(props.sessionId);
 
@@ -368,6 +479,7 @@ export function ExploreTranscript(
               dense
               pages={pages}
               currentId={current?.id ?? null}
+              firstOrdinal={Math.max(1, total - pages.length + 1)}
               onSelect={select}
             />
           </Box>
@@ -392,7 +504,7 @@ export function ExploreTranscript(
               color="primary.main"
               sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
             >
-              {String(currentIndex + 1)} / {String(pages.length)}
+              {String(currentOrdinal)} / {String(total)}
             </Typography>
             <Typography variant="body2" noWrap sx={{ fontWeight: 650 }}>
               {current.title}
@@ -457,9 +569,7 @@ export function MobilePageDock({
     snapshot.pagination.get(sessionId)
   );
   const { pages, current, currentIndex, navigate } = usePages(sessionId, timeline);
-  const [pageIndex, setPageIndex] = useState<{ total: number; exact: boolean } | null>(
-    null,
-  );
+  const pageIndex = useQuestionPageIndex(sessionId, pages.at(-1)?.id);
   const [open, setOpen] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
     anchorItemKey: string;
@@ -480,25 +590,6 @@ export function MobilePageDock({
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/question-pages`,
-      { signal: controller.signal },
-    )
-      .then((response) => {
-        if (!response.ok) throw new Error(`question pages: ${String(response.status)}`);
-        return response.json() as Promise<{ total: number; exact: boolean }>;
-      })
-      .then(setPageIndex)
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          console.warn("Failed to load exact question page count", error);
-        }
-      });
-    return () => controller.abort();
-  }, [sessionId, pages.at(-1)?.id]);
 
   const goPrevious = (): void => {
     if (previous) {
@@ -727,25 +818,17 @@ export function MobilePageDock({
           <Stack direction="row" alignItems="baseline" sx={{ px: 2, pt: 1.5 }}>
             <Typography variant="h6" sx={{ fontWeight: 750 }}>Pages</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-              {`${String(pages.length)}${hasEarlierHistory ? "+" : ""}`}
+              {`${String(total)}${pageIndex?.exact === false ? "+" : ""}`}
             </Typography>
           </Stack>
-          {hasEarlierHistory && (
-            <Button
-              disabled={loadingEarlier}
-              startIcon={loadingEarlier
-                ? <CircularProgress size={16} />
-                : <ChevronLeft />}
-              onClick={(): void => void loadOlder(sessionId)}
-              sx={{ mx: 2, mt: 1, minHeight: 40, textTransform: "none" }}
-            >
-              {loadingEarlier ? "Loading…" : "Load earlier questions"}
-            </Button>
-          )}
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
               pages={pages}
               currentId={current?.id ?? null}
+              firstOrdinal={Math.max(1, total - pages.length + 1)}
+              hasEarlier={hasEarlierHistory}
+              loadingEarlier={loadingEarlier}
+              onReachStart={(): void => void loadOlder(sessionId)}
               onSelect={(id): void => {
                 navigate(id);
                 setOpen(false);

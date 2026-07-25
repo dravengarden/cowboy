@@ -2550,28 +2550,6 @@ export function App({
                                 <>
                                     {exploreComposeIntent !== null && (
                                     <>
-                                        <Stack
-                                            direction="row"
-                                            alignItems="center"
-                                            sx={{ px: 1.5, pt: 0.5 }}
-                                        >
-                                            <Typography
-                                                variant="caption"
-                                                sx={{ fontWeight: 750, color: "text.secondary" }}
-                                            >
-                                                {exploreComposeIntent.kind === "follow_up"
-                                                    ? "Follow up"
-                                                    : "New question"}
-                                            </Typography>
-                                            <Box sx={{ flex: 1 }} />
-                                            <IconButton
-                                                aria-label="Close new question"
-                                                onClick={(): void => setExploreComposeIntent(null)}
-                                                size="small"
-                                            >
-                                                <CloseIcon fontSize="small" />
-                                            </IconButton>
-                                        </Stack>
                                         <MobileComposer
                                             key={active.id}
                                             sessionId={active.id}
