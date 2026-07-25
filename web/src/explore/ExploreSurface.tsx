@@ -54,13 +54,23 @@ const EMPTY_TIMELINE: Envelope[] = [];
 function useQuestionPageIndex(
   sessionId: string,
   revisionKey: string | undefined,
-): { total: number; exact: boolean } | null {
-  const [pageIndex, setPageIndex] = useState<{
-    total: number;
-    exact: boolean;
-  } | null>(null);
+): {
+  data: { total: number; exact: boolean } | null;
+  loading: boolean;
+} {
+  const [state, setState] = useState<{
+    data: { total: number; exact: boolean } | null;
+    loading: boolean;
+    sessionId: string;
+  }>({ data: null, loading: true, sessionId });
+  const data = state.sessionId === sessionId ? state.data : null;
   useEffect(() => {
     const controller = new AbortController();
+    setState((current) => ({
+      data: current.sessionId === sessionId ? current.data : null,
+      loading: true,
+      sessionId,
+    }));
     void fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/question-pages`,
       { signal: controller.signal },
@@ -71,15 +81,19 @@ function useQuestionPageIndex(
         }
         return response.json() as Promise<{ total: number; exact: boolean }>;
       })
-      .then(setPageIndex)
+      .then((next) => setState({ data: next, loading: false, sessionId }))
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           console.warn("Failed to load exact question page count", error);
+          setState((current) => ({
+            ...current,
+            loading: false,
+          }));
         }
       });
     return () => controller.abort();
   }, [sessionId, revisionKey]);
-  return pageIndex;
+  return { data, loading: state.loading || state.sessionId !== sessionId };
 }
 
 export interface ExploreTranscriptProps {
@@ -335,7 +349,7 @@ export function ExploreTranscript(
   );
   const atTail = currentIndex === pages.length - 1;
   const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
-  const total = Math.max(pages.length, pageIndex?.total ?? 0);
+  const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
   const currentOrdinal = Math.max(
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
@@ -499,13 +513,24 @@ export function ExploreTranscript(
               flexShrink: 0,
             }}
           >
-            <Typography
-              variant="caption"
-              color="primary.main"
-              sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
-            >
-              {String(currentOrdinal)} / {String(total)}
-            </Typography>
+            {pageIndex.loading && pageIndex.data === null
+              ? (
+                <Skeleton
+                  aria-label="Loading page position"
+                  variant="text"
+                  width="4.5em"
+                  sx={{ fontSize: "0.75rem", flexShrink: 0 }}
+                />
+              )
+              : (
+                <Typography
+                  variant="caption"
+                  color="primary.main"
+                  sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
+                >
+                  {String(currentOrdinal)} / {String(total)}
+                </Typography>
+              )}
             <Typography variant="body2" noWrap sx={{ fontWeight: 650 }}>
               {current.title}
             </Typography>
@@ -585,7 +610,7 @@ export function MobilePageDock({
   const loadingEarlier = pagination?.loadingOlder === true;
   const loadingPrevious = loadingEarlier || pendingPrevious !== null;
   const onlyCompletePage = pages.length <= 1 && !hasEarlierHistory;
-  const total = Math.max(pages.length, pageIndex?.total ?? 0);
+  const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
   const currentOrdinal = Math.max(
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
@@ -668,12 +693,12 @@ export function MobilePageDock({
         variant="outlined"
         elevation={0}
         sx={{
-          height: 52,
+          minHeight: 52,
           mx: "max(env(safe-area-inset-left), 12px)",
           mr: "max(env(safe-area-inset-right), 12px)",
           mt: 1.5,
           mb: 0.75,
-          px: 0.5,
+          px: "0.5em",
           display: "grid",
           gridTemplateColumns: "1fr auto 1fr",
           alignItems: "center",
@@ -698,8 +723,8 @@ export function MobilePageDock({
                     disabled={(!previous && !hasEarlierHistory) || loadingPrevious}
                     onClick={goPrevious}
                     sx={{
-                      width: 40,
-                      height: 40,
+                      width: "max(40px, 2.5rem)",
+                      height: "max(40px, 2.5rem)",
                       m: 0.25,
                       border: 1,
                       borderColor: "divider",
@@ -714,7 +739,7 @@ export function MobilePageDock({
                   >
                     {loadingPrevious
                       ? <CircularProgress size="1.0625rem" />
-                      : <ChevronLeft sx={{ fontSize: "1.25rem" }} />}
+                      : <ChevronLeft sx={{ fontSize: "1.25em" }} />}
                   </IconButton>
                 </span>
               </Tooltip>
@@ -725,8 +750,8 @@ export function MobilePageDock({
                     disabled={!next}
                     onClick={(): void => next && navigate(next.id)}
                     sx={{
-                      width: 40,
-                      height: 40,
+                      width: "max(40px, 2.5rem)",
+                      height: "max(40px, 2.5rem)",
                       m: 0.25,
                       border: 1,
                       borderColor: "divider",
@@ -739,7 +764,7 @@ export function MobilePageDock({
                       },
                     }}
                   >
-                    <ChevronRight sx={{ fontSize: "1.25rem" }} />
+                    <ChevronRight sx={{ fontSize: "1.25em" }} />
                   </IconButton>
                 </span>
               </Tooltip>
@@ -749,31 +774,47 @@ export function MobilePageDock({
         <Button
           aria-label="Open question pages"
           onClick={(): void => setOpen(true)}
-          startIcon={<ListAltOutlined sx={{ fontSize: "1.25rem" }} />}
+          startIcon={<ListAltOutlined />}
           sx={{
-            minWidth: 92,
-            height: 40,
-            px: 1.25,
+            minWidth: "7.25em",
+            minHeight: "max(40px, 2.5rem)",
+            px: "1em",
             border: 1,
             borderColor: "divider",
-            borderRadius: 20,
+            borderRadius: "1.25rem",
             bgcolor: "action.hover",
             textTransform: "none",
             color: "text.primary",
+            fontSize: "1rem",
+            "& .MuiButton-startIcon": { mr: "0.6em" },
+            "& .MuiButton-startIcon > *:nth-of-type(1)": {
+              fontSize: "1.35em",
+            },
             "&:active": { bgcolor: "action.selected" },
           }}
         >
-          <Typography
-            variant="caption"
-            noWrap
-            sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
-          >
-            {pages.length === 0
-              ? "Pages"
-              : `${String(currentOrdinal)} / ${String(total)}${
-                pageIndex?.exact === false ? "+" : ""
-              }`}
-          </Typography>
+          {pageIndex.loading && pageIndex.data === null
+            ? (
+              <Skeleton
+                aria-label="Loading page count"
+                variant="text"
+                width="3.8em"
+                sx={{ fontSize: "0.75em" }}
+              />
+            )
+            : (
+              <Typography
+                variant="caption"
+                noWrap
+                sx={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}
+              >
+                {pages.length === 0
+                  ? "Pages"
+                  : `${String(currentOrdinal)} / ${String(total)}${
+                    pageIndex.data?.exact === false ? "+" : ""
+                  }`}
+              </Typography>
+            )}
         </Button>
         <Tooltip title={composeOpen ? "Close question editor" : "Open question editor"}>
           <IconButton
@@ -782,8 +823,8 @@ export function MobilePageDock({
             aria-pressed={composeOpen}
             onClick={(): void => onComposeToggle(knownPageIds)}
             sx={{
-              width: 40,
-              height: 40,
+              width: "max(40px, 2.5rem)",
+              height: "max(40px, 2.5rem)",
               m: 0.25,
               justifySelf: "end",
               border: 1,
@@ -794,8 +835,8 @@ export function MobilePageDock({
             }}
           >
             {composeOpen
-              ? <Close sx={{ fontSize: "1.25rem" }} />
-              : <EditOutlined sx={{ fontSize: "1.25rem" }} />}
+              ? <Close sx={{ fontSize: "1.25em" }} />
+              : <EditOutlined sx={{ fontSize: "1.25em" }} />}
           </IconButton>
         </Tooltip>
       </Paper>
@@ -817,9 +858,20 @@ export function MobilePageDock({
         >
           <Stack direction="row" alignItems="baseline" sx={{ px: 2, pt: 1.5 }}>
             <Typography variant="h6" sx={{ fontWeight: 750 }}>Pages</Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-              {`${String(total)}${pageIndex?.exact === false ? "+" : ""}`}
-            </Typography>
+            {pageIndex.loading && pageIndex.data === null
+              ? (
+                <Skeleton
+                  aria-label="Loading page count"
+                  variant="text"
+                  width="2.5em"
+                  sx={{ ml: 1, fontSize: "0.75rem" }}
+                />
+              )
+              : (
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                  {`${String(total)}${pageIndex.data?.exact === false ? "+" : ""}`}
+                </Typography>
+              )}
           </Stack>
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
