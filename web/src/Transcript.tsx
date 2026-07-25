@@ -3431,6 +3431,19 @@ export function Transcript({
       freezeRef.current.key = null;
       el.scrollTo({ top: 0, behavior: "smooth" });
     };
+    const onExplorePageStart = (rawEvent: Event): void => {
+      const requestedSessionId = (
+        rawEvent as CustomEvent<{ sessionId?: string }>
+      ).detail?.sessionId;
+      if (requestedSessionId !== sessionIdRef.current) return;
+      // Page navigation is a reading action. Keep Transcript's private follow
+      // intent in sync with the shared sticky store before Explore positions
+      // the question root. Otherwise a live answer immediately pulls the
+      // reader back to the newest token and the first follow-button tap merely
+      // disables that stale intent.
+      detach();
+      freezeRef.current.key = null;
+    };
     const onDesktopNavigation = (rawEvent: Event): void => {
       const action = (rawEvent as CustomEvent<{ action?: string }>).detail
         ?.action;
@@ -3465,6 +3478,10 @@ export function Transcript({
     globalThis.addEventListener(
       "cowboy:explore-current-page-bottom",
       onExploreCurrentPageBottom,
+    );
+    globalThis.addEventListener(
+      "cowboy:explore-page-start",
+      onExplorePageStart,
     );
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
@@ -3539,6 +3556,10 @@ export function Transcript({
       globalThis.removeEventListener(
         "cowboy:explore-current-page-bottom",
         onExploreCurrentPageBottom,
+      );
+      globalThis.removeEventListener(
+        "cowboy:explore-page-start",
+        onExplorePageStart,
       );
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();

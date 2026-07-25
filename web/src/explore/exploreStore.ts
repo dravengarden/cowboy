@@ -35,10 +35,15 @@ function restore(): void {
       Partial<ExploreSessionState>
     >;
     for (const [sessionId, state] of Object.entries(raw)) {
+      const pageId = typeof state.pageId === "string" ? state.pageId : null;
+      const projection = state.projection === "explore" ? "explore" : "history";
       states.set(sessionId, {
-        projection: state.projection === "explore" ? "explore" : "history",
-        pageId: typeof state.pageId === "string" ? state.pageId : null,
-        pageStartId: null,
+        projection,
+        pageId,
+        // A restored Page View is a document, not a chat tail. Reopen at the
+        // question root; otherwise the default sticky transcript position can
+        // land midway through the final answer and hide the question.
+        pageStartId: projection === "explore" ? pageId : null,
         transitionAnchorKey: null,
         pageParents: state.pageParents && typeof state.pageParents === "object"
           ? state.pageParents

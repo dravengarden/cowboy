@@ -45,6 +45,7 @@ import {
   loadPreviousQuestionPage,
   useStoreSelector,
 } from "../store";
+import { setSticky } from "../stickyStore";
 import { Transcript } from "../Transcript";
 import {
   setExplorePage,
@@ -179,8 +180,14 @@ function usePages(
     pages,
     current,
     currentIndex,
-    select: (id: string): void => setExplorePage(sessionId, id),
-    navigate: (id: string): void => navigateExplorePage(sessionId, id),
+    select: (id: string): void => {
+      setSticky(sessionId, false);
+      navigateExplorePage(sessionId, id);
+    },
+    navigate: (id: string): void => {
+      setSticky(sessionId, false);
+      navigateExplorePage(sessionId, id);
+    },
   };
 }
 
@@ -584,6 +591,16 @@ export function ExploreTranscript(
 
   useLayoutEffect(() => {
     if (!current || pageStartId !== current.id) return;
+    // Page navigation is a reading action. Detach before positioning so a live
+    // final page cannot have Transcript's streaming follow loop race this
+    // page-start handshake back to the newest answer token. The shared navbar
+    // button explicitly re-enables follow when the reader wants to catch up.
+    setSticky(props.sessionId, false);
+    globalThis.dispatchEvent(
+      new CustomEvent("cowboy:explore-page-start", {
+        detail: { sessionId: props.sessionId },
+      }),
+    );
     let frame = 0;
     let attempts = 0;
     let positionedFrames = 0;
@@ -827,8 +844,8 @@ export function MobilePageDock({
     requestedBeforeSeq: number | null;
     requestComplete: boolean;
   } | null>(null);
-  const previous = current
-    ? completePageBeforeItem(pages, current.itemKeys.at(-1) ?? "")
+  const previous = currentIndex > 0 && pages[currentIndex - 1]?.questionCount
+    ? pages[currentIndex - 1]
     : undefined;
   const next = pages[currentIndex + 1];
   const knownPageIds = pages.map((page) => page.id);
@@ -890,7 +907,10 @@ export function MobilePageDock({
     // One answer can span several bounded HTTP history pages. Keep loading
     // under this single user action until the preceding question boundary is
     // found, rather than making the reader tap once per transport page.
-    const anchorItemKey = current.itemKeys.at(-1);
+    // The question root is immutable while its answer streams. Using the last
+    // answer item here made this anchor change underneath the pending history
+    // request, which could repeatedly restart navigation and freeze WebKit.
+    const anchorItemKey = current.id;
     if (!anchorItemKey) return;
     setPendingPrevious({
       anchorItemKey,
