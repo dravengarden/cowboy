@@ -5,11 +5,15 @@ server on Mac port `4171`. The project-owned Mac control surface is
 [`tools/cowboysim.sh`](../tools/cowboysim.sh); the generic Codex plugin only
 provides the SSH transport.
 
+The Hawk wrapper uses the Mac's stable Stormbird overlay address by default.
+Override `IOS_SIM_MAC_HOST` only when validating another Mac or an isolated
+bridge.
+
 Install or refresh the helper from the Cowboy checkout on Hawk:
 
 ```bash
-scp tools/cowboysim.sh macbook-air:/tmp/cowboysim.sh.new
-ssh macbook-air 'install -m 0755 /tmp/cowboysim.sh.new "$HOME/cowboy-shell/tools/cowboysim.sh" && rm /tmp/cowboysim.sh.new'
+scp tools/cowboysim.sh dravenchen@100.64.0.2:/tmp/cowboysim.sh.new
+ssh dravenchen@100.64.0.2 'install -m 0755 /tmp/cowboysim.sh.new "$HOME/cowboy-shell/tools/cowboysim.sh" && rm /tmp/cowboysim.sh.new'
 ```
 
 From Hawk, invoke it through the repo wrapper, which resolves the installed

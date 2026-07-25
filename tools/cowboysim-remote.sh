@@ -2,6 +2,10 @@
 # Hawk-side convenience wrapper around the generic iOS Simulator Bridge plugin.
 set -euo pipefail
 
+# Reach the Mac through Stormbird's stable overlay address. Callers can still
+# override this when validating another Mac or an isolated bridge.
+export IOS_SIM_MAC_HOST="${IOS_SIM_MAC_HOST:-dravenchen@100.64.0.2}"
+
 resolver="${IOS_SIM_REMOTE_RESOLVER:-}"
 if [ -z "$resolver" ]; then
   for candidate in \
