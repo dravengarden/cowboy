@@ -515,7 +515,9 @@ export function ExploreTranscript(
     // Reuse page navigation's multi-frame positioning handshake. Transcript
     // also owns this column-reverse scroller, so a one-off scrollTop write can
     // otherwise lose a race to its deferred derived-row commit on WebKit.
-    navigateExplorePage(props.sessionId, current.id);
+    const pageId = current.id;
+    resolveExplorePageStart(props.sessionId);
+    requestAnimationFrame(() => navigateExplorePage(props.sessionId, pageId));
     setShowPageTop(false);
   };
 
