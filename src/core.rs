@@ -1678,6 +1678,34 @@ impl Hub {
         })
     }
 
+    #[must_use]
+    pub fn question_page_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Option<(Vec<Envelope>, Option<u64>, bool)> {
+        let sessions = self.inner.sessions.lock();
+        sessions.get(session_id).map(|session| {
+            let end = session.log.partition_point(|event| event.seq < before_seq);
+            let roots = session.log[..end]
+                .iter()
+                .enumerate()
+                .filter_map(|(index, event)| {
+                    let previous_was_user =
+                        index > 0 && is_user_message_chunk(&session.log[index - 1]);
+                    (is_human_question_chunk(event) && !previous_was_user).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let Some(&root_index) = roots.last() else {
+                return (Vec::new(), None, true);
+            };
+            let events = session.log[root_index..end].to_vec();
+            let reached_start = roots.len() == 1 && session.reached_start;
+            let next_before_seq = (!reached_start).then_some(session.log[root_index].seq);
+            (events, next_before_seq, reached_start)
+        })
+    }
+
     /// Count question-page roots in the retained log. Consecutive ACP content
     /// blocks belong to one rich prompt, matching the frontend derivation.
     #[must_use]
@@ -4435,6 +4463,36 @@ mod confirm_hold_tests {
         assert_eq!(middle[0].seq, 1);
         assert!(!reached_start);
         assert!(next.unwrap() < 2);
+    }
+
+    #[test]
+    fn question_history_returns_one_complete_prompt_rooted_page() {
+        let hub = hub_with_session("question-page");
+        for (kind, text) in [
+            ("user_message_chunk", "first question"),
+            ("agent_message_chunk", "first answer"),
+            ("tool_call_update", "first tool"),
+            ("user_message_chunk", "second question"),
+            ("agent_message_chunk", "second answer"),
+        ] {
+            hub.push(
+                "question-page",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": kind,
+                        "content": {"text": text},
+                    }),
+                },
+            );
+        }
+
+        let (page, cursor, reached_start) = hub.question_page_before("question-page", 3).unwrap();
+        assert_eq!(
+            page.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(cursor, None);
+        assert!(reached_start);
     }
 
     #[tokio::test]

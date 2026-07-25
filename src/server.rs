@@ -1763,6 +1763,8 @@ fn focused_session_bootstrap(hub: &Hub, session_id: &str) -> Option<Vec<Outbound
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
     before_seq: u64,
+    #[serde(default)]
+    question_page: bool,
 }
 
 /// One cursor-addressed, event- and byte-bounded page of a session's history.
@@ -1782,14 +1784,27 @@ async fn api_history(
     }
     let history = match &state.store {
         Some(store) => {
-            store
-                .history_page(&session_id, query.before_seq, crate::core::HISTORY_PAGE)
-                .await
+            if query.question_page {
+                store
+                    .question_page_before(&session_id, query.before_seq)
+                    .await
+            } else {
+                store
+                    .history_page(&session_id, query.before_seq, crate::core::HISTORY_PAGE)
+                    .await
+            }
         }
-        None => Ok(state
-            .hub
-            .history_page(&session_id, query.before_seq)
-            .unwrap_or_default()),
+        None => Ok(if query.question_page {
+            state
+                .hub
+                .question_page_before(&session_id, query.before_seq)
+                .unwrap_or_default()
+        } else {
+            state
+                .hub
+                .history_page(&session_id, query.before_seq)
+                .unwrap_or_default()
+        }),
     };
     let (events, next_before_seq, reached_start) = match history {
         Ok(page) => page,

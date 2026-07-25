@@ -447,6 +447,88 @@ impl Store {
         Ok((events, next_before_seq, reached_start))
     }
 
+    /// Load the complete question page immediately preceding `before_seq`.
+    /// Unlike scrollback paging this deliberately follows the durable user
+    /// prompt boundary, so the reader does not repeatedly re-render partial
+    /// answer batches while looking for the preceding question.
+    pub async fn question_page_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Result<(Vec<Envelope>, Option<u64>, bool)> {
+        let before_i64 = i64::try_from(before_seq).context("question cursor overflow")?;
+        let root = sqlx::query_scalar::<_, Option<i64>>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 AND seq < $2 \
+             ) \
+             SELECT MAX(seq) FROM ordered \
+             WHERE payload->>'kind' = 'update' \
+               AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+               AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+               AND previous_update IS DISTINCT FROM 'user_message_chunk'",
+        )
+        .bind(session_id)
+        .bind(before_i64)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT previous question root for {session_id}"))?;
+        let Some(root) = root else {
+            return Ok((Vec::new(), None, true));
+        };
+        let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
+            "SELECT seq, payload, 0::bigint AS total_count FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND seq < $3 ORDER BY seq",
+        )
+        .bind(session_id)
+        .bind(root)
+        .bind(before_i64)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT complete question page for {session_id}"))?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            match serde_json::from_value::<Event>(row.payload) {
+                Ok(event) => events.push(Envelope {
+                    session_id: session_id.to_owned(),
+                    seq: u64::try_from(row.seq).unwrap_or(0),
+                    event,
+                    cmid: None,
+                }),
+                Err(error) => tracing::warn!(
+                    %error,
+                    session = %session_id,
+                    seq = row.seq,
+                    "skipping undecodable question-page event",
+                ),
+            }
+        }
+        let root_u64 = u64::try_from(root).unwrap_or(0);
+        let has_earlier_root = sqlx::query_scalar::<_, bool>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 AND seq < $2 \
+             ) \
+             SELECT EXISTS(SELECT 1 FROM ordered \
+               WHERE payload->>'kind' = 'update' \
+                 AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+                 AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND previous_update IS DISTINCT FROM 'user_message_chunk')",
+        )
+        .bind(session_id)
+        .bind(root)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT earlier question root for {session_id}"))?;
+        Ok((
+            events,
+            has_earlier_root.then_some(root_u64),
+            !has_earlier_root,
+        ))
+    }
+
     /// Count canonical question pages without transferring transcript payloads.
     /// A rich prompt may contain several consecutive user-message content
     /// blocks; only the first block starts a page.

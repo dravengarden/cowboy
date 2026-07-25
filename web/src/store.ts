@@ -577,6 +577,38 @@ export async function loadOlder(sessionId: string): Promise<void> {
   }
 }
 
+export async function loadPreviousQuestionPage(sessionId: string): Promise<void> {
+  const pg = state.pagination.get(sessionId);
+  if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return;
+  const beforeSeq = pg.beforeSeq;
+  setPagination(sessionId, { ...pg, loadingOlder: true });
+  try {
+    const res = await fetch(
+      `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&question_page=true&v=${encodeURIComponent(conn.version() ?? "0")}`,
+    );
+    if (!res.ok) {
+      setPagination(sessionId, { ...pg, loadingOlder: false });
+      return;
+    }
+    const data = (await res.json()) as {
+      events: Envelope[];
+      next_before_seq: number | null;
+      reached_start: boolean;
+    };
+    setState({
+      ...state,
+      timelines: mergeEvents(state.timelines, sessionId, data.events),
+    });
+    setPagination(sessionId, {
+      reachedStart: data.reached_start,
+      loadingOlder: false,
+      beforeSeq: data.next_before_seq,
+    });
+  } catch {
+    setPagination(sessionId, { ...pg, loadingOlder: false });
+  }
+}
+
 const INACTIVE_HISTORY_TAIL = 800;
 // The open transcript used to grow forever between page reloads. Keep a smaller
 // recent window once a following reader crosses this batched high-water mark.

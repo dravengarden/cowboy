@@ -25,7 +25,11 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
-import { loadOlder, useStoreSelector } from "../store";
+import {
+  loadOlder,
+  loadPreviousQuestionPage,
+  useStoreSelector,
+} from "../store";
 import { Transcript } from "../Transcript";
 import {
   setExplorePage,
@@ -551,7 +555,7 @@ export function MobilePageDock({
     // Yield between transport pages so a long answer cannot monopolize
     // WKWebView's main thread while React derives the growing page window.
     window.setTimeout(() => {
-      void loadOlder(sessionId).finally(() => {
+      void loadPreviousQuestionPage(sessionId).finally(() => {
         setPendingPrevious((value) =>
           value?.requestedBeforeSeq === beforeSeq
             ? { ...value, requestComplete: true }
