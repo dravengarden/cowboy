@@ -513,18 +513,33 @@ export function ExploreTranscript(
 
   useEffect(() => {
     if (props.desktop) return undefined;
-    const root = rootRef.current;
-    const scroller = root?.querySelector<HTMLElement>(
-      `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
-    );
-    if (!scroller) return undefined;
+    let frame = 0;
+    let scroller: HTMLElement | null = null;
     const update = (): void => {
+      if (!scroller) return;
       const visualStart = scroller.clientHeight - scroller.scrollHeight;
-      setShowPageTop(scroller.scrollTop - visualStart > scroller.clientHeight * 0.75);
+      setShowPageTop(
+        scroller.scrollTop - visualStart > scroller.clientHeight * 0.75,
+      );
     };
-    update();
-    scroller.addEventListener("scroll", update, { passive: true });
-    return () => scroller.removeEventListener("scroll", update);
+    const bind = (): void => {
+      scroller = rootRef.current?.querySelector<HTMLElement>(
+        `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
+      ) ?? null;
+      if (!scroller) {
+        // ExploreTranscript mounts before Transcript commits its scroll node.
+        // Retry instead of silently losing the listener for the page lifetime.
+        frame = requestAnimationFrame(bind);
+        return;
+      }
+      update();
+      scroller.addEventListener("scroll", update, { passive: true });
+    };
+    frame = requestAnimationFrame(bind);
+    return () => {
+      cancelAnimationFrame(frame);
+      scroller?.removeEventListener("scroll", update);
+    };
   }, [current?.id, props.desktop, props.sessionId]);
 
   const scrollPageToTop = (): void => {
@@ -661,6 +676,7 @@ export function ExploreTranscript(
               border: 1,
               borderColor: "divider",
               boxShadow: 3,
+              zIndex: 4,
             }}
           >
             <ArrowUpward sx={{ fontSize: "1.25em" }} />
