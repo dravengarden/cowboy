@@ -1,4 +1,5 @@
 import {
+  ArrowUpward,
   ChevronLeft,
   ChevronRight,
   Close,
@@ -11,6 +12,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Fab,
   IconButton,
   InputAdornment,
   LinearProgress,
@@ -24,7 +26,14 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { DetentSheet, MobileSheetDismiss } from "../_shell";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
@@ -193,8 +202,7 @@ function PageList({
   const [query, setQuery] = useState("");
   const selectedRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
-  const loadArmedRef = useRef(true);
-  const wasLoadingRef = useRef(loadingEarlier);
+  const startSentinelRef = useRef<HTMLDivElement | null>(null);
   const prependAnchorRef = useRef<{
     scrollHeight: number;
     scrollTop: number;
@@ -214,7 +222,7 @@ function PageList({
     selectedRef.current?.scrollIntoView({ block: "center" });
   }, [currentId]);
 
-  const requestEarlier = (): void => {
+  const requestEarlier = useCallback((): void => {
     if (!onReachStart) return;
     const list = listRef.current;
     if (list) {
@@ -225,7 +233,7 @@ function PageList({
       };
     }
     onReachStart();
-  };
+  }, [onReachStart, pages.length]);
 
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
@@ -247,31 +255,24 @@ function PageList({
   }, [loadingEarlier, pages.length]);
 
   useEffect(() => {
-    const completedLoad = wasLoadingRef.current && !loadingEarlier;
-    wasLoadingRef.current = loadingEarlier;
     if (query.trim() || !hasEarlier || loadingEarlier) return undefined;
-    const frame = requestAnimationFrame(() => {
-      const list = listRef.current;
-      if (!list || list.scrollHeight > list.clientHeight + 1) return;
-      // Only a genuinely unfilled viewport may chain another batch after a
-      // prepend. A scrollable directory stays disarmed until the reader moves
-      // away from the leading edge and deliberately approaches it again.
-      if (completedLoad) loadArmedRef.current = true;
-      if (!loadArmedRef.current) return;
-      // Like Transcript's viewport backfill: a short directory should fill
-      // itself rather than presenting a pull gesture that cannot physically
-      // scroll yet.
-      loadArmedRef.current = false;
-      requestEarlier();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [
-    hasEarlier,
-    loadingEarlier,
-    onReachStart,
-    pages.length,
-    query,
-  ]);
+    const list = listRef.current;
+    const sentinel = startSentinelRef.current;
+    if (!list || !sentinel) return undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) requestEarlier();
+      },
+      {
+        root: list,
+        // Start fetching just before the first row reaches the sheet edge.
+        rootMargin: "72px 0px 0px",
+        threshold: 0,
+      },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasEarlier, loadingEarlier, query, requestEarlier]);
 
   return (
     <Stack sx={{ minHeight: 0, height: "100%" }}>
@@ -317,30 +318,6 @@ function PageList({
         <List
           ref={listRef}
           dense={dense}
-          onScroll={(event): void => {
-            const list = event.currentTarget;
-            const availableTravel = Math.max(
-              0,
-              list.scrollHeight - list.clientHeight,
-            );
-            const threshold = Math.min(
-              Math.max(32, list.clientHeight * 0.12),
-              Math.max(16, availableTravel * 0.6),
-            );
-            if (list.scrollTop > threshold) {
-              // A completed prepend remains disarmed while the reader is still
-              // at the leading edge. Require a deliberate move away before the
-              // next approach can request another batch.
-              loadArmedRef.current = true;
-              return;
-            }
-            if (
-              query.trim() || !hasEarlier || loadingEarlier ||
-              !loadArmedRef.current
-            ) return;
-            loadArmedRef.current = false;
-            requestEarlier();
-          }}
           sx={{
             height: "100%",
             overflowY: "auto",
@@ -348,6 +325,13 @@ function PageList({
             overflowAnchor: "auto",
           }}
         >
+          {!query.trim() && (
+            <Box
+              ref={startSentinelRef}
+              aria-hidden
+              sx={{ height: 1, pointerEvents: "none" }}
+            />
+          )}
           {filtered.map((page) => {
             const selected = page.id === currentId;
             return (
@@ -416,6 +400,7 @@ export function ExploreTranscript(
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
   const rootRef = useRef<HTMLDivElement>(null);
+  const [showPageTop, setShowPageTop] = useState(false);
   const { pageStartId } = useExploreSessionState(props.sessionId);
 
   useLayoutEffect(() => {
@@ -509,6 +494,33 @@ export function ExploreTranscript(
     return () => root.removeEventListener("keydown", onKeyDown);
   }, [currentIndex, pages, props.desktop, select]);
 
+  useEffect(() => {
+    if (props.desktop) return undefined;
+    const root = rootRef.current;
+    const scroller = root?.querySelector<HTMLElement>(
+      `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
+    );
+    if (!scroller) return undefined;
+    const update = (): void => {
+      const visualStart = scroller.clientHeight - scroller.scrollHeight;
+      setShowPageTop(scroller.scrollTop - visualStart > scroller.clientHeight * 0.75);
+    };
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    return () => scroller.removeEventListener("scroll", update);
+  }, [current?.id, props.desktop, props.sessionId]);
+
+  const scrollPageToTop = (): void => {
+    const scroller = rootRef.current?.querySelector<HTMLElement>(
+      `[data-transcript-session="${CSS.escape(props.sessionId)}"]`,
+    );
+    if (!scroller) return;
+    scroller.scrollTo({
+      top: scroller.clientHeight - scroller.scrollHeight,
+      behavior: "smooth",
+    });
+  };
+
   if (!current && !props.loading) {
     return (
       <Stack
@@ -560,7 +572,7 @@ export function ExploreTranscript(
           </Box>
         </>
       )}
-      <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
+      <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
         {current && (
           <Box
             sx={{
@@ -614,6 +626,29 @@ export function ExploreTranscript(
           liveTail={atTail}
           shortContentAtTop
         />
+        {!props.desktop && showPageTop && (
+          <Fab
+            size="small"
+            color="default"
+            aria-label="Back to page top"
+            onClick={scrollPageToTop}
+            sx={{
+              position: "absolute",
+              right: "max(env(safe-area-inset-right), 16px)",
+              bottom: 12,
+              width: 42,
+              height: 42,
+              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.82),
+              backdropFilter: "blur(18px) saturate(1.3)",
+              WebkitBackdropFilter: "blur(18px) saturate(1.3)",
+              border: 1,
+              borderColor: "divider",
+              boxShadow: 3,
+            }}
+          >
+            <ArrowUpward sx={{ fontSize: "1.25em" }} />
+          </Fab>
+        )}
         {props.desktop && (
           <Stack
             direction="row"
