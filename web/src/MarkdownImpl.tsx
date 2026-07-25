@@ -177,6 +177,12 @@ function CodeBlock({
     ? normalizeSyntaxLanguage(lang.slice("diff-".length))
     : "";
   const syntaxLanguage = diffLanguage || normalizeSyntaxLanguage(lang) || "text";
+  // A compact one-line fence should be sized by its text padding, not by the
+  // overlaid copy control. Centre the control within that resulting card so
+  // the top and bottom whitespace stay visually equal. Multi-line blocks keep
+  // the copy control pinned to the top-right where it remains reachable while
+  // reading or horizontally scrolling long output.
+  const centerCompactCopy = centerCopy || !code.includes("\n");
   const diffLines = diffLanguage ? code.split("\n") : [];
   // Only apply diff row treatment to a real prefixed patch. This also makes a
   // hand-written ```diff-typescript fence degrade safely if it contains plain
@@ -231,6 +237,7 @@ function CodeBlock({
   return (
     <Box
       ref={rootRef}
+      data-code-lines={code.includes("\n") ? "multiple" : "single"}
       sx={{
         my: 1,
         maxWidth: "100%",
@@ -394,9 +401,9 @@ function CodeBlock({
         size="small"
         sx={{
           position: "absolute",
-          top: centerCopy ? "50%" : 6,
+          top: centerCompactCopy ? "50%" : 6,
           right: 6,
-          transform: centerCopy ? "translateY(-50%)" : "none",
+          transform: centerCompactCopy ? "translateY(-50%)" : "none",
           height: 32,
           minWidth: 32,
           // Explicit width to OVERRIDE the global MuiIconButton `width: 44` —
