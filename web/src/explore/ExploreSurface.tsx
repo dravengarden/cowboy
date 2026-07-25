@@ -1,4 +1,5 @@
 import {
+  ArrowDownward,
   ArrowUpward,
   ChevronLeft,
   ChevronRight,
@@ -34,7 +35,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { DetentSheet, MobileSheetDismiss } from "../_shell";
+import {
+  DetentSheet,
+  FloatingActionIsland,
+  MobileSheetDismiss,
+} from "../_shell";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
@@ -189,6 +194,7 @@ function PageList({
   hasEarlier = false,
   loadingEarlier = false,
   onReachStart,
+  onDismiss,
 }: {
   pages: QuestionPage[];
   currentId: string | null;
@@ -198,8 +204,10 @@ function PageList({
   hasEarlier?: boolean;
   loadingEarlier?: boolean;
   onReachStart?: (() => void) | undefined;
+  onDismiss?: (() => void) | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
   const selectedRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
   const startSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -218,9 +226,27 @@ function PageList({
     )
     : pages;
 
+  const updateBottomAffordance = useCallback((): void => {
+    const list = listRef.current;
+    if (!list || !onDismiss) {
+      setAwayFromBottom(false);
+      return;
+    }
+    setAwayFromBottom(
+      list.scrollHeight - list.scrollTop - list.clientHeight > 48,
+    );
+  }, [onDismiss]);
+
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "center" });
-  }, [currentId]);
+    const frame = window.requestAnimationFrame(updateBottomAffordance);
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentId, updateBottomAffordance]);
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(updateBottomAffordance);
+    return () => window.cancelAnimationFrame(frame);
+  }, [filtered.length, loadingEarlier, updateBottomAffordance]);
 
   const requestEarlier = useCallback((): void => {
     if (!onReachStart) return;
@@ -325,11 +351,15 @@ function PageList({
         <List
           ref={listRef}
           dense={dense}
+          onScroll={updateBottomAffordance}
           sx={{
             height: "100%",
             overflowY: "auto",
             px: dense ? 0.75 : 1,
-            py: 0.5,
+            pt: 0.5,
+            pb: onDismiss
+              ? "calc(72px + env(safe-area-inset-bottom, 0px))"
+              : 0.5,
             overflowAnchor: "auto",
           }}
         >
@@ -393,6 +423,54 @@ function PageList({
             );
           })}
         </List>
+        {onDismiss && (
+          <Box
+            aria-label="Page directory actions"
+            sx={{
+              position: "absolute",
+              insetInline: 0,
+              bottom: "max(10px, env(safe-area-inset-bottom, 0px))",
+              zIndex: 3,
+              height: 54,
+              pointerEvents: "none",
+            }}
+          >
+            <Box
+              sx={{
+                position: "absolute",
+                left: "50%",
+                transform: "translateX(-50%)",
+                pointerEvents: "auto",
+              }}
+            >
+              <MobileSheetDismiss onClose={onDismiss} />
+            </Box>
+            {awayFromBottom && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  right: 14,
+                  pointerEvents: "auto",
+                }}
+              >
+                <FloatingActionIsland maxWidth={54}>
+                  <IconButton
+                    aria-label="Scroll to latest question"
+                    onClick={(): void => {
+                      listRef.current?.scrollTo({
+                        top: listRef.current.scrollHeight,
+                        behavior: "smooth",
+                      });
+                    }}
+                    sx={{ width: 46, height: 46 }}
+                  >
+                    <ArrowDownward sx={{ fontSize: "1.25em" }} />
+                  </IconButton>
+                </FloatingActionIsland>
+              </Box>
+            )}
+          </Box>
+        )}
       </Box>
     </Stack>
   );
@@ -974,8 +1052,6 @@ export function MobilePageDock({
         onClose={(): void => setOpen(false)}
         ariaLabel="Question pages"
         frosted
-        footer={<MobileSheetDismiss onClose={(): void => setOpen(false)} />}
-        footerOverlay
       >
         <Box
           sx={{
@@ -1025,6 +1101,7 @@ export function MobilePageDock({
               hasEarlier={hasEarlierHistory}
               loadingEarlier={loadingEarlier}
               onReachStart={(): void => void loadOlder(sessionId)}
+              onDismiss={(): void => setOpen(false)}
               onSelect={(id): void => {
                 navigate(id);
                 setOpen(false);
