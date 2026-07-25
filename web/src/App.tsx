@@ -1358,7 +1358,6 @@ export function App({
     // newest pinned just above the growing panel).
     const columnRef = useRef<HTMLDivElement>(null);
     const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
-    const [exploreAtTail, setExploreAtTail] = useState(false);
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
     // vars on the column. The glass follows every animation frame, while the
@@ -1645,7 +1644,6 @@ export function App({
     }, []);
     useEffect(() => {
         setExploreComposeIntent(null);
-        setExploreAtTail(false);
     }, [active?.id, exploreState.projection]);
     const previousActiveRef = useRef<string | null>(null);
     useEffect(() => {
@@ -2550,37 +2548,35 @@ export function App({
                                 </Box>
                             ) : exploreState.projection === "explore" ? (
                                 <>
-                                    {(exploreAtTail || exploreComposeIntent !== null) && (
+                                    {exploreComposeIntent !== null && (
                                     <>
-                                        {exploreComposeIntent !== null && (
-                                            <Stack
-                                                direction="row"
-                                                alignItems="center"
-                                                sx={{ px: 1.5, pt: 0.5 }}
+                                        <Stack
+                                            direction="row"
+                                            alignItems="center"
+                                            sx={{ px: 1.5, pt: 0.5 }}
+                                        >
+                                            <Typography
+                                                variant="caption"
+                                                sx={{ fontWeight: 750, color: "text.secondary" }}
                                             >
-                                                <Typography
-                                                    variant="caption"
-                                                    sx={{ fontWeight: 750, color: "text.secondary" }}
-                                                >
-                                                    {exploreComposeIntent?.kind === "follow_up"
-                                                        ? "Follow up"
-                                                        : "New question"}
-                                                </Typography>
-                                                <Box sx={{ flex: 1 }} />
-                                                <IconButton
-                                                    aria-label="Close new question"
-                                                    onClick={(): void => setExploreComposeIntent(null)}
-                                                    size="small"
-                                                >
-                                                    <CloseIcon fontSize="small" />
-                                                </IconButton>
-                                            </Stack>
-                                        )}
+                                                {exploreComposeIntent.kind === "follow_up"
+                                                    ? "Follow up"
+                                                    : "New question"}
+                                            </Typography>
+                                            <Box sx={{ flex: 1 }} />
+                                            <IconButton
+                                                aria-label="Close new question"
+                                                onClick={(): void => setExploreComposeIntent(null)}
+                                                size="small"
+                                            >
+                                                <CloseIcon fontSize="small" />
+                                            </IconButton>
+                                        </Stack>
                                         <MobileComposer
                                             key={active.id}
                                             sessionId={active.id}
                                             status={active.status}
-                                            autoFocus={exploreComposeIntent !== null}
+                                            autoFocus
                                             onSubmitted={(): void => {
                                                 if (
                                                     exploreComposeIntent?.kind === "follow_up" &&
@@ -2599,16 +2595,19 @@ export function App({
                                     )}
                                     <MobilePageDock
                                         sessionId={active.id}
-                                        onTailChange={setExploreAtTail}
-                                        onCompose={(kind, targetPageId, knownPageIds): void => {
-                                            // Page Dock actions are explicit typing
-                                            // gestures. Claim the iOS keyboard before
-                                            // mounting the conditional composer, then
-                                            // let its autoFocus transfer focus to CM6.
+                                        composeOpen={exploreComposeIntent !== null}
+                                        onComposeToggle={(knownPageIds): void => {
+                                            if (exploreComposeIntent !== null) {
+                                                setExploreComposeIntent(null);
+                                                return;
+                                            }
+                                            // Claim the iOS keyboard before mounting
+                                            // the conditional composer, then let its
+                                            // autoFocus transfer focus to CM6.
                                             claimKeyboard();
                                             setExploreComposeIntent({
-                                                kind,
-                                                targetPageId,
+                                                kind: "new_page",
+                                                targetPageId: null,
                                                 knownPageIds,
                                             });
                                         }}

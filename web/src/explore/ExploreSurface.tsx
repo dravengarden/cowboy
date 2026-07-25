@@ -1,6 +1,7 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Close,
   EditOutlined,
   ListAltOutlined,
   Search,
@@ -442,16 +443,12 @@ export function ExploreTranscript(
 
 export function MobilePageDock({
   sessionId,
-  onCompose,
-  onTailChange,
+  composeOpen,
+  onComposeToggle,
 }: {
   sessionId: string;
-  onCompose: (
-    intent: "follow_up" | "new_page",
-    targetPageId: string | null,
-    knownPageIds: string[],
-  ) => void;
-  onTailChange?: ((atTail: boolean) => void) | undefined;
+  composeOpen: boolean;
+  onComposeToggle: (knownPageIds: string[]) => void;
 }): React.JSX.Element {
   const timeline = useStoreSelector((snapshot) =>
     snapshot.timelines.get(sessionId) ?? EMPTY_TIMELINE
@@ -474,7 +471,6 @@ export function MobilePageDock({
     : undefined;
   const next = pages[currentIndex + 1];
   const knownPageIds = pages.map((page) => page.id);
-  const atTail = pages.length === 0 || currentIndex === pages.length - 1;
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
   const loadingPrevious = loadingEarlier || pendingPrevious !== null;
@@ -521,10 +517,6 @@ export function MobilePageDock({
       requestComplete: true,
     });
   };
-
-  useEffect(() => {
-    onTailChange?.(atTail);
-  }, [atTail, onTailChange]);
 
   useEffect(() => {
     if (!pendingPrevious || loadingEarlier) return;
@@ -692,15 +684,12 @@ export function MobilePageDock({
               }`}
           </Typography>
         </Button>
-        <Tooltip title="Latest page and type">
+        <Tooltip title={composeOpen ? "Close question editor" : "Open question editor"}>
           <IconButton
             color="primary"
-            aria-label="Latest page and type"
-            onClick={(): void => {
-              const latest = pages.at(-1);
-              if (latest) navigate(latest.id);
-              onCompose("new_page", null, knownPageIds);
-            }}
+            aria-label={composeOpen ? "Close question editor" : "Open question editor"}
+            aria-pressed={composeOpen}
+            onClick={(): void => onComposeToggle(knownPageIds)}
             sx={{
               width: 40,
               height: 40,
@@ -713,7 +702,9 @@ export function MobilePageDock({
               "&:active": { bgcolor: "action.selected" },
             }}
           >
-            <EditOutlined sx={{ fontSize: "1.25rem" }} />
+            {composeOpen
+              ? <Close sx={{ fontSize: "1.25rem" }} />
+              : <EditOutlined sx={{ fontSize: "1.25rem" }} />}
           </IconButton>
         </Tooltip>
       </Paper>
