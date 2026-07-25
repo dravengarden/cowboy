@@ -16,6 +16,7 @@ interface ExploreSessionState {
 
 const STORAGE_KEY = "cowboy:transcript-projections:v1";
 const states = new Map<string, ExploreSessionState>();
+const tailStates = new Map<string, boolean>();
 const listeners = new Set<() => void>();
 const DEFAULT_STATE: ExploreSessionState = {
   projection: "history",
@@ -102,6 +103,13 @@ export function setExplorePage(sessionId: string, pageId: string | null): void {
   update(sessionId, { pageId });
 }
 
+export function setExploreAtTail(sessionId: string, atTail: boolean): void {
+  if ((tailStates.get(sessionId) ?? false) === atTail) return;
+  if (atTail) tailStates.set(sessionId, true);
+  else tailStates.delete(sessionId);
+  emit();
+}
+
 export function navigateExplorePage(sessionId: string, pageId: string): void {
   update(sessionId, { pageId, pageStartId: pageId });
 }
@@ -186,5 +194,16 @@ export function useExploreSessionState(
     },
     () => get(sessionId),
     () => DEFAULT_STATE,
+  );
+}
+
+export function useExploreAtTail(sessionId: string): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => tailStates.get(sessionId) ?? false,
+    () => false,
   );
 }

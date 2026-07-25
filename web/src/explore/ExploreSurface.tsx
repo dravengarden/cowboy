@@ -49,6 +49,7 @@ import {
 import { Transcript } from "../Transcript";
 import {
   setExplorePage,
+  setExploreAtTail,
   navigateExplorePage,
   resolveExplorePageStart,
   resolveProjectionAnchor,
@@ -509,6 +510,11 @@ export function ExploreTranscript(
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const { pageStartId } = useExploreSessionState(props.sessionId);
+
+  useLayoutEffect(() => {
+    setExploreAtTail(props.sessionId, atTail);
+    return () => setExploreAtTail(props.sessionId, false);
+  }, [atTail, props.sessionId]);
 
   useLayoutEffect(() => {
     if (!current || pageStartId !== current.id) return;

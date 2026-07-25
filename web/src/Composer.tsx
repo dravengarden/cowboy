@@ -113,7 +113,10 @@ import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
 import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { useCompactionContext } from "./useCompactionContext";
-import type { TranscriptProjection } from "./explore/exploreStore";
+import {
+  type TranscriptProjection,
+  useExploreAtTail,
+} from "./explore/exploreStore";
 import { desktopFocusBoundary, desktopFocusFill } from "./theme";
 import {
   type Attachment,
@@ -3994,8 +3997,12 @@ export function AutoScrollAndStop({
   desktopShortcutActive?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
+  const exploreAtTail = useExploreAtTail(sessionId);
   const [cancelOpen, setCancelOpen] = useState(false);
   const busy = status === "busy";
+  const following = projection === "history"
+    ? sticky
+    : sticky && exploreAtTail && busy;
   const size = dense ? "small" : "medium";
   if (presentation === "desktop-toolbar") {
     const stopButton = busy
@@ -4036,14 +4043,22 @@ export function AutoScrollAndStop({
           tap while inactive → scroll to bottom + follow again; tap while active →
           stop following. Hover-only tooltip so a tap doesn't pop the bubble. */}
       <Tooltip
-        title={sticky ? "Auto-scroll: on" : "Auto-scroll: off — tap to follow"}
+        title={following
+          ? "Auto-scroll: on"
+          : projection === "explore"
+          ? "Scroll to page bottom"
+          : "Auto-scroll: off — tap to follow"}
         disableFocusListener
         disableTouchListener
       >
         <IconButton
           size={size}
-          aria-label={sticky ? "auto-scroll on" : "auto-scroll off"}
-          color={sticky ? "primary" : "default"}
+          aria-label={following
+            ? "auto-scroll on"
+            : projection === "explore"
+            ? "scroll to page bottom"
+            : "auto-scroll off"}
+          color={following ? "primary" : "default"}
           onClick={(): void => {
             haptic();
             if (projection === "explore") {
