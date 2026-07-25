@@ -265,10 +265,20 @@ function PageList({
     // selected page id; following every such change yanks a user who is
     // browsing backwards straight back to the newest row.
     if (!onDismiss || !positionedForActivationRef.current) {
-      // Only reveal the selected row. Centering it creates a screen-sized blank
-      // gap above short/partially loaded page lists.
-      selectedRef.current?.scrollIntoView({ block: "nearest" });
-      if (onDismiss && selectedRef.current) {
+      const list = listRef.current;
+      const selected = selectedRef.current;
+      if (list && selected) {
+        // Never use scrollIntoView inside the transformed DetentSheet: WebKit
+        // may scroll its outer body as well as this nested list. Adjust only
+        // the list's own scroll position, by the minimum amount needed.
+        const rowTop = selected.offsetTop;
+        const rowBottom = rowTop + selected.offsetHeight;
+        if (rowTop < list.scrollTop) list.scrollTop = rowTop;
+        else if (rowBottom > list.scrollTop + list.clientHeight) {
+          list.scrollTop = rowBottom - list.clientHeight;
+        }
+      }
+      if (onDismiss && selected) {
         positionedForActivationRef.current = true;
       }
     }
@@ -399,6 +409,9 @@ function PageList({
           flex: 1,
           minHeight: 0,
           position: "relative",
+          // DetentSheet's body is itself scrollable. Keep this result region
+          // geometrically contained so only the List below owns page scrolling.
+          overflow: "hidden",
         }}
       >
         <Box
@@ -442,7 +455,8 @@ function PageList({
           dense={dense}
           onScroll={updateBottomAffordance}
           sx={{
-            height: "100%",
+            position: "absolute",
+            inset: 0,
             overflowY: "auto",
             px: dense ? 0.75 : 1,
             pt: 0.5,
