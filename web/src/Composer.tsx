@@ -4277,6 +4277,7 @@ function ComposerSheet({
       open={open}
       onClose={close}
       forceSheet={useSheetSurface}
+      cover={useSheetSurface}
       wide
       mobileDismiss={useSheetSurface ? "none" : "header"}
       actions={useSheetSurface

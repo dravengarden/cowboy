@@ -218,6 +218,8 @@ function PageList({
   const earlierLoadingShownAtRef = useRef(0);
   const earlierLoadingHideTimerRef = useRef<number | null>(null);
   const prependAnchorRef = useRef<{
+    element: HTMLElement | null;
+    top: number;
     scrollHeight: number;
     scrollTop: number;
     pageCount: number;
@@ -279,7 +281,13 @@ function PageList({
     }
     const list = listRef.current;
     if (list) {
+      const listTop = list.getBoundingClientRect().top;
+      const element = Array.from(
+        list.querySelectorAll<HTMLElement>("[data-page-id]"),
+      ).find((row) => row.getBoundingClientRect().bottom > listTop + 1) ?? null;
       prependAnchorRef.current = {
+        element,
+        top: element?.getBoundingClientRect().top ?? listTop,
         scrollHeight: list.scrollHeight,
         scrollTop: list.scrollTop,
         pageCount: pages.length,
@@ -317,11 +325,17 @@ function PageList({
     const anchor = prependAnchorRef.current;
     const list = listRef.current;
     if (!anchor || !list || pages.length <= anchor.pageCount) return;
-    // The page projection may regroup while older events are prepended, so an
-    // item id is not a reliable visual anchor. Preserve the exact viewport by
-    // adding only the newly inserted height to the prior scroll position.
-    list.scrollTop = anchor.scrollTop +
-      Math.max(0, list.scrollHeight - anchor.scrollHeight);
+    // Keep the first visible row under the user's finger. WebKit otherwise
+    // performs its own scroll anchoring while this code also compensates for
+    // the prepended height, which applies the same offset twice and creates a
+    // large empty gap. If regrouping replaced the row, fall back to the exact
+    // inserted-height delta with native anchoring disabled below.
+    if (anchor.element?.isConnected && list.contains(anchor.element)) {
+      list.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
+    } else {
+      list.scrollTop = anchor.scrollTop +
+        Math.max(0, list.scrollHeight - anchor.scrollHeight);
+    }
     prependAnchorRef.current = null;
   }, [pages.length]);
 
@@ -426,7 +440,7 @@ function PageList({
             pb: onDismiss
               ? "calc(84px + env(safe-area-inset-bottom, 0px))"
               : 0.5,
-            overflowAnchor: "auto",
+            overflowAnchor: "none",
           }}
         >
           {!query.trim() && (
@@ -1128,10 +1142,11 @@ export function MobilePageDock({
         onClose={closePageDirectory}
         ariaLabel="Question pages"
         frosted
+        cover
       >
         <Box
           sx={{
-            height: "min(72dvh, 700px)",
+            height: "100%",
             display: "flex",
             flexDirection: "column",
             minHeight: 0,
