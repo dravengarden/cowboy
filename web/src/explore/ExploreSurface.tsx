@@ -265,7 +265,9 @@ function PageList({
     // selected page id; following every such change yanks a user who is
     // browsing backwards straight back to the newest row.
     if (!onDismiss || !positionedForActivationRef.current) {
-      selectedRef.current?.scrollIntoView({ block: "center" });
+      // Only reveal the selected row. Centering it creates a screen-sized blank
+      // gap above short/partially loaded page lists.
+      selectedRef.current?.scrollIntoView({ block: "nearest" });
       if (onDismiss && selectedRef.current) {
         positionedForActivationRef.current = true;
       }
