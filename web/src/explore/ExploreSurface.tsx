@@ -865,6 +865,7 @@ export function ExploreTranscript(
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}
               visibleItemKeys={visibleItemKeys}
+              pageId={current?.id}
               liveTail={atTail}
               shortContentAtTop
             />

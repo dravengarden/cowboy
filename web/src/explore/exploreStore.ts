@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { clearTranscriptViewport } from "../transcriptViewportStore";
 
 export type TranscriptProjection = "history" | "explore";
 
@@ -101,6 +102,9 @@ export function setTranscriptProjection(
   projection: TranscriptProjection,
   transitionAnchorKey: string | null = null,
 ): void {
+  if (projection === "explore" && get(sessionId).projection !== "explore") {
+    clearTranscriptViewport(sessionId, "page");
+  }
   update(sessionId, { projection, transitionAnchorKey });
 }
 
@@ -116,6 +120,7 @@ export function setExploreAtTail(sessionId: string, atTail: boolean): void {
 }
 
 export function navigateExplorePage(sessionId: string, pageId: string): void {
+  clearTranscriptViewport(sessionId, "page");
   update(sessionId, { pageId, pageStartId: pageId });
 }
 

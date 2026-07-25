@@ -120,6 +120,7 @@ import {
     queueExploreFollowUp,
     useExploreSessionState,
 } from "./explore/exploreStore";
+import { retainTranscriptViewportSessions } from "./transcriptViewportStore";
 import { MobileConnectionBanner } from "./mobile/MobileConnectionBanner";
 import {
     ConnectionBanner,
@@ -1683,6 +1684,10 @@ export function App({
         if (previous && previous !== active?.id) releaseInactiveHistory(previous);
         previousActiveRef.current = active?.id ?? null;
     }, [active?.id]);
+    useEffect(() => {
+        if (!sessionsLoaded) return;
+        retainTranscriptViewportSessions(new Set(sessions.map((session) => session.id)));
+    }, [sessions, sessionsLoaded]);
 
     // Persist the *resolved* focus so a reload reopens it. Keyed on `active.id`
     // (not raw `activeId`) so a stale stored id that fell back to sessions[0]

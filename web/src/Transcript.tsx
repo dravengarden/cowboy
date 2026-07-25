@@ -106,6 +106,10 @@ import {
   historyPrefetchTransition,
   shouldBackfillTranscriptViewport,
 } from "./transcriptViewport";
+import {
+  getTranscriptViewport,
+  saveTranscriptViewport,
+} from "./transcriptViewportStore";
 import { FloatingActionIsland, ImageLightbox } from "./_shell";
 import { Kbd } from "./Kbd";
 import { Sheet } from "./Sheet";
@@ -2822,6 +2826,7 @@ export function Transcript({
   visibleItemKeys,
   liveTail = true,
   shortContentAtTop = false,
+  pageId,
   restoreAnchorKey,
   onAnchorRestored,
 }: {
@@ -2873,6 +2878,9 @@ export function Transcript({
    * beside the composer. In the column-reverse scroller a DOM-first flexible
    * spacer occupies the visual bottom without changing overflow behaviour. */
   shortContentAtTop?: boolean | undefined;
+  /** Explore's current question page. A page viewport is restored only when
+   * returning to the same session and page; page navigation clears its cache. */
+  pageId?: string | undefined;
   /** Projection transition: restore this canonical row near the viewport centre. */
   restoreAnchorKey?: string | null | undefined;
   onAnchorRestored?: (() => void) | undefined;
@@ -3181,6 +3189,8 @@ export function Transcript({
   // sessionId. Read it through a ref that tracks the latest prop.
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+  const pageIdRef = useRef(pageId);
+  pageIdRef.current = pageId;
   const locateTool = useCallback((key: string): void => {
     setSelectedToolKey(null);
     stick.current = false;
@@ -3289,6 +3299,18 @@ export function Transcript({
     // fire on content growth) plus this RO for container resizes (keyboard).
     const captureAnchor = (): void =>
       captureFreezeAnchor(el, freezeRef.current);
+    const saveViewport = (): void => {
+      const mode = managesScrollHistoryRef.current ? "history" : "page";
+      if (mode === "page" && !pageIdRef.current) return;
+      saveTranscriptViewport({
+        sessionId: sessionIdRef.current,
+        mode,
+        pageId: mode === "page" ? pageIdRef.current ?? null : null,
+        anchorKey: stick.current ? null : freezeRef.current.key,
+        anchorOffset: freezeRef.current.top,
+        following: mode === "history" && stick.current,
+      });
+    };
     const restoreAnchor = (): void =>
       restoreFreezeAnchor(el, freezeRef.current);
     const markNativeScrollActive = (): void => {
@@ -3306,6 +3328,7 @@ export function Transcript({
         // Capture first, then hand ownership back to chunk/resize anchoring.
         // The next stream update therefore preserves the exact settled view.
         if (!stick.current) captureAnchor();
+        saveViewport();
         nativeScrollActiveRef.current = false;
         setRenderPausedForScroll(false);
         nativeScrollSettleTimer = undefined;
@@ -3363,6 +3386,7 @@ export function Transcript({
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
       if (!stick.current) captureAnchor();
+      saveViewport();
       // Fetch one page per deliberate entry into the top threshold. Remaining
       // inside the zone while a page lands must not chain through the entire
       // session; the reader must move away and approach the top again.
@@ -3577,32 +3601,48 @@ export function Transcript({
     };
   }, []);
 
-  // Opening / switching a session always starts pinned to the latest message
-  // (chat default). The component isn't remounted per session, so `stick` would
-  // otherwise carry over a scrolled-up position. column-reverse already starts
-  // at the bottom (scrollTop 0), but a SWITCH from a scrolled-up prior session
-  // needs an explicit reset; a few frames cover the initial lazy image/markdown
-  // settle (0 stays pinned to the bottom as they grow).
+  // Restore a device-local reading anchor when returning to a session. History
+  // keeps its own anchor across projection changes. Page navigation and entry
+  // into Page View clear the page cache, so only a session round-trip can
+  // restore a Page position; a different/newly opened page starts at its head.
   useLayoutEffect(() => {
     if (restoringProjectionMountRef.current) {
       stick.current = false;
       setSticky(sessionId, false);
       return undefined;
     }
-    stick.current = true;
-    // A (re)opened session starts pinned + following, regardless of a prior
-    // detached state (REQ: default on).
-    resetSticky(sessionId);
+    const mode = managesScrollHistory ? "history" : "page";
+    const saved = getTranscriptViewport(sessionId, mode);
+    const canRestore = saved &&
+      (saved.following || saved.anchorKey !== null) &&
+      (mode === "history" || saved.pageId === (pageId ?? null));
+    const restoreDetached = canRestore && !saved.following &&
+      saved.anchorKey !== null;
+    stick.current = canRestore ? saved.following : mode === "history";
+    if (stick.current) resetSticky(sessionId);
+    else setSticky(sessionId, false);
     let raf = 0;
     let tries = 0;
-    const pin = (): void => {
+    const position = (): void => {
       const el = parentRef.current;
-      if (el) pinTranscriptToLatest(el); // column-reverse: 0 = bottom
-      if (++tries < 5) raf = requestAnimationFrame(pin);
+      if (el && restoreDetached) {
+        const anchor: FreezeAnchor = {
+          key: saved.anchorKey,
+          top: saved.anchorOffset,
+          self: false,
+        };
+        restoreFreezeAnchor(el, anchor);
+        freezeRef.current = anchor;
+      } else if (el && stick.current) {
+        pinTranscriptToLatest(el);
+      } else if (el && mode === "page") {
+        el.scrollTop = el.clientHeight - el.scrollHeight;
+      }
+      if (++tries < 12) raf = requestAnimationFrame(position);
     };
-    raf = requestAnimationFrame(pin);
+    raf = requestAnimationFrame(position);
     return () => cancelAnimationFrame(raf);
-  }, [sessionId]);
+  }, [managesScrollHistory, pageId, sessionId]);
 
   // After a PRESENTED timeline change. Normally this fires per streamed chunk;
   // while native scrolling is active presentation is frozen, then the latest
