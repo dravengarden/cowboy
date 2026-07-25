@@ -448,18 +448,14 @@ function PageList({
               pointerEvents: "none",
             }}
           >
-            <Box
-              sx={{
-                position: "absolute",
-                left: "50%",
-                transform: "translateX(-50%)",
-                display: "flex",
-                alignItems: "center",
-                gap: 1.25,
-                pointerEvents: "auto",
-              }}
-            >
-              {awayFromBottom && (
+            {awayFromBottom && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  right: "max(14px, env(safe-area-inset-right, 0px))",
+                  pointerEvents: "auto",
+                }}
+              >
                 <FloatingActionIsland maxWidth={54}>
                   <IconButton
                     aria-label="Scroll to latest question"
@@ -474,7 +470,16 @@ function PageList({
                     <ArrowDownward sx={{ fontSize: "1.25em" }} />
                   </IconButton>
                 </FloatingActionIsland>
-              )}
+              </Box>
+            )}
+            <Box
+              sx={{
+                position: "absolute",
+                left: "50%",
+                transform: "translateX(-50%)",
+                pointerEvents: "auto",
+              }}
+            >
               <MobileSheetDismiss onClose={onDismiss} />
             </Box>
           </Box>
@@ -896,7 +901,14 @@ export function MobilePageDock({
           bgcolor: "transparent",
         }}
       >
-        <Stack direction="row" sx={{ justifySelf: "start" }}>
+        <Stack
+          direction="row"
+          gap={0.75}
+          sx={{
+            justifySelf: "start",
+            "& > span": { display: "flex" },
+          }}
+        >
           {!onlyCompletePage && (
             <>
               <Tooltip title={hasEarlierHistory && !previous
@@ -913,7 +925,6 @@ export function MobilePageDock({
                     sx={{
                       width: "max(40px, 2.5rem)",
                       height: "max(40px, 2.5rem)",
-                      m: 0.25,
                       border: 1,
                       borderColor: "divider",
                       borderRadius: "50%",
@@ -940,7 +951,6 @@ export function MobilePageDock({
                     sx={{
                       width: "max(40px, 2.5rem)",
                       height: "max(40px, 2.5rem)",
-                      m: 0.25,
                       border: 1,
                       borderColor: "divider",
                       borderRadius: "50%",
@@ -1006,9 +1016,12 @@ export function MobilePageDock({
         </Button>
         <Stack
           direction="row"
-          spacing={0.25}
+          gap={0.75}
           alignItems="center"
-          sx={{ justifySelf: "end" }}
+          sx={{
+            justifySelf: "end",
+            "& > span": { display: "flex" },
+          }}
         >
           {showPageTop && (
             <Tooltip title="Back to page top">
@@ -1018,7 +1031,6 @@ export function MobilePageDock({
                 sx={{
                   width: "max(40px, 2.5rem)",
                   height: "max(40px, 2.5rem)",
-                  m: 0.25,
                   border: 1,
                   borderColor: "divider",
                   borderRadius: "50%",
@@ -1039,7 +1051,6 @@ export function MobilePageDock({
               sx={{
                 width: "max(40px, 2.5rem)",
                 height: "max(40px, 2.5rem)",
-                m: 0.25,
                 border: 1,
                 borderColor: "divider",
                 borderRadius: "50%",
