@@ -4021,6 +4021,7 @@ function SessionInfoShell(
     return (
         <Sheet
             forceSheet={navbarAtBottom}
+            cover={navbarAtBottom}
             open
             onClose={onClose}
             title="Session info"
