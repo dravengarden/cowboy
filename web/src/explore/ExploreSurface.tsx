@@ -350,7 +350,6 @@ function PageList({
                 selected={selected}
                 onClick={(): void => onSelect(page.id)}
                 sx={{
-                  position: "relative",
                   minHeight: dense ? 44 : 52,
                   px: dense ? 1 : 1.25,
                   py: dense ? 0.625 : 0.875,
@@ -360,16 +359,6 @@ function PageList({
                   transition: "background-color 120ms ease",
                   "&.Mui-selected": {
                     bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
-                  },
-                  "&.Mui-selected::before": {
-                    content: '""',
-                    position: "absolute",
-                    left: 0,
-                    top: dense ? 8 : 10,
-                    bottom: dense ? 8 : 10,
-                    width: 3,
-                    borderRadius: "0 3px 3px 0",
-                    bgcolor: "primary.main",
                   },
                   "&:not(.Mui-selected):hover": {
                     bgcolor: "action.hover",
@@ -980,8 +969,23 @@ export function MobilePageDock({
             minHeight: 0,
           }}
         >
-          <Stack direction="row" alignItems="baseline" sx={{ px: 2, pt: 1.5 }}>
-            <Typography variant="h6" sx={{ fontWeight: 750 }}>Pages</Typography>
+          <Stack
+            direction="row"
+            alignItems="center"
+            sx={{
+              minHeight: 52,
+              px: 2,
+              pt: 1,
+              flexShrink: 0,
+              overflow: "visible",
+            }}
+          >
+            <Typography
+              variant="h6"
+              sx={{ fontWeight: 750, lineHeight: 1.25, overflow: "visible" }}
+            >
+              Pages
+            </Typography>
             {pageIndex.loading && pageIndex.data === null
               ? (
                 <Skeleton
