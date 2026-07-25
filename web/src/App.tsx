@@ -660,6 +660,13 @@ function SessionList({
                 sx={{
                     flex: 1,
                     overflowY: "auto",
+                    // The dismiss island overlays rows during ordinary scrolling,
+                    // but at the true end the final session must be able to rest
+                    // fully above it. Keep this clearance inside the scrolling
+                    // list (like Settings), not as a fixed footer-sized gap.
+                    pb: desktop
+                        ? undefined
+                        : "calc(76px + env(safe-area-inset-bottom, 0px))",
                     // Fine-pointer desktops do not need phone-sized 44px controls
                     // in every row. Keep the generous targets for touch/tablet,
                     // while fitting more sessions without making the rail noisy.
