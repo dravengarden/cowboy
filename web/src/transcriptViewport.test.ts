@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   historyPrefetchTransition,
   shouldBackfillTranscriptViewport,
+  shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
 
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {
@@ -132,5 +133,48 @@ Deno.test("page projection never invokes transcript-managed history loading", ()
       threshold: 2_040,
     }),
     { armed: false, request: false },
+  );
+});
+
+Deno.test("history magnetizes at the live edge after the gesture settles", () => {
+  assertEquals(
+    shouldMagnetizeTranscript({
+      history: true,
+      working: false,
+      detached: true,
+      touching: false,
+      fromBottom: 36,
+      threshold: 48,
+    }),
+    true,
+  );
+  assertEquals(
+    shouldMagnetizeTranscript({
+      history: true,
+      working: false,
+      detached: true,
+      touching: true,
+      fromBottom: 36,
+      threshold: 48,
+    }),
+    false,
+  );
+});
+
+Deno.test("only a streaming page magnetizes at its bottom", () => {
+  const page = {
+    history: false,
+    detached: true,
+    touching: false,
+    fromBottom: 36,
+    threshold: 48,
+  };
+  assertEquals(
+    shouldMagnetizeTranscript({ ...page, working: true }),
+    true,
+  );
+  assertEquals(
+    shouldMagnetizeTranscript({ ...page, working: false }),
+    false,
   );
 });

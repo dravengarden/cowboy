@@ -43,3 +43,24 @@ export function historyPrefetchTransition(
   if (input.armed) return { armed: false, request: true };
   return { armed: false, request: false };
 }
+
+export interface TranscriptMagnetInput {
+  history: boolean;
+  working: boolean;
+  detached: boolean;
+  touching: boolean;
+  fromBottom: number;
+  threshold: number;
+}
+
+/** History always owns bottom-following. Page View only owns it while its live
+ * tail is actively streaming; a settled page's control remains a plain
+ * scroll-to-page-bottom action. */
+export function shouldMagnetizeTranscript(
+  input: TranscriptMagnetInput,
+): boolean {
+  return (input.history || input.working) &&
+    input.detached &&
+    !input.touching &&
+    input.fromBottom <= input.threshold;
+}
