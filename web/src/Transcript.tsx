@@ -129,6 +129,15 @@ const SKELETON_TURNS: { mine: boolean; lines: string[] }[] = [
   { mine: false, lines: ["80%", "65%"] },
 ];
 
+const LOADING_FILL_TURNS: { mine: boolean; lines: string[] }[] = [
+  { mine: false, lines: ["84%", "63%"] },
+  { mine: true, lines: ["46%"] },
+  { mine: false, lines: ["91%", "72%", "54%"] },
+  { mine: false, lines: ["76%", "58%"] },
+  { mine: true, lines: ["39%"] },
+  { mine: false, lines: ["88%", "69%", "45%"] },
+];
+
 function TranscriptSkeleton({
   desktop,
   provider,
@@ -286,16 +295,14 @@ function TranscriptLoadingFill({
           justifyContent: "space-evenly",
           gap: 1.1,
           opacity: 0.62,
-          // A phone's short free area benefits from distributing the outline
-          // edge-to-edge. On iPad that same `space-evenly` turns a handful of
-          // related rows into several disconnected islands. Keep the tablet
-          // outline together as one readable conversation-shaped cluster and
-          // let it use the wider reading column.
           "@media (min-width: 600px)": {
             inset: "20px 32px",
             maxWidth: 760,
-            justifyContent: "center",
-            gap: 2.25,
+            // The filler owns exactly the otherwise-empty transcript space.
+            // Spread enough conversation-shaped rows through that area on
+            // iPad instead of leaving one small cluster floating in its centre.
+            justifyContent: "space-evenly",
+            gap: 1.5,
           },
           maskImage:
             "linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)",
@@ -317,26 +324,22 @@ function TranscriptLoadingFill({
             {label}
           </Typography>
         </Stack>
-        {[
-          ["84%", "63%"],
-          ["46%"],
-          ["91%", "72%", "54%"],
-        ].map((lines, turn) => (
+        {LOADING_FILL_TURNS.map(({ mine, lines }, turn) => (
           <Stack
             // Static outline with no reordering.
             key={turn}
             spacing={0.8}
             sx={{
-              width: turn === 1 ? "58%" : "100%",
-              alignSelf: turn === 1 ? "flex-end" : "stretch",
-              p: turn === 1 ? 1.15 : 0,
-              borderRadius: turn === 1 ? 2.5 : 0,
+              width: mine ? "58%" : "100%",
+              alignSelf: mine ? "flex-end" : "stretch",
+              p: mine ? 1.15 : 0,
+              borderRadius: mine ? 2.5 : 0,
               "@media (min-width: 600px)": {
-                width: turn === 1 ? "44%" : "100%",
-                maxWidth: turn === 1 ? 360 : "none",
-                p: turn === 1 ? 1.25 : 0,
+                width: mine ? "44%" : "100%",
+                maxWidth: mine ? 360 : "none",
+                p: mine ? 1.25 : 0,
               },
-              bgcolor: turn === 1
+              bgcolor: mine
                 ? (theme) => alpha(theme.palette.primary.main, 0.045)
                 : "transparent",
             }}
@@ -3876,11 +3879,9 @@ export function Transcript({
                     />
                   </Box>
                 ))}
-              {!desktopNavigation && (working || showHistoryLoadingFill) && (
+              {!desktopNavigation && showHistoryLoadingFill && (
                 <TranscriptLoadingFill
-                  label={working
-                    ? "Agent is working"
-                    : "Restoring earlier conversation"}
+                  label="Loading conversation"
                 />
               )}
             </>
