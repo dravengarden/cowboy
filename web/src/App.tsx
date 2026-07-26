@@ -1530,6 +1530,7 @@ export function App({
     const restoredFocusRef = useRef<string | null>(activeSessionStore.get());
     const goneCheckedRef = useRef(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const mobileShellRef = useRef<HTMLDivElement>(null);
     const mobileDrawerRef = useRef<HTMLDivElement>(null);
     const settleMobileDrawerRef = useRef<((open: boolean) => void) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -1548,8 +1549,9 @@ export function App({
     useEffect(() => {
         if (!mobile || anySheetOpen) return undefined;
         const surface = columnRef.current;
+        const gestureTarget = mobileShellRef.current;
         const drawer = mobileDrawerRef.current;
-        if (!surface || !drawer) return undefined;
+        if (!surface || !gestureTarget || !drawer) return undefined;
         let gesture: {
             x: number;
             y: number;
@@ -1619,7 +1621,7 @@ export function App({
             if (
                 !touch ||
                 target?.closest("input, textarea, [contenteditable='true'], [data-mobile-drawer-ignore]") ||
-                hasHorizontalScroller(event.target, surface)
+                hasHorizontalScroller(event.target, gestureTarget)
             ) {
                 gesture = null;
                 return;
@@ -1651,6 +1653,9 @@ export function App({
                 : horizontalSwipe(deltaX, deltaY, 8, 1.15);
             if (!swipe || (!drawerOpen && swipe.direction !== "right") || (drawerOpen && swipe.direction !== "left")) {
                 return;
+            }
+            if (!gesture.locked) {
+                globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-start"));
             }
             gesture.locked = true;
             event.preventDefault();
@@ -1684,6 +1689,7 @@ export function App({
         };
         const onTouchEnd = (): void => {
             if (!gesture) return;
+            const wasLocked = gesture.locked;
             const velocityCommit = drawerOpen
                 ? gesture.velocity > -0.45
                 : gesture.velocity > 0.45;
@@ -1692,11 +1698,18 @@ export function App({
             gesture = null;
             commit = false;
             settle(shouldOpen);
+            if (wasLocked) {
+                globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
+            }
         };
         const onTouchCancel = (): void => {
+            const wasLocked = gesture?.locked === true;
             gesture = null;
             commit = false;
             settle(drawerOpen);
+            if (wasLocked) {
+                globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
+            }
         };
         render(drawerOpen ? drawerWidth() : 0);
         // `setDrawerOpen` rebinds this effect during settle. Its cleanup cancels
@@ -1704,15 +1717,18 @@ export function App({
         if (surface.style.transition) {
             settleTimer = globalThis.setTimeout(clearTransitions, 340);
         }
-        surface.addEventListener("touchstart", onTouchStart, { passive: true });
-        surface.addEventListener("touchmove", onTouchMove, { passive: false });
-        surface.addEventListener("touchend", onTouchEnd, { passive: true });
-        surface.addEventListener("touchcancel", onTouchCancel, { passive: true });
+        gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
+        gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
+        gestureTarget.addEventListener("touchend", onTouchEnd, { passive: true });
+        gestureTarget.addEventListener("touchcancel", onTouchCancel, { passive: true });
         return () => {
-            surface.removeEventListener("touchstart", onTouchStart);
-            surface.removeEventListener("touchmove", onTouchMove);
-            surface.removeEventListener("touchend", onTouchEnd);
-            surface.removeEventListener("touchcancel", onTouchCancel);
+            if (gesture?.locked) {
+                globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
+            }
+            gestureTarget.removeEventListener("touchstart", onTouchStart);
+            gestureTarget.removeEventListener("touchmove", onTouchMove);
+            gestureTarget.removeEventListener("touchend", onTouchEnd);
+            gestureTarget.removeEventListener("touchcancel", onTouchCancel);
             settleMobileDrawerRef.current = null;
             globalThis.clearTimeout(settleTimer);
             if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
@@ -2113,6 +2129,7 @@ export function App({
                 manifestUrl="/native-release.json"
             />
             <Box
+                ref={mobileShellRef}
                 sx={{
                     display: "flex",
                     flex: 1,

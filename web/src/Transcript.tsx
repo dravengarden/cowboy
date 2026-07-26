@@ -3285,6 +3285,8 @@ export function Transcript({
     if (!el) return undefined;
     let touching = false;
     let magneticArmed = false;
+    let directManipulationActive = false;
+    let directManipulationShouldFollow = false;
     let nativeScrollSettleTimer: number | undefined;
     const magneticThreshold = (): number => {
       const lineHeight = Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24;
@@ -3401,6 +3403,43 @@ export function Transcript({
     };
     const onTouchEnd = (): void => {
       touching = false;
+    };
+    const onDirectManipulationStart = (): void => {
+      if (directManipulationActive) return;
+      directManipulationActive = true;
+      // Transcript's own touchstart runs before the app-shell bubble listener
+      // can direction-lock the drawer gesture. It may already have detached a
+      // bottom-following reader, so infer that original intent from geometry.
+      directManipulationShouldFollow = stick.current ||
+        (
+          Math.abs(el.scrollTop) <= 1 &&
+          (managesScrollHistoryRef.current || workingRef.current)
+        );
+      cancelHistoryRelease();
+      markTranscriptScrollActivity();
+      nativeScrollActiveRef.current = true;
+      setRenderPausedForScroll(true);
+      if (nativeScrollSettleTimer !== undefined) {
+        globalThis.clearTimeout(nativeScrollSettleTimer);
+        nativeScrollSettleTimer = undefined;
+      }
+    };
+    const onDirectManipulationEnd = (): void => {
+      if (!directManipulationActive) return;
+      directManipulationActive = false;
+      if (directManipulationShouldFollow) {
+        stick.current = true;
+        setSticky(sessionIdRef.current, true);
+        freezeRef.current.key = null;
+        saveViewport();
+        scheduleHistoryRelease();
+      } else {
+        captureAnchor();
+        saveViewport();
+      }
+      directManipulationShouldFollow = false;
+      nativeScrollActiveRef.current = false;
+      setRenderPausedForScroll(false);
     };
     const onWheel = (event: WheelEvent): void => {
       // A wheel/trackpad gesture that continues toward the bottom can still
@@ -3560,6 +3599,14 @@ export function Transcript({
       "cowboy:explore-page-start",
       onExplorePageStart,
     );
+    globalThis.addEventListener(
+      "cowboy:transcript-direct-manipulation-start",
+      onDirectManipulationStart,
+    );
+    globalThis.addEventListener(
+      "cowboy:transcript-direct-manipulation-end",
+      onDirectManipulationEnd,
+    );
     // Keyboard scrolls (PgUp / arrows) — listen on the container so it must
     // be focused first; that's fine, hits the rare desktop case.
     el.addEventListener("keydown", onKeyDown);
@@ -3639,6 +3686,14 @@ export function Transcript({
       globalThis.removeEventListener(
         "cowboy:explore-page-start",
         onExplorePageStart,
+      );
+      globalThis.removeEventListener(
+        "cowboy:transcript-direct-manipulation-start",
+        onDirectManipulationStart,
+      );
+      globalThis.removeEventListener(
+        "cowboy:transcript-direct-manipulation-end",
+        onDirectManipulationEnd,
       );
       el.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
@@ -3821,6 +3876,7 @@ export function Transcript({
       <Box
         ref={parentRef}
         data-transcript-session={sessionId}
+        data-render-paused={renderPausedForScroll ? "true" : undefined}
         data-desktop-transcript-scroller={desktopNavigation
           ? "true"
           : undefined}
