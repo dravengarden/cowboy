@@ -23,6 +23,12 @@ import { useActiveWorkspaceBinding } from "../../controlPlane";
 import { fetchCodeFile } from "./codeApi";
 import { loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
+import {
+  loadReviewProgress,
+  type ReviewProgress,
+  revisionMatches,
+  saveReviewProgress,
+} from "./reviewProgress";
 import { ReviewChanges } from "./ReviewChanges";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
@@ -46,9 +52,11 @@ type ReviewTarget =
 function DocumentView({
   sessionId,
   target,
+  onRevision,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
+  onRevision: (revision: string | undefined) => void;
 }): React.JSX.Element {
   const settings = useReviewSettings();
   const [text, setText] = useState("");
@@ -80,6 +88,7 @@ function DocumentView({
       setText(result.text);
       setTruncated(result.truncated);
       if ("added" in result) {
+        onRevision(result.revision);
         setCounts({ added: result.added, removed: result.removed });
         setHunkIndex(0);
         if (!diffTarget) return;
@@ -119,6 +128,7 @@ function DocumentView({
     target.kind,
     target.path,
     target.kind === "diff" ? target.scope : undefined,
+    onRevision,
   ]);
 
   if (loading) {
@@ -221,14 +231,19 @@ export function ReviewApp({
   const workspace = useActiveWorkspaceBinding();
   const [target, setTarget] = useState<ReviewTarget>({ kind: "changes" });
   const [closeRequest, setCloseRequest] = useState(0);
-  const [reviewed, setReviewed] = useState<ReadonlySet<string>>(new Set());
+  const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
+  const [currentRevision, setCurrentRevision] = useState<string>();
 
   useEffect(() => {
     setTarget({ kind: "changes" });
-    setReviewed(new Set());
+    setCurrentRevision(undefined);
+    setReviewProgress(
+      workspace?.sessionId ? loadReviewProgress(workspace.sessionId) : {},
+    );
   }, [workspace?.sessionId]);
 
   const openSource = (path: string): void => {
+    setCurrentRevision(undefined);
     setTarget({ kind: "source", path });
     setCloseRequest((value) => value + 1);
   };
@@ -236,6 +251,7 @@ export function ReviewApp({
     entry: GitReviewEntry,
     queue: GitReviewEntry[],
   ): void => {
+    setCurrentRevision(undefined);
     setTarget({
       kind: "diff",
       path: entry.change.path,
@@ -256,14 +272,37 @@ export function ReviewApp({
   const targetReviewKey = target.kind === "diff"
     ? reviewEntryKey(target.path, target.scope)
     : undefined;
+  const targetIsReviewed = targetReviewKey
+    ? revisionMatches(reviewProgress, targetReviewKey, currentRevision)
+    : false;
+  useEffect(() => {
+    if (
+      !workspace?.sessionId ||
+      !targetReviewKey ||
+      !currentRevision ||
+      reviewProgress[targetReviewKey] === undefined ||
+      targetIsReviewed
+    ) {
+      return;
+    }
+    const next = { ...reviewProgress };
+    delete next[targetReviewKey];
+    setReviewProgress(next);
+    saveReviewProgress(workspace.sessionId, next);
+  }, [
+    currentRevision,
+    reviewProgress,
+    targetIsReviewed,
+    targetReviewKey,
+    workspace?.sessionId,
+  ]);
   const toggleReviewed = (): void => {
-    if (!targetReviewKey) return;
-    setReviewed((current) => {
-      const next = new Set(current);
-      if (next.has(targetReviewKey)) next.delete(targetReviewKey);
-      else next.add(targetReviewKey);
-      return next;
-    });
+    if (!targetReviewKey || !currentRevision || !workspace?.sessionId) return;
+    const next = { ...reviewProgress };
+    if (targetIsReviewed) delete next[targetReviewKey];
+    else next[targetReviewKey] = currentRevision;
+    setReviewProgress(next);
+    saveReviewProgress(workspace.sessionId, next);
   };
 
   return (
@@ -324,17 +363,14 @@ export function ReviewApp({
             </Box>
             {target.kind === "diff" && (
               <IconButton
-                aria-label={targetReviewKey && reviewed.has(targetReviewKey)
+                aria-label={targetIsReviewed
                   ? "Mark unreviewed"
                   : "Mark reviewed"}
-                color={targetReviewKey && reviewed.has(targetReviewKey)
-                  ? "success"
-                  : "default"}
+                color={targetIsReviewed ? "success" : "default"}
+                disabled={!currentRevision}
                 onClick={toggleReviewed}
               >
-                {targetReviewKey && reviewed.has(targetReviewKey)
-                  ? <CheckCircle />
-                  : <CheckCircleOutline />}
+                {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
               </IconButton>
             )}
           </Stack>
@@ -359,14 +395,18 @@ export function ReviewApp({
             <ReviewChanges
               sessionId={workspace.sessionId}
               onOpenDiff={openDiff}
-              reviewed={reviewed}
-              onRefresh={() => setReviewed(new Set())}
+              reviewed={new Set(Object.keys(reviewProgress))}
+              onRefresh={() => {
+                setReviewProgress({});
+                saveReviewProgress(workspace.sessionId, {});
+              }}
             />
           )
           : (
             <DocumentView
               sessionId={workspace.sessionId}
               target={target}
+              onRevision={setCurrentRevision}
             />
           )}
         <Box

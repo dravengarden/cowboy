@@ -1,14 +1,17 @@
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorState, type Extension, StateEffect } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
   ViewPlugin,
   type ViewUpdate,
+  WidgetType,
 } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { Box, useTheme } from "@mui/material";
 import { useEffect, useMemo, useRef } from "react";
 import { cmTheme } from "../../cmTheme";
+import { changedWordRange } from "./diffWordModel";
+import { diffContextFolds } from "./diffContextModel";
 
 function diffDecorations(view: EditorView): ReturnType<typeof Decoration.set> {
   const decorations = [];
@@ -29,6 +32,37 @@ function diffDecorations(view: EditorView): ReturnType<typeof Decoration.set> {
           Decoration.line({ class: className }).range(line.from),
         );
       }
+      if (
+        first === "-" &&
+        !line.text.startsWith("---") &&
+        line.number < view.state.doc.lines
+      ) {
+        const next = view.state.doc.line(line.number + 1);
+        if (next.text.startsWith("+") && !next.text.startsWith("+++")) {
+          const changed = changedWordRange(
+            line.text.slice(1),
+            next.text.slice(1),
+          );
+          if (changed) {
+            if (changed.removedTo > changed.removedFrom) {
+              decorations.push(
+                Decoration.mark({ class: "cowboy-diff-word-removed" }).range(
+                  line.from + 1 + changed.removedFrom,
+                  line.from + 1 + changed.removedTo,
+                ),
+              );
+            }
+            if (changed.addedTo > changed.addedFrom) {
+              decorations.push(
+                Decoration.mark({ class: "cowboy-diff-word-added" }).range(
+                  next.from + 1 + changed.addedFrom,
+                  next.from + 1 + changed.addedTo,
+                ),
+              );
+            }
+          }
+        }
+      }
       if (line.to >= view.state.doc.length) break;
       position = line.to + 1;
     }
@@ -48,6 +82,69 @@ const diffView = ViewPlugin.fromClass(
       if (update.docChanged || update.viewportChanged) {
         this.decorations = diffDecorations(update.view);
       }
+    }
+  },
+  { decorations: (value) => value.decorations },
+);
+
+const expandContext = StateEffect.define<number>();
+
+class ContextFoldWidget extends WidgetType {
+  constructor(
+    private readonly hiddenLines: number,
+    private readonly from: number,
+  ) {
+    super();
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cowboy-diff-context-fold";
+    button.textContent = `⋯ ${this.hiddenLines} unchanged lines`;
+    button.addEventListener("click", () => {
+      view.dispatch({ effects: expandContext.of(this.from) });
+    });
+    return button;
+  }
+}
+
+const contextFolding = ViewPlugin.fromClass(
+  class {
+    decorations;
+    private expanded = new Set<number>();
+
+    constructor(view: EditorView) {
+      this.decorations = this.build(view);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged) this.expanded.clear();
+      let changed = update.docChanged;
+      for (const transaction of update.transactions) {
+        for (const effect of transaction.effects) {
+          if (effect.is(expandContext)) {
+            this.expanded.add(effect.value);
+            changed = true;
+          }
+        }
+      }
+      if (changed) this.decorations = this.build(update.view);
+    }
+
+    private build(view: EditorView): ReturnType<typeof Decoration.set> {
+      const ranges = diffContextFolds(view.state.doc.toString())
+        .map((fold) => {
+          const from = view.state.doc.line(fold.fromLine).from;
+          const to = view.state.doc.line(fold.toLine).to;
+          if (this.expanded.has(from)) return undefined;
+          return Decoration.replace({
+            block: true,
+            widget: new ContextFoldWidget(fold.hiddenLines, from),
+          }).range(from, to);
+        })
+        .filter((range) => range !== undefined);
+      return Decoration.set(ranges, true);
     }
   },
   { decorations: (value) => value.decorations },
@@ -100,10 +197,34 @@ export default function CodeViewer({
           color: theme.palette.primary.main,
           backgroundColor: theme.palette.action.hover,
         },
+        ".cowboy-diff-word-added": {
+          backgroundColor: theme.palette.mode === "dark"
+            ? "rgba(46, 160, 67, 0.42)"
+            : "rgba(46, 160, 67, 0.28)",
+          borderRadius: "2px",
+        },
+        ".cowboy-diff-word-removed": {
+          backgroundColor: theme.palette.mode === "dark"
+            ? "rgba(248, 81, 73, 0.42)"
+            : "rgba(248, 81, 73, 0.26)",
+          borderRadius: "2px",
+        },
+        ".cowboy-diff-context-fold": {
+          width: "100%",
+          minHeight: "36px",
+          border: "0",
+          borderTop: `1px solid ${theme.palette.divider}`,
+          borderBottom: `1px solid ${theme.palette.divider}`,
+          color: theme.palette.text.secondary,
+          background: theme.palette.action.hover,
+          font: "inherit",
+          textAlign: "left",
+          padding: "0 12px",
+        },
       }),
     ];
     if (softWrap) values.push(EditorView.lineWrapping);
-    if (kind === "diff") values.push(diffView);
+    if (kind === "diff") values.push(diffView, contextFolding);
     return values;
   }, [kind, softWrap, theme]);
 

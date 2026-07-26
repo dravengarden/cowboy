@@ -1765,6 +1765,7 @@ fn default_true() -> bool {
 struct CodeDiffResponse {
     api_version: u8,
     path: String,
+    revision: String,
     text: String,
     added: usize,
     removed: usize,
@@ -1936,9 +1937,11 @@ async fn api_code_diff(
     let Ok(Ok(result)) = result else {
         return (StatusCode::BAD_REQUEST, "diff unavailable").into_response();
     };
+    let revision = format!("{:x}", Sha256::digest(result.text.as_bytes()));
     Json(CodeDiffResponse {
         api_version: 1,
         path: result.path,
+        revision,
         text: result.text,
         added: result.added,
         removed: result.removed,

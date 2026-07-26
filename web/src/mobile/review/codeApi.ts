@@ -26,6 +26,7 @@ export interface CodeChanges {
 export interface CodeDocument {
   apiVersion: 1;
   path: string;
+  revision?: string;
   text: string;
   truncated: boolean;
 }
