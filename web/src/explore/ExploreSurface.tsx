@@ -473,7 +473,12 @@ function PageList({
             overflowY: "auto",
             px: dense ? 0.75 : 1,
             pt: 0.5,
-            pb: 0.5,
+            // Close is a true overlay during ordinary scrolling. Keep its
+            // clearance inside the scroll content so the final page can still
+            // rest fully above the island at the real end.
+            pb: onDismiss
+              ? "calc(76px + env(safe-area-inset-bottom, 0px))"
+              : 0.5,
             overflowAnchor: "none",
           }}
         >
@@ -1207,7 +1212,11 @@ export function MobilePageDock({
       >
         <Box
           sx={{
-            height: "100%",
+            // Consume DetentSheet's generic overlay-footer clearance so page
+            // rows extend behind the floating Close island. PageList owns the
+            // equivalent clearance inside its scrollable content instead.
+            height: "calc(100% + 76px + env(safe-area-inset-bottom, 0px))",
+            mb: "calc(-76px - env(safe-area-inset-bottom, 0px))",
             display: "flex",
             flexDirection: "column",
             minHeight: 0,
