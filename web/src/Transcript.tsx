@@ -3830,7 +3830,10 @@ export function Transcript({
     else setSticky(sessionId, false);
     let raf = 0;
     let tries = 0;
+    let stableFrames = 0;
+    let previousHeight = -1;
     const position = (): void => {
+      if (!viewportRestoreActiveRef.current) return;
       const el = parentRef.current;
       if (el && restoreOffset) {
         // Exact offset is the reliable fallback while the cached anchor row is
@@ -3850,8 +3853,26 @@ export function Transcript({
       } else if (el && mode === "page") {
         el.scrollTop = el.clientHeight - el.scrollHeight;
       }
-      if (++tries < 12) raf = requestAnimationFrame(position);
-      else viewportRestoreActiveRef.current = false;
+      if (el) {
+        const expected = restoreOffset
+          ? saved.scrollOffset
+          : stick.current
+          ? 0
+          : el.clientHeight - el.scrollHeight;
+        const stable = Math.abs(el.scrollHeight - previousHeight) < 0.5 &&
+          Math.abs(el.scrollTop - expected) < 0.5;
+        stableFrames = stable ? stableFrames + 1 : 0;
+        previousHeight = el.scrollHeight;
+      }
+      tries += 1;
+      // Lazy Markdown, fonts and images can commit after the first dozen
+      // frames. Hold the requested viewport through a real stability window,
+      // but never longer than ~1.5s; touchstart cancels immediately above.
+      if ((tries < 30 || stableFrames < 8) && tries < 90) {
+        raf = requestAnimationFrame(position);
+      } else {
+        viewportRestoreActiveRef.current = false;
+      }
     };
     raf = requestAnimationFrame(position);
     return () => {
