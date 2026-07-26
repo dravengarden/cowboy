@@ -26,6 +26,7 @@ Deno.test("pager motion follows the finger and clamps at both products", () => {
 Deno.test("interactive and horizontally scrolling content keeps its gesture", () => {
   assertEquals(shouldReservePagerStart(false), true);
   assertEquals(shouldReservePagerStart(true), false);
+  assertEquals(shouldReservePagerStart(false, true), false);
 });
 
 Deno.test("product transitions are symmetric", () => {

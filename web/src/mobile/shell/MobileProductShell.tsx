@@ -57,35 +57,54 @@ export function MobileProductShell({
   onSetThemeMode: (mode: ThemeMode) => void;
 }): React.JSX.Element {
   const [product, setProduct] = useState<MobileProduct>(restoredProduct);
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const productRef = useRef(product);
   const shellRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
+  const agentPageRef = useRef<HTMLDivElement>(null);
+  const reviewPageRef = useRef<HTMLDivElement>(null);
   const workspace = useActiveWorkspaceBinding();
 
   const selectProduct = useCallback((next: MobileProduct): void => {
     const shell = shellRef.current;
-    const rail = railRef.current;
     productRef.current = next;
     setProduct(next);
     globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
-    if (!shell || !rail) return;
-    rail.style.transition = "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)";
-    rail.style.transform =
-      `translate3d(${String(pagerTargetOffset(next, shell.clientWidth))}px, 0, 0)`;
-    globalThis.setTimeout(() => rail.style.removeProperty("transition"), 240);
+    if (!shell) return;
+    const pages = [agentPageRef.current, reviewPageRef.current];
+    for (const page of pages) {
+      if (!page) continue;
+      page.style.transition = "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)";
+    }
+    const offset = pagerTargetOffset(next, shell.clientWidth);
+    if (agentPageRef.current) {
+      agentPageRef.current.style.transform =
+        `translate3d(${String(offset)}px, 0, 0)`;
+    }
+    if (reviewPageRef.current) {
+      reviewPageRef.current.style.transform =
+        `translate3d(${String(shell.clientWidth + offset)}px, 0, 0)`;
+    }
+    globalThis.setTimeout(() => {
+      for (const page of pages) page?.style.removeProperty("transition");
+    }, 240);
   }, []);
 
   useEffect(() => {
     const shell = shellRef.current;
     const rail = railRef.current;
-    if (!shell || !rail) return undefined;
+    const agentPage = agentPageRef.current;
+    const reviewPage = reviewPageRef.current;
+    if (!shell || !rail || !agentPage || !reviewPage) return undefined;
 
     let gesture: PagerGesture | null = null;
     let frame = 0;
     let pendingOffset = pagerTargetOffset(productRef.current, shell.clientWidth);
 
     const render = (offset: number): void => {
-      rail.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
+      agentPage.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
+      reviewPage.style.transform =
+        `translate3d(${String(shell.clientWidth + offset)}px, 0, 0)`;
     };
     const scheduleRender = (offset: number): void => {
       pendingOffset = offset;
@@ -106,7 +125,9 @@ export function MobileProductShell({
       const touch = event.touches[0];
       if (!touch) return;
       const ignored = ignoredGestureTarget(event.target, shell);
-      if (!shouldReservePagerStart(ignored)) {
+      const overlayOwnsGesture =
+        productRef.current === "agent" && agentDrawerOpen;
+      if (!shouldReservePagerStart(ignored, overlayOwnsGesture)) {
         gesture = null;
         return;
       }
@@ -147,8 +168,10 @@ export function MobileProductShell({
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
       if (!gesture.locked) {
         gesture.locked = true;
-        rail.style.transition = "none";
-        rail.style.willChange = "transform";
+        agentPage.style.transition = "none";
+        reviewPage.style.transition = "none";
+        agentPage.style.willChange = "transform";
+        reviewPage.style.willChange = "transform";
       }
       event.preventDefault();
       event.stopPropagation();
@@ -211,7 +234,7 @@ export function MobileProductShell({
       globalThis.removeEventListener("resize", onResize);
       if (frame !== 0) globalThis.cancelAnimationFrame(frame);
     };
-  }, [selectProduct]);
+  }, [agentDrawerOpen, selectProduct]);
 
   return (
     <Box
@@ -235,26 +258,51 @@ export function MobileProductShell({
         data-workspace-session={workspace?.sessionId}
         data-workspace-cwd={workspace?.cwd}
         sx={{
-          display: "flex",
-          width: "200%",
+          width: "100%",
           height: "100%",
+          position: "relative",
           backfaceVisibility: "hidden",
         }}
       >
         <Box
+          ref={agentPageRef}
           aria-hidden={product !== "agent"}
           inert={product !== "agent"}
-          sx={{ width: "50%", height: "100%", minWidth: 0, overflow: "hidden" }}
+          sx={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            minWidth: 0,
+            overflow: "hidden",
+            backfaceVisibility: "hidden",
+            transform: product === "agent"
+              ? "translate3d(0, 0, 0)"
+              : "translate3d(-100%, 0, 0)",
+          }}
         >
           <AgentApp
             themeMode={themeMode}
             onSetThemeMode={onSetThemeMode}
+            onDrawerOpenChange={setAgentDrawerOpen}
           />
         </Box>
         <Box
+          ref={reviewPageRef}
           aria-hidden={product !== "review"}
           inert={product !== "review"}
-          sx={{ width: "50%", height: "100%", minWidth: 0, overflow: "hidden" }}
+          sx={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            minWidth: 0,
+            overflow: "hidden",
+            backfaceVisibility: "hidden",
+            transform: product === "review"
+              ? "translate3d(0, 0, 0)"
+              : "translate3d(100%, 0, 0)",
+          }}
         >
           <ReviewApp
             themeMode={themeMode}

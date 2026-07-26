@@ -1418,10 +1418,12 @@ export function App({
     themeMode,
     onSetThemeMode,
     surface,
+    onMobileDrawerOpenChange,
 }: {
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
     surface: "desktop" | "touch";
+    onMobileDrawerOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
@@ -1589,6 +1591,11 @@ export function App({
     const goneCheckedRef = useRef(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const drawerOpenRef = useRef(false);
+    useEffect(() => {
+        if (!mobile) return undefined;
+        onMobileDrawerOpenChange?.(drawerOpen);
+        return () => onMobileDrawerOpenChange?.(false);
+    }, [drawerOpen, mobile, onMobileDrawerOpenChange]);
     const mobileShellRef = useRef<HTMLDivElement>(null);
     const mobileDrawerRef = useRef<HTMLDivElement>(null);
     const mobileDrawerMaskRef = useRef<HTMLDivElement>(null);

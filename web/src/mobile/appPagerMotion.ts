@@ -42,6 +42,7 @@ export function nextMobileProduct(product: MobileProduct): MobileProduct {
 
 export function shouldReservePagerStart(
   targetIgnored: boolean,
+  overlayOwnsGesture = false,
 ): boolean {
-  return !targetIgnored;
+  return !targetIgnored && !overlayOwnsGesture;
 }
