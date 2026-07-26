@@ -13,8 +13,6 @@ use std::process::{Command, Stdio};
 use sha2::Digest as _;
 
 const MAX_CHANGES: usize = 1_000;
-#[cfg(test)]
-const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 const FILE_PAGE_BYTES: usize = 256 * 1024;
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
@@ -72,20 +70,108 @@ pub struct FileDocument {
     pub limited: bool,
 }
 
-pub struct LocalCodeProvider<'a> {
-    root: &'a Path,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeManifest {
+    pub provider: &'static str,
+    pub revision: String,
+    pub head: Option<String>,
 }
 
-impl<'a> LocalCodeProvider<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeTreeEntry {
+    pub name: String,
+    pub path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeTreePage {
+    pub entries: Vec<CodeTreeEntry>,
+    pub truncated: bool,
+}
+
+pub trait CodeProvider {
+    fn manifest(&self) -> Result<WorktreeManifest, String>;
+    fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String>;
+    fn changes(&self) -> Result<ChangeList, String>;
+    fn diff_snapshot(
+        &self,
+        relative: &str,
+        context: usize,
+        show_whitespace: bool,
+        scope: DiffScope,
+    ) -> Result<DiffDocument, String>;
+    fn file_page(&self, relative: &str, cursor: Option<&str>) -> Result<FileDocument, String>;
+}
+
+pub struct LocalCodeProvider {
+    root: PathBuf,
+}
+
+impl LocalCodeProvider {
     #[must_use]
-    pub fn new(root: &'a Path) -> Self {
-        Self { root }
+    pub fn new(root: impl AsRef<Path>) -> Self {
+        Self {
+            root: root.as_ref().to_path_buf(),
+        }
     }
 
-    pub fn changes(&self) -> Result<ChangeList, String> {
-        ensure_git_worktree(self.root)?;
+    fn head(&self) -> Option<String> {
+        git_output(&self.root, &["rev-parse", "--short=12", "HEAD"], 128)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+
+    #[cfg(test)]
+    fn file(&self, relative: &str) -> Result<FileDocument, String> {
+        self.file_page(relative, None)
+    }
+}
+
+impl CodeProvider for LocalCodeProvider {
+    fn manifest(&self) -> Result<WorktreeManifest, String> {
+        ensure_git_worktree(&self.root)?;
+        let status = git_output(
+            &self.root,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            4 * 1024 * 1024,
+        )?;
+        let head = self.head();
+        let mut digest = sha2::Sha256::new();
+        if let Some(head) = &head {
+            digest.update(head.as_bytes());
+        }
+        digest.update([0]);
+        digest.update(&status);
+        Ok(WorktreeManifest {
+            provider: "local",
+            revision: format!("{:x}", digest.finalize()),
+            head,
+        })
+    }
+
+    fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String> {
+        let (entries, truncated) =
+            crate::files::directory(&self.root, relative, limit).map_err(str::to_owned)?;
+        Ok(CodeTreePage {
+            entries: entries
+                .into_iter()
+                .map(|entry| CodeTreeEntry {
+                    name: entry.name,
+                    path: entry.path,
+                    is_directory: entry.is_directory,
+                })
+                .collect(),
+            truncated,
+        })
+    }
+
+    fn changes(&self) -> Result<ChangeList, String> {
+        ensure_git_worktree(&self.root)?;
         let output = git_output(
-            self.root,
+            &self.root,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             4 * 1024 * 1024,
         )?;
@@ -121,40 +207,14 @@ impl<'a> LocalCodeProvider<'a> {
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         let truncated = changes.len() > MAX_CHANGES;
         changes.truncate(MAX_CHANGES);
-        let head = git_output(self.root, &["rev-parse", "--short=12", "HEAD"], 128)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
         Ok(ChangeList {
-            head,
+            head: self.head(),
             changes,
             truncated,
         })
     }
 
-    #[cfg(test)]
-    fn diff(
-        &self,
-        relative: &str,
-        context: usize,
-        show_whitespace: bool,
-        scope: DiffScope,
-    ) -> Result<DiffDocument, String> {
-        let mut document = self.diff_snapshot(relative, context, show_whitespace, scope)?;
-        if document.text.len() > MAX_DIFF_BYTES {
-            let mut end = MAX_DIFF_BYTES;
-            while !document.text.is_char_boundary(end) {
-                end -= 1;
-            }
-            document.text.truncate(end);
-            document.truncated = true;
-            (document.added, document.removed) = count_diff_lines(&document.text);
-        }
-        Ok(document)
-    }
-
-    pub fn diff_snapshot(
+    fn diff_snapshot(
         &self,
         relative: &str,
         context: usize,
@@ -162,7 +222,7 @@ impl<'a> LocalCodeProvider<'a> {
         scope: DiffScope,
     ) -> Result<DiffDocument, String> {
         let relative = safe_relative(relative)?;
-        ensure_git_worktree(self.root)?;
+        ensure_git_worktree(&self.root)?;
         let path = relative.to_string_lossy().replace('\\', "/");
         let mut args = vec![
             "diff".to_owned(),
@@ -183,10 +243,10 @@ impl<'a> LocalCodeProvider<'a> {
         }
         args.extend(["--".to_owned(), path.clone()]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let mut bytes = git_output(self.root, &refs, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
-        if bytes.is_empty() && scope != DiffScope::Staged && !git_path_is_tracked(self.root, &path)
+        let mut bytes = git_output(&self.root, &refs, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
+        if bytes.is_empty() && scope != DiffScope::Staged && !git_path_is_tracked(&self.root, &path)
         {
-            bytes = untracked_diff(self.root, &relative, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
+            bytes = untracked_diff(&self.root, &relative, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
         }
         let truncated = bytes.len() > MAX_DIFF_SNAPSHOT_BYTES;
         bytes.truncate(MAX_DIFF_SNAPSHOT_BYTES);
@@ -204,12 +264,7 @@ impl<'a> LocalCodeProvider<'a> {
         })
     }
 
-    #[cfg(test)]
-    fn file(&self, relative: &str) -> Result<FileDocument, String> {
-        self.file_page(relative, None)
-    }
-
-    pub fn file_page(&self, relative: &str, cursor: Option<&str>) -> Result<FileDocument, String> {
+    fn file_page(&self, relative: &str, cursor: Option<&str>) -> Result<FileDocument, String> {
         let relative = safe_relative(relative)?;
         let canonical_root = self
             .root
@@ -437,7 +492,7 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChangeStatus, DiffScope, LocalCodeProvider};
+    use super::{ChangeStatus, CodeProvider as _, DiffScope, LocalCodeProvider};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -496,14 +551,27 @@ mod tests {
                 && change.unstaged
         }));
         let tracked = provider
-            .diff("tracked.rs", 3, true, DiffScope::Combined)
+            .diff_snapshot("tracked.rs", 3, true, DiffScope::Combined)
             .unwrap();
         assert!(tracked.text.contains("-fn old() {}"));
         assert!(tracked.text.contains("+fn new() {}"));
         let untracked = provider
-            .diff("new.txt", 3, true, DiffScope::Unstaged)
+            .diff_snapshot("new.txt", 3, true, DiffScope::Unstaged)
             .unwrap();
         assert!(untracked.text.contains("+hello"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn manifest_revision_changes_with_visible_worktree_state() {
+        let dir = scratch("manifest");
+        let provider = LocalCodeProvider::new(&dir);
+        let clean = provider.manifest().unwrap();
+        assert_eq!(clean.provider, "local");
+        assert!(clean.head.is_some());
+        fs::write(dir.join("tracked.rs"), "fn changed() {}\n").unwrap();
+        let changed = provider.manifest().unwrap();
+        assert_ne!(clean.revision, changed.revision);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -524,13 +592,13 @@ mod tests {
         assert!(change.unstaged);
 
         let staged = provider
-            .diff("tracked.rs", 3, true, DiffScope::Staged)
+            .diff_snapshot("tracked.rs", 3, true, DiffScope::Staged)
             .unwrap();
         assert!(staged.text.contains("+fn staged() {}"));
         assert!(!staged.text.contains("unstaged"));
 
         let unstaged = provider
-            .diff("tracked.rs", 3, true, DiffScope::Unstaged)
+            .diff_snapshot("tracked.rs", 3, true, DiffScope::Unstaged)
             .unwrap();
         assert!(unstaged.text.contains("-fn staged() {}"));
         assert!(unstaged.text.contains("+fn unstaged() {}"));

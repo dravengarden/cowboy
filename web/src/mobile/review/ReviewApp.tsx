@@ -26,8 +26,9 @@ import {
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
+  fetchCodeManifest,
 } from "./codeApi";
-import { loadCodeDiff } from "./diffCache";
+import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import {
   loadReviewProgress,
@@ -308,8 +309,10 @@ function DocumentView({
 }
 
 export function ReviewApp({
+  active,
   onDrawerOpenChange,
 }: {
+  active: boolean;
   onDrawerOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const workspace = useActiveWorkspaceBinding();
@@ -317,6 +320,39 @@ export function ReviewApp({
   const [closeRequest, setCloseRequest] = useState(0);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
+  const [dataRevision, setDataRevision] = useState(0);
+  const manifestRevision = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    manifestRevision.current = undefined;
+    setDataRevision(0);
+  }, [workspace?.sessionId]);
+
+  useEffect(() => {
+    if (!active || !workspace?.sessionId) return undefined;
+    let controller: AbortController | undefined;
+    const refreshManifest = (): void => {
+      controller?.abort();
+      controller = new AbortController();
+      void fetchCodeManifest(workspace.sessionId, controller.signal)
+        .then((manifest) => {
+          const previous = manifestRevision.current;
+          manifestRevision.current = manifest.revision;
+          if (previous && previous !== manifest.revision) {
+            invalidateDiffCache(workspace.sessionId);
+            setDataRevision((value) => value + 1);
+          }
+        })
+        // The ordinary tree/changes error surfaces remain authoritative.
+        .catch(() => undefined);
+    };
+    refreshManifest();
+    const timer = globalThis.setInterval(refreshManifest, 5_000);
+    return () => {
+      globalThis.clearInterval(timer);
+      controller?.abort();
+    };
+  }, [active, workspace?.sessionId]);
 
   useEffect(() => {
     setTarget({ kind: "changes" });
@@ -477,6 +513,7 @@ export function ReviewApp({
           : target.kind === "changes"
           ? (
             <ReviewChanges
+              key={`${workspace.sessionId}:${dataRevision}`}
               sessionId={workspace.sessionId}
               onOpenDiff={openDiff}
               reviewed={new Set(Object.keys(reviewProgress))}

@@ -37,6 +37,13 @@ export interface CodeTreePage {
   truncated: boolean;
 }
 
+export interface CodeManifest {
+  apiVersion: 1;
+  provider: string;
+  revision: string;
+  head?: string;
+}
+
 export interface CodeDocument {
   apiVersion: 1;
   path: string;
@@ -90,6 +97,16 @@ export function fetchCodeChanges(
 ): Promise<CodeChanges> {
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/changes`,
+    signal,
+  );
+}
+
+export function fetchCodeManifest(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<CodeManifest> {
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/manifest`,
     signal,
   );
 }

@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { fetchCodeFilePage, fetchCodeTree } from "./codeApi.ts";
+import {
+  fetchCodeFilePage,
+  fetchCodeManifest,
+  fetchCodeTree,
+} from "./codeApi.ts";
 
 Deno.test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
   const originalFetch = globalThis.fetch;
@@ -34,6 +38,33 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
         cache: "reload",
       },
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("manifest stays inside the stable Code data plane", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          provider: "local",
+          revision: "revision",
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeManifest("session/id");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/manifest",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

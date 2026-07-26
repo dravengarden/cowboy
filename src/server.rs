@@ -33,6 +33,7 @@ use agent_client_protocol::schema::v1::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
+use crate::code_review::CodeProvider as _;
 use crate::core::{
     DispatchReq, Envelope, Event, Hub, Inbound, JudgeReq, Outbound, PersistenceHealth,
     RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
@@ -966,6 +967,7 @@ async fn serve_axum(
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/file-tree", get(api_file_tree))
         .route("/api/code/sessions/{id}/tree", get(api_file_tree))
+        .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
         .route("/api/code/sessions/{id}/file", get(api_code_file))
@@ -1750,6 +1752,15 @@ struct CodeChangesResponse {
     truncated: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeManifestResponse {
+    api_version: u8,
+    provider: &'static str,
+    revision: String,
+    head: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeDiffQuery {
@@ -1865,13 +1876,14 @@ async fn api_file_tree(
     let path = query.path;
     let requested_path = path.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::files::directory(std::path::Path::new(&cwd), &path, limit)
+        crate::code_review::LocalCodeProvider::new(cwd).directory(&path, limit)
     })
     .await;
-    let Ok(Ok((entries, truncated))) = result else {
+    let Ok(Ok(page)) = result else {
         return (StatusCode::BAD_REQUEST, "invalid directory").into_response();
     };
-    let entries = entries
+    let entries = page
+        .entries
         .into_iter()
         .map(|entry| FileTreeEntry {
             name: entry.name,
@@ -1883,6 +1895,7 @@ async fn api_file_tree(
             },
         })
         .collect::<Vec<_>>();
+    let truncated = page.truncated;
     let revision = file_tree_revision(&requested_path, &entries, truncated);
     let etag = format!("\"{revision}\"");
     const TREE_CACHE_CONTROL: &str = "private, max-age=15, stale-while-revalidate=120";
@@ -1925,6 +1938,54 @@ fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
         .into_iter()
         .find(|meta| meta.id == session_id)
         .map(|meta| meta.cwd)
+}
+
+async fn api_code_manifest(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        crate::code_review::LocalCodeProvider::new(cwd).manifest()
+    })
+    .await;
+    let Ok(Ok(manifest)) = result else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable").into_response();
+    };
+    let etag = format!("\"{}\"", manifest.revision);
+    const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains(etag.as_str()))
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag.as_str()),
+                (header::CACHE_CONTROL, MANIFEST_CACHE_CONTROL),
+            ],
+        )
+            .into_response();
+    }
+    let mut response = Json(CodeManifestResponse {
+        api_version: 1,
+        provider: manifest.provider,
+        revision: manifest.revision,
+        head: manifest.head,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().expect("SHA256 ETag is valid"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(MANIFEST_CACHE_CONTROL),
+    );
+    response
 }
 
 async fn api_code_changes(

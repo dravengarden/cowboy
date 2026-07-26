@@ -306,7 +306,10 @@ export function MobileProductShell({
               : "translate3d(100%, 0, 0)",
           }}
         >
-          <ReviewApp onDrawerOpenChange={setReviewDrawerOpen} />
+          <ReviewApp
+            active={product === "review"}
+            onDrawerOpenChange={setReviewDrawerOpen}
+          />
         </Box>
       </Box>
     </Box>

@@ -71,6 +71,8 @@ are never speculatively scanned.
 
 The v1 data plane is exposed under `/api/code/sessions/{id}`:
 
+- `GET /manifest` returns the provider identity, current Git head, and a small
+  worktree revision suitable for conditional revalidation.
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
 - `GET /changes` returns normalized working-tree change records.
 - `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` creates or
@@ -82,8 +84,12 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 
 Every response carries `apiVersion: 1`. Paths are resolved from the session,
 validated, and contained inside its worktree. Git porcelain and Zed RPC values
-never cross this boundary. The legacy session file-tree route remains an alias
-temporarily, but the Code frontend uses only the stable namespace.
+never cross this boundary. Server handlers depend on the product-level
+`CodeProvider` interface for manifests, directory pages, changes, diffs, and
+file windows. The first implementation reads the local worktree; a future
+version-pinned Zed adapter can replace it without changing browser contracts.
+The legacy session file-tree route remains an alias temporarily, but the Code
+frontend uses only the stable namespace.
 
 Diff pages carry a content revision and opaque cursor. The browser appends only
 pages with the same revision, so a worktree mutation can never splice two
@@ -99,8 +105,12 @@ mtime, and ctime; continuations therefore reject replacement and in-place
 mutation without rereading or hashing the whole file. Reads are O(window), use
 HTTP revalidation, and cap one preview at 32 MiB.
 
-The next data-plane revision adds provider-driven worktree deltas without
-changing the provider-independent response model.
+While Code is visible, Mobile conditionally revalidates the manifest every five
+seconds. A revision change refreshes the changes surface and invalidates diff
+snapshots without interrupting the file currently being read. Hidden Code
+surfaces do no polling. The next data-plane revision can replace this bounded
+poll with provider-driven worktree deltas without changing the
+provider-independent response model.
 
 ## Code surface
 
