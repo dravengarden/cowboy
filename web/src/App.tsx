@@ -1654,9 +1654,17 @@ export function App({
                 phone,
                 reducedMotion,
             );
+            const progress = Math.max(0, Math.min(1, offset / presentationWidth));
+            const drawerParallax = (phone ? 28 : 36) * (1 - progress);
             surface.style.transform =
                 `translate3d(${String(offset)}px, 0, 0) scale(${String(visual.scale)})`;
             surface.style.opacity = String(visual.opacity);
+            // DeepSeek's drawer is not a stationary wallpaper revealed by the
+            // foreground. Its complete underlay, including the empty bottom
+            // region, enters from the left with a restrained parallax while the
+            // foreground moves under the finger.
+            drawer.style.transform =
+                `translate3d(-${String(drawerParallax)}px, 0, 0)`;
             // The foreground recedes translucently, but the session list must
             // remain visible only in the strip that has physically been
             // revealed. Move an opaque app-background mask with the foreground
@@ -1675,6 +1683,8 @@ export function App({
         const clearTransitions = (): void => {
             surface.style.removeProperty("transition");
             surface.style.removeProperty("will-change");
+            drawer.style.removeProperty("transition");
+            drawer.style.removeProperty("will-change");
             drawerMask.style.removeProperty("transition");
             drawerMask.style.removeProperty("will-change");
         };
@@ -1727,6 +1737,8 @@ export function App({
                 `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
                 `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             drawerMask.style.transition =
+                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+            drawer.style.transition =
                 `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             render(targetOffset);
             // Mount the foreground hit layer at open-start. During close, keep
@@ -1810,6 +1822,8 @@ export function App({
                 applyOpenDepth();
                 surface.style.transition = "none";
                 surface.style.willChange = "transform, opacity";
+                drawer.style.transition = "none";
+                drawer.style.willChange = "transform";
                 drawerMask.style.transition = "none";
                 drawerMask.style.willChange = "transform";
             }
