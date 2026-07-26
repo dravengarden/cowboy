@@ -1,5 +1,5 @@
-import { App } from "../App";
 import type { Mode as ThemeMode } from "../theme";
+import { MobileProductShell } from "./shell/MobileProductShell";
 
 export function MobileApp({
   themeMode,
@@ -8,11 +8,5 @@ export function MobileApp({
   themeMode: ThemeMode;
   onSetThemeMode: (mode: ThemeMode) => void;
 }): React.JSX.Element {
-  return (
-    <App
-      themeMode={themeMode}
-      onSetThemeMode={onSetThemeMode}
-      surface="touch"
-    />
-  );
+  return <MobileProductShell themeMode={themeMode} onSetThemeMode={onSetThemeMode} />;
 }
