@@ -133,6 +133,7 @@ import { MobileConnectionBanner } from "./mobile/MobileConnectionBanner";
 import {
     ConnectionBanner,
     DetentSheet,
+    FloatingActionIsland,
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
     ThemeModeControl,
@@ -922,19 +923,58 @@ function SessionList({
                 <Box
                     sx={{
                         flexShrink: 0,
-                        px: 1,
-                        pt: 0.75,
-                        pb: "max(env(safe-area-inset-bottom, 0px), 8px)",
+                        px: "max(env(safe-area-inset-right, 0px), env(safe-area-inset-left, 0px), 12px)",
+                        pt: 1,
+                        pb: "max(env(safe-area-inset-bottom, 0px), 12px)",
+                        display: "flex",
+                        justifyContent: "center",
+                        "@media (min-width: 768px)": {
+                            px: 2.5,
+                            pt: 1.25,
+                            pb: "max(env(safe-area-inset-bottom, 0px), 18px)",
+                        },
                     }}
                 >
-                    <Button
-                        fullWidth
-                        variant="outlined"
-                        startIcon={<Add />}
-                        onClick={onNew}
-                    >
-                        New session
-                    </Button>
+                    <FloatingActionIsland maxWidth="min(100%, 320px)">
+                        <Button
+                            fullWidth
+                            variant="text"
+                            startIcon={<Add />}
+                            onClick={onNew}
+                            sx={(theme) => ({
+                                minWidth: 0,
+                                minHeight: 46,
+                                px: 2.5,
+                                borderRadius: 999,
+                                color: "primary.main",
+                                fontWeight: 750,
+                                letterSpacing: "0.055em",
+                                bgcolor: alpha(
+                                    theme.palette.primary.main,
+                                    theme.palette.mode === "dark" ? 0.08 : 0.055,
+                                ),
+                                "& .MuiButton-startIcon": {
+                                    mr: 1,
+                                },
+                                "& .MuiSvgIcon-root": {
+                                    fontSize: 26,
+                                },
+                                "&:active": {
+                                    bgcolor: alpha(
+                                        theme.palette.primary.main,
+                                        theme.palette.mode === "dark" ? 0.16 : 0.11,
+                                    ),
+                                    transform: "scale(0.985)",
+                                },
+                                transition: theme.transitions.create(
+                                    ["background-color", "transform"],
+                                    { duration: theme.transitions.duration.shortest },
+                                ),
+                            })}
+                        >
+                            New session
+                        </Button>
+                    </FloatingActionIsland>
                 </Box>
             )}
             <Menu
