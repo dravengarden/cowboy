@@ -9,6 +9,33 @@ export interface QuestionPage {
   endsAt: number;
 }
 
+export interface QuestionPageIndexEntry {
+  id: string;
+  ordinal: number;
+}
+
+export function indexedQuestionPagePosition(
+  pages: QuestionPageIndexEntry[],
+  currentId: string | undefined,
+): {
+  ordinal: number | undefined;
+  previousId: string | undefined;
+  nextId: string | undefined;
+} {
+  if (!currentId) {
+    return { ordinal: undefined, previousId: undefined, nextId: undefined };
+  }
+  const index = pages.findIndex((page) => page.id === currentId);
+  if (index < 0) {
+    return { ordinal: undefined, previousId: undefined, nextId: undefined };
+  }
+  return {
+    ordinal: pages[index]?.ordinal,
+    previousId: pages[index - 1]?.id,
+    nextId: pages[index + 1]?.id,
+  };
+}
+
 function messageText(item: RenderItem): string {
   if (item.kind !== "message") return "";
   return item.chunks

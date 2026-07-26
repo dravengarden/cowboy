@@ -4,6 +4,7 @@ import {
   completePageBeforeItem,
   deriveQuestionPages,
   groupQuestionPages,
+  indexedQuestionPagePosition,
   pageContainingItemKey,
   questionTitle,
 } from "./questionPages";
@@ -145,4 +146,26 @@ Deno.test("previous navigation waits for the real user question boundary", () =>
     completePageBeforeItem(complete, "current-answer")?.id,
     "previous-question",
   );
+});
+
+Deno.test("authoritative page index survives a sparse loaded content window", () => {
+  const index = [
+    { id: "28", ordinal: 28 },
+    { id: "29", ordinal: 29 },
+    { id: "30", ordinal: 30 },
+    { id: "31", ordinal: 31 },
+    { id: "32", ordinal: 32 },
+    { id: "33", ordinal: 33 },
+    { id: "34", ordinal: 34 },
+    { id: "35", ordinal: 35 },
+    { id: "36", ordinal: 36 },
+  ];
+
+  // The content cache may currently contain only 28-31 and 36. Its array
+  // position cannot be used to infer either the ordinal or the next page.
+  assertEquals(indexedQuestionPagePosition(index, "31"), {
+    ordinal: 31,
+    previousId: "30",
+    nextId: "32",
+  });
 });

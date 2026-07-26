@@ -60,6 +60,7 @@ import {
   completePageBeforeItem,
   deriveQuestionPages,
   groupQuestionPages,
+  indexedQuestionPagePosition,
   pageContainingItemKey,
   type QuestionPage,
 } from "./questionPages";
@@ -687,9 +688,25 @@ export function ExploreTranscript(
     () => new Set(current?.itemKeys ?? []),
     [current?.itemKeys],
   );
-  const atTail = currentIndex === pages.length - 1;
   const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
+  const indexedPosition = indexedQuestionPagePosition(
+    pageIndex.data?.pages ?? [],
+    current?.id,
+  );
+  const indexedCurrentOrdinal = indexedPosition.ordinal;
+  const atTail = indexedCurrentOrdinal === undefined
+    ? currentIndex === pages.length - 1
+    : indexedCurrentOrdinal === total;
+  const indexedPages = useMemo(() => {
+    const ordinalById = new Map(
+      (pageIndex.data?.pages ?? []).map((page) => [page.id, page.ordinal]),
+    );
+    return pages.map((page) => {
+      const ordinal = ordinalById.get(page.id);
+      return ordinal === undefined ? page : { ...page, ordinal };
+    });
+  }, [pageIndex.data?.pages, pages]);
   const rootRef = useRef<HTMLDivElement>(null);
   const {
     pageId: retainedPageId,
@@ -699,6 +716,20 @@ export function ExploreTranscript(
   const [restoringPageId, setRestoringPageId] = useState<string | null>(null);
   const retainedPageLoaded = retainedPageId === null ||
     pages.some((page) => page.id === retainedPageId);
+
+  useEffect(() => {
+    if (
+      !current || !pageIndex.data || pageIndex.loadingEarlier ||
+      pageIndex.data.pages.some((page) => page.id === current.id) ||
+      pageIndex.data.nextBeforeSeq === null
+    ) return;
+    void pageIndex.loadEarlier();
+  }, [
+    current,
+    pageIndex.data,
+    pageIndex.loadEarlier,
+    pageIndex.loadingEarlier,
+  ]);
 
   useEffect(() => {
     if (retainedPageLoaded || retainedPageId === null) {
@@ -929,7 +960,7 @@ export function ExploreTranscript(
           >
             <PageList
               dense
-              pages={pages}
+              pages={indexedPages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - pages.length + 1)}
               onSelect={select}
@@ -1060,6 +1091,7 @@ export function MobilePageDock({
   const pageIndex = useQuestionPageIndex(sessionId, pages.at(-1)?.id);
   const [open, setOpen] = useState(false);
   const [loadingDirectoryPageId, setLoadingDirectoryPageId] = useState<string | null>(null);
+  const [loadingAdjacentPageId, setLoadingAdjacentPageId] = useState<string | null>(null);
   const [pageDirectoryAwayFromBottom, setPageDirectoryAwayFromBottom] = useState(false);
   const pageDirectoryListRef = useRef<HTMLUListElement | null>(null);
   const [showPageTop, setShowPageTop] = useState(false);
@@ -1075,9 +1107,19 @@ export function MobilePageDock({
   const knownPageIds = pages.map((page) => page.id);
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
-  const loadingPrevious = loadingEarlier || pendingPrevious !== null;
-  const onlyCompletePage = pages.length <= 1 && !hasEarlierHistory;
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
+  const indexedPages = pageIndex.data?.pages ?? [];
+  const indexedPosition = indexedQuestionPagePosition(indexedPages, current?.id);
+  const indexedPrevious = indexedPosition.previousId
+    ? indexedPages.find((page) => page.id === indexedPosition.previousId)
+    : undefined;
+  const indexedNext = indexedPosition.nextId
+    ? indexedPages.find((page) => page.id === indexedPosition.nextId)
+    : undefined;
+  const loadingPrevious = loadingEarlier || pendingPrevious !== null ||
+    loadingAdjacentPageId === indexedPrevious?.id;
+  const loadingNext = loadingAdjacentPageId === indexedNext?.id;
+  const onlyCompletePage = total <= 1 && !hasEarlierHistory;
   const directoryPages = useMemo(() => {
     const summaries = pageIndex.data?.pages ?? [];
     const byId = new Map(summaries.map((page) => [page.id, page]));
@@ -1094,10 +1136,27 @@ export function MobilePageDock({
     }
     return [...byId.values()].sort((left, right) => left.ordinal - right.ordinal);
   }, [pageIndex.data?.pages, pages, total]);
-  const currentOrdinal = Math.max(
-    1,
-    total - Math.max(0, pages.length - 1 - currentIndex),
-  );
+  const currentOrdinal = indexedPosition.ordinal !== undefined
+    ? indexedPosition.ordinal
+    : Math.max(
+      1,
+      total - Math.max(0, pages.length - 1 - currentIndex),
+    );
+
+  useEffect(() => {
+    if (
+      !current || !pageIndex.data || pageIndex.loadingEarlier ||
+      pageIndex.data.pages.some((page) => page.id === current.id) ||
+      pageIndex.data.nextBeforeSeq === null
+    ) return;
+    void pageIndex.loadEarlier();
+  }, [
+    current,
+    pageIndex.data,
+    pageIndex.loadEarlier,
+    pageIndex.loadingEarlier,
+  ]);
+
   const closePageDirectory = useCallback((): void => setOpen(false), []);
   const scrollPageDirectoryToLatest = useCallback((): void => {
     const list = pageDirectoryListRef.current;
@@ -1146,7 +1205,29 @@ export function MobilePageDock({
     setShowPageTop(false);
   };
 
+  const navigateIndexedPage = (id: string): void => {
+    if (loadingAdjacentPageId !== null) return;
+    if (pages.some((page) => page.id === id)) {
+      navigate(id);
+      return;
+    }
+    setLoadingAdjacentPageId(id);
+    beginExplorePageLoading(sessionId);
+    void loadQuestionPage(sessionId, id).then((loaded) => {
+      setLoadingAdjacentPageId(null);
+      if (loaded) {
+        navigate(id);
+      } else {
+        resolveExplorePageStart(sessionId);
+      }
+    });
+  };
+
   const goPrevious = (): void => {
+    if (indexedPrevious) {
+      navigateIndexedPage(indexedPrevious.id);
+      return;
+    }
     if (previous) {
       navigate(previous.id);
       return;
@@ -1254,16 +1335,17 @@ export function MobilePageDock({
         >
           {!onlyCompletePage && (
             <>
-              <Tooltip title={hasEarlierHistory && !previous
+              <Tooltip title={hasEarlierHistory && !indexedPrevious && !previous
                 ? "Load earlier questions"
                 : "Previous page"}
               >
                 <span>
                   <IconButton
-                    aria-label={hasEarlierHistory && !previous
+                    aria-label={hasEarlierHistory && !indexedPrevious && !previous
                       ? "Load earlier questions"
                       : "Previous page"}
-                    disabled={(!previous && !hasEarlierHistory) || loadingPrevious}
+                    disabled={(!indexedPrevious && !previous && !hasEarlierHistory) ||
+                      loadingPrevious || loadingNext}
                     onClick={goPrevious}
                     sx={{
                       width: "max(40px, 2.5rem)",
@@ -1291,8 +1373,11 @@ export function MobilePageDock({
                 <span>
                   <IconButton
                     aria-label="Next page"
-                    disabled={!next}
-                    onClick={(): void => next && navigate(next.id)}
+                    disabled={(!indexedNext && !next) || loadingAdjacentPageId !== null}
+                    onClick={(): void => {
+                      if (indexedNext) navigateIndexedPage(indexedNext.id);
+                      else if (next) navigate(next.id);
+                    }}
                     sx={{
                       width: "max(40px, 2.5rem)",
                       height: "max(40px, 2.5rem)",
@@ -1309,7 +1394,9 @@ export function MobilePageDock({
                       },
                     }}
                   >
-                    <ChevronRight sx={{ fontSize: "1.25em" }} />
+                    {loadingNext
+                      ? <CircularProgress size="1.0625rem" />
+                      : <ChevronRight sx={{ fontSize: "1.25em" }} />}
                   </IconButton>
                 </span>
               </Tooltip>
