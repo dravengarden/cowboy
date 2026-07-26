@@ -46,6 +46,7 @@ import {
 } from "../store";
 import { setSticky } from "../stickyStore";
 import { Transcript } from "../Transcript";
+import { useReliableTouchTap } from "../useReliableTouchTap";
 import {
   setExplorePage,
   setExploreAtTail,
@@ -201,6 +202,7 @@ function PageList({
   onReachStart,
   onDismiss,
   active = true,
+  searchable = true,
 }: {
   pages: QuestionPage[];
   currentId: string | null;
@@ -212,6 +214,7 @@ function PageList({
   onReachStart?: (() => void) | undefined;
   onDismiss?: (() => void) | undefined;
   active?: boolean;
+  searchable?: boolean;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [awayFromBottom, setAwayFromBottom] = useState(false);
@@ -234,7 +237,7 @@ function PageList({
     () => new Map(pages.map((page, index) => [page.id, firstOrdinal + index])),
     [firstOrdinal, pages],
   );
-  const filtered = query.trim()
+  const filtered = searchable && query.trim()
     ? pages.filter((page) =>
       page.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
     )
@@ -253,6 +256,14 @@ function PageList({
     // viewport clear of the boundary, arm the next deliberate approach.
     if (list.scrollTop > 120) earlierRequestArmedRef.current = true;
   }, [onDismiss]);
+  const scrollToLatestTap = useReliableTouchTap<HTMLButtonElement>(() => {
+    const list = listRef.current;
+    if (!list) return;
+    // Directly mutate the nested list. Mobile Safari can drop a smooth
+    // Element.scrollTo() while an ancestor DetentSheet is transformed.
+    list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    updateBottomAffordance();
+  });
 
   useEffect(() => {
     if (!active) {
@@ -400,23 +411,25 @@ function PageList({
 
   return (
     <Stack sx={{ minHeight: 0, height: "100%" }}>
-      <TextField
-        inputProps={{ "data-explore-page-search": "true" }}
-        size="small"
-        value={query}
-        onChange={(event): void => setQuery(event.target.value)}
-        placeholder="Search questions"
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search fontSize="small" />
-              </InputAdornment>
-            ),
-          },
-        }}
-        sx={{ m: dense ? 1 : 2, mb: 1 }}
-      />
+      {searchable && (
+        <TextField
+          inputProps={{ "data-explore-page-search": "true" }}
+          size="small"
+          value={query}
+          onChange={(event): void => setQuery(event.target.value)}
+          placeholder="Search questions"
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search fontSize="small" />
+                </InputAdornment>
+              ),
+            },
+          }}
+          sx={{ m: dense ? 1 : 2, mb: 1 }}
+        />
+      )}
       <Box
         sx={{
           flex: 1,
@@ -565,13 +578,8 @@ function PageList({
               >
                 <FloatingActionIsland maxWidth={54}>
                   <IconButton
+                    {...scrollToLatestTap}
                     aria-label="Scroll to latest question"
-                    onClick={(): void => {
-                      listRef.current?.scrollTo({
-                        top: listRef.current.scrollHeight,
-                        behavior: "smooth",
-                      });
-                    }}
                     sx={{ width: 46, height: 46 }}
                   >
                     <ArrowDownward sx={{ fontSize: "1.25em" }} />
@@ -1264,6 +1272,7 @@ export function MobilePageDock({
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
               active={open}
+              searchable={false}
               pages={pages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - pages.length + 1)}
