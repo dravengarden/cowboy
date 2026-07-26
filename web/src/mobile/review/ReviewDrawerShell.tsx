@@ -18,10 +18,12 @@ export function ReviewDrawerShell({
   drawer,
   children,
   onOpenChange,
+  closeRequest = 0,
 }: {
   drawer: React.ReactNode;
   children: React.ReactNode;
   onOpenChange: (open: boolean) => void;
+  closeRequest?: number;
 }): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -30,6 +32,10 @@ export function ReviewDrawerShell({
   const closeRef = useRef<() => void>(() => undefined);
   const openRef = useRef(false);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (closeRequest > 0) closeRef.current();
+  }, [closeRequest]);
 
   useEffect(() => {
     const root = rootRef.current;

@@ -67,13 +67,23 @@ Project inclusions override only project exclusions, never security checks or
 the session worktree boundary. Ignored entries can be revealed explicitly, but
 are never speculatively scanned.
 
-The initial implementation exposes
-`GET /api/sessions/{id}/file-tree?path=<relative>&limit=<n>`. It returns only
-the immediate children of the requested directory and validates that the
-canonical target remains inside the session cwd. This replaces the temporary
-flat 5,000-file response. The next data-plane revision moves this under
-`/api/code/workspaces/`, adds revisions, cursors, conditional requests, Git
-changes, and file content without changing the UI's provider abstraction.
+The v1 data plane is exposed under `/api/code/sessions/{id}`:
+
+- `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
+- `GET /changes` returns normalized working-tree change records.
+- `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` returns a
+  bounded unified diff.
+- `GET /file?path=<relative>` returns bounded UTF-8 source content with an
+  `ETag`.
+
+Every response carries `apiVersion: 1`. Paths are resolved from the session,
+validated, and contained inside its worktree. Git porcelain and Zed RPC values
+never cross this boundary. The legacy session file-tree route remains an alias
+temporarily, but the Code frontend uses only the stable namespace.
+
+The next data-plane revision adds snapshot revisions, cursors, conditional tree
+requests, Git hunk paging, and persistent browser caching without changing the
+provider-independent response model.
 
 ## Code surface
 

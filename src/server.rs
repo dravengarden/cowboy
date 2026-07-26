@@ -25,6 +25,7 @@ use axum::routing::{any, get, post, put};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -961,6 +962,10 @@ async fn serve_axum(
         )
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/file-tree", get(api_file_tree))
+        .route("/api/code/sessions/{id}/tree", get(api_file_tree))
+        .route("/api/code/sessions/{id}/changes", get(api_code_changes))
+        .route("/api/code/sessions/{id}/diff", get(api_code_diff))
+        .route("/api/code/sessions/{id}/file", get(api_code_file))
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/question-pages", get(api_question_pages))
         .route(
@@ -975,6 +980,7 @@ async fn serve_axum(
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
         .fallback(static_handler)
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -1700,8 +1706,70 @@ struct FileTreeEntry {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FileTreeResponse {
+    api_version: u8,
     path: String,
     entries: Vec<FileTreeEntry>,
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeChangeResponse {
+    path: String,
+    old_path: Option<String>,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeChangesResponse {
+    api_version: u8,
+    head: Option<String>,
+    changes: Vec<CodeChangeResponse>,
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeDiffQuery {
+    path: String,
+    #[serde(default = "default_code_context")]
+    context: usize,
+    #[serde(default = "default_true")]
+    show_whitespace: bool,
+}
+
+fn default_code_context() -> usize {
+    6
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeDiffResponse {
+    api_version: u8,
+    path: String,
+    text: String,
+    added: usize,
+    removed: usize,
+    truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeFileQuery {
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeFileResponse {
+    api_version: u8,
+    path: String,
+    text: String,
+    size: u64,
     truncated: bool,
 }
 
@@ -1763,6 +1831,7 @@ async fn api_file_tree(
         return (StatusCode::BAD_REQUEST, "invalid directory").into_response();
     };
     Json(FileTreeResponse {
+        api_version: 1,
         path: requested_path,
         entries: entries
             .into_iter()
@@ -1779,6 +1848,117 @@ async fn api_file_tree(
         truncated,
     })
     .into_response()
+}
+
+fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
+    state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|meta| meta.id == session_id)
+        .map(|meta| meta.cwd)
+}
+
+async fn api_code_changes(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
+    })
+    .await;
+    let Ok(Ok(result)) = result else {
+        return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable").into_response();
+    };
+    Json(CodeChangesResponse {
+        api_version: 1,
+        head: result.head,
+        changes: result
+            .changes
+            .into_iter()
+            .map(|change| CodeChangeResponse {
+                path: change.path,
+                old_path: change.old_path,
+                status: match change.status {
+                    crate::code_review::ChangeStatus::Modified => "modified",
+                    crate::code_review::ChangeStatus::Added => "added",
+                    crate::code_review::ChangeStatus::Deleted => "deleted",
+                    crate::code_review::ChangeStatus::Renamed => "renamed",
+                    crate::code_review::ChangeStatus::Untracked => "untracked",
+                    crate::code_review::ChangeStatus::Conflicted => "conflicted",
+                },
+            })
+            .collect(),
+        truncated: result.truncated,
+    })
+    .into_response()
+}
+
+async fn api_code_diff(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeDiffQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).diff(
+            &query.path,
+            query.context,
+            query.show_whitespace,
+        )
+    })
+    .await;
+    let Ok(Ok(result)) = result else {
+        return (StatusCode::BAD_REQUEST, "diff unavailable").into_response();
+    };
+    Json(CodeDiffResponse {
+        api_version: 1,
+        path: result.path,
+        text: result.text,
+        added: result.added,
+        removed: result.removed,
+        truncated: result.truncated,
+    })
+    .into_response()
+}
+
+async fn api_code_file(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeFileQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).file(&query.path)
+    })
+    .await;
+    let Ok(Ok(result)) = result else {
+        return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
+    };
+    let etag = format!("\"{:x}\"", Sha256::digest(result.text.as_bytes()));
+    let mut response = Json(CodeFileResponse {
+        api_version: 1,
+        path: result.path,
+        text: result.text,
+        size: result.size,
+        truncated: result.truncated,
+    })
+    .into_response();
+    if let Ok(value) = etag.parse() {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("private, max-age=0, must-revalidate"),
+    );
+    response
 }
 
 #[derive(Debug, Serialize)]

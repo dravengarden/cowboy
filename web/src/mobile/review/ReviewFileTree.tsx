@@ -38,10 +38,12 @@ function cacheKey(sessionId: string, path: string): string {
 function DirectoryRows({
   sessionId,
   entries,
+  onOpenFile,
   depth = 0,
 }: {
   sessionId: string;
   entries: FileTreeEntry[];
+  onOpenFile: (path: string) => void;
   depth?: number;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -75,14 +77,16 @@ function DirectoryRows({
     try {
       const query = new URLSearchParams({ path });
       const response = await fetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/file-tree?${query}`,
+        `/api/code/sessions/${encodeURIComponent(sessionId)}/tree?${query}`,
         { signal: controller.signal },
       );
       if (!response.ok) throw new Error(`file tree: ${response.status}`);
       const body = (await response.json()) as {
+        apiVersion?: number;
         entries?: FileTreeEntry[];
         truncated?: boolean;
       };
+      if (body.apiVersion !== 1) throw new Error("Unsupported Code API version");
       const page = {
         entries: body.entries ?? [],
         truncated: body.truncated ?? false,
@@ -116,7 +120,10 @@ function DirectoryRows({
             <ListItemButton
               aria-expanded={isDirectory ? open : undefined}
               onClick={() => {
-                if (!isDirectory) return;
+                if (!isDirectory) {
+                  onOpenFile(entry.path);
+                  return;
+                }
                 setExpanded((current) => {
                   const next = new Set(current);
                   if (next.has(entry.path)) {
@@ -186,6 +193,7 @@ function DirectoryRows({
                 <DirectoryRows
                   sessionId={sessionId}
                   entries={page.entries}
+                  onOpenFile={onOpenFile}
                   depth={depth + 1}
                 />
                 {page.truncated && (
@@ -209,9 +217,11 @@ function DirectoryRows({
 export function ReviewFileTree({
   sessionId,
   cwd,
+  onOpenFile,
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
+  onOpenFile: (path: string) => void;
 }): React.JSX.Element {
   const [root, setRoot] = useState<DirectoryPage>({
     entries: [],
@@ -248,14 +258,16 @@ export function ReviewFileTree({
     controllerRef.current = controller;
     try {
       const response = await fetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/file-tree`,
+        `/api/code/sessions/${encodeURIComponent(sessionId)}/tree`,
         { signal: controller.signal },
       );
       if (!response.ok) throw new Error(`file tree: ${response.status}`);
       const body = (await response.json()) as {
+        apiVersion?: number;
         entries?: FileTreeEntry[];
         truncated?: boolean;
       };
+      if (body.apiVersion !== 1) throw new Error("Unsupported Code API version");
       const page = {
         entries: body.entries ?? [],
         truncated: body.truncated ?? false,
@@ -342,6 +354,7 @@ export function ReviewFileTree({
                   key={`${sessionId}:${revision}`}
                   sessionId={sessionId}
                   entries={root.entries}
+                  onOpenFile={onOpenFile}
                 />
               )}
             </List>

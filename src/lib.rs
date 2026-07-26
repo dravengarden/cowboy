@@ -21,6 +21,8 @@ mod cgroup;
 #[cfg(feature = "full")]
 pub mod cli;
 #[cfg(feature = "full")]
+mod code_review;
+#[cfg(feature = "full")]
 mod core;
 #[cfg(feature = "full")]
 mod files;
