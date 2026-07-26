@@ -7,7 +7,7 @@ import {
 } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { Box, useTheme } from "@mui/material";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { cmTheme } from "../../cmTheme";
 
 function diffDecorations(view: EditorView): ReturnType<typeof Decoration.set> {
@@ -25,7 +25,9 @@ function diffDecorations(view: EditorView): ReturnType<typeof Decoration.set> {
         ? "cowboy-diff-hunk"
         : "";
       if (className) {
-        decorations.push(Decoration.line({ class: className }).range(line.from));
+        decorations.push(
+          Decoration.line({ class: className }).range(line.from),
+        );
       }
       if (line.to >= view.state.doc.length) break;
       position = line.to + 1;
@@ -55,12 +57,15 @@ export default function CodeViewer({
   text,
   kind,
   softWrap,
+  revealLine,
 }: {
   text: string;
   kind: "source" | "diff";
   softWrap: boolean;
+  revealLine?: number | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
+  const editorRef = useRef<EditorView | null>(null);
   const extensions = useMemo(() => {
     const values: Extension[] = [
       EditorState.readOnly.of(true),
@@ -102,11 +107,28 @@ export default function CodeViewer({
     return values;
   }, [kind, softWrap, theme]);
 
+  useEffect(() => {
+    const view = editorRef.current;
+    if (!view || revealLine === undefined) return;
+    const line = view.state.doc.line(
+      Math.max(1, Math.min(revealLine, view.state.doc.lines)),
+    );
+    view.dispatch({
+      effects: EditorView.scrollIntoView(line.from, {
+        y: "start",
+        yMargin: 12,
+      }),
+    });
+  }, [revealLine, text]);
+
   return (
     <Box sx={{ height: "100%", minHeight: 0, "& > div": { height: "100%" } }}>
       <CodeMirror
         value={text}
         extensions={extensions}
+        onCreateEditor={(view) => {
+          editorRef.current = view;
+        }}
         basicSetup={{
           lineNumbers: true,
           foldGutter: false,

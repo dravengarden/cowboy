@@ -1,6 +1,7 @@
 import {
   Add,
   CallSplit,
+  CheckCircleOutline,
   DeleteOutline,
   DescriptionOutlined,
   ErrorOutline,
@@ -26,6 +27,8 @@ import {
   groupGitChanges,
   reviewQueue,
 } from "./gitReviewModel";
+import { invalidateDiffCache } from "./diffCache";
+import { reviewEntryKey } from "./diffNavigationModel";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
   modified: "M",
@@ -49,9 +52,13 @@ function ChangeIcon(
 export function ReviewChanges({
   sessionId,
   onOpenDiff,
+  reviewed,
+  onRefresh,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
+  reviewed: ReadonlySet<string>;
+  onRefresh: () => void;
 }): React.JSX.Element {
   const [changes, setChanges] = useState<
     Awaited<
@@ -105,9 +112,20 @@ export function ReviewChanges({
         </Box>
         <Chip
           size="small"
-          label={`${changes.length} ${changes.length === 1 ? "file" : "files"}`}
+          label={`${
+            queue.filter((entry) =>
+              reviewed.has(reviewEntryKey(entry.change.path, entry.scope))
+            ).length
+          } / ${queue.length}`}
         />
-        <IconButton aria-label="Refresh changes" onClick={() => void load()}>
+        <IconButton
+          aria-label="Refresh changes"
+          onClick={() => {
+            invalidateDiffCache(sessionId);
+            onRefresh();
+            void load();
+          }}
+        >
           <Refresh />
         </IconButton>
       </Stack>
@@ -173,9 +191,23 @@ export function ReviewChanges({
                         sx={{ minHeight: 56, px: 1.25 }}
                       >
                         <ListItemIcon
-                          sx={{ minWidth: 36, color: "text.secondary" }}
+                          sx={{
+                            minWidth: 36,
+                            color: reviewed.has(
+                                reviewEntryKey(
+                                  entry.change.path,
+                                  entry.scope,
+                                ),
+                              )
+                              ? "success.main"
+                              : "text.secondary",
+                          }}
                         >
-                          <ChangeIcon status={entry.change.status} />
+                          {reviewed.has(
+                              reviewEntryKey(entry.change.path, entry.scope),
+                            )
+                            ? <CheckCircleOutline />
+                            : <ChangeIcon status={entry.change.status} />}
                         </ListItemIcon>
                         <ListItemText
                           primary={entry.change.path.split("/").pop()}

@@ -1,8 +1,12 @@
 import {
   ArrowBack,
+  CheckCircle,
+  CheckCircleOutline,
   ChevronLeft,
   ChevronRight,
   FolderOpenOutlined,
+  KeyboardArrowDown,
+  KeyboardArrowUp,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -16,7 +20,9 @@ import {
 } from "@mui/material";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
-import { fetchCodeDiff, fetchCodeFile } from "./codeApi";
+import { fetchCodeFile } from "./codeApi";
+import { loadCodeDiff } from "./diffCache";
+import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { ReviewChanges } from "./ReviewChanges";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
@@ -50,20 +56,23 @@ function DocumentView({
   const [counts, setCounts] = useState<{ added: number; removed: number }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [hunkIndex, setHunkIndex] = useState(0);
+  const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
 
   useEffect(() => {
     const controller = new AbortController();
+    const diffTarget = target.kind === "diff" ? target : undefined;
     setLoading(true);
     setError(false);
     setText("");
     setCounts(undefined);
-    const request = target.kind === "diff"
-      ? fetchCodeDiff(
+    const request = diffTarget
+      ? loadCodeDiff(
         sessionId,
-        target.path,
+        diffTarget.path,
         settings.contextLines,
         settings.showWhitespaceChanges,
-        target.scope,
+        diffTarget.scope,
         controller.signal,
       )
       : fetchCodeFile(sessionId, target.path, controller.signal);
@@ -72,6 +81,28 @@ function DocumentView({
       setTruncated(result.truncated);
       if ("added" in result) {
         setCounts({ added: result.added, removed: result.removed });
+        setHunkIndex(0);
+        if (!diffTarget) return;
+        const currentIndex = diffTarget.queue.findIndex((entry) =>
+          entry.change.path === diffTarget.path &&
+          entry.scope === diffTarget.scope
+        );
+        for (
+          const entry of [
+            diffTarget.queue[currentIndex - 1],
+            diffTarget.queue[currentIndex + 1],
+          ]
+        ) {
+          if (entry) {
+            void loadCodeDiff(
+              sessionId,
+              entry.change.path,
+              settings.contextLines,
+              settings.showWhitespaceChanges,
+              entry.scope,
+            ).catch(() => undefined);
+          }
+        }
       }
     }).catch((reason) => {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -125,6 +156,34 @@ function DocumentView({
               </Typography>
             </>
           )}
+          {hunks.length > 0 && (
+            <>
+              <Box sx={{ flex: 1 }} />
+              <IconButton
+                size="small"
+                aria-label="Previous hunk"
+                disabled={hunkIndex <= 0}
+                onClick={() => setHunkIndex((value) => value - 1)}
+              >
+                <KeyboardArrowUp fontSize="small" />
+              </IconButton>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ minWidth: 36, textAlign: "center" }}
+              >
+                {hunkIndex + 1}/{hunks.length}
+              </Typography>
+              <IconButton
+                size="small"
+                aria-label="Next hunk"
+                disabled={hunkIndex >= hunks.length - 1}
+                onClick={() => setHunkIndex((value) => value + 1)}
+              >
+                <KeyboardArrowDown fontSize="small" />
+              </IconButton>
+            </>
+          )}
           {truncated && (
             <Chip
               size="small"
@@ -146,6 +205,7 @@ function DocumentView({
             text={text}
             kind={target.kind}
             softWrap={settings.softWrap}
+            revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}
           />
         </Suspense>
       </Box>
@@ -161,8 +221,12 @@ export function ReviewApp({
   const workspace = useActiveWorkspaceBinding();
   const [target, setTarget] = useState<ReviewTarget>({ kind: "changes" });
   const [closeRequest, setCloseRequest] = useState(0);
+  const [reviewed, setReviewed] = useState<ReadonlySet<string>>(new Set());
 
-  useEffect(() => setTarget({ kind: "changes" }), [workspace?.sessionId]);
+  useEffect(() => {
+    setTarget({ kind: "changes" });
+    setReviewed(new Set());
+  }, [workspace?.sessionId]);
 
   const openSource = (path: string): void => {
     setTarget({ kind: "source", path });
@@ -188,6 +252,18 @@ export function ReviewApp({
     if (target.kind !== "diff") return;
     const entry = target.queue[reviewIndex + offset];
     if (entry) openDiff(entry, target.queue);
+  };
+  const targetReviewKey = target.kind === "diff"
+    ? reviewEntryKey(target.path, target.scope)
+    : undefined;
+  const toggleReviewed = (): void => {
+    if (!targetReviewKey) return;
+    setReviewed((current) => {
+      const next = new Set(current);
+      if (next.has(targetReviewKey)) next.delete(targetReviewKey);
+      else next.add(targetReviewKey);
+      return next;
+    });
   };
 
   return (
@@ -246,6 +322,21 @@ export function ReviewApp({
                   : "Read-only file"}
               </Typography>
             </Box>
+            {target.kind === "diff" && (
+              <IconButton
+                aria-label={targetReviewKey && reviewed.has(targetReviewKey)
+                  ? "Mark unreviewed"
+                  : "Mark reviewed"}
+                color={targetReviewKey && reviewed.has(targetReviewKey)
+                  ? "success"
+                  : "default"}
+                onClick={toggleReviewed}
+              >
+                {targetReviewKey && reviewed.has(targetReviewKey)
+                  ? <CheckCircle />
+                  : <CheckCircleOutline />}
+              </IconButton>
+            )}
           </Stack>
         )}
         {!workspace
@@ -268,9 +359,16 @@ export function ReviewApp({
             <ReviewChanges
               sessionId={workspace.sessionId}
               onOpenDiff={openDiff}
+              reviewed={reviewed}
+              onRefresh={() => setReviewed(new Set())}
             />
           )
-          : <DocumentView sessionId={workspace.sessionId} target={target} />}
+          : (
+            <DocumentView
+              sessionId={workspace.sessionId}
+              target={target}
+            />
+          )}
         <Box
           component="nav"
           aria-label="Code Review controls"
