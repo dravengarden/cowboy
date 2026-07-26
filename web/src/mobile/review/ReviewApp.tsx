@@ -1,11 +1,15 @@
-import { ArrowBack, RateReviewOutlined } from "@mui/icons-material";
-import { Box, Chip, IconButton, Stack, Typography } from "@mui/material";
+import { RateReviewOutlined } from "@mui/icons-material";
+import { Box, Chip, Stack, Typography } from "@mui/material";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
+import type { Mode as ThemeMode } from "../../theme";
+import { ReviewSettings } from "./ReviewSettings";
 
 export function ReviewApp({
-  onOpenAgent,
+  themeMode,
+  onSetThemeMode,
 }: {
-  onOpenAgent: () => void;
+  themeMode: ThemeMode;
+  onSetThemeMode: (mode: ThemeMode) => void;
 }): React.JSX.Element {
   const workspace = useActiveWorkspaceBinding();
   return (
@@ -16,30 +20,8 @@ export function ReviewApp({
         bgcolor: "background.default",
         color: "text.primary",
         pt: "env(safe-area-inset-top, 0px)",
-        pb: "env(safe-area-inset-bottom, 0px)",
       }}
     >
-      <Stack
-        component="header"
-        direction="row"
-        alignItems="center"
-        spacing={0.5}
-        sx={{
-          minHeight: 56,
-          px: 1,
-          borderBottom: 1,
-          borderColor: "divider",
-          bgcolor: "background.default",
-        }}
-      >
-        <IconButton aria-label="Back to Agent" onClick={onOpenAgent}>
-          <ArrowBack />
-        </IconButton>
-        <Typography component="h1" variant="h6" sx={{ fontWeight: 650 }}>
-          Code Review
-        </Typography>
-      </Stack>
-
       <Stack
         component="main"
         alignItems="center"
@@ -100,6 +82,28 @@ export function ReviewApp({
           Swipe right to return to Agent
         </Typography>
       </Stack>
+      <Box
+        component="nav"
+        aria-label="Code Review controls"
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          minHeight: 44,
+          px: 1,
+          pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
+          pl: "max(env(safe-area-inset-left, 0px), 8px)",
+          pr: "max(env(safe-area-inset-right, 0px), 8px)",
+          borderTop: 1,
+          borderColor: "divider",
+          bgcolor: "background.default",
+        }}
+      >
+        <ReviewSettings
+          themeMode={themeMode}
+          onSetThemeMode={onSetThemeMode}
+        />
+      </Box>
     </Stack>
   );
 }

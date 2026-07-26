@@ -256,7 +256,10 @@ export function MobileProductShell({
           inert={product !== "review"}
           sx={{ width: "50%", height: "100%", minWidth: 0, overflow: "hidden" }}
         >
-          <ReviewApp onOpenAgent={(): void => selectProduct("agent")} />
+          <ReviewApp
+            themeMode={themeMode}
+            onSetThemeMode={onSetThemeMode}
+          />
         </Box>
       </Box>
     </Box>
