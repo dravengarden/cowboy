@@ -644,6 +644,32 @@ export async function loadPreviousQuestionPage(sessionId: string): Promise<void>
   }
 }
 
+export async function loadQuestionPage(
+  sessionId: string,
+  pageId: string,
+): Promise<boolean> {
+  const rootSeq = Number(pageId);
+  if (!Number.isSafeInteger(rootSeq) || rootSeq < 0) return false;
+  const timeline = state.timelines.get(sessionId);
+  if (timeline?.some((event) => event.seq === rootSeq)) return true;
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/question-pages/${encodeURIComponent(pageId)}?v=${
+        encodeURIComponent(conn.version() ?? "0")
+      }`,
+    );
+    if (!response.ok) return false;
+    const data = (await response.json()) as { events: Envelope[] };
+    setState({
+      ...state,
+      timelines: mergeEvents(state.timelines, sessionId, data.events),
+    });
+    return data.events.some((event) => event.seq === rootSeq);
+  } catch {
+    return false;
+  }
+}
+
 const INACTIVE_HISTORY_TAIL = 800;
 // The open transcript used to grow forever between page reloads. Keep a smaller
 // recent window once a following reader crosses this batched high-water mark.

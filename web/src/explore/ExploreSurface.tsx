@@ -40,6 +40,7 @@ import {
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
+  loadQuestionPage,
   loadPreviousQuestionPage,
   useStoreSelector,
 } from "../store";
@@ -64,24 +65,44 @@ import {
 
 const EMPTY_TIMELINE: Envelope[] = [];
 
+interface QuestionPageSummary {
+  id: string;
+  title: string;
+  ordinal: number;
+}
+
 function useQuestionPageIndex(
   sessionId: string,
   revisionKey: string | undefined,
 ): {
-  data: { total: number; exact: boolean } | null;
+  data: {
+    total: number;
+    exact: boolean;
+    pages: QuestionPageSummary[];
+    nextBeforeSeq: number | null;
+  } | null;
   loading: boolean;
+  loadingEarlier: boolean;
+  loadEarlier: () => Promise<void>;
 } {
   const [state, setState] = useState<{
-    data: { total: number; exact: boolean } | null;
+    data: {
+      total: number;
+      exact: boolean;
+      pages: QuestionPageSummary[];
+      nextBeforeSeq: number | null;
+    } | null;
     loading: boolean;
+    loadingEarlier: boolean;
     sessionId: string;
-  }>({ data: null, loading: true, sessionId });
+  }>({ data: null, loading: true, loadingEarlier: false, sessionId });
   const data = state.sessionId === sessionId ? state.data : null;
   useEffect(() => {
     const controller = new AbortController();
     setState((current) => ({
       data: current.sessionId === sessionId ? current.data : null,
       loading: true,
+      loadingEarlier: false,
       sessionId,
     }));
     void fetch(
@@ -92,9 +113,26 @@ function useQuestionPageIndex(
         if (!response.ok) {
           throw new Error(`question pages: ${String(response.status)}`);
         }
-        return response.json() as Promise<{ total: number; exact: boolean }>;
+        return response.json() as Promise<{
+          total: number;
+          exact: boolean;
+          pages: Array<{ id: number; title: string; ordinal: number }>;
+          next_before_seq: number | null;
+        }>;
       })
-      .then((next) => setState({ data: next, loading: false, sessionId }))
+      .then((next) =>
+        setState({
+          data: {
+            total: next.total,
+            exact: next.exact,
+            pages: next.pages.map((page) => ({ ...page, id: String(page.id) })),
+            nextBeforeSeq: next.next_before_seq,
+          },
+          loading: false,
+          loadingEarlier: false,
+          sessionId,
+        })
+      )
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           console.warn("Failed to load exact question page count", error);
@@ -106,7 +144,49 @@ function useQuestionPageIndex(
       });
     return () => controller.abort();
   }, [sessionId, revisionKey]);
-  return { data, loading: state.loading || state.sessionId !== sessionId };
+  const loadEarlier = useCallback(async (): Promise<void> => {
+    const cursor = data?.nextBeforeSeq;
+    if (cursor === null || cursor === undefined || state.loadingEarlier) return;
+    setState((current) => ({ ...current, loadingEarlier: true }));
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/question-pages?limit=64&before=${String(cursor)}`,
+      );
+      if (!response.ok) throw new Error(`question pages: ${String(response.status)}`);
+      const next = (await response.json()) as {
+        total: number;
+        exact: boolean;
+        pages: Array<{ id: number; title: string; ordinal: number }>;
+        next_before_seq: number | null;
+      };
+      setState((current) => {
+        if (current.sessionId !== sessionId || !current.data) return current;
+        const existing = new Set(current.data.pages.map((page) => page.id));
+        const earlier = next.pages
+          .map((page) => ({ ...page, id: String(page.id) }))
+          .filter((page) => !existing.has(page.id));
+        return {
+          ...current,
+          loadingEarlier: false,
+          data: {
+            total: next.total,
+            exact: next.exact,
+            pages: [...earlier, ...current.data.pages],
+            nextBeforeSeq: next.next_before_seq,
+          },
+        };
+      });
+    } catch (error) {
+      console.warn("Failed to load earlier question titles", error);
+      setState((current) => ({ ...current, loadingEarlier: false }));
+    }
+  }, [data?.nextBeforeSeq, sessionId, state.loadingEarlier]);
+  return {
+    data,
+    loading: state.loading || state.sessionId !== sessionId,
+    loadingEarlier: state.loadingEarlier && state.sessionId === sessionId,
+    loadEarlier,
+  };
 }
 
 export interface ExploreTranscriptProps {
@@ -197,6 +277,7 @@ function PageList({
   firstOrdinal = 1,
   hasEarlier = false,
   loadingEarlier = false,
+  loadingPageId,
   onReachStart,
   onDismiss,
   active = true,
@@ -204,13 +285,14 @@ function PageList({
   listElementRef,
   onAwayFromBottomChange,
 }: {
-  pages: QuestionPage[];
+  pages: Array<{ id: string; title: string; ordinal?: number }>;
   currentId: string | null;
   onSelect: (id: string) => void;
   dense?: boolean;
   firstOrdinal?: number;
   hasEarlier?: boolean;
   loadingEarlier?: boolean;
+  loadingPageId?: string | null;
   onReachStart?: (() => void) | undefined;
   onDismiss?: (() => void) | undefined;
   active?: boolean;
@@ -235,7 +317,13 @@ function PageList({
     pageCount: number;
   } | null>(null);
   const ordinalById = useMemo(
-    () => new Map(pages.map((page, index) => [page.id, firstOrdinal + index])),
+    () =>
+      new Map(
+        pages.map((page, index) => [
+          page.id,
+          page.ordinal ?? firstOrdinal + index,
+        ]),
+      ),
     [firstOrdinal, pages],
   );
   const filtered = searchable && query.trim()
@@ -548,6 +636,15 @@ function PageList({
                     },
                   }}
                 />
+                {loadingPageId === page.id && (
+                  <CircularProgress
+                    aria-label="Loading question"
+                    size={17}
+                    thickness={5}
+                    color="inherit"
+                    sx={{ ml: 1, flexShrink: 0, color: "text.secondary" }}
+                  />
+                )}
               </ListItemButton>
             );
           })}
@@ -853,6 +950,7 @@ export function MobilePageDock({
   const { pages, current, currentIndex, navigate } = usePages(sessionId, timeline);
   const pageIndex = useQuestionPageIndex(sessionId, pages.at(-1)?.id);
   const [open, setOpen] = useState(false);
+  const [loadingDirectoryPageId, setLoadingDirectoryPageId] = useState<string | null>(null);
   const [pageDirectoryAwayFromBottom, setPageDirectoryAwayFromBottom] = useState(false);
   const pageDirectoryListRef = useRef<HTMLUListElement | null>(null);
   const [showPageTop, setShowPageTop] = useState(false);
@@ -871,6 +969,22 @@ export function MobilePageDock({
   const loadingPrevious = loadingEarlier || pendingPrevious !== null;
   const onlyCompletePage = pages.length <= 1 && !hasEarlierHistory;
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
+  const directoryPages = useMemo(() => {
+    const summaries = pageIndex.data?.pages ?? [];
+    const byId = new Map(summaries.map((page) => [page.id, page]));
+    let nextOrdinal = summaries.at(-1)?.ordinal ??
+      Math.max(0, total - pages.length);
+    for (const page of pages) {
+      if (byId.has(page.id)) continue;
+      nextOrdinal += 1;
+      byId.set(page.id, {
+        id: page.id,
+        title: page.title,
+        ordinal: nextOrdinal,
+      });
+    }
+    return [...byId.values()].sort((left, right) => left.ordinal - right.ordinal);
+  }, [pageIndex.data?.pages, pages, total]);
   const currentOrdinal = Math.max(
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
@@ -1270,20 +1384,28 @@ export function MobilePageDock({
               searchable={false}
               listElementRef={pageDirectoryListRef}
               onAwayFromBottomChange={setPageDirectoryAwayFromBottom}
-              pages={pages}
+              pages={directoryPages}
               currentId={current?.id ?? null}
-              firstOrdinal={Math.max(1, total - pages.length + 1)}
-              hasEarlier={hasEarlierHistory}
-              loadingEarlier={loadingEarlier}
-              // Directory pagination is page-semantic, not transport-semantic:
-              // one answer can span many bounded event batches, none of which
-              // adds a visible row here. Fetch through the question boundary so
-              // one upward approach always reveals an earlier directory page.
-              onReachStart={(): void => void loadPreviousQuestionPage(sessionId)}
+              firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
+              hasEarlier={pageIndex.data?.nextBeforeSeq !== null}
+              loadingEarlier={pageIndex.loadingEarlier}
+              loadingPageId={loadingDirectoryPageId}
+              onReachStart={(): void => void pageIndex.loadEarlier()}
               onDismiss={closePageDirectory}
               onSelect={(id): void => {
-                navigate(id);
-                setOpen(false);
+                if (loadingDirectoryPageId) return;
+                if (pages.some((page) => page.id === id)) {
+                  navigate(id);
+                  setOpen(false);
+                  return;
+                }
+                setLoadingDirectoryPageId(id);
+                void loadQuestionPage(sessionId, id).then((loaded) => {
+                  setLoadingDirectoryPageId(null);
+                  if (!loaded) return;
+                  navigate(id);
+                  setOpen(false);
+                });
               }}
             />
           </Box>

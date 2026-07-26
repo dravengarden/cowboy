@@ -962,6 +962,10 @@ async fn serve_axum(
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/question-pages", get(api_question_pages))
+        .route(
+            "/api/sessions/{id}/question-pages/{page_id}",
+            get(api_question_page),
+        )
         .route("/api/sessions/{id}/bootstrap", get(api_session_bootstrap))
         .route("/api/sessions/{id}/prompt", post(api_session_prompt))
         .route("/api/history/{id}", get(api_history))
@@ -1712,6 +1716,14 @@ struct HistoryResponse {
 struct QuestionPagesResponse {
     total: u64,
     exact: bool,
+    pages: Vec<crate::core::QuestionPageSummary>,
+    next_before_seq: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuestionPagesQuery {
+    before: Option<u64>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1828,25 +1840,39 @@ async fn api_history(
 async fn api_question_pages(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
+    Query(query): Query<QuestionPagesQuery>,
 ) -> Response {
     if state.hub.session_info(&session_id).is_none() {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     }
+    let limit = query.limit.unwrap_or(64).clamp(1, 100);
     let result = match &state.store {
         Some(store) => store
-            .question_page_count(&session_id)
+            .question_page_summaries(&session_id, query.before, limit)
             .await
-            .map(|total| QuestionPagesResponse { total, exact: true }),
-        None => Ok(state.hub.question_page_count(&session_id).map_or(
-            QuestionPagesResponse {
-                total: 0,
-                exact: false,
-            },
-            |(total, exact)| QuestionPagesResponse {
-                total: u64::try_from(total).unwrap_or(u64::MAX),
-                exact,
-            },
-        )),
+            .map(|(pages, next_before_seq, total)| QuestionPagesResponse {
+                total,
+                exact: true,
+                pages,
+                next_before_seq,
+            }),
+        None => Ok(state
+            .hub
+            .question_page_summaries(&session_id, query.before, limit)
+            .map_or(
+                QuestionPagesResponse {
+                    total: 0,
+                    exact: false,
+                    pages: Vec::new(),
+                    next_before_seq: None,
+                },
+                |(pages, next_before_seq, total, exact)| QuestionPagesResponse {
+                    total: u64::try_from(total).unwrap_or(u64::MAX),
+                    exact,
+                    pages,
+                    next_before_seq,
+                },
+            )),
     };
     match result {
         Ok(response) => Json(response).into_response(),
@@ -1861,6 +1887,40 @@ async fn api_question_pages(
                 "question pages unavailable",
             )
                 .into_response()
+        }
+    }
+}
+
+async fn api_question_page(
+    State(state): State<Arc<AppState>>,
+    Path((session_id, page_id)): Path<(String, u64)>,
+) -> Response {
+    if state.hub.session_info(&session_id).is_none() {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    }
+    let result = match &state.store {
+        Some(store) => store.question_page_at(&session_id, page_id).await,
+        None => Ok(state.hub.question_page_at(&session_id, page_id)),
+    };
+    match result {
+        Ok(Some(events)) => (
+            [(header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+            Json(HistoryResponse {
+                events,
+                next_before_seq: None,
+                reached_start: false,
+            }),
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::warn!(
+                session = %session_id,
+                page_id,
+                %error,
+                "question page query failed"
+            );
+            (StatusCode::SERVICE_UNAVAILABLE, "question page unavailable").into_response()
         }
     }
 }

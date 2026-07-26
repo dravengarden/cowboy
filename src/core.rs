@@ -46,6 +46,13 @@ const BROADCAST_CAPACITY: usize = 1_024;
 /// above is the primary bound; this limits render work for many tiny events.
 pub const HISTORY_PAGE: usize = 64;
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct QuestionPageSummary {
+    pub id: u64,
+    pub title: String,
+    pub ordinal: u64,
+}
+
 fn is_user_message_chunk(envelope: &Envelope) -> bool {
     matches!(
         &envelope.event,
@@ -69,6 +76,36 @@ fn is_human_question_chunk(envelope: &Envelope) -> bool {
                     Some("/compact" | "/compress")
                 )
     )
+}
+
+fn question_chunk_text(envelope: &Envelope) -> &str {
+    match &envelope.event {
+        Event::Update { update } => update
+            .pointer("/content/text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        _ => "",
+    }
+}
+
+pub(crate) fn question_summary_title(text: &str, ordinal: u64) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = compact.trim_matches(|character: char| {
+        matches!(
+            character,
+            '#' | '>' | '*' | '+' | '-' | '.' | '`' | ' ' | '\t'
+        ) || character.is_ascii_digit()
+    });
+    if trimmed.is_empty() {
+        return format!("Question {ordinal}");
+    }
+    let mut chars = trimmed.chars();
+    let title = chars.by_ref().take(72).collect::<String>();
+    if chars.next().is_some() {
+        format!("{}…", title.trim_end())
+    } else {
+        title
+    }
 }
 
 pub(crate) fn bound_history_page(mut events: Vec<Envelope>) -> Vec<Envelope> {
@@ -1711,22 +1748,67 @@ impl Hub {
         })
     }
 
-    /// Count question-page roots in the retained log. Consecutive ACP content
-    /// blocks belong to one rich prompt, matching the frontend derivation.
     #[must_use]
-    pub fn question_page_count(&self, session_id: &str) -> Option<(usize, bool)> {
+    pub fn question_page_summaries(
+        &self,
+        session_id: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Option<(Vec<QuestionPageSummary>, Option<u64>, usize, bool)> {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|session| {
-            let mut previous_was_user_chunk = false;
-            let mut count = 0usize;
-            for envelope in &session.log {
-                let is_user_chunk = is_user_message_chunk(envelope);
-                if is_human_question_chunk(envelope) && !previous_was_user_chunk {
-                    count += 1;
-                }
-                previous_was_user_chunk = is_user_chunk;
+            let roots = session
+                .log
+                .iter()
+                .enumerate()
+                .filter_map(|(index, envelope)| {
+                    let previous_was_user =
+                        index > 0 && is_user_message_chunk(&session.log[index - 1]);
+                    (is_human_question_chunk(envelope) && !previous_was_user).then_some(envelope)
+                })
+                .collect::<Vec<_>>();
+            let end = before_seq.map_or(roots.len(), |cursor| {
+                roots.partition_point(|envelope| envelope.seq < cursor)
+            });
+            let start = end.saturating_sub(limit);
+            let pages = roots[start..end]
+                .iter()
+                .enumerate()
+                .map(|(offset, envelope)| {
+                    let ordinal = u64::try_from(start + offset + 1).unwrap_or(u64::MAX);
+                    QuestionPageSummary {
+                        id: envelope.seq,
+                        title: question_summary_title(question_chunk_text(envelope), ordinal),
+                        ordinal,
+                    }
+                })
+                .collect();
+            let next_before_seq = (start > 0).then_some(roots[start].seq);
+            (pages, next_before_seq, roots.len(), session.reached_start)
+        })
+    }
+
+    #[must_use]
+    pub fn question_page_at(&self, session_id: &str, root_seq: u64) -> Option<Vec<Envelope>> {
+        let sessions = self.inner.sessions.lock();
+        sessions.get(session_id).and_then(|session| {
+            let root_index = session
+                .log
+                .iter()
+                .position(|envelope| envelope.seq == root_seq)?;
+            let envelope = &session.log[root_index];
+            let previous_was_user =
+                root_index > 0 && is_user_message_chunk(&session.log[root_index - 1]);
+            if !is_human_question_chunk(envelope) || previous_was_user {
+                return None;
             }
-            (count, session.reached_start)
+            let end = (root_index + 1..session.log.len())
+                .find(|&index| {
+                    is_human_question_chunk(&session.log[index])
+                        && !is_user_message_chunk(&session.log[index - 1])
+                })
+                .unwrap_or(session.log.len());
+            Some(session.log[root_index..end].to_vec())
         })
     }
 
@@ -4498,6 +4580,30 @@ mod confirm_hold_tests {
         );
         assert_eq!(cursor, None);
         assert!(reached_start);
+
+        let (latest, before, total, exact) = hub
+            .question_page_summaries("question-page", None, 1)
+            .expect("latest question summary");
+        assert_eq!(latest[0].title, "second question");
+        assert_eq!(latest[0].ordinal, 2);
+        assert_eq!(before, Some(3));
+        assert_eq!(total, 2);
+        assert!(exact);
+
+        let (earlier, before, _, _) = hub
+            .question_page_summaries("question-page", before, 1)
+            .expect("earlier question summary");
+        assert_eq!(earlier[0].title, "first question");
+        assert_eq!(earlier[0].ordinal, 1);
+        assert_eq!(before, None);
+
+        let lazy_page = hub
+            .question_page_at("question-page", 0)
+            .expect("lazy question page");
+        assert_eq!(
+            lazy_page.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
     }
 
     #[test]
@@ -4524,10 +4630,13 @@ mod confirm_hold_tests {
             );
         }
 
-        assert_eq!(
-            hub.question_page_count("question-commands"),
-            Some((2, true))
-        );
+        let (pages, next, total, exact) = hub
+            .question_page_summaries("question-commands", None, 64)
+            .expect("question summaries");
+        assert_eq!(pages.len(), 2);
+        assert_eq!(next, None);
+        assert_eq!(total, 2);
+        assert!(exact);
     }
 
     #[tokio::test]

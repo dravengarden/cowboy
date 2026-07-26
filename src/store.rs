@@ -29,8 +29,8 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::core::{
-    Envelope, Event, JudgeRun, QueuedMessage, SessionMeta, SessionOrigin, Status,
-    bound_history_page,
+    Envelope, Event, JudgeRun, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin,
+    Status, bound_history_page, question_summary_title,
 };
 
 /// Strip NUL (`U+0000`) code points from every string (and object key) inside a
@@ -533,29 +533,136 @@ impl Store {
         ))
     }
 
-    /// Count canonical question pages without transferring transcript payloads.
-    /// A rich prompt may contain several consecutive user-message content
-    /// blocks; only the first block starts a page.
-    pub async fn question_page_count(&self, session_id: &str) -> Result<u64> {
-        let count = sqlx::query_scalar::<_, i64>(
+    /// Return a cursor page of lightweight question roots. This query transfers
+    /// only the prompt text needed for the directory; answer payloads remain in
+    /// Postgres until the reader opens one page.
+    pub async fn question_page_summaries(
+        &self,
+        session_id: &str,
+        before_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<(Vec<QuestionPageSummary>, Option<u64>, u64)> {
+        let before = before_seq
+            .map(i64::try_from)
+            .transpose()
+            .context("question summary cursor overflow")?;
+        let rows = sqlx::query_as::<_, (i64, String, i64, i64)>(
             "WITH ordered AS ( \
-               SELECT payload, \
+               SELECT seq, payload, \
                  LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
                FROM events WHERE session_id = $1 \
+             ), roots AS ( \
+               SELECT seq, COALESCE(payload->'update'->'content'->>'text', '') AS title \
+               FROM ordered \
+               WHERE payload->>'kind' = 'update' \
+                 AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+                 AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                     NOT IN ('/compact', '/compress') \
+                 AND previous_update IS DISTINCT FROM 'user_message_chunk' \
+             ), numbered AS ( \
+               SELECT seq, title, \
+                 ROW_NUMBER() OVER (ORDER BY seq) AS ordinal, \
+                 COUNT(*) OVER () AS total \
+               FROM roots \
              ) \
-             SELECT COUNT(*) FROM ordered \
-             WHERE payload->>'kind' = 'update' \
-               AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
-               AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
-               AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
-                   NOT IN ('/compact', '/compress') \
-               AND previous_update IS DISTINCT FROM 'user_message_chunk'",
+             SELECT seq, title, ordinal, total FROM numbered \
+             WHERE ($2::bigint IS NULL OR seq < $2) \
+             ORDER BY seq DESC LIMIT $3",
         )
         .bind(session_id)
-        .fetch_one(&self.pool)
+        .bind(before)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
         .await
-        .with_context(|| format!("COUNT question pages for {session_id}"))?;
-        Ok(u64::try_from(count).unwrap_or(0))
+        .with_context(|| format!("SELECT question summaries for {session_id}"))?;
+        let total = rows
+            .first()
+            .map_or(0, |row| u64::try_from(row.3).unwrap_or(0));
+        let next_before_seq = rows
+            .last()
+            .and_then(|row| (row.2 > 1).then(|| u64::try_from(row.0).unwrap_or(0)));
+        let mut pages = rows
+            .into_iter()
+            .map(|(seq, title, ordinal, _)| {
+                let ordinal = u64::try_from(ordinal).unwrap_or(u64::MAX);
+                QuestionPageSummary {
+                    id: u64::try_from(seq).unwrap_or(0),
+                    title: question_summary_title(&title, ordinal),
+                    ordinal,
+                }
+            })
+            .collect::<Vec<_>>();
+        pages.reverse();
+        Ok((pages, next_before_seq, total))
+    }
+
+    /// Load exactly one immutable question page by its user-message root.
+    pub async fn question_page_at(
+        &self,
+        session_id: &str,
+        root_seq: u64,
+    ) -> Result<Option<Vec<Envelope>>> {
+        let root = i64::try_from(root_seq).context("question root overflow")?;
+        let bounds = sqlx::query_as::<_, (i64, Option<i64>)>(
+            "WITH ordered AS ( \
+               SELECT seq, payload, \
+                 LAG(payload->'update'->>'sessionUpdate') OVER (ORDER BY seq) AS previous_update \
+               FROM events WHERE session_id = $1 \
+             ), roots AS ( \
+               SELECT seq FROM ordered \
+               WHERE payload->>'kind' = 'update' \
+                 AND payload->'update'->>'sessionUpdate' = 'user_message_chunk' \
+                 AND COALESCE(payload->'update'->>'autoResumed', 'false') <> 'true' \
+                 AND BTRIM(COALESCE(payload->'update'->'content'->>'text', '')) \
+                     NOT IN ('/compact', '/compress') \
+                 AND previous_update IS DISTINCT FROM 'user_message_chunk' \
+             ), bounded AS ( \
+               SELECT seq, LEAD(seq) OVER (ORDER BY seq) AS next_seq FROM roots \
+             ) \
+             SELECT seq, next_seq FROM bounded WHERE seq = $2",
+        )
+        .bind(session_id)
+        .bind(root)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question page bounds for {session_id}:{root_seq}"))?;
+        let Some((start, end)) = bounds else {
+            return Ok(None);
+        };
+        let rows = sqlx::query_as::<_, EventRow>(
+            "SELECT seq, payload, 0::bigint AS total_count FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND ($3::bigint IS NULL OR seq < $3) \
+             ORDER BY seq",
+        )
+        .bind(session_id)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question page at {session_id}:{root_seq}"))?;
+        let events = rows
+            .into_iter()
+            .filter_map(|row| {
+                serde_json::from_value::<Event>(row.payload)
+                    .map(|event| Envelope {
+                        session_id: session_id.to_owned(),
+                        seq: u64::try_from(row.seq).unwrap_or(0),
+                        event,
+                        cmid: None,
+                    })
+                    .map_err(|error| {
+                        tracing::warn!(
+                            %error,
+                            session = %session_id,
+                            seq = row.seq,
+                            "skipping undecodable lazy question-page event",
+                        );
+                    })
+                    .ok()
+            })
+            .collect();
+        Ok(Some(events))
     }
 
     /// Insert a brand-new session. Caller is expected to set `next_seq = 0`
