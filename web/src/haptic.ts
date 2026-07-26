@@ -30,28 +30,17 @@ interface CowboyNativeSelectionBridge {
   readonly __cowboySelectionHaptic?: () => void;
 }
 
-let preparedNavigationUntil = -Infinity;
-
-/** Warm the native selection generator before a drag can cross its magnetic
- * threshold. The native shell keeps the generator alive; browsers and older
- * shells simply retain the existing plugin path. */
+/** Warm the native low-priority soft-impact generator before a drag can cross
+ * its magnetic threshold. The bridge names remain stable for older bundles. */
 export function prepareNavigationHaptic(): void {
   const bridge = globalThis as typeof globalThis & CowboyNativeSelectionBridge;
   if (typeof bridge.__cowboyPrepareSelectionHaptic !== "function") return;
   bridge.__cowboyPrepareSelectionHaptic();
-  preparedNavigationUntil = (globalThis.performance?.now?.() ?? 0) + 2_000;
 }
 
-function firePreparedNavigationHaptic(): boolean {
+function fireNativeLowPriorityHaptic(): boolean {
   const bridge = globalThis as typeof globalThis & CowboyNativeSelectionBridge;
-  const now = globalThis.performance?.now?.() ?? 0;
-  if (
-    now > preparedNavigationUntil ||
-    typeof bridge.__cowboySelectionHaptic !== "function"
-  ) {
-    return false;
-  }
-  preparedNavigationUntil = -Infinity;
+  if (typeof bridge.__cowboySelectionHaptic !== "function") return false;
   bridge.__cowboySelectionHaptic();
   return true;
 }
@@ -59,6 +48,7 @@ function firePreparedNavigationHaptic(): boolean {
 function fireIntent(intent: CowboyHapticIntent): void {
   const style = hapticStyleForIntent(intent);
   if (style === "selection") {
+    if (fireNativeLowPriorityHaptic()) return;
     selectionHaptic();
     return;
   }
@@ -77,7 +67,6 @@ function fireIntent(intent: CowboyHapticIntent): void {
  * semantically different from impact strength.
  */
 export function navigationHaptic(): void {
-  if (firePreparedNavigationHaptic()) return;
   fireIntent("navigation");
 }
 
@@ -96,6 +85,7 @@ export function importantHaptic(): void {
 /** Backward-compatible adapter for ordinary call sites awaiting semantic
  * migration. New feature code must use one of the intent functions above. */
 export function haptic(ms = 12): void {
+  if (ms <= 12 && fireNativeLowPriorityHaptic()) return;
   const style: HapticStyle = ms <= 12 ? "light" : ms <= 24 ? "medium" : "heavy";
   fireImpact(style);
 }
