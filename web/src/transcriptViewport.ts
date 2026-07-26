@@ -64,3 +64,17 @@ export function shouldMagnetizeTranscript(
     !input.touching &&
     input.fromBottom <= input.threshold;
 }
+
+export function magneticHapticTransition(
+  armed: boolean,
+  fromBottom: number,
+  threshold: number,
+): { armed: boolean; fire: boolean } {
+  if (!armed && fromBottom <= threshold) return { armed: true, fire: true };
+  // Native scroll settling can oscillate by a few pixels at the boundary.
+  // Require a deliberate retreat before another quiet orientation tick.
+  if (armed && fromBottom >= threshold * 1.75) {
+    return { armed: false, fire: false };
+  }
+  return { armed, fire: false };
+}

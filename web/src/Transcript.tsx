@@ -106,6 +106,7 @@ import {
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
+  magneticHapticTransition,
   shouldBackfillTranscriptViewport,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
@@ -3516,8 +3517,13 @@ export function Transcript({
       const insideMagneticZone = !stick.current &&
         (managesScrollHistoryRef.current || workingRef.current) &&
         fromBottom <= magneticThreshold();
-      if (insideMagneticZone && !magneticArmed) magneticHaptic();
-      magneticArmed = insideMagneticZone;
+      const magnetic = magneticHapticTransition(
+        magneticArmed,
+        fromBottom,
+        magneticThreshold(),
+      );
+      if (insideMagneticZone && magnetic.fire) magneticHaptic();
+      magneticArmed = magnetic.armed;
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
       if (!stick.current) captureAnchor();

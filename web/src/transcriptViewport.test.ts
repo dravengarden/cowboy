@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   historyPrefetchTransition,
+  magneticHapticTransition,
   shouldBackfillTranscriptViewport,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
@@ -159,6 +160,25 @@ Deno.test("history magnetizes at the live edge after the gesture settles", () =>
     }),
     false,
   );
+});
+
+Deno.test("magnetic haptic uses hysteresis around the live edge", () => {
+  assertEquals(magneticHapticTransition(false, 47, 48), {
+    armed: true,
+    fire: true,
+  });
+  assertEquals(magneticHapticTransition(true, 52, 48), {
+    armed: true,
+    fire: false,
+  });
+  assertEquals(magneticHapticTransition(true, 84, 48), {
+    armed: false,
+    fire: false,
+  });
+  assertEquals(magneticHapticTransition(false, 47, 48), {
+    armed: true,
+    fire: true,
+  });
 });
 
 Deno.test("only a streaming page magnetizes at its bottom", () => {

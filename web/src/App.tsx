@@ -1818,7 +1818,7 @@ export function App({
             scheduleRender(offset);
             const progress = Math.max(0, Math.min(1, offset / width));
             const nextCommit = gesture.startOpen ? progress > 0.66 : progress >= 0.34;
-            if (nextCommit !== commit) {
+            if (nextCommit !== commit && !gesture.thresholdHaptic) {
                 navigationHaptic();
                 gesture.thresholdHaptic = true;
             }
