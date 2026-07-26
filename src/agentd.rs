@@ -87,7 +87,9 @@ struct Broker {
     /// even though the global desired generation is still marked unhealthy.
     fallback_pins: Mutex<HashMap<String, String>>,
     fallback_targets: Mutex<HashMap<String, String>>,
-    unhealthy_generations: Mutex<HashSet<(String, String)>>,
+    /// Sessions whose candidate launch marked a provider generation unhealthy.
+    /// Tracking the source lets deletion retract only its own failure.
+    unhealthy_generations: Mutex<HashMap<(String, String), HashSet<String>>>,
     desired_generation: Mutex<String>,
     previous_generation: Mutex<Option<String>>,
     generation_commands: Mutex<HashMap<String, PathBuf>>,
@@ -117,7 +119,7 @@ impl Broker {
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
-            unhealthy_generations: Mutex::new(HashSet::new()),
+            unhealthy_generations: Mutex::new(HashMap::new()),
             previous_generation: Mutex::new(None),
             generation_commands: Mutex::new(generation_commands),
             next_connection: AtomicU64::new(1),
@@ -210,6 +212,13 @@ impl Broker {
     fn unpin_fallback(&self, session_id: &str) {
         self.fallback_pins.lock().remove(session_id);
         self.fallback_targets.lock().remove(session_id);
+    }
+
+    fn clear_generation_failures_for_session(&self, session_id: &str) {
+        self.unhealthy_generations.lock().retain(|_, sessions| {
+            sessions.remove(session_id);
+            !sessions.is_empty()
+        });
     }
 
     fn controller_for(&self, lease: u64) -> Option<mpsc::UnboundedSender<Frame>> {
@@ -338,7 +347,8 @@ impl Broker {
         if !accepted {
             return;
         }
-        if self.cancelled_sessions.lock().contains(&session_id) {
+        let cancelled = self.cancelled_sessions.lock();
+        if cancelled.contains(&session_id) {
             return;
         }
         if let Some(launch) = launch.as_ref()
@@ -350,13 +360,16 @@ impl Broker {
                 *self.previous_generation.lock() = Some(launch.generation.clone());
                 self.unhealthy_generations
                     .lock()
-                    .insert((failed_generation.clone(), launch.provider.clone()));
+                    .entry((failed_generation.clone(), launch.provider.clone()))
+                    .or_default()
+                    .insert(session_id.clone());
             }
         }
         if let Some(launch) = launch {
             self.sessions.lock().insert(session_id.clone(), launch);
         }
         self.session_states.lock().insert(session_id, state);
+        drop(cancelled);
     }
 
     fn touch_worker(&self, session_id: &str, connection_id: u64) {
@@ -546,6 +559,15 @@ impl Broker {
             let result = broker.spawn_with_fallback(session.clone(), None).await;
             broker.launching.lock().remove(&session.session_id);
             if let Err(error) = result {
+                let cancelled = broker.cancelled_sessions.lock();
+                if cancelled.contains(&session.session_id) {
+                    tracing::debug!(
+                        session = %session.session_id,
+                        %error,
+                        "deleted session launch stopped"
+                    );
+                    return;
+                }
                 if broker
                     .resetting_sessions
                     .lock()
@@ -565,6 +587,7 @@ impl Broker {
                     format!("ensure:{}", session.session_id),
                     error.to_string(),
                 );
+                drop(cancelled);
             }
         });
     }
@@ -668,7 +691,10 @@ impl Broker {
         session_fallback: Option<String>,
     ) -> Result<()> {
         let generation_key = (session.generation.clone(), session.provider.clone());
-        let desired_is_unhealthy = self.unhealthy_generations.lock().contains(&generation_key);
+        let desired_is_unhealthy = self
+            .unhealthy_generations
+            .lock()
+            .contains_key(&generation_key);
         let mut selected = session.clone();
         if desired_is_unhealthy
             && let Some(previous) = session_fallback
@@ -691,9 +717,17 @@ impl Broker {
                 Ok(())
             }
             Err(error) => {
-                self.unhealthy_generations
-                    .lock()
-                    .insert((selected.generation.clone(), selected.provider.clone()));
+                {
+                    let cancelled = self.cancelled_sessions.lock();
+                    if cancelled.contains(&selected.session_id) {
+                        return Err(error);
+                    }
+                    self.unhealthy_generations
+                        .lock()
+                        .entry((selected.generation.clone(), selected.provider.clone()))
+                        .or_default()
+                        .insert(selected.session_id.clone());
+                }
                 let fallback = session_fallback
                     .clone()
                     .or_else(|| self.previous_generation.lock().clone());
@@ -1028,6 +1062,11 @@ impl Broker {
                     tracing::info!(session = %session_id, %old_generation, "worker generation cutover launched")
                 }
                 Err(error) => {
+                    let cancelled = broker.cancelled_sessions.lock();
+                    if cancelled.contains(&session_id) {
+                        tracing::debug!(session = %session_id, %error, "deleted session rollout stopped");
+                        return;
+                    }
                     tracing::error!(session = %session_id, %old_generation, %error, "worker cutover and fallback failed");
                     broker.publish_session_state(&session_id, WorkerState::Crashed);
                     broker.command_rejected(
@@ -1035,6 +1074,7 @@ impl Broker {
                         format!("rollout:{session_id}"),
                         error.to_string(),
                     );
+                    drop(cancelled);
                 }
             }
         });
@@ -1547,12 +1587,15 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             command_id,
         } => {
             broker.resetting_sessions.lock().remove(&session_id);
+            let mut cancelled = broker.cancelled_sessions.lock();
+            cancelled.insert(session_id.clone());
+            broker.clear_generation_failures_for_session(&session_id);
             broker.sessions.lock().remove(&session_id);
-            broker.cancelled_sessions.lock().insert(session_id.clone());
             broker.awaiting_reconnect.lock().remove(&session_id);
             broker.session_states.lock().remove(&session_id);
             broker.pending_commands.lock().remove(&session_id);
             broker.unpin_fallback(&session_id);
+            drop(cancelled);
             if broker.workers.lock().contains_key(&session_id) {
                 broker.route_worker(&session_id, WorkerCommand::Stop { command_id });
             } else {
@@ -1589,6 +1632,10 @@ async fn handle_worker(
         match frame {
             Frame::Snapshot { worker } if worker.session_id == session_id => {
                 broker.update_snapshot((*worker).clone(), connection_id);
+                let cancelled = broker.cancelled_sessions.lock();
+                if cancelled.contains(session_id) {
+                    continue;
+                }
                 broker.unhealthy_generations.lock().remove(&(
                     worker.generation.clone(),
                     broker
@@ -1605,6 +1652,7 @@ async fn handle_worker(
                 broker.send_controller(Frame::Snapshot {
                     worker: Box::new(worker),
                 });
+                drop(cancelled);
                 broker.maybe_cutover(session_id);
             }
             Frame::WorkerEvent {
@@ -1613,6 +1661,10 @@ async fn handle_worker(
                 runtime_seq,
                 event,
             } if event_session == session_id && worker_epoch == epoch => {
+                let cancelled = broker.cancelled_sessions.lock();
+                if cancelled.contains(session_id) {
+                    continue;
+                }
                 broker.update_from_event(session_id, connection_id, runtime_seq, &event);
                 broker.send_controller(Frame::WorkerEvent {
                     session_id: event_session,
@@ -1621,6 +1673,7 @@ async fn handle_worker(
                     event,
                 });
                 broker.maybe_cutover(session_id);
+                drop(cancelled);
             }
             Frame::CommandAck { .. } => broker.send_controller(frame),
             Frame::Heartbeat => {}
@@ -1983,6 +2036,76 @@ mod tests {
         assert!(!broker.cancelled_sessions.lock().contains("sess-reset"));
         assert!(broker.sessions.lock().contains_key("sess-reset"));
         assert!(!broker.resetting_sessions.lock().contains_key("sess-reset"));
+    }
+
+    #[tokio::test]
+    async fn deleted_launch_does_not_quarantine_the_worker_generation() {
+        let broker = Broker::new(AgentdArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-2".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_ready_timeout: Duration::from_millis(10),
+        });
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-deleted".to_owned());
+
+        let error = broker
+            .spawn_with_fallback(
+                StartSession {
+                    session_id: "sess-deleted".to_owned(),
+                    provider: "codex".to_owned(),
+                    cwd: "/work".to_owned(),
+                    agent_session_id: None,
+                    system: false,
+                    generation: "gen-2".to_owned(),
+                    fallback_for: None,
+                    adopt_only: false,
+                },
+                Some("gen-1".to_owned()),
+            )
+            .await
+            .expect_err("deleted launch must stop");
+
+        assert!(error.to_string().contains("deleted during launch"));
+        assert!(broker.unhealthy_generations.lock().is_empty());
+        assert!(broker.fallback_pins.lock().is_empty());
+        assert!(broker.fallback_targets.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deletion_retracts_only_its_generation_failure() {
+        let broker = Arc::new(Broker::new(AgentdArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-2".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_ready_timeout: Duration::from_millis(10),
+        }));
+        broker.unhealthy_generations.lock().insert(
+            ("gen-2".to_owned(), "codex".to_owned()),
+            HashSet::from(["sess-deleted".to_owned(), "sess-live".to_owned()]),
+        );
+
+        handle_core_command(
+            &broker,
+            CoreCommand::StopSession {
+                session_id: "sess-deleted".to_owned(),
+                command_id: "delete-1".to_owned(),
+            },
+        )
+        .await;
+
+        assert_eq!(
+            broker
+                .unhealthy_generations
+                .lock()
+                .get(&("gen-2".to_owned(), "codex".to_owned()))
+                .cloned(),
+            Some(HashSet::from(["sess-live".to_owned()]))
+        );
     }
 
     #[tokio::test]
