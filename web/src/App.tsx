@@ -7,6 +7,7 @@ import {
     Suspense,
     useCallback,
     useEffect,
+    useLayoutEffect,
     useRef,
     useState,
 } from "react";
@@ -427,6 +428,7 @@ function SessionList({
     loaded,
     desktop,
     mobileDrawer = false,
+    mobileDrawerOpen = false,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -442,6 +444,7 @@ function SessionList({
     loaded: boolean;
     desktop: boolean;
     mobileDrawer?: boolean;
+    mobileDrawerOpen?: boolean;
 }): React.JSX.Element {
     // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
     // the same keys into spatial reorder commands until P/Esc (or opening a
@@ -459,12 +462,30 @@ function SessionList({
     } | null>(null);
     // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
     const byId = new Map(sessions.map((s) => [s.id, s]));
+    const displayedSessions = mobileDrawer ? [...sessions].reverse() : sessions;
     const listRef = useRef<HTMLUListElement>(null);
     const sortable = useSortable({
-        ids: sessions.map((s) => s.id),
-        onReorder: reorderSessions,
+        ids: displayedSessions.map((s) => s.id),
+        onReorder: (order): void =>
+            reorderSessions(mobileDrawer ? [...order].reverse() : order),
         scrollContainer: () => listRef.current,
     });
+    const positionedMobileOpenRef = useRef(false);
+    useLayoutEffect(() => {
+        if (!mobileDrawer || !mobileDrawerOpen) {
+            positionedMobileOpenRef.current = false;
+            return undefined;
+        }
+        if (positionedMobileOpenRef.current || !loaded) return undefined;
+        positionedMobileOpenRef.current = true;
+        let frame = requestAnimationFrame(() => {
+            frame = requestAnimationFrame(() => {
+                const list = listRef.current;
+                if (list) list.scrollTop = list.scrollHeight - list.clientHeight;
+            });
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [loaded, mobileDrawer, mobileDrawerOpen]);
     useEffect(() => {
         const list = listRef.current;
         const region = list?.closest<HTMLElement>("[data-desktop-region='sessions.list']");
@@ -620,7 +641,7 @@ function SessionList({
                     : "calc(-76px - env(safe-area-inset-bottom, 0px))",
             }}
         >
-            <Box sx={{ p: 1 }}>
+            {!mobileDrawer && <Box sx={{ p: 1 }}>
                 <Button
                     fullWidth
                     variant="outlined"
@@ -660,7 +681,7 @@ function SessionList({
                         <Typography variant="caption" color="text.secondary">Done</Typography>
                     </Box>
                 )}
-            </Box>
+            </Box>}
             <List
                 dense
                 ref={listRef}
@@ -675,7 +696,7 @@ function SessionList({
                     pb: desktop
                         ? undefined
                         : mobileDrawer
-                        ? "max(env(safe-area-inset-bottom, 0px), 16px)"
+                        ? 0.5
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
                     // Fine-pointer desktops do not need phone-sized 44px controls
                     // in every row. Keep the generous targets for touch/tablet,
@@ -897,6 +918,25 @@ function SessionList({
                         : <LoadingState compact />
                 )}
             </List>
+            {mobileDrawer && (
+                <Box
+                    sx={{
+                        flexShrink: 0,
+                        px: 1,
+                        pt: 0.75,
+                        pb: "max(env(safe-area-inset-bottom, 0px), 8px)",
+                    }}
+                >
+                    <Button
+                        fullWidth
+                        variant="outlined"
+                        startIcon={<Add />}
+                        onClick={onNew}
+                    >
+                        New session
+                    </Button>
+                </Box>
+            )}
             <Menu
                 sx={{ display: desktop ? "none" : undefined }}
                 anchorEl={menuAnchor?.el ?? null}
@@ -2209,6 +2249,7 @@ export function App({
             loaded={sessionsLoaded}
             desktop={surface === "desktop"}
             mobileDrawer={mobile}
+            mobileDrawerOpen={mobile && drawerOpen}
         />
     );
 
@@ -2430,18 +2471,6 @@ export function App({
                             },
                         }}
                     >
-                        <Typography
-                            variant="h6"
-                            sx={{
-                                px: 2,
-                                pt: 1.5,
-                                pb: 0.5,
-                                fontWeight: 750,
-                                letterSpacing: "-0.015em",
-                            }}
-                        >
-                            Sessions
-                        </Typography>
                         <Box sx={{ flex: 1, minHeight: 0 }}>
                             {list}
                         </Box>
