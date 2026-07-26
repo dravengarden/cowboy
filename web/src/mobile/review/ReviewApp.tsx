@@ -1,11 +1,13 @@
 import { ArrowBack, RateReviewOutlined } from "@mui/icons-material";
-import { Box, IconButton, Stack, Typography } from "@mui/material";
+import { Box, Chip, IconButton, Stack, Typography } from "@mui/material";
+import { useActiveWorkspaceBinding } from "../../controlPlane";
 
 export function ReviewApp({
   onOpenAgent,
 }: {
   onOpenAgent: () => void;
 }): React.JSX.Element {
+  const workspace = useActiveWorkspaceBinding();
   return (
     <Stack
       sx={{
@@ -72,6 +74,28 @@ export function ReviewApp({
             Agent session.
           </Typography>
         </Stack>
+        {workspace && (
+          <Stack spacing={0.75} alignItems="center" sx={{ maxWidth: "100%" }}>
+            <Chip
+              size="small"
+              label={workspace.title || workspace.sessionId}
+              color="primary"
+              variant="outlined"
+            />
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                maxWidth: "100%",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {workspace.cwd}
+            </Typography>
+          </Stack>
+        )}
         <Typography variant="caption" color="text.secondary">
           Swipe right to return to Agent
         </Typography>

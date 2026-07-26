@@ -2,6 +2,12 @@ import { Box } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { navigationHaptic, prepareNavigationHaptic } from "../../haptic";
 import {
+  controlPlaneConnection,
+  useActiveWorkspaceBinding,
+} from "../../controlPlane";
+import { NativeReleaseUpdatePrompt } from "../../_shell";
+import { MobileConnectionBanner } from "../MobileConnectionBanner";
+import {
   expandedSelection,
   hasHorizontalScroller,
   horizontalSwipe,
@@ -54,6 +60,7 @@ export function MobileProductShell({
   const productRef = useRef(product);
   const shellRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
+  const workspace = useActiveWorkspaceBinding();
 
   const selectProduct = useCallback((next: MobileProduct): void => {
     const shell = shellRef.current;
@@ -218,8 +225,15 @@ export function MobileProductShell({
         bgcolor: "background.default",
       }}
     >
+      <MobileConnectionBanner store={controlPlaneConnection} />
+      <NativeReleaseUpdatePrompt
+        appId="top.thundersparrow.cowboy"
+        manifestUrl="/native-release.json"
+      />
       <Box
         ref={railRef}
+        data-workspace-session={workspace?.sessionId}
+        data-workspace-cwd={workspace?.cwd}
         sx={{
           display: "flex",
           width: "200%",

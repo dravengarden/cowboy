@@ -76,7 +76,6 @@ import {
 import {
     AUTO_RESUME_DEFAULT_KEY,
     AUTO_RESUME_TEMPLATE_KEY,
-    conn,
     DEFAULT_CONTINUATION_TEMPLATE,
     holdStorePresentation,
     markSessionHydrated,
@@ -133,7 +132,6 @@ import {
     useExploreSessionState,
 } from "./explore/exploreStore";
 import { retainTranscriptViewportSessions } from "./transcriptViewportStore";
-import { MobileConnectionBanner } from "./mobile/MobileConnectionBanner";
 import {
     ConnectionBanner,
     DetentSheet,
@@ -158,6 +156,11 @@ import { persisted } from "./_store/mod.ts";
 import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import {
+    controlPlaneConnection,
+    getActiveSessionId,
+    setActiveSessionId,
+} from "./controlPlane";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -218,18 +221,6 @@ const sidebarWidthStore = persisted("cowboy:sidebar-width", SIDEBAR_DEFAULT, {
         const n = Number.parseInt(raw, 10);
         return Number.isFinite(n) ? clampSidebarWidth(n) : SIDEBAR_DEFAULT;
     },
-});
-
-// The session the user last had focused, so a page reload (or PWA relaunch)
-// reopens it instead of snapping back to the top of the list. Just an id; if it
-// names a session that no longer exists (deleted elsewhere) the `active`
-// derivation falls back to the first session AND a one-shot warning snackbar
-// fires once the session list loads (see restoredFocusRef / goneCheckedRef).
-// The session the user last had focused — persisted (per-device) so a reload /
-// PWA relaunch reopens it. Just an id (or null).
-const activeSessionStore = persisted<string | null>("cowboy:active-session", null, {
-    serialize: (id) => id ?? "",
-    deserialize: (raw) => (raw === "" ? null : raw),
 });
 
 // Status is shown as a single color-coded dot/spinner (no text label), so the
@@ -1481,7 +1472,7 @@ export function App({
     // RANGE tracks the panel with NO column reflow (column-reverse keeps the
     // newest pinned just above the growing panel).
     const columnRef = useRef<HTMLDivElement>(null);
-    const [activeId, setActiveId] = useState<string | null>(activeSessionStore.get);
+    const [activeId, setActiveId] = useState<string | null>(getActiveSessionId);
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
     // vars on the column. The glass follows every animation frame, while the
@@ -1594,7 +1585,7 @@ export function App({
     // list arrives — if that session was deleted while we were away, the
     // `active` derivation silently falls back to sessions[0], which would hide
     // the loss; this surfaces it as a warning snackbar instead.
-    const restoredFocusRef = useRef<string | null>(activeSessionStore.get());
+    const restoredFocusRef = useRef<string | null>(getActiveSessionId());
     const goneCheckedRef = useRef(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const drawerOpenRef = useRef(false);
@@ -2142,7 +2133,7 @@ export function App({
     // the stored id with null before it has a chance to resolve.
     useEffect(() => {
         if (active) {
-            activeSessionStore.set(active.id);
+            setActiveSessionId(active.id);
         }
     }, [active]);
 
@@ -2444,13 +2435,15 @@ export function App({
                 Desktop keeps the short update countdown, while touch surfaces
                 require an explicit Update tap so foreground checks never
                 replace active mobile work. */}
-            {surface === "desktop"
-                ? <ConnectionBanner store={conn} />
-                : <MobileConnectionBanner store={conn} />}
-            <NativeReleaseUpdatePrompt
-                appId="top.thundersparrow.cowboy"
-                manifestUrl="/native-release.json"
-            />
+            {surface === "desktop" && (
+                <>
+                    <ConnectionBanner store={controlPlaneConnection} />
+                    <NativeReleaseUpdatePrompt
+                        appId="top.thundersparrow.cowboy"
+                        manifestUrl="/native-release.json"
+                    />
+                </>
+            )}
             <Box
                 ref={mobileShellRef}
                 sx={{
