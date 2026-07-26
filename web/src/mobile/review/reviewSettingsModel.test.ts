@@ -4,11 +4,9 @@ import {
   normalizeReviewSettings,
 } from "./reviewSettingsModel.ts";
 
-Deno.test("review settings retain supported display choices", () => {
+Deno.test("review settings retain code-review-specific choices", () => {
   assertEquals(
     normalizeReviewSettings({
-      codeFontSize: 18,
-      lineHeight: 1.7,
       softWrap: true,
       contextLines: -1,
       showWhitespaceChanges: false,
@@ -17,8 +15,6 @@ Deno.test("review settings retain supported display choices", () => {
       semanticHighlighting: false,
     }),
     {
-      codeFontSize: 18,
-      lineHeight: 1.7,
       softWrap: true,
       contextLines: -1,
       showWhitespaceChanges: false,
@@ -32,6 +28,8 @@ Deno.test("review settings retain supported display choices", () => {
 Deno.test("review settings reject stale or malformed values", () => {
   assertEquals(
     normalizeReviewSettings({
+      // Theme, typography, and line spacing belong to Agent settings. Old
+      // Review-local values are intentionally discarded during normalization.
       codeFontSize: 99,
       lineHeight: "wide",
       softWrap: "yes",
@@ -41,4 +39,3 @@ Deno.test("review settings reject stale or malformed values", () => {
     DEFAULT_REVIEW_SETTINGS,
   );
 });
-

@@ -1,10 +1,6 @@
-export const REVIEW_CODE_FONT_SIZES = [12, 14, 16, 18] as const;
-export const REVIEW_LINE_HEIGHTS = [1.35, 1.5, 1.7] as const;
 export const REVIEW_CONTEXT_LINES = [3, 6, 12, -1] as const;
 
 export interface ReviewSettings {
-  readonly codeFontSize: number;
-  readonly lineHeight: number;
   readonly softWrap: boolean;
   readonly contextLines: number;
   readonly showWhitespaceChanges: boolean;
@@ -14,8 +10,6 @@ export interface ReviewSettings {
 }
 
 export const DEFAULT_REVIEW_SETTINGS: ReviewSettings = {
-  codeFontSize: 14,
-  lineHeight: 1.5,
   softWrap: false,
   contextLines: 6,
   showWhitespaceChanges: true,
@@ -43,16 +37,6 @@ export function normalizeReviewSettings(value: unknown): ReviewSettings {
     ? value as Partial<ReviewSettings>
     : {};
   return {
-    codeFontSize: presetOrDefault(
-      raw.codeFontSize,
-      REVIEW_CODE_FONT_SIZES,
-      DEFAULT_REVIEW_SETTINGS.codeFontSize,
-    ),
-    lineHeight: presetOrDefault(
-      raw.lineHeight,
-      REVIEW_LINE_HEIGHTS,
-      DEFAULT_REVIEW_SETTINGS.lineHeight,
-    ),
     softWrap: booleanOrDefault(
       raw.softWrap,
       DEFAULT_REVIEW_SETTINGS.softWrap,
@@ -80,4 +64,3 @@ export function normalizeReviewSettings(value: unknown): ReviewSettings {
     ),
   };
 }
-

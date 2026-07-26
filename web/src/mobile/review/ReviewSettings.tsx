@@ -6,17 +6,10 @@ import {
   Select,
   Stack,
   Switch,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
-import { SettingsSheet, ThemeModeControl } from "../../_shell";
-import type { Mode as ThemeMode } from "../../theme";
-import {
-  REVIEW_CODE_FONT_SIZES,
-  REVIEW_CONTEXT_LINES,
-  REVIEW_LINE_HEIGHTS,
-} from "./reviewSettingsModel";
+import { SettingsSheet } from "../../_shell";
+import { REVIEW_CONTEXT_LINES } from "./reviewSettingsModel";
 import {
   updateReviewSettings,
   useReviewSettings,
@@ -61,63 +54,14 @@ function SettingToggle({
   );
 }
 
-export function ReviewSettings({
-  themeMode,
-  onSetThemeMode,
-}: {
-  themeMode: ThemeMode;
-  onSetThemeMode: (mode: ThemeMode) => void;
-}): React.JSX.Element {
+export function ReviewSettings(): React.JSX.Element {
   const settings = useReviewSettings();
   return (
     <SettingsSheet title="Code Review settings" cover>
-      <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
-
-      <Divider />
       <Stack spacing={2}>
         <Typography variant="overline" color="text.secondary">
           Code display
         </Typography>
-        <Box>
-          <Typography variant="body2" fontWeight={650} sx={{ mb: 0.75 }}>
-            Font size
-          </Typography>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            size="small"
-            value={settings.codeFontSize}
-            onChange={(_, value: number | null): void => {
-              if (value !== null) updateReviewSettings({ codeFontSize: value });
-            }}
-          >
-            {REVIEW_CODE_FONT_SIZES.map((value) => (
-              <ToggleButton key={value} value={value}>
-                {value}px
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        </Box>
-        <Box>
-          <Typography variant="body2" fontWeight={650} sx={{ mb: 0.75 }}>
-            Line height
-          </Typography>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            size="small"
-            value={settings.lineHeight}
-            onChange={(_, value: number | null): void => {
-              if (value !== null) updateReviewSettings({ lineHeight: value });
-            }}
-          >
-            {REVIEW_LINE_HEIGHTS.map((value) => (
-              <ToggleButton key={value} value={value}>
-                {value.toFixed(2).replace(/0$/, "")}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        </Box>
         <SettingToggle
           label="Soft wrap"
           description="Wrap long code lines to the phone width"
@@ -189,4 +133,3 @@ export function ReviewSettings({
     </SettingsSheet>
   );
 }
-

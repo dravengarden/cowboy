@@ -1,16 +1,9 @@
 import { RateReviewOutlined } from "@mui/icons-material";
 import { Box, Chip, Stack, Toolbar, Typography } from "@mui/material";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
-import type { Mode as ThemeMode } from "../../theme";
 import { ReviewSettings } from "./ReviewSettings";
 
-export function ReviewApp({
-  themeMode,
-  onSetThemeMode,
-}: {
-  themeMode: ThemeMode;
-  onSetThemeMode: (mode: ThemeMode) => void;
-}): React.JSX.Element {
+export function ReviewApp(): React.JSX.Element {
   const workspace = useActiveWorkspaceBinding();
   return (
     <Stack
@@ -101,10 +94,7 @@ export function ReviewApp({
             "@media (min-width: 600px)": { minHeight: 44 },
           }}
         >
-          <ReviewSettings
-            themeMode={themeMode}
-            onSetThemeMode={onSetThemeMode}
-          />
+          <ReviewSettings />
         </Toolbar>
       </Box>
     </Stack>

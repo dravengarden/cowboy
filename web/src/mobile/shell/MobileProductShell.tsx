@@ -304,10 +304,7 @@ export function MobileProductShell({
               : "translate3d(100%, 0, 0)",
           }}
         >
-          <ReviewApp
-            themeMode={themeMode}
-            onSetThemeMode={onSetThemeMode}
-          />
+          <ReviewApp />
         </Box>
       </Box>
     </Box>
