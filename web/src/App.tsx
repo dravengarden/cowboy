@@ -92,6 +92,7 @@ import {
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { hasHorizontalScroller, horizontalSwipe } from "./touchGestures";
+import { mobileDrawerSurfaceVisual } from "./mobileDrawerMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -1585,6 +1586,10 @@ export function App({
         let keyboardCornersSquared = false;
         let keyboardCornerTimer = 0;
         let releaseStorePresentation: (() => void) | undefined;
+        let presentationWidth = 1;
+        const reducedMotion = globalThis.matchMedia?.(
+            "(prefers-reduced-motion: reduce)",
+        ).matches ?? false;
         const drawerWidth = (): number => {
             const width = surface.clientWidth;
             return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
@@ -1635,11 +1640,20 @@ export function App({
             }, 420);
         };
         const render = (offset: number): void => {
-            // The hot path deliberately writes ONE compositor-only property.
-            // Sessions is already sitting statically underneath; moving/fading
-            // it too spent a second layer update for imperceptible parallax.
+            // The frozen workspace is one GPU layer. Translation keeps its
+            // leading edge under the finger while scale and opacity establish
+            // the same spatial depth as a native navigation stack. These are
+            // compositor-only writes: no transcript layout or paint occurs.
             currentOffset = offset;
-            surface.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
+            const visual = mobileDrawerSurfaceVisual(
+                offset,
+                presentationWidth,
+                phone,
+                reducedMotion,
+            );
+            surface.style.transform =
+                `translate3d(${String(offset)}px, 0, 0) scale(${String(visual.scale)})`;
+            surface.style.opacity = String(visual.opacity);
         };
         const scheduleRender = (offset: number): void => {
             pendingOffset = offset;
@@ -1687,6 +1701,7 @@ export function App({
             renderFrame = 0;
             applyOpenDepth();
             const width = cachedWidth ?? drawerWidth();
+            presentationWidth = width;
             const targetOffset = open ? width : 0;
             const remaining = Math.min(1, Math.abs(targetOffset - releaseOffset) / width);
             // Distance + release velocity determine the snap duration. A quick
@@ -1698,7 +1713,8 @@ export function App({
                 Math.min(260, 160 + remaining * 100 - Math.min(70, Math.abs(releaseVelocity) * 45)),
             );
             surface.style.transition =
-                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
+                `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             render(targetOffset);
             // Mount the foreground hit layer at open-start. During close, keep
             // the open state through the last animation frame so the radius and
@@ -1731,6 +1747,7 @@ export function App({
             const now = performance.now();
             const startOpen = drawerOpenRef.current;
             const width = drawerWidth();
+            presentationWidth = width;
             gesture = {
                 x: touch.clientX,
                 y: touch.clientY,
@@ -1779,7 +1796,7 @@ export function App({
                 directManipulationActive = true;
                 applyOpenDepth();
                 surface.style.transition = "none";
-                surface.style.willChange = "transform";
+                surface.style.willChange = "transform, opacity";
             }
             gesture.locked = true;
             event.preventDefault();
@@ -1850,7 +1867,8 @@ export function App({
         // avoiding layer promotion/demotion removes the post-settle flash.
         keyboardCornersSquared = ownsKeyboard();
         applyOpenDepth();
-        render(drawerOpenRef.current ? drawerWidth() : 0);
+        presentationWidth = drawerWidth();
+        render(drawerOpenRef.current ? presentationWidth : 0);
         gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
         gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
         gestureTarget.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -2451,13 +2469,12 @@ export function App({
                     overflow: "hidden",
                     zIndex: mobile ? 1 : undefined,
                     bgcolor: "background.default",
-                    // Keep the revealed seam exactly under the finger. Mobile
-                    // drawer motion is translation-only so WebKit can reuse the
-                    // already-rasterized workspace layer without resampling it.
+                    // Keep the revealed seam exactly under the finger while the
+                    // frozen workspace recedes as one composited layer.
                     transformOrigin: "left center",
                     backfaceVisibility: "hidden",
                     contain: mobile ? "paint" : undefined,
-                    willChange: mobile ? "transform" : undefined,
+                    willChange: mobile ? "transform, opacity" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
