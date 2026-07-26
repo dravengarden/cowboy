@@ -40,6 +40,7 @@ import {
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
+  isQuestionPageLoaded,
   loadQuestionPage,
   loadPreviousQuestionPage,
   useStoreSelector,
@@ -715,7 +716,7 @@ export function ExploreTranscript(
   } = useExploreSessionState(props.sessionId);
   const [restoringPageId, setRestoringPageId] = useState<string | null>(null);
   const retainedPageLoaded = retainedPageId === null ||
-    pages.some((page) => page.id === retainedPageId);
+    isQuestionPageLoaded(props.sessionId, retainedPageId);
 
   useEffect(() => {
     if (
@@ -1207,7 +1208,7 @@ export function MobilePageDock({
 
   const navigateIndexedPage = (id: string): void => {
     if (loadingAdjacentPageId !== null) return;
-    if (pages.some((page) => page.id === id)) {
+    if (isQuestionPageLoaded(sessionId, id)) {
       navigate(id);
       return;
     }
@@ -1593,7 +1594,7 @@ export function MobilePageDock({
               onDismiss={closePageDirectory}
               onSelect={(id): void => {
                 if (loadingDirectoryPageId) return;
-                if (pages.some((page) => page.id === id)) {
+                if (isQuestionPageLoaded(sessionId, id)) {
                   navigate(id);
                   setOpen(false);
                   return;

@@ -650,8 +650,7 @@ export async function loadQuestionPage(
 ): Promise<boolean> {
   const rootSeq = Number(pageId);
   if (!Number.isSafeInteger(rootSeq) || rootSeq < 0) return false;
-  const timeline = state.timelines.get(sessionId);
-  if (timeline?.some((event) => event.seq === rootSeq)) return true;
+  if (completeQuestionPages.get(sessionId)?.has(pageId)) return true;
   try {
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/question-pages/${encodeURIComponent(pageId)}?v=${
@@ -664,10 +663,22 @@ export async function loadQuestionPage(
       ...state,
       timelines: mergeEvents(state.timelines, sessionId, data.events),
     });
-    return data.events.some((event) => event.seq === rootSeq);
+    const complete = data.events.some((event) => event.seq === rootSeq);
+    if (complete) {
+      const pages = completeQuestionPages.get(sessionId) ?? new Set<string>();
+      pages.add(pageId);
+      completeQuestionPages.set(sessionId, pages);
+    }
+    return complete;
   } catch {
     return false;
   }
+}
+
+const completeQuestionPages = new Map<string, Set<string>>();
+
+export function isQuestionPageLoaded(sessionId: string, pageId: string): boolean {
+  return completeQuestionPages.get(sessionId)?.has(pageId) === true;
 }
 
 const INACTIVE_HISTORY_TAIL = 800;
@@ -689,6 +700,11 @@ function releaseHistoryTail(sessionId: string, retain: number): boolean {
   // this parent link immediately; the discarded deep history is still
   // collectible after that render (there is no ancestry chain).
   const retainedTimeline = linkTimeline(retained.events, timeline);
+  // A retained root event does not prove that the rest of its immutable page
+  // survived this timeline trim. Force the next Page View visit through the
+  // page endpoint instead of presenting a root-only, falsely non-scrollable
+  // answer.
+  completeQuestionPages.delete(sessionId);
   const timelines = new Map(state.timelines);
   timelines.set(sessionId, retainedTimeline);
   const pagination = new Map(state.pagination);
