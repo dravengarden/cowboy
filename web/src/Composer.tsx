@@ -1295,6 +1295,13 @@ export function ComposerWorkspace({
       }
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
+          // This is a native vertical scrollport. Exclude it from the shell-wide
+          // Sessions drawer recognizer at touchstart: WebKit otherwise keeps the
+          // ancestor's non-passive horizontal recognizer in the gesture arena,
+          // and can refuse to hand a drag that began on a draft card to this
+          // overflow node. Horizontal drawer swipes remain available everywhere
+          // outside the bounded queue/draft list.
+          data-mobile-drawer-ignore
           sx={{
             // Plain BLOCK scroll container — NOT flex-column: with flex, the panels
             // (flex-shrink:1 children) get squished to fit instead of overflowing +
@@ -1311,6 +1318,7 @@ export function ComposerWorkspace({
             // gestures.
             minHeight: 0,
             maxHeight: "40vh",
+            flexShrink: 1,
             touchAction: "pan-y",
             WebkitOverflowScrolling: "touch",
             display: "grid",
