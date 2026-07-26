@@ -35,8 +35,7 @@ import {
 } from "react";
 import {
   DetentSheet,
-  FloatingActionIsland,
-  MobileSheetDismiss,
+  MobileSheetActionGroup,
 } from "../_shell";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
@@ -46,7 +45,6 @@ import {
 } from "../store";
 import { setSticky } from "../stickyStore";
 import { Transcript } from "../Transcript";
-import { useReliableTouchTap } from "../useReliableTouchTap";
 import {
   setExplorePage,
   setExploreAtTail,
@@ -203,6 +201,8 @@ function PageList({
   onDismiss,
   active = true,
   searchable = true,
+  listElementRef,
+  onAwayFromBottomChange,
 }: {
   pages: QuestionPage[];
   currentId: string | null;
@@ -215,9 +215,10 @@ function PageList({
   onDismiss?: (() => void) | undefined;
   active?: boolean;
   searchable?: boolean;
+  listElementRef?: React.RefObject<HTMLUListElement | null>;
+  onAwayFromBottomChange?: ((away: boolean) => void) | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
-  const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [showEarlierLoading, setShowEarlierLoading] = useState(false);
   const selectedRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
@@ -246,24 +247,16 @@ function PageList({
   const updateBottomAffordance = useCallback((): void => {
     const list = listRef.current;
     if (!list || !onDismiss) {
-      setAwayFromBottom(false);
+      onAwayFromBottomChange?.(false);
       return;
     }
-    setAwayFromBottom(
+    onAwayFromBottomChange?.(
       list.scrollHeight - list.scrollTop - list.clientHeight > 48,
     );
     // One upward approach loads one batch. Once prepending has moved the
     // viewport clear of the boundary, arm the next deliberate approach.
     if (list.scrollTop > 120) earlierRequestArmedRef.current = true;
-  }, [onDismiss]);
-  const scrollToLatestTap = useReliableTouchTap<HTMLButtonElement>(() => {
-    const list = listRef.current;
-    if (!list) return;
-    // Directly mutate the nested list. Mobile Safari can drop a smooth
-    // Element.scrollTo() while an ancestor DetentSheet is transformed.
-    list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
-    updateBottomAffordance();
-  });
+  }, [onAwayFromBottomChange, onDismiss]);
 
   useEffect(() => {
     if (!active) {
@@ -477,7 +470,10 @@ function PageList({
           </Typography>
         </Box>
         <List
-          ref={listRef}
+          ref={(element): void => {
+            listRef.current = element;
+            if (listElementRef) listElementRef.current = element;
+          }}
           dense={dense}
           onScroll={updateBottomAffordance}
           sx={{
@@ -556,39 +552,6 @@ function PageList({
             );
           })}
         </List>
-        {onDismiss && (
-          <Box
-            aria-label="Page directory actions"
-            sx={{
-              position: "absolute",
-              insetInline: 0,
-              bottom: "max(10px, env(safe-area-inset-bottom, 0px))",
-              zIndex: 3,
-              height: 54,
-              pointerEvents: "none",
-            }}
-          >
-            {awayFromBottom && (
-              <Box
-                sx={{
-                  position: "absolute",
-                  right: "max(14px, env(safe-area-inset-right, 0px))",
-                  pointerEvents: "auto",
-                }}
-              >
-                <FloatingActionIsland maxWidth={54}>
-                  <IconButton
-                    {...scrollToLatestTap}
-                    aria-label="Scroll to latest question"
-                    sx={{ width: 46, height: 46 }}
-                  >
-                    <ArrowDownward sx={{ fontSize: "1.25em" }} />
-                  </IconButton>
-                </FloatingActionIsland>
-              </Box>
-            )}
-          </Box>
-        )}
       </Box>
     </Stack>
   );
@@ -890,6 +853,8 @@ export function MobilePageDock({
   const { pages, current, currentIndex, navigate } = usePages(sessionId, timeline);
   const pageIndex = useQuestionPageIndex(sessionId, pages.at(-1)?.id);
   const [open, setOpen] = useState(false);
+  const [pageDirectoryAwayFromBottom, setPageDirectoryAwayFromBottom] = useState(false);
+  const pageDirectoryListRef = useRef<HTMLUListElement | null>(null);
   const [showPageTop, setShowPageTop] = useState(false);
   const [pendingPrevious, setPendingPrevious] = useState<{
     anchorItemKey: string;
@@ -911,6 +876,14 @@ export function MobilePageDock({
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
   const closePageDirectory = useCallback((): void => setOpen(false), []);
+  const scrollPageDirectoryToLatest = useCallback((): void => {
+    const list = pageDirectoryListRef.current;
+    if (!list) return;
+    // DetentSheet is transformed; direct nested-scroll assignment is reliable
+    // on iOS where smooth Element.scrollTo() can be dropped.
+    list.scrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    setPageDirectoryAwayFromBottom(false);
+  }, []);
 
   useEffect(() => {
     let frame = 0;
@@ -1222,7 +1195,25 @@ export function MobilePageDock({
         ariaLabel="Question pages"
         frosted
         cover
-        footer={<MobileSheetDismiss onClose={closePageDirectory} />}
+        footer={
+          <MobileSheetActionGroup
+            actions={[
+              {
+                key: "close",
+                label: "Close",
+                onPress: closePageDirectory,
+                icon: <Close aria-hidden fontSize="small" sx={{ transform: "translate(-0.75px, -0.5px)" }} />,
+              },
+              {
+                key: "latest",
+                label: "Scroll to latest question",
+                onPress: scrollPageDirectoryToLatest,
+                visible: pageDirectoryAwayFromBottom,
+                icon: <ArrowDownward aria-hidden sx={{ fontSize: "1.25em" }} />,
+              },
+            ]}
+          />
+        }
         footerOverlay
       >
         <Box
@@ -1273,6 +1264,8 @@ export function MobilePageDock({
             <PageList
               active={open}
               searchable={false}
+              listElementRef={pageDirectoryListRef}
+              onAwayFromBottomChange={setPageDirectoryAwayFromBottom}
               pages={pages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - pages.length + 1)}
