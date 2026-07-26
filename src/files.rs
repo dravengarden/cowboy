@@ -7,7 +7,7 @@
 //! there's a query, or a "most useful first" heuristic (shallow + recently
 //! modified) when the query is empty.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use ignore::WalkBuilder;
@@ -18,6 +18,27 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 /// Gitignore pruning already removes the heavy directories; this is a backstop
 /// for an un-ignored monorepo so a keystroke can't stall the runtime thread.
 const MAX_SCANNED: usize = 20_000;
+
+const DEFAULT_TREE_EXCLUSIONS: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    ".cache",
+    "coverage",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub path: String,
+    pub is_directory: bool,
+}
 
 struct Entry {
     /// Path relative to the session cwd, forward-slashed for display + match.
@@ -41,17 +62,65 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<String> {
     }
 }
 
-/// Walk `root` and return a stable, lexical file listing for a tree UI.
+/// Return one stable, sorted directory page for a lazy tree UI.
 ///
-/// The boolean is true when more matching files existed than the requested
-/// limit. Directory nodes are inferred by the client from these relative paths.
-#[must_use]
-pub fn tree(root: &Path, limit: usize) -> (Vec<String>, bool) {
-    let mut paths: Vec<String> = collect(root).into_iter().map(|entry| entry.rel).collect();
-    paths.sort();
-    let truncated = paths.len() > limit;
-    paths.truncate(limit);
-    (paths, truncated)
+/// The boolean is true when more matching entries existed than the requested
+/// limit. The path is canonicalized before scanning to contain symlink escapes.
+pub fn directory(
+    root: &Path,
+    relative: &str,
+    limit: usize,
+) -> Result<(Vec<DirectoryEntry>, bool), &'static str> {
+    let relative = safe_relative_path(relative)?;
+    let target = root.join(&relative);
+    let canonical_root = root.canonicalize().map_err(|_| "workspace unavailable")?;
+    let canonical_target = target.canonicalize().map_err(|_| "directory not found")?;
+    if !canonical_target.starts_with(&canonical_root) || !canonical_target.is_dir() {
+        return Err("directory not found");
+    }
+
+    let mut entries = Vec::new();
+    let walk = WalkBuilder::new(&canonical_target)
+        .parents(true)
+        .max_depth(Some(1))
+        .build();
+    for dirent in walk.flatten().skip(1) {
+        let name = dirent.file_name().to_string_lossy();
+        if DEFAULT_TREE_EXCLUSIONS.contains(&name.as_ref()) {
+            continue;
+        }
+        let Some(file_type) = dirent.file_type() else {
+            continue;
+        };
+        let path = relative.join(dirent.file_name());
+        entries.push(DirectoryEntry {
+            name: name.into_owned(),
+            path: path.to_string_lossy().replace('\\', "/"),
+            is_directory: file_type.is_dir(),
+        });
+    }
+    entries.sort_by(|a, b| {
+        b.is_directory
+            .cmp(&a.is_directory)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+    Ok((entries, truncated))
+}
+
+fn safe_relative_path(relative: &str) -> Result<PathBuf, &'static str> {
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+            && !relative.is_empty()
+    {
+        return Err("invalid directory");
+    }
+    Ok(path.to_path_buf())
 }
 
 fn collect(root: &Path) -> Vec<Entry> {
@@ -132,7 +201,7 @@ fn rank_fuzzy(entries: &[Entry], query: &str, limit: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{search, tree};
+    use super::{directory, search};
     use std::fs;
     use std::path::PathBuf;
 
@@ -176,18 +245,35 @@ mod tests {
     }
 
     #[test]
-    fn tree_is_lexical_and_reports_truncation() {
+    fn directory_is_shallow_sorted_and_reports_truncation() {
         let dir = scratch("tree");
-        let (out, truncated) = tree(&dir, 3);
+        let (out, truncated) = directory(&dir, "", 2).unwrap();
         assert_eq!(
-            out,
-            vec![
-                "README.md".to_owned(),
-                "deep/a/b/c.txt".to_owned(),
-                "src/files.rs".to_owned(),
-            ]
+            out.iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["deep", "src",]
         );
         assert!(truncated);
+        let (src, truncated) = directory(&dir, "src", 10).unwrap();
+        assert_eq!(
+            src.iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["files.rs", "main.rs"]
+        );
+        assert!(!truncated);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn directory_rejects_parent_traversal_and_skips_heavy_defaults() {
+        let dir = scratch("safe");
+        fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
+        fs::write(dir.join("node_modules/pkg/index.js"), "x").unwrap();
+        let (out, _) = directory(&dir, "", 20).unwrap();
+        assert!(!out.iter().any(|entry| entry.name == "node_modules"));
+        assert_eq!(directory(&dir, "../", 20), Err("invalid directory"));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

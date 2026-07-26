@@ -16,31 +16,116 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { buildFileTree, type FileTreeNode } from "./fileTree";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-function TreeRows({
-  nodes,
+interface FileTreeEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+}
+
+interface DirectoryPage {
+  entries: FileTreeEntry[];
+  truncated: boolean;
+}
+
+const directoryCache = new Map<string, DirectoryPage>();
+
+function cacheKey(sessionId: string, path: string): string {
+  return `${sessionId}\0${path}`;
+}
+
+function DirectoryRows({
+  sessionId,
+  entries,
   depth = 0,
 }: {
-  nodes: FileTreeNode[];
+  sessionId: string;
+  entries: FileTreeEntry[];
   depth?: number;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [pages, setPages] = useState<ReadonlyMap<string, DirectoryPage>>(
+    new Map(),
+  );
+  const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
+  const controllers = useRef(new Map<string, AbortController>());
+
+  useEffect(() => () => {
+    controllers.current.forEach((controller) => controller.abort());
+  }, []);
+
+  const loadDirectory = useCallback(async (path: string): Promise<void> => {
+    const key = cacheKey(sessionId, path);
+    const cached = directoryCache.get(key);
+    if (cached) {
+      setPages((current) => new Map(current).set(path, cached));
+      return;
+    }
+    controllers.current.get(path)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(path, controller);
+    setLoading((current) => new Set(current).add(path));
+    setFailed((current) => {
+      const next = new Set(current);
+      next.delete(path);
+      return next;
+    });
+    try {
+      const query = new URLSearchParams({ path });
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/file-tree?${query}`,
+        { signal: controller.signal },
+      );
+      if (!response.ok) throw new Error(`file tree: ${response.status}`);
+      const body = (await response.json()) as {
+        entries?: FileTreeEntry[];
+        truncated?: boolean;
+      };
+      const page = {
+        entries: body.entries ?? [],
+        truncated: body.truncated ?? false,
+      };
+      directoryCache.set(key, page);
+      setPages((current) => new Map(current).set(path, page));
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setFailed((current) => new Set(current).add(path));
+      }
+    } finally {
+      controllers.current.delete(path);
+      setLoading((current) => {
+        const next = new Set(current);
+        next.delete(path);
+        return next;
+      });
+    }
+  }, [sessionId]);
+
   return (
     <>
-      {nodes.map((node) => {
-        const open = expanded.has(node.path);
+      {entries.map((entry) => {
+        const isDirectory = entry.kind === "directory";
+        const open = expanded.has(entry.path);
+        const page = pages.get(entry.path);
+        const isLoading = loading.has(entry.path);
+        const hasFailed = failed.has(entry.path);
         return (
-          <Box key={node.path}>
+          <Box key={entry.path}>
             <ListItemButton
-              aria-expanded={node.kind === "directory" ? open : undefined}
+              aria-expanded={isDirectory ? open : undefined}
               onClick={() => {
-                if (node.kind !== "directory") return;
+                if (!isDirectory) return;
                 setExpanded((current) => {
                   const next = new Set(current);
-                  if (next.has(node.path)) next.delete(node.path);
-                  else next.add(node.path);
+                  if (next.has(entry.path)) {
+                    next.delete(entry.path);
+                    controllers.current.get(entry.path)?.abort();
+                  } else {
+                    next.add(entry.path);
+                    if (!page) void loadDirectory(entry.path);
+                  }
                   return next;
                 });
               }}
@@ -51,7 +136,7 @@ function TreeRows({
                 borderRadius: 2,
               }}
             >
-              {node.kind === "directory" && (
+              {isDirectory && (
                 <ChevronRight
                   sx={{
                     mr: 0.5,
@@ -63,23 +148,56 @@ function TreeRows({
                 />
               )}
               <ListItemIcon sx={{ minWidth: 30, color: "text.secondary" }}>
-                {node.kind === "directory"
+                {isDirectory
                   ? <FolderOutlined fontSize="small" />
                   : <DescriptionOutlined fontSize="small" />}
               </ListItemIcon>
               <ListItemText
-                primary={node.name}
+                primary={entry.name}
                 primaryTypographyProps={{
                   noWrap: true,
-                  fontFamily: node.kind === "file"
-                    ? "var(--cowboy-font-mono)"
-                    : undefined,
+                  fontFamily: isDirectory
+                    ? undefined
+                    : "var(--cowboy-font-mono)",
                   fontSize: 14,
                 }}
               />
+              {isLoading && <CircularProgress size={16} />}
             </ListItemButton>
-            {node.kind === "directory" && open && (
-              <TreeRows nodes={node.children} depth={depth + 1} />
+            {isDirectory && open && hasFailed && (
+              <Alert
+                severity="error"
+                sx={{ ml: 2 + depth * 2, py: 0 }}
+                action={
+                  <IconButton
+                    size="small"
+                    aria-label={`Retry ${entry.name}`}
+                    onClick={() => void loadDirectory(entry.path)}
+                  >
+                    <Refresh fontSize="small" />
+                  </IconButton>
+                }
+              >
+                Could not load folder
+              </Alert>
+            )}
+            {isDirectory && open && page && (
+              <>
+                <DirectoryRows
+                  sessionId={sessionId}
+                  entries={page.entries}
+                  depth={depth + 1}
+                />
+                {page.truncated && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", pl: 4 + depth * 2, py: 0.5 }}
+                  >
+                    Folder limited to 200 entries
+                  </Typography>
+                )}
+              </>
             )}
           </Box>
         );
@@ -95,41 +213,72 @@ export function ReviewFileTree({
   sessionId: string | undefined;
   cwd: string | undefined;
 }): React.JSX.Element {
-  const [files, setFiles] = useState<string[]>([]);
-  const [truncated, setTruncated] = useState(false);
+  const [root, setRoot] = useState<DirectoryPage>({
+    entries: [],
+    truncated: false,
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const controllerRef = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (refresh = false): Promise<void> => {
     if (!sessionId) {
-      setFiles([]);
+      setRoot({ entries: [], truncated: false });
       return;
+    }
+    const key = cacheKey(sessionId, "");
+    const cached = directoryCache.get(key);
+    if (cached && !refresh) {
+      setRoot(cached);
+      return;
+    }
+    if (refresh) {
+      for (const cacheKey of directoryCache.keys()) {
+        if (cacheKey.startsWith(`${sessionId}\0`)) {
+          directoryCache.delete(cacheKey);
+        }
+      }
+      setRevision((current) => current + 1);
     }
     setLoading(true);
     setError(false);
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     try {
       const response = await fetch(
         `/api/sessions/${encodeURIComponent(sessionId)}/file-tree`,
+        { signal: controller.signal },
       );
       if (!response.ok) throw new Error(`file tree: ${response.status}`);
       const body = (await response.json()) as {
-        files?: string[];
+        entries?: FileTreeEntry[];
         truncated?: boolean;
       };
-      setFiles(body.files ?? []);
-      setTruncated(body.truncated ?? false);
-    } catch {
-      setError(true);
+      const page = {
+        entries: body.entries ?? [],
+        truncated: body.truncated ?? false,
+      };
+      directoryCache.set(key, page);
+      setRoot(page);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setError(true);
+      }
     } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+      }
       setLoading(false);
     }
   }, [sessionId]);
 
   useEffect(() => {
     void load();
+    return () => controllerRef.current?.abort();
   }, [load]);
 
-  const tree = useMemo(() => buildFileTree(files), [files]);
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
       <Stack
@@ -150,13 +299,16 @@ export function ReviewFileTree({
             {cwd ?? "No active session"}
           </Typography>
         </Box>
-        <IconButton aria-label="Refresh worktree" onClick={() => void load()}>
+        <IconButton
+          aria-label="Refresh worktree"
+          onClick={() => void load(true)}
+        >
           <Refresh />
         </IconButton>
       </Stack>
-      {truncated && (
+      {root.truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
-          Showing the first 5,000 files
+          Root folder limited to 200 entries
         </Alert>
       )}
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 2 }}>
@@ -185,7 +337,13 @@ export function ReviewFileTree({
           )
           : (
             <List disablePadding>
-              <TreeRows nodes={tree} />
+              {sessionId && (
+                <DirectoryRows
+                  key={`${sessionId}:${revision}`}
+                  sessionId={sessionId}
+                  entries={root.entries}
+                />
+              )}
             </List>
           )}
       </Box>

@@ -1679,17 +1679,29 @@ struct FileSearchResponse {
 
 #[derive(Debug, Deserialize)]
 struct FileTreeQuery {
+    #[serde(default)]
+    path: String,
     #[serde(default = "default_file_tree_limit")]
     limit: usize,
 }
 
 fn default_file_tree_limit() -> usize {
-    5_000
+    200
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTreeEntry {
+    name: String,
+    path: String,
+    kind: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct FileTreeResponse {
-    files: Vec<String>,
+    path: String,
+    entries: Vec<FileTreeEntry>,
     truncated: bool,
 }
 
@@ -1722,10 +1734,10 @@ async fn api_search_files(
     Json(FileSearchResponse { files }).into_response()
 }
 
-/// Return a gitignore-aware file listing for the mobile review tree.
+/// Return one gitignore-aware directory page for the mobile review tree.
 ///
 /// Like file search, the root is resolved from the session rather than a
-/// client-provided path. The UI infers directory nodes from relative paths.
+/// client-provided root. Relative paths are validated and cannot escape it.
 async fn api_file_tree(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -1740,12 +1752,33 @@ async fn api_file_tree(
     else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let limit = query.limit.clamp(100, 10_000);
-    let (files, truncated) =
-        tokio::task::spawn_blocking(move || crate::files::tree(std::path::Path::new(&cwd), limit))
-            .await
-            .unwrap_or_default();
-    Json(FileTreeResponse { files, truncated }).into_response()
+    let limit = query.limit.clamp(20, 500);
+    let path = query.path;
+    let requested_path = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::files::directory(std::path::Path::new(&cwd), &path, limit)
+    })
+    .await;
+    let Ok(Ok((entries, truncated))) = result else {
+        return (StatusCode::BAD_REQUEST, "invalid directory").into_response();
+    };
+    Json(FileTreeResponse {
+        path: requested_path,
+        entries: entries
+            .into_iter()
+            .map(|entry| FileTreeEntry {
+                name: entry.name,
+                path: entry.path,
+                kind: if entry.is_directory {
+                    "directory"
+                } else {
+                    "file"
+                },
+            })
+            .collect(),
+        truncated,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Serialize)]
