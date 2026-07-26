@@ -1295,20 +1295,22 @@ export function ComposerWorkspace({
       }
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
-          // This is a native vertical scrollport. Exclude it from the shell-wide
-          // Sessions drawer recognizer at touchstart: WebKit otherwise keeps the
-          // ancestor's non-passive horizontal recognizer in the gesture arena,
-          // and can refuse to hand a drag that began on a draft card to this
-          // overflow node. Horizontal drawer swipes remain available everywhere
-          // outside the bounded queue/draft list.
-          data-mobile-drawer-ignore
+          // This is a native vertical scrollport, but it still participates in
+          // the shell-wide direction-locked Sessions gesture. `pan-y` below
+          // keeps vertical movement native; only a deliberate horizontal move
+          // is prevented by the ancestor after it locks. Excluding this whole
+          // subtree made both expanded cards and collapsed headers dead zones
+          // for opening the drawer.
           sx={{
             // Plain BLOCK scroll container — NOT flex-column: with flex, the panels
             // (flex-shrink:1 children) get squished to fit instead of overflowing +
             // scrolling, which crushed the last panel's (drafts) header. Block stacks
             // them at natural height and `overflowY: auto` scrolls the overflow.
             overflowY: "auto",
-            overscrollBehavior: "contain",
+            // Do not trap a vertical gesture when the bounded stack currently
+            // fits or reaches an edge. WebKit can then finish normal scroll
+            // chaining instead of leaving the touched cards feeling frozen.
+            overscrollBehaviorY: "auto",
             // This Box is a flex child of the mobile composer stack. Without an
             // explicit zero minimum, WebKit applies min-height:auto and keeps the
             // grid at its content height instead of establishing this bounded
