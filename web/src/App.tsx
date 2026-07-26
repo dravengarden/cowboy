@@ -1532,7 +1532,7 @@ export function App({
     const [drawerOpen, setDrawerOpen] = useState(false);
     const mobileShellRef = useRef<HTMLDivElement>(null);
     const mobileDrawerRef = useRef<HTMLDivElement>(null);
-    const settleMobileDrawerRef = useRef<((open: boolean) => void) | null>(null);
+    const settleMobileDrawerRef = useRef<((open: boolean, releaseVelocity?: number) => void) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [exploreComposeIntent, setExploreComposeIntent] = useState<{
@@ -1565,28 +1565,31 @@ export function App({
         let settleTimer = 0;
         let renderFrame = 0;
         let pendingOffset = 0;
+        let currentOffset = 0;
         let commit = false;
         const drawerWidth = (): number => {
             const width = surface.clientWidth;
             return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
         };
+        const cornerRadius = (): string => `${String(phone ? 36 : 30)}px`;
+        const applyOpenDepth = (): void => {
+            // Radius and shadow are discrete drawer-surface properties, not
+            // per-frame motion. Keeping them identical from direction-lock
+            // through the fully-open state avoids both visual shape-shifting
+            // and expensive re-rasterization of the transcript layer.
+            surface.style.borderRadius = cornerRadius();
+            surface.style.boxShadow = "-18px 0 42px rgba(0,0,0,0.16)";
+        };
+        const clearOpenDepth = (): void => {
+            surface.style.borderRadius = "0px";
+            surface.style.boxShadow = "none";
+        };
         const render = (offset: number): void => {
-            const width = drawerWidth();
-            const progress = Math.max(0, Math.min(1, offset / width));
-            const scale = 1 - progress * 0.012;
-            const cornerProgress = Math.min(1, progress * 1.6);
-            const cornerRadius = phone ? 36 : 30;
-            surface.style.setProperty("--mobile-drawer-progress", String(progress));
-            surface.style.transform = `translate3d(${String(offset)}px, 0, 0) scale(${String(scale)})`;
-            surface.style.borderRadius = `${String(cornerProgress * cornerRadius)}px`;
-            // Keep the shadow geometry stable throughout the drag. Animating a
-            // large blurred shadow every touch event forces WebKit to repaint;
-            // a constant composited edge gives the same depth without jank.
-            surface.style.boxShadow = progress > 0.01
-                ? "-18px 0 42px rgba(0,0,0,0.16)"
-                : "none";
-            drawer.style.opacity = String(0.72 + progress * 0.28);
-            drawer.style.transform = `translate3d(${String(-14 * (1 - progress))}px, 0, 0)`;
+            // The hot path deliberately writes ONE compositor-only property.
+            // Sessions is already sitting statically underneath; moving/fading
+            // it too spent a second layer update for imperceptible parallax.
+            currentOffset = offset;
+            surface.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
         };
         const scheduleRender = (offset: number): void => {
             pendingOffset = offset;
@@ -1599,20 +1602,37 @@ export function App({
         const clearTransitions = (): void => {
             surface.style.removeProperty("transition");
             surface.style.removeProperty("will-change");
-            drawer.style.removeProperty("transition");
-            drawer.style.removeProperty("will-change");
         };
-        const settle = (open: boolean): void => {
+        const settle = (open: boolean, releaseVelocity = 0): void => {
             globalThis.clearTimeout(settleTimer);
+            const releaseOffset = renderFrame !== 0 ? pendingOffset : currentOffset;
             if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
             renderFrame = 0;
+            if (open) applyOpenDepth();
+            const targetOffset = open ? drawerWidth() : 0;
+            const remaining = Math.min(1, Math.abs(targetOffset - releaseOffset) / drawerWidth());
+            // Distance + release velocity determine the snap duration. A quick
+            // flick completes promptly; a deliberate partial drag gets enough
+            // easing to remain legible. Fixed-duration snaps felt sluggish near
+            // an endpoint and abrupt after a short fast flick.
+            const duration = Math.max(
+                150,
+                Math.min(260, 160 + remaining * 100 - Math.min(70, Math.abs(releaseVelocity) * 45)),
+            );
             surface.style.transition =
-                "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms ease";
-            drawer.style.transition =
-                "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease";
-            render(open ? drawerWidth() : 0);
-            setDrawerOpen(open);
-            settleTimer = globalThis.setTimeout(clearTransitions, 340);
+                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+            render(targetOffset);
+            // Mount the foreground hit layer at open-start. During close, keep
+            // the open state through the last animation frame so the radius and
+            // clipping cannot disappear early when React rebinds this effect.
+            if (open) setDrawerOpen(true);
+            settleTimer = globalThis.setTimeout(() => {
+                clearTransitions();
+                if (!open) {
+                    clearOpenDepth();
+                    setDrawerOpen(false);
+                }
+            }, duration + 20);
         };
         settleMobileDrawerRef.current = settle;
         const onTouchStart = (event: TouchEvent): void => {
@@ -1656,6 +1676,7 @@ export function App({
             }
             if (!gesture.locked) {
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-start"));
+                applyOpenDepth();
             }
             gesture.locked = true;
             event.preventDefault();
@@ -1672,9 +1693,7 @@ export function App({
             if (offset < 0) offset *= 0.18;
             if (offset > width) offset = width + (offset - width) * 0.18;
             surface.style.transition = "none";
-            surface.style.willChange = "transform, border-radius";
-            drawer.style.transition = "none";
-            drawer.style.willChange = "transform, opacity";
+            surface.style.willChange = "transform";
             // iOS can deliver touchmove faster than the display refresh rate.
             // Coalesce those samples into one visual update per frame while
             // keeping velocity and the magnetic threshold on every raw sample.
@@ -1693,11 +1712,12 @@ export function App({
             const velocityCommit = drawerOpen
                 ? gesture.velocity > -0.45
                 : gesture.velocity > 0.45;
+            const releaseVelocity = gesture.velocity;
             const shouldOpen = gesture.locked ? (Math.abs(gesture.velocity) >= 0.45 ? velocityCommit : commit) : drawerOpen;
             if (gesture.locked && shouldOpen !== commit && !gesture.thresholdHaptic) haptic(18);
             gesture = null;
             commit = false;
-            settle(shouldOpen);
+            settle(shouldOpen, releaseVelocity);
             if (wasLocked) {
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
             }
@@ -1711,6 +1731,8 @@ export function App({
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
             }
         };
+        if (drawerOpen) applyOpenDepth();
+        else clearOpenDepth();
         render(drawerOpen ? drawerWidth() : 0);
         // `setDrawerOpen` rebinds this effect during settle. Its cleanup cancels
         // the old timer, so the new binding owns the final transition cleanup.
@@ -2292,11 +2314,12 @@ export function App({
                     overflow: "hidden",
                     zIndex: mobile ? 1 : undefined,
                     bgcolor: "background.default",
-                    // Keep the revealed seam exactly under the finger. The tiny
-                    // depth scale recedes toward the far/right edge rather than
-                    // opening an artificial gap between drawer and workspace.
+                    // Keep the revealed seam exactly under the finger. Mobile
+                    // drawer motion is translation-only so WebKit can reuse the
+                    // already-rasterized workspace layer without resampling it.
                     transformOrigin: "left center",
                     backfaceVisibility: "hidden",
+                    contain: mobile ? "paint" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
