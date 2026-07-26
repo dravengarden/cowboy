@@ -1313,7 +1313,17 @@ export function ComposerWorkspace({
             // them at natural height and `overflowY: auto` scrolls the overflow.
             overflowY: "auto",
             overscrollBehavior: "contain",
+            // This Box is a flex child of the mobile composer stack. Without an
+            // explicit zero minimum, WebKit applies min-height:auto and keeps the
+            // grid at its content height instead of establishing this bounded
+            // inner scrollport — the rows remain visible but vertical swipes do
+            // nothing. Preserve native vertical ownership while the app shell's
+            // direction lock continues to recognise deliberate horizontal drawer
+            // gestures.
+            minHeight: 0,
             maxHeight: "40vh",
+            touchAction: "pan-y",
+            WebkitOverflowScrolling: "touch",
             display: "grid",
             rowGap: "var(--mobile-composer-stack-gap)",
             // The outer Composer owns the space before and after this group.
