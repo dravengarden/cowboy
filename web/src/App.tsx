@@ -89,6 +89,7 @@ import {
 } from "./store";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { hasHorizontalScroller, horizontalSwipe } from "./touchGestures";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -142,7 +143,6 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
-import { horizontalSwipe, swipeCommits } from "./touchGestures";
 import { haptic } from "./haptic";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -420,6 +420,7 @@ function SessionList({
     autoResumeDefault,
     loaded,
     desktop,
+    mobileDrawer = false,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -434,6 +435,7 @@ function SessionList({
     // false "No sessions yet." flash on a reload before the snapshot lands.
     loaded: boolean;
     desktop: boolean;
+    mobileDrawer?: boolean;
 }): React.JSX.Element {
     // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
     // the same keys into spatial reorder commands until P/Esc (or opening a
@@ -604,10 +606,10 @@ function SessionList({
                 // footers. Sessions owns an inner scrolling list, so consume
                 // that clearance here: the list continues behind the floating
                 // Close island instead of ending in a footer-shaped blank band.
-                height: desktop
+                height: desktop || mobileDrawer
                     ? "100%"
                     : "calc(100% + 76px + env(safe-area-inset-bottom, 0px))",
-                mb: desktop
+                mb: desktop || mobileDrawer
                     ? 0
                     : "calc(-76px - env(safe-area-inset-bottom, 0px))",
             }}
@@ -666,6 +668,8 @@ function SessionList({
                     // list (like Settings), not as a fixed footer-sized gap.
                     pb: desktop
                         ? undefined
+                        : mobileDrawer
+                        ? "max(env(safe-area-inset-bottom, 0px), 16px)"
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
                     // Fine-pointer desktops do not need phone-sized 44px controls
                     // in every row. Keep the generous targets for touch/tablet,
@@ -1526,6 +1530,8 @@ export function App({
     const restoredFocusRef = useRef<string | null>(activeSessionStore.get());
     const goneCheckedRef = useRef(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const mobileDrawerRef = useRef<HTMLDivElement>(null);
+    const settleMobileDrawerRef = useRef<((open: boolean) => void) | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [exploreComposeIntent, setExploreComposeIntent] = useState<{
@@ -1534,74 +1540,144 @@ export function App({
         knownPageIds: string[];
     } | null>(null);
 
-    // Mobile's session list is a spatial layer to the left of the conversation.
-    // A deliberate swipe from the left edge reveals it; requiring both an edge
-    // origin and a horizontal direction lock keeps transcript scrolling, code
-    // selection, composer editing, and iOS vertical momentum fully native.
+    // Mobile Sessions is a spatial layer underneath the whole conversation.
+    // The foreground follows a horizontal finger drag continuously, then settles
+    // from its exact release position. This intentionally does not use a sheet:
+    // replacing the drag with a second component after touchend caused the old
+    // 46px teaser + delayed-sheet discontinuity.
     useEffect(() => {
-        if (!mobile || !phone || drawerOpen || anySheetOpen) return undefined;
+        if (!mobile || anySheetOpen) return undefined;
         const surface = columnRef.current;
-        if (!surface) return undefined;
-        let gesture: { x: number; y: number; locked: boolean } | null = null;
+        const drawer = mobileDrawerRef.current;
+        if (!surface || !drawer) return undefined;
+        let gesture: {
+            x: number;
+            y: number;
+            lastX: number;
+            lastAt: number;
+            velocity: number;
+            locked: boolean;
+            startOffset: number;
+            thresholdHaptic: boolean;
+        } | null = null;
+        let settleTimer = 0;
         let commit = false;
-        const settle = (): void => {
-            surface.style.transition = "transform 260ms cubic-bezier(0.22, 1, 0.36, 1)";
-            surface.style.transform = "translate3d(0, 0, 0)";
-            globalThis.setTimeout(() => {
-                surface.style.removeProperty("transition");
-                surface.style.removeProperty("transform");
-                surface.style.removeProperty("will-change");
-            }, 280);
+        const drawerWidth = (): number => {
+            const width = surface.clientWidth;
+            return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
         };
+        const render = (offset: number): void => {
+            const width = drawerWidth();
+            const progress = Math.max(0, Math.min(1, offset / width));
+            const scale = 1 - progress * 0.012;
+            surface.style.setProperty("--mobile-drawer-progress", String(progress));
+            surface.style.transform = `translate3d(${String(offset)}px, 0, 0) scale(${String(scale)})`;
+            surface.style.borderRadius = `${String(progress * 18)}px`;
+            surface.style.boxShadow = progress > 0
+                ? `-12px 0 36px rgba(0,0,0,${String(progress * 0.18)})`
+                : "none";
+            drawer.style.opacity = String(0.72 + progress * 0.28);
+            drawer.style.transform = `translate3d(${String(-14 * (1 - progress))}px, 0, 0)`;
+        };
+        const settle = (open: boolean): void => {
+            globalThis.clearTimeout(settleTimer);
+            surface.style.transition =
+                "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms ease";
+            drawer.style.transition =
+                "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease";
+            render(open ? drawerWidth() : 0);
+            setDrawerOpen(open);
+            settleTimer = globalThis.setTimeout(() => {
+                surface.style.removeProperty("transition");
+                surface.style.removeProperty("will-change");
+                drawer.style.removeProperty("transition");
+                drawer.style.removeProperty("will-change");
+            }, 340);
+        };
+        settleMobileDrawerRef.current = settle;
         const onTouchStart = (event: TouchEvent): void => {
             const touch = event.touches[0];
             const target = event.target instanceof HTMLElement ? event.target : null;
-            // A 56px edge lane is still narrow enough to avoid ordinary content
-            // gestures, while making one-handed drawer reveal practical through
-            // a case/screen protector instead of demanding a pixel-perfect edge.
-            if (!touch || touch.clientX > 56 || target?.closest("button, input, textarea, [role='button']")) {
+            if (
+                !touch ||
+                target?.closest("input, textarea, [contenteditable='true'], [data-mobile-drawer-ignore]") ||
+                hasHorizontalScroller(event.target, surface)
+            ) {
                 gesture = null;
                 return;
             }
-            gesture = { x: touch.clientX, y: touch.clientY, locked: false };
-            commit = false;
+            const now = performance.now();
+            gesture = {
+                x: touch.clientX,
+                y: touch.clientY,
+                lastX: touch.clientX,
+                lastAt: now,
+                velocity: 0,
+                locked: false,
+                startOffset: drawerOpen ? drawerWidth() : 0,
+                thresholdHaptic: false,
+            };
+            commit = drawerOpen;
         };
         const onTouchMove = (event: TouchEvent): void => {
             const touch = event.touches[0];
             if (!gesture || !touch) return;
             const deltaX = touch.clientX - gesture.x;
             const deltaY = touch.clientY - gesture.y;
-            if (!gesture.locked && Math.abs(deltaY) >= 12 && Math.abs(deltaY) > Math.abs(deltaX) * 1.1) {
+            if (!gesture.locked && Math.abs(deltaY) >= 10 && Math.abs(deltaY) > Math.abs(deltaX) * 1.15) {
                 gesture = null;
                 return;
             }
             const swipe = gesture.locked
                 ? { direction: deltaX < 0 ? "left" as const : "right" as const, distance: Math.abs(deltaX) }
-                : horizontalSwipe(deltaX, deltaY);
-            if (!swipe || swipe.direction !== "right") return;
+                : horizontalSwipe(deltaX, deltaY, 8, 1.15);
+            if (!swipe || (!drawerOpen && swipe.direction !== "right") || (drawerOpen && swipe.direction !== "left")) {
+                return;
+            }
             gesture.locked = true;
             event.preventDefault();
-            const offset = Math.min(46, swipe.distance * 0.34);
+            const now = performance.now();
+            const elapsed = Math.max(1, now - gesture.lastAt);
+            const instantaneousVelocity = (touch.clientX - gesture.lastX) / elapsed;
+            gesture.velocity = gesture.velocity * 0.65 + instantaneousVelocity * 0.35;
+            gesture.lastX = touch.clientX;
+            gesture.lastAt = now;
+            const width = drawerWidth();
+            let offset = gesture.startOffset + deltaX;
+            // A little rubber-band resistance at both ends makes the limits feel
+            // physical instead of abruptly clipped.
+            if (offset < 0) offset *= 0.18;
+            if (offset > width) offset = width + (offset - width) * 0.18;
             surface.style.transition = "none";
             surface.style.willChange = "transform";
-            surface.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
-            const nextCommit = swipeCommits(swipe.distance, surface.clientWidth);
-            if (nextCommit && !commit) haptic(12);
+            drawer.style.transition = "none";
+            drawer.style.willChange = "transform, opacity";
+            render(offset);
+            const progress = Math.max(0, Math.min(1, offset / width));
+            const nextCommit = drawerOpen ? progress > 0.66 : progress >= 0.34;
+            if (nextCommit !== commit) {
+                haptic(18);
+                gesture.thresholdHaptic = true;
+            }
             commit = nextCommit;
         };
         const onTouchEnd = (): void => {
             if (!gesture) return;
-            const shouldOpen = commit;
+            const velocityCommit = drawerOpen
+                ? gesture.velocity > -0.45
+                : gesture.velocity > 0.45;
+            const shouldOpen = gesture.locked ? (Math.abs(gesture.velocity) >= 0.45 ? velocityCommit : commit) : drawerOpen;
+            if (gesture.locked && shouldOpen !== commit && !gesture.thresholdHaptic) haptic(18);
             gesture = null;
             commit = false;
-            settle();
-            if (shouldOpen) globalThis.setTimeout(() => setDrawerOpen(true), 120);
+            settle(shouldOpen);
         };
         const onTouchCancel = (): void => {
             gesture = null;
             commit = false;
-            settle();
+            settle(drawerOpen);
         };
+        render(drawerOpen ? drawerWidth() : 0);
         surface.addEventListener("touchstart", onTouchStart, { passive: true });
         surface.addEventListener("touchmove", onTouchMove, { passive: false });
         surface.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -1611,7 +1687,8 @@ export function App({
             surface.removeEventListener("touchmove", onTouchMove);
             surface.removeEventListener("touchend", onTouchEnd);
             surface.removeEventListener("touchcancel", onTouchCancel);
-            settle();
+            settleMobileDrawerRef.current = null;
+            globalThis.clearTimeout(settleTimer);
         };
     }, [anySheetOpen, drawerOpen, mobile, phone]);
     // Settings + Info are one merged sheet; this picks which tab it opens on.
@@ -1768,7 +1845,8 @@ export function App({
 
     function pick(id: string): void {
         setActiveId(id);
-        setDrawerOpen(false);
+        if (mobile) settleMobileDrawerRef.current?.(false);
+        else setDrawerOpen(false);
     }
 
     // VSCode-style divider drag. Pointer capture keeps move/up events flowing
@@ -1839,6 +1917,7 @@ export function App({
             autoResumeDefault={autoResumeDefaultOn}
             loaded={sessionsLoaded}
             desktop={surface === "desktop"}
+            mobileDrawer={mobile}
         />
     );
 
@@ -2012,6 +2091,8 @@ export function App({
                     flex: 1,
                     minHeight: 0,
                     width: "100%",
+                    position: "relative",
+                    overflow: mobile ? "hidden" : undefined,
                 }}
             >
             {surface === "desktop" && (
@@ -2022,7 +2103,46 @@ export function App({
                     />
                 </Suspense>
             )}
-            {sessionsInDrawer ? (
+            {mobile && (
+                <Stack
+                    ref={mobileDrawerRef}
+                    role="navigation"
+                    aria-label="Sessions"
+                    aria-hidden={!drawerOpen}
+                    sx={{
+                        position: "absolute",
+                        zIndex: 0,
+                        inset: 0,
+                        right: "auto",
+                        width: "min(84%, 360px)",
+                        minWidth: 0,
+                        overflow: "hidden",
+                        bgcolor: "background.default",
+                        pt: "env(safe-area-inset-top, 0px)",
+                        pl: "env(safe-area-inset-left, 0px)",
+                        "@media (min-width: 768px)": {
+                            width: "min(52%, 440px)",
+                        },
+                    }}
+                >
+                    <Typography
+                        variant="h6"
+                        sx={{
+                            px: 2,
+                            pt: 1.5,
+                            pb: 0.5,
+                            fontWeight: 750,
+                            letterSpacing: "-0.015em",
+                        }}
+                    >
+                        Sessions
+                    </Typography>
+                    <Box sx={{ flex: 1, minHeight: 0 }}>
+                        {list}
+                    </Box>
+                </Stack>
+            )}
+            {sessionsInDrawer && !mobile ? (
                 // The shared momentum sheet presents the Sessions rail only when
                 // it is out of flow. Touch follows its configurable navbar anchor;
                 // compact Desktop always opens from the top and otherwise retains
@@ -2051,7 +2171,7 @@ export function App({
                         px gutter below insets the controls instead.) */}
                     {list}
                 </DetentSheet>
-            ) : (
+            ) : !mobile ? (
                 <Stack
                     data-desktop-pane="sessions"
                     data-desktop-region="sessions.list"
@@ -2111,10 +2231,11 @@ export function App({
                         }}
                     />
                 </Stack>
-            )}
+            ) : null}
 
             <Stack
                 ref={columnRef}
+                data-mobile-session-surface={mobile ? "true" : undefined}
                 sx={{
                     flex: 1,
                     minWidth: 0,
@@ -2125,6 +2246,13 @@ export function App({
                     // clip is unconditional.
                     position: "relative",
                     overflow: "hidden",
+                    zIndex: mobile ? 1 : undefined,
+                    bgcolor: "background.default",
+                    // Keep the revealed seam exactly under the finger. The tiny
+                    // depth scale recedes toward the far/right edge rather than
+                    // opening an artificial gap between drawer and workspace.
+                    transformOrigin: "left center",
+                    backfaceVisibility: "hidden",
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at
@@ -2134,6 +2262,27 @@ export function App({
                     pb: "var(--kb-inset, 0px)",
                 }}
             >
+                {mobile && drawerOpen && (
+                    <Box
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Close sessions"
+                        onClick={(): void => settleMobileDrawerRef.current?.(false)}
+                        onKeyDown={(event): void => {
+                            if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                settleMobileDrawerRef.current?.(false);
+                            }
+                        }}
+                        sx={{
+                            position: "absolute",
+                            inset: 0,
+                            zIndex: (t) => t.zIndex.modal - 1,
+                            bgcolor: (t) => alpha(t.palette.common.black, 0.04),
+                            cursor: "pointer",
+                        }}
+                    />
+                )}
                 {/* Bottom-navbar mode leaves the TOP bare — the transcript runs
                     under the iOS status bar (time/signal/battery), which clashed
                     with the content. A frosted-glass strip over the safe-area-top
@@ -2358,7 +2507,10 @@ export function App({
                             // bar read lopsided. Dropping it gives the hamburger the
                             // same gutter, symmetric with the gear on the right.
                             <IconButton
-                                onClick={(): void => setDrawerOpen(true)}
+                                onClick={(): void => {
+                                    if (mobile) settleMobileDrawerRef.current?.(true);
+                                    else setDrawerOpen(true);
+                                }}
                                 // Unified 44px box + fixed 24px glyph (global
                                 // MuiIconButton) keeps the hamburger aligned with
                                 // the slash button below it at any font scale.
@@ -2714,7 +2866,8 @@ export function App({
                     // returns its id; the `sessions` broadcast that adds it to
                     // the list arrives moments later and `active` resolves it.
                     setActiveId(id);
-                    setDrawerOpen(false);
+                    if (mobile) settleMobileDrawerRef.current?.(false);
+                    else setDrawerOpen(false);
                 }}
             />
             <DeleteSessionShell
