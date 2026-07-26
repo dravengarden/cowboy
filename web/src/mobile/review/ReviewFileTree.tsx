@@ -17,19 +17,16 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type CodeTreeEntry as FileTreeEntry,
+  type CodeTreePage,
+  fetchCodeTree,
+} from "./codeApi";
 
-interface FileTreeEntry {
-  name: string;
-  path: string;
-  kind: "directory" | "file";
-}
-
-interface DirectoryPage {
-  entries: FileTreeEntry[];
-  truncated: boolean;
-}
+type DirectoryPage = CodeTreePage & { cachedAt: number };
 
 const directoryCache = new Map<string, DirectoryPage>();
+const MEMORY_FRESH_MS = 15_000;
 
 function cacheKey(sessionId: string, path: string): string {
   return `${sessionId}\0${path}`;
@@ -63,47 +60,42 @@ function DirectoryRows({
     const cached = directoryCache.get(key);
     if (cached) {
       setPages((current) => new Map(current).set(path, cached));
-      return;
+      if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
     }
     controllers.current.get(path)?.abort();
     const controller = new AbortController();
     controllers.current.set(path, controller);
-    setLoading((current) => new Set(current).add(path));
+    if (!cached) {
+      setLoading((current) => new Set(current).add(path));
+    }
     setFailed((current) => {
       const next = new Set(current);
       next.delete(path);
       return next;
     });
     try {
-      const query = new URLSearchParams({ path });
-      const response = await fetch(
-        `/api/code/sessions/${encodeURIComponent(sessionId)}/tree?${query}`,
-        { signal: controller.signal },
-      );
-      if (!response.ok) throw new Error(`file tree: ${response.status}`);
-      const body = (await response.json()) as {
-        apiVersion?: number;
-        entries?: FileTreeEntry[];
-        truncated?: boolean;
-      };
-      if (body.apiVersion !== 1) throw new Error("Unsupported Code API version");
       const page = {
-        entries: body.entries ?? [],
-        truncated: body.truncated ?? false,
+        ...(await fetchCodeTree(sessionId, path, controller.signal)),
+        cachedAt: Date.now(),
       };
       directoryCache.set(key, page);
       setPages((current) => new Map(current).set(path, page));
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
+      if (
+        !cached &&
+        !(error instanceof DOMException && error.name === "AbortError")
+      ) {
         setFailed((current) => new Set(current).add(path));
       }
     } finally {
-      controllers.current.delete(path);
-      setLoading((current) => {
-        const next = new Set(current);
-        next.delete(path);
-        return next;
-      });
+      if (controllers.current.get(path) === controller) {
+        controllers.current.delete(path);
+        setLoading((current) => {
+          const next = new Set(current);
+          next.delete(path);
+          return next;
+        });
+      }
     }
   }, [sessionId]);
 
@@ -131,7 +123,7 @@ function DirectoryRows({
                     controllers.current.get(entry.path)?.abort();
                   } else {
                     next.add(entry.path);
-                    if (!page) void loadDirectory(entry.path);
+                    void loadDirectory(entry.path);
                   }
                   return next;
                 });
@@ -224,8 +216,12 @@ export function ReviewFileTree({
   onOpenFile: (path: string) => void;
 }): React.JSX.Element {
   const [root, setRoot] = useState<DirectoryPage>({
+    apiVersion: 1,
+    path: "",
+    revision: "",
     entries: [],
     truncated: false,
+    cachedAt: 0,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -234,14 +230,21 @@ export function ReviewFileTree({
 
   const load = useCallback(async (refresh = false): Promise<void> => {
     if (!sessionId) {
-      setRoot({ entries: [], truncated: false });
+      setRoot({
+        apiVersion: 1,
+        path: "",
+        revision: "",
+        entries: [],
+        truncated: false,
+        cachedAt: 0,
+      });
       return;
     }
     const key = cacheKey(sessionId, "");
     const cached = directoryCache.get(key);
     if (cached && !refresh) {
       setRoot(cached);
-      return;
+      if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
     }
     if (refresh) {
       for (const cacheKey of directoryCache.keys()) {
@@ -251,38 +254,30 @@ export function ReviewFileTree({
       }
       setRevision((current) => current + 1);
     }
-    setLoading(true);
+    setLoading(!cached);
     setError(false);
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     try {
-      const response = await fetch(
-        `/api/code/sessions/${encodeURIComponent(sessionId)}/tree`,
-        { signal: controller.signal },
-      );
-      if (!response.ok) throw new Error(`file tree: ${response.status}`);
-      const body = (await response.json()) as {
-        apiVersion?: number;
-        entries?: FileTreeEntry[];
-        truncated?: boolean;
-      };
-      if (body.apiVersion !== 1) throw new Error("Unsupported Code API version");
       const page = {
-        entries: body.entries ?? [],
-        truncated: body.truncated ?? false,
+        ...(await fetchCodeTree(sessionId, "", controller.signal, refresh)),
+        cachedAt: Date.now(),
       };
       directoryCache.set(key, page);
       setRoot(page);
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
+      if (
+        !cached &&
+        !(error instanceof DOMException && error.name === "AbortError")
+      ) {
         setError(true);
       }
     } finally {
       if (controllerRef.current === controller) {
         controllerRef.current = null;
+        setLoading(false);
       }
-      setLoading(false);
     }
   }, [sessionId]);
 

@@ -1711,8 +1711,24 @@ struct FileTreeEntry {
 struct FileTreeResponse {
     api_version: u8,
     path: String,
+    revision: String,
     entries: Vec<FileTreeEntry>,
     truncated: bool,
+}
+
+fn file_tree_revision(path: &str, entries: &[FileTreeEntry], truncated: bool) -> String {
+    let mut digest = Sha256::new();
+    digest.update(path.as_bytes());
+    digest.update([u8::from(truncated)]);
+    for entry in entries {
+        digest.update(entry.name.as_bytes());
+        digest.update([0]);
+        digest.update(entry.path.as_bytes());
+        digest.update([0]);
+        digest.update(entry.kind.as_bytes());
+        digest.update([0]);
+    }
+    format!("{:x}", digest.finalize())
 }
 
 #[derive(Debug, Serialize)]
@@ -1830,6 +1846,7 @@ async fn api_file_tree(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Query(query): Query<FileTreeQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(cwd) = state
         .hub
@@ -1850,24 +1867,51 @@ async fn api_file_tree(
     let Ok(Ok((entries, truncated))) = result else {
         return (StatusCode::BAD_REQUEST, "invalid directory").into_response();
     };
-    Json(FileTreeResponse {
+    let entries = entries
+        .into_iter()
+        .map(|entry| FileTreeEntry {
+            name: entry.name,
+            path: entry.path,
+            kind: if entry.is_directory {
+                "directory"
+            } else {
+                "file"
+            },
+        })
+        .collect::<Vec<_>>();
+    let revision = file_tree_revision(&requested_path, &entries, truncated);
+    let etag = format!("\"{revision}\"");
+    const TREE_CACHE_CONTROL: &str = "private, max-age=15, stale-while-revalidate=120";
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains(etag.as_str()))
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag.as_str()),
+                (header::CACHE_CONTROL, TREE_CACHE_CONTROL),
+            ],
+        )
+            .into_response();
+    }
+    let mut response = Json(FileTreeResponse {
         api_version: 1,
         path: requested_path,
-        entries: entries
-            .into_iter()
-            .map(|entry| FileTreeEntry {
-                name: entry.name,
-                path: entry.path,
-                kind: if entry.is_directory {
-                    "directory"
-                } else {
-                    "file"
-                },
-            })
-            .collect(),
+        revision,
+        entries,
         truncated,
     })
-    .into_response()
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().expect("SHA256 ETag is valid"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(TREE_CACHE_CONTROL),
+    );
+    response
 }
 
 fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
@@ -3054,6 +3098,30 @@ mod reset_policy_tests {
             scheduled_reset_failure_policy(false, 2),
             ScheduledResetFailurePolicy::StopFailed
         );
+    }
+}
+
+#[cfg(test)]
+mod code_tree_cache_tests {
+    use super::{FileTreeEntry, file_tree_revision};
+
+    #[test]
+    fn revision_is_stable_and_covers_visible_tree_state() {
+        let entries = vec![FileTreeEntry {
+            name: "src".to_owned(),
+            path: "src".to_owned(),
+            kind: "directory",
+        }];
+        let revision = file_tree_revision("", &entries, false);
+        assert_eq!(revision, file_tree_revision("", &entries, false));
+        assert_ne!(revision, file_tree_revision("", &entries, true));
+        assert_ne!(revision, file_tree_revision("nested", &entries, false));
+        let renamed = vec![FileTreeEntry {
+            name: "source".to_owned(),
+            path: "source".to_owned(),
+            kind: "directory",
+        }];
+        assert_ne!(revision, file_tree_revision("", &renamed, false));
     }
 }
 

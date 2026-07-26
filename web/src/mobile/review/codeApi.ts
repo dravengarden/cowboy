@@ -23,6 +23,20 @@ export interface CodeChanges {
   truncated: boolean;
 }
 
+export interface CodeTreeEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+}
+
+export interface CodeTreePage {
+  apiVersion: 1;
+  path: string;
+  revision: string;
+  entries: CodeTreeEntry[];
+  truncated: boolean;
+}
+
 export interface CodeDocument {
   apiVersion: 1;
   path: string;
@@ -42,8 +56,12 @@ export class CodeApiError extends Error {
 async function codeFetch<T>(
   url: string,
   signal?: AbortSignal,
+  cache?: RequestCache,
 ): Promise<T> {
-  const response = await fetch(url, signal ? { signal } : undefined);
+  const response = await fetch(url, {
+    ...(signal ? { signal } : {}),
+    ...(cache ? { cache } : {}),
+  });
   if (!response.ok) {
     throw new CodeApiError(response.status);
   }
@@ -73,6 +91,20 @@ export function fetchCodeChanges(
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/changes`,
     signal,
+  );
+}
+
+export function fetchCodeTree(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+  refresh = false,
+): Promise<CodeTreePage> {
+  const query = path ? `?${new URLSearchParams({ path })}` : "";
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/tree${query}`,
+    signal,
+    refresh ? "reload" : "default",
   );
 }
 

@@ -50,9 +50,11 @@ last active file. It must not depend on a complete recursive scan.
    preloading on constrained networks.
 
 Tree responses use stable relative paths until the Zed provider supplies entry
-IDs. Content responses use a content hash and immutable cache key. Metadata and
-directory pages use a workspace revision plus `ETag`, allowing stale cached
-content to paint immediately while revalidation runs.
+IDs. Content responses use a content hash and immutable cache key. Directory
+pages carry a content revision and matching `ETag`; browser HTTP storage keeps
+them fresh for 15 seconds and may paint stale data for up to two minutes while
+revalidating. The in-memory tree paints immediately, then revalidates expired
+pages without blanking expanded folders. Explicit refresh uses cache reload.
 
 ## Scan policy
 
@@ -90,9 +92,9 @@ TTL, and bounded 48 MiB / 12-entry cache; generation is capped at 16 MiB. A
 missing cursor snapshot returns `410 Gone`, prompting a clean restart instead
 of partial data.
 
-The next data-plane revision adds conditional tree requests, persistent browser
-caching, and windowed large-file source reads without changing the
-provider-independent response model.
+The next data-plane revision adds windowed large-file source reads and
+provider-driven worktree deltas without changing the provider-independent
+response model.
 
 ## Code surface
 
