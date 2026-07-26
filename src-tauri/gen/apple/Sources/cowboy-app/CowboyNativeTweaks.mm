@@ -99,7 +99,7 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
         return;
     }
     if ([intent isEqualToString:@"selection"]) {
-        [_drawerImpactGen impactOccurred];
+        [_drawerImpactGen impactOccurredWithIntensity:0.78];
         // Keep the engine warm for a quick threshold reversal.
         [_drawerImpactGen prepare];
         return;
