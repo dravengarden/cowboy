@@ -2059,9 +2059,11 @@ function ToolDetailsBrowser({
   );
 
   const navigation = (
-    <FloatingActionIsland columns="repeat(5, minmax(0, 1fr))">
-      {mobileNavigationItems}
-    </FloatingActionIsland>
+    <Box sx={{ width: "min(100%, 19rem)", mx: "auto" }}>
+      <FloatingActionIsland columns="2.75rem minmax(3.5rem, 1fr) 2.75rem 2.75rem 2.75rem">
+        {mobileNavigationItems}
+      </FloatingActionIsland>
+    </Box>
   );
 
   const details = (

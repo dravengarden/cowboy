@@ -721,8 +721,27 @@ export function ExploreTranscript(
     );
     let frame = 0;
     let attempts = 0;
-    let positionedFrames = 0;
+    let stableFrames = 0;
+    let previousExtent = -1;
+    let userInteracted = false;
+    let observedScroller: HTMLElement | null = null;
+    const relinquish = (): void => {
+      userInteracted = true;
+      cancelAnimationFrame(frame);
+      resolveExplorePageStart(props.sessionId);
+    };
+    const observeUser = (scroller: HTMLElement): void => {
+      if (observedScroller === scroller) return;
+      observedScroller?.removeEventListener("pointerdown", relinquish);
+      observedScroller?.removeEventListener("touchstart", relinquish);
+      observedScroller?.removeEventListener("wheel", relinquish);
+      observedScroller = scroller;
+      scroller.addEventListener("pointerdown", relinquish, { passive: true });
+      scroller.addEventListener("touchstart", relinquish, { passive: true });
+      scroller.addEventListener("wheel", relinquish, { passive: true });
+    };
     const positionAtStart = (): void => {
+      if (userInteracted) return;
       const firstKey = current.itemKeys[0];
       const row = firstKey
         ? rootRef.current?.querySelector<HTMLElement>(
@@ -738,23 +757,31 @@ export function ExploreTranscript(
         return;
       }
       if (!scroller) return;
+      observeUser(scroller);
       // Transcript is a column-reverse scroller. WebKit's scrollIntoView()
       // treats block:start as the flex start (the newest edge), so a long
       // question page can reopen in the middle of its answer. The visual
       // beginning is the negative scroll extent.
       scroller.scrollTop = scroller.clientHeight - scroller.scrollHeight;
-      if (positionedFrames++ < 11) {
-        // Transcript also initializes its column-reverse position in a layout
-        // effect and may commit a deferred derived row set after several
-        // paints. Reassert through that hand-off so cached page switches cannot
-        // be overwritten back to the newest edge.
+      const extent = scroller.scrollHeight - scroller.clientHeight;
+      stableFrames = Math.abs(extent - previousExtent) < 0.5 ? stableFrames + 1 : 0;
+      previousExtent = extent;
+      if (stableFrames < 2 && attempts++ < 12) {
+        // Wait only until the lazy page DOM has held the same geometry for two
+        // paints. The first real touch/wheel immediately cancels this handshake,
+        // so startup positioning can never fight native scrolling.
         frame = requestAnimationFrame(positionAtStart);
         return;
       }
       resolveExplorePageStart(props.sessionId);
     };
     frame = requestAnimationFrame(positionAtStart);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      observedScroller?.removeEventListener("pointerdown", relinquish);
+      observedScroller?.removeEventListener("touchstart", relinquish);
+      observedScroller?.removeEventListener("wheel", relinquish);
+    };
   }, [current, pageStartId, props.sessionId]);
 
   useEffect(() => {
