@@ -1640,10 +1640,11 @@ export function App({
             }, 420);
         };
         const render = (offset: number): void => {
-            // The frozen workspace is one GPU layer. Translation keeps its
-            // leading edge under the finger while scale and opacity establish
-            // the same spatial depth as a native navigation stack. These are
-            // compositor-only writes: no transcript layout or paint occurs.
+            // The complete frozen workspace (transcript, composer, navbar, and
+            // bottom corners) is one GPU layer. Translation keeps its leading
+            // edge under the finger; scale and the delayed opacity curve make
+            // that whole page recede like DeepSeek. These are compositor-only
+            // writes: no transcript layout or paint occurs.
             currentOffset = offset;
             const visual = mobileDrawerSurfaceVisual(
                 offset,
@@ -2459,6 +2460,7 @@ export function App({
                 data-mobile-session-surface={mobile ? "true" : undefined}
                 sx={{
                     flex: 1,
+                    height: mobile ? "100%" : undefined,
                     minWidth: 0,
                     // Anchor the floating frosted navbar + composer overlays (below)
                     // and clip them to the column. The overlay design (transcript is

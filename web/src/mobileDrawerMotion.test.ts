@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertAlmostEquals, assertEquals } from "jsr:@std/assert";
 import { mobileDrawerSurfaceVisual } from "./mobileDrawerMotion.ts";
 
 Deno.test("mobile drawer visual follows the finger from an exact closed state", () => {
@@ -10,13 +10,22 @@ Deno.test("mobile drawer visual follows the finger from an exact closed state", 
   assertEquals(mobileDrawerSurfaceVisual(180, 360, true), {
     progress: 0.5,
     scale: 0.98,
-    opacity: 0.79,
+    opacity: 0.8582167352537723,
   });
   assertEquals(mobileDrawerSurfaceVisual(360, 360, true), {
     progress: 1,
     scale: 0.96,
-    opacity: 0.58,
+    opacity: 0.66,
   });
+});
+
+Deno.test("mobile drawer stays opaque through direction lock then fades smoothly", () => {
+  assertEquals(mobileDrawerSurfaceVisual(35, 360, true).opacity, 1);
+  const justAfterLock = mobileDrawerSurfaceVisual(45, 360, true).opacity;
+  const halfway = mobileDrawerSurfaceVisual(180, 360, true).opacity;
+  assertAlmostEquals(justAfterLock, 0.9992275377229081);
+  assertEquals(justAfterLock > halfway, true);
+  assertEquals(halfway > mobileDrawerSurfaceVisual(360, 360, true).opacity, true);
 });
 
 Deno.test("mobile drawer visual clamps rubber-band overscroll", () => {
@@ -34,6 +43,6 @@ Deno.test("reduced motion preserves the scale while retaining drawer separation"
   assertEquals(mobileDrawerSurfaceVisual(360, 360, true, true), {
     progress: 1,
     scale: 1,
-    opacity: 0.78,
+    opacity: 0.84,
   });
 });
