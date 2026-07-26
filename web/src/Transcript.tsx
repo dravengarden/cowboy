@@ -9,6 +9,7 @@
 
 import {
   memo,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -3439,7 +3440,10 @@ export function Transcript({
       }
       directManipulationShouldFollow = false;
       nativeScrollActiveRef.current = false;
-      setRenderPausedForScroll(false);
+      // Catching up can replace a large derived timeline. Mark it non-urgent so
+      // React yields to the drawer's final compositor frames instead of turning
+      // release into one long synchronous paint.
+      startTransition(() => setRenderPausedForScroll(false));
     };
     const onWheel = (event: WheelEvent): void => {
       // A wheel/trackpad gesture that continues toward the bottom can still
