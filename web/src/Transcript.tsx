@@ -3246,6 +3246,7 @@ export function Transcript({
   sessionIdRef.current = sessionId;
   const pageIdRef = useRef(pageId);
   pageIdRef.current = pageId;
+  const viewportRestoreActiveRef = useRef(false);
   const pageWorkingRef = useRef({
     key: `${sessionId}:${pageId ?? ""}`,
     working,
@@ -3432,6 +3433,7 @@ export function Transcript({
       }, 240);
     };
     const onTouchStart = (): void => {
+      viewportRestoreActiveRef.current = false;
       // A real transcript scroll supersedes an in-flight drawer catch-up. The
       // native-scroll settle path will atomically adopt the latest canonical
       // timeline after the reader's gesture ends.
@@ -3523,6 +3525,13 @@ export function Transcript({
       // neither re-captures (would chase its own correction) nor re-sticks.
       if (freezeRef.current.self) {
         freezeRef.current.self = false;
+        return;
+      }
+      // Page/session mounting writes scrollTop while lazy rows and Markdown
+      // settle. Those synthetic scroll events are not reading intent and must
+      // not overwrite the saved viewport before restoration completes.
+      if (viewportRestoreActiveRef.current) {
+        reportScrollableRef.current();
         return;
       }
       // Covers scrollbar drags and keyboard/native scrolling as well as wheel
@@ -3799,9 +3808,11 @@ export function Transcript({
   // into Page View clear the page cache, so only a session round-trip can
   // restore a Page position; a different/newly opened page starts at its head.
   useLayoutEffect(() => {
+    viewportRestoreActiveRef.current = true;
     if (restoringProjectionMountRef.current) {
       stick.current = false;
       setSticky(sessionId, false);
+      viewportRestoreActiveRef.current = false;
       return undefined;
     }
     const mode = managesScrollHistory ? "history" : "page";
@@ -3840,9 +3851,13 @@ export function Transcript({
         el.scrollTop = el.clientHeight - el.scrollHeight;
       }
       if (++tries < 12) raf = requestAnimationFrame(position);
+      else viewportRestoreActiveRef.current = false;
     };
     raf = requestAnimationFrame(position);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      viewportRestoreActiveRef.current = false;
+    };
   }, [managesScrollHistory, pageId, sessionId]);
 
   // A live Page is allowed to follow only for the duration of its active turn.
