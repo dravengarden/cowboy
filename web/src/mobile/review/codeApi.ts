@@ -10,7 +10,11 @@ export interface CodeChange {
   path: string;
   oldPath?: string;
   status: CodeChangeStatus;
+  staged: boolean;
+  unstaged: boolean;
 }
+
+export type CodeDiffScope = "combined" | "staged" | "unstaged";
 
 export interface CodeChanges {
   apiVersion: 1;
@@ -56,12 +60,14 @@ export function fetchCodeDiff(
   path: string,
   context: number,
   showWhitespace: boolean,
+  scope: CodeDiffScope,
   signal?: AbortSignal,
 ): Promise<CodeDocument & { added: number; removed: number }> {
   const query = new URLSearchParams({
     path,
     context: String(context < 0 ? 100 : context),
     showWhitespace: String(showWhitespace),
+    scope,
   });
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,

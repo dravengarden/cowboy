@@ -1,4 +1,9 @@
-import { ArrowBack, FolderOpenOutlined } from "@mui/icons-material";
+import {
+  ArrowBack,
+  ChevronLeft,
+  ChevronRight,
+  FolderOpenOutlined,
+} from "@mui/icons-material";
 import {
   Alert,
   Box,
@@ -17,12 +22,19 @@ import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
 import { useReviewSettings } from "./reviewSettings";
+import type { CodeDiffScope } from "./codeApi";
+import type { GitReviewEntry } from "./gitReviewModel";
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
 type ReviewTarget =
   | { kind: "changes" }
-  | { kind: "diff"; path: string }
+  | {
+    kind: "diff";
+    path: string;
+    scope: CodeDiffScope;
+    queue: GitReviewEntry[];
+  }
   | { kind: "source"; path: string };
 
 function DocumentView({
@@ -51,6 +63,7 @@ function DocumentView({
         target.path,
         settings.contextLines,
         settings.showWhitespaceChanges,
+        target.scope,
         controller.signal,
       )
       : fetchCodeFile(sessionId, target.path, controller.signal);
@@ -74,6 +87,7 @@ function DocumentView({
     settings.showWhitespaceChanges,
     target.kind,
     target.path,
+    target.kind === "diff" ? target.scope : undefined,
   ]);
 
   if (loading) {
@@ -112,7 +126,11 @@ function DocumentView({
             </>
           )}
           {truncated && (
-            <Chip size="small" color="warning" label="Preview limited to 2 MB" />
+            <Chip
+              size="small"
+              color="warning"
+              label="Preview limited to 2 MB"
+            />
           )}
         </Stack>
       )}
@@ -150,6 +168,27 @@ export function ReviewApp({
     setTarget({ kind: "source", path });
     setCloseRequest((value) => value + 1);
   };
+  const openDiff = (
+    entry: GitReviewEntry,
+    queue: GitReviewEntry[],
+  ): void => {
+    setTarget({
+      kind: "diff",
+      path: entry.change.path,
+      scope: entry.scope,
+      queue,
+    });
+  };
+  const reviewIndex = target.kind === "diff"
+    ? target.queue.findIndex((entry) =>
+      entry.change.path === target.path && entry.scope === target.scope
+    )
+    : -1;
+  const moveReview = (offset: number): void => {
+    if (target.kind !== "diff") return;
+    const entry = target.queue[reviewIndex + offset];
+    if (entry) openDiff(entry, target.queue);
+  };
 
   return (
     <ReviewDrawerShell
@@ -176,7 +215,12 @@ export function ReviewApp({
           <Stack
             direction="row"
             alignItems="center"
-            sx={{ minHeight: 44, px: 0.5, borderBottom: 1, borderColor: "divider" }}
+            sx={{
+              minHeight: 44,
+              px: 0.5,
+              borderBottom: 1,
+              borderColor: "divider",
+            }}
           >
             <IconButton
               aria-label="Back to changes"
@@ -193,7 +237,13 @@ export function ReviewApp({
                 {target.path}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                {target.kind === "diff" ? "Working tree diff" : "Read-only file"}
+                {target.kind === "diff"
+                  ? target.scope === "staged"
+                    ? "Staged changes"
+                    : target.scope === "unstaged"
+                    ? "Unstaged changes"
+                    : "Conflict review"
+                  : "Read-only file"}
               </Typography>
             </Box>
           </Stack>
@@ -217,12 +267,10 @@ export function ReviewApp({
           ? (
             <ReviewChanges
               sessionId={workspace.sessionId}
-              onOpenDiff={(path) => setTarget({ kind: "diff", path })}
+              onOpenDiff={openDiff}
             />
           )
-          : (
-            <DocumentView sessionId={workspace.sessionId} target={target} />
-          )}
+          : <DocumentView sessionId={workspace.sessionId} target={target} />}
         <Box
           component="nav"
           aria-label="Code Review controls"
@@ -243,6 +291,32 @@ export function ReviewApp({
             }}
           >
             <ReviewSettings />
+            {target.kind === "diff" && (
+              <>
+                <Box sx={{ flex: 1 }} />
+                <IconButton
+                  aria-label="Previous change"
+                  disabled={reviewIndex <= 0}
+                  onClick={() => moveReview(-1)}
+                >
+                  <ChevronLeft />
+                </IconButton>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ minWidth: 52, textAlign: "center" }}
+                >
+                  {reviewIndex + 1} / {target.queue.length}
+                </Typography>
+                <IconButton
+                  aria-label="Next change"
+                  disabled={reviewIndex >= target.queue.length - 1}
+                  onClick={() => moveReview(1)}
+                >
+                  <ChevronRight />
+                </IconButton>
+              </>
+            )}
           </Toolbar>
         </Box>
       </Stack>

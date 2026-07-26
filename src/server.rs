@@ -1718,6 +1718,8 @@ struct CodeChangeResponse {
     path: String,
     old_path: Option<String>,
     status: &'static str,
+    staged: bool,
+    unstaged: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1737,6 +1739,17 @@ struct CodeDiffQuery {
     context: usize,
     #[serde(default = "default_true")]
     show_whitespace: bool,
+    #[serde(default)]
+    scope: CodeDiffScope,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CodeDiffScope {
+    #[default]
+    Combined,
+    Staged,
+    Unstaged,
 }
 
 fn default_code_context() -> usize {
@@ -1882,6 +1895,8 @@ async fn api_code_changes(
             .map(|change| CodeChangeResponse {
                 path: change.path,
                 old_path: change.old_path,
+                staged: change.staged,
+                unstaged: change.unstaged,
                 status: match change.status {
                     crate::code_review::ChangeStatus::Modified => "modified",
                     crate::code_review::ChangeStatus::Added => "added",
@@ -1910,6 +1925,11 @@ async fn api_code_diff(
             &query.path,
             query.context,
             query.show_whitespace,
+            match query.scope {
+                CodeDiffScope::Combined => crate::code_review::DiffScope::Combined,
+                CodeDiffScope::Staged => crate::code_review::DiffScope::Staged,
+                CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
+            },
         )
     })
     .await;

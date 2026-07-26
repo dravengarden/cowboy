@@ -19,12 +19,13 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
 import {
-  type CodeChange,
-  type CodeChangeStatus,
-  fetchCodeChanges,
-} from "./codeApi";
+  type GitReviewEntry,
+  groupGitChanges,
+  reviewQueue,
+} from "./gitReviewModel";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
   modified: "M",
@@ -35,7 +36,9 @@ const statusLabel: Record<CodeChangeStatus, string> = {
   conflicted: "!",
 };
 
-function ChangeIcon({ status }: { status: CodeChangeStatus }): React.JSX.Element {
+function ChangeIcon(
+  { status }: { status: CodeChangeStatus },
+): React.JSX.Element {
   if (status === "added" || status === "untracked") return <Add />;
   if (status === "deleted") return <DeleteOutline />;
   if (status === "renamed") return <CallSplit />;
@@ -48,13 +51,19 @@ export function ReviewChanges({
   onOpenDiff,
 }: {
   sessionId: string | undefined;
-  onOpenDiff: (path: string) => void;
+  onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
 }): React.JSX.Element {
-  const [changes, setChanges] = useState<CodeChange[]>([]);
+  const [changes, setChanges] = useState<
+    Awaited<
+      ReturnType<typeof fetchCodeChanges>
+    >["changes"]
+  >([]);
   const [head, setHead] = useState<string>();
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const sections = useMemo(() => groupGitChanges(changes), [changes]);
+  const queue = useMemo(() => reviewQueue(sections), [sections]);
 
   const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
     if (!sessionId) {
@@ -87,12 +96,17 @@ export function ReviewChanges({
     <Stack sx={{ height: "100%", minHeight: 0 }}>
       <Stack direction="row" alignItems="center" sx={{ px: 2, py: 1 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="subtitle1" fontWeight={700}>Changes</Typography>
+          <Typography variant="subtitle1" fontWeight={700}>
+            Git review
+          </Typography>
           <Typography variant="caption" color="text.secondary">
             {head ? `HEAD ${head}` : "Working tree"}
           </Typography>
         </Box>
-        <Chip size="small" label={changes.length} />
+        <Chip
+          size="small"
+          label={`${changes.length} ${changes.length === 1 ? "file" : "files"}`}
+        />
         <IconButton aria-label="Refresh changes" onClick={() => void load()}>
           <Refresh />
         </IconButton>
@@ -110,50 +124,90 @@ export function ReviewChanges({
             </Box>
           )
           : error
-          ? (
-            <Alert severity="error">Git changes are unavailable</Alert>
-          )
+          ? <Alert severity="error">Git changes are unavailable</Alert>
           : changes.length === 0
           ? (
             <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
               <DescriptionOutlined color="disabled" />
-              <Typography color="text.secondary">Working tree is clean</Typography>
+              <Typography color="text.secondary">
+                Working tree is clean
+              </Typography>
             </Stack>
           )
           : (
-            <List disablePadding>
-              {changes.map((change) => (
-                <ListItemButton
-                  key={`${change.status}:${change.path}`}
-                  onClick={() => onOpenDiff(change.path)}
-                  sx={{ minHeight: 52, borderRadius: 2 }}
-                >
-                  <ListItemIcon sx={{ minWidth: 36, color: "text.secondary" }}>
-                    <ChangeIcon status={change.status} />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={change.path.split("/").pop()}
-                    secondary={change.path.includes("/")
-                      ? change.path.slice(0, change.path.lastIndexOf("/"))
-                      : change.oldPath
-                      ? `from ${change.oldPath}`
-                      : undefined}
-                    primaryTypographyProps={{
-                      noWrap: true,
-                      fontFamily: "var(--cowboy-font-mono)",
-                      fontSize: 14,
+            <Stack spacing={1.25}>
+              {sections.map((section) => (
+                <Box component="section" key={section.kind}>
+                  <Stack
+                    direction="row"
+                    alignItems="center"
+                    sx={{ px: 1.25, minHeight: 36 }}
+                  >
+                    <Typography
+                      variant="overline"
+                      color={section.kind === "conflicts"
+                        ? "error.main"
+                        : "text.secondary"}
+                      sx={{ flex: 1, letterSpacing: "0.08em" }}
+                    >
+                      {section.label}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {section.entries.length}
+                    </Typography>
+                  </Stack>
+                  <List
+                    disablePadding
+                    sx={{
+                      border: 1,
+                      borderColor: "divider",
+                      borderRadius: 2.5,
+                      overflow: "hidden",
                     }}
-                    secondaryTypographyProps={{ noWrap: true }}
-                  />
-                  <Chip
-                    size="small"
-                    label={statusLabel[change.status]}
-                    color={change.status === "conflicted" ? "error" : "default"}
-                    sx={{ minWidth: 32 }}
-                  />
-                </ListItemButton>
+                  >
+                    {section.entries.map((entry, index) => (
+                      <ListItemButton
+                        key={`${entry.scope}:${entry.change.path}`}
+                        onClick={() => onOpenDiff(entry, queue)}
+                        divider={index < section.entries.length - 1}
+                        sx={{ minHeight: 56, px: 1.25 }}
+                      >
+                        <ListItemIcon
+                          sx={{ minWidth: 36, color: "text.secondary" }}
+                        >
+                          <ChangeIcon status={entry.change.status} />
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={entry.change.path.split("/").pop()}
+                          secondary={entry.change.path.includes("/")
+                            ? entry.change.path.slice(
+                              0,
+                              entry.change.path.lastIndexOf("/"),
+                            )
+                            : entry.change.oldPath
+                            ? `from ${entry.change.oldPath}`
+                            : undefined}
+                          primaryTypographyProps={{
+                            noWrap: true,
+                            fontFamily: "var(--cowboy-font-mono)",
+                            fontSize: 14,
+                          }}
+                          secondaryTypographyProps={{ noWrap: true }}
+                        />
+                        <Chip
+                          size="small"
+                          label={statusLabel[entry.change.status]}
+                          color={entry.change.status === "conflicted"
+                            ? "error"
+                            : "default"}
+                          sx={{ minWidth: 32 }}
+                        />
+                      </ListItemButton>
+                    ))}
+                  </List>
+                </Box>
               ))}
-            </List>
+            </Stack>
           )}
       </Box>
     </Stack>

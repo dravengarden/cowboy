@@ -18,6 +18,8 @@ pub struct CodeChange {
     pub path: String,
     pub old_path: Option<String>,
     pub status: ChangeStatus,
+    pub staged: bool,
+    pub unstaged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +30,13 @@ pub enum ChangeStatus {
     Renamed,
     Untracked,
     Conflicted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffScope {
+    Combined,
+    Staged,
+    Unstaged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,6 +102,8 @@ impl<'a> LocalCodeProvider<'a> {
                 path,
                 old_path,
                 status: classify_status(xy),
+                staged: has_staged_change(xy),
+                unstaged: has_unstaged_change(xy),
             });
             if changes.len() > MAX_CHANGES {
                 break;
@@ -118,6 +129,7 @@ impl<'a> LocalCodeProvider<'a> {
         relative: &str,
         context: usize,
         show_whitespace: bool,
+        scope: DiffScope,
     ) -> Result<DiffDocument, String> {
         let relative = safe_relative(relative)?;
         ensure_git_worktree(self.root)?;
@@ -131,10 +143,19 @@ impl<'a> LocalCodeProvider<'a> {
         if !show_whitespace {
             args.push("--ignore-all-space".to_owned());
         }
-        args.extend(["HEAD".to_owned(), "--".to_owned(), path.clone()]);
+        match scope {
+            DiffScope::Combined => args.push("HEAD".to_owned()),
+            DiffScope::Staged => {
+                args.push("--cached".to_owned());
+                args.push("HEAD".to_owned());
+            }
+            DiffScope::Unstaged => {}
+        }
+        args.extend(["--".to_owned(), path.clone()]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let mut bytes = git_output(self.root, &refs, MAX_DIFF_BYTES + 1)?;
-        if bytes.is_empty() && !git_path_is_tracked(self.root, &path) {
+        if bytes.is_empty() && scope != DiffScope::Staged && !git_path_is_tracked(self.root, &path)
+        {
             bytes = untracked_diff(self.root, &relative, MAX_DIFF_BYTES + 1)?;
         }
         let truncated = bytes.len() > MAX_DIFF_BYTES;
@@ -185,6 +206,15 @@ impl<'a> LocalCodeProvider<'a> {
             truncated,
         })
     }
+}
+
+fn has_staged_change(xy: &[u8]) -> bool {
+    xy.first()
+        .is_some_and(|value| !matches!(value, b' ' | b'?'))
+}
+
+fn has_unstaged_change(xy: &[u8]) -> bool {
+    xy == b"??" || xy.get(1).is_some_and(|value| !matches!(value, b' '))
 }
 
 fn classify_status(xy: &[u8]) -> ChangeStatus {
@@ -307,7 +337,7 @@ fn count_diff_lines(diff: &str) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChangeStatus, LocalCodeProvider};
+    use super::{ChangeStatus, DiffScope, LocalCodeProvider};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -354,16 +384,56 @@ mod tests {
         let changes = provider.changes().unwrap();
         assert_eq!(changes.changes.len(), 2);
         assert!(changes.changes.iter().any(|change| {
-            change.path == "tracked.rs" && change.status == ChangeStatus::Modified
+            change.path == "tracked.rs"
+                && change.status == ChangeStatus::Modified
+                && !change.staged
+                && change.unstaged
         }));
         assert!(changes.changes.iter().any(|change| {
-            change.path == "new.txt" && change.status == ChangeStatus::Untracked
+            change.path == "new.txt"
+                && change.status == ChangeStatus::Untracked
+                && !change.staged
+                && change.unstaged
         }));
-        let tracked = provider.diff("tracked.rs", 3, true).unwrap();
+        let tracked = provider
+            .diff("tracked.rs", 3, true, DiffScope::Combined)
+            .unwrap();
         assert!(tracked.text.contains("-fn old() {}"));
         assert!(tracked.text.contains("+fn new() {}"));
-        let untracked = provider.diff("new.txt", 3, true).unwrap();
+        let untracked = provider
+            .diff("new.txt", 3, true, DiffScope::Unstaged)
+            .unwrap();
         assert!(untracked.text.contains("+hello"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn partial_changes_keep_staged_and_unstaged_views_separate() {
+        let dir = scratch("partial");
+        fs::write(dir.join("tracked.rs"), "fn staged() {}\n").unwrap();
+        Command::new("git")
+            .args(["add", "tracked.rs"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::write(dir.join("tracked.rs"), "fn unstaged() {}\n").unwrap();
+
+        let provider = LocalCodeProvider::new(&dir);
+        let change = provider.changes().unwrap().changes.remove(0);
+        assert!(change.staged);
+        assert!(change.unstaged);
+
+        let staged = provider
+            .diff("tracked.rs", 3, true, DiffScope::Staged)
+            .unwrap();
+        assert!(staged.text.contains("+fn staged() {}"));
+        assert!(!staged.text.contains("unstaged"));
+
+        let unstaged = provider
+            .diff("tracked.rs", 3, true, DiffScope::Unstaged)
+            .unwrap();
+        assert!(unstaged.text.contains("-fn staged() {}"));
+        assert!(unstaged.text.contains("+fn unstaged() {}"));
         fs::remove_dir_all(dir).unwrap();
     }
 
