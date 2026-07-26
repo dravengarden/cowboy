@@ -1581,6 +1581,8 @@ export function App({
         let directManipulationActive = false;
         let releaseFrame = 0;
         let releaseIdle: number | undefined;
+        let keyboardCornersSquared = false;
+        let keyboardCornerTimer = 0;
         const drawerWidth = (): number => {
             const width = surface.clientWidth;
             return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
@@ -1591,8 +1593,44 @@ export function App({
             // per-frame motion. Keeping them identical from direction-lock
             // through the fully-open state avoids both visual shape-shifting
             // and expensive re-rasterization of the transcript layer.
-            surface.style.borderRadius = cornerRadius();
+            const radius = cornerRadius();
+            // The native shell shrinks the WKWebView frame when the keyboard
+            // opens. A bottom radius then exposes the native window underneath
+            // the WebView as dark corner wedges, even when both the document and
+            // keyboard are light. Square only the keyboard-facing corners while
+            // an editor owns focus; the drawer-facing top radius remains stable.
+            surface.style.borderRadius = keyboardCornersSquared
+                ? `${radius} ${radius} 0 0`
+                : radius;
             surface.style.boxShadow = "-18px 0 42px rgba(0,0,0,0.16)";
+        };
+        const ownsKeyboard = (): boolean => {
+            const active = document.activeElement;
+            return active instanceof HTMLElement &&
+                active.matches("input, textarea, [contenteditable='true']");
+        };
+        const onFocusIn = (event: FocusEvent): void => {
+            const target = event.target;
+            if (
+                !(target instanceof HTMLElement) ||
+                !target.matches("input, textarea, [contenteditable='true']")
+            ) {
+                return;
+            }
+            globalThis.clearTimeout(keyboardCornerTimer);
+            keyboardCornersSquared = true;
+            applyOpenDepth();
+        };
+        const onFocusOut = (): void => {
+            globalThis.clearTimeout(keyboardCornerTimer);
+            // iOS keeps resizing the native WebView after blur while the
+            // keyboard animates down. Restoring the bottom radius immediately
+            // would reveal the same native underlay for the closing frames.
+            keyboardCornerTimer = globalThis.setTimeout(() => {
+                if (ownsKeyboard()) return;
+                keyboardCornersSquared = false;
+                applyOpenDepth();
+            }, 420);
         };
         const render = (offset: number): void => {
             // The hot path deliberately writes ONE compositor-only property.
@@ -1805,12 +1843,15 @@ export function App({
         // closed. At x=0 the shadow lies outside the viewport and the matching
         // app background fills the device corners, so no visual depth leaks;
         // avoiding layer promotion/demotion removes the post-settle flash.
+        keyboardCornersSquared = ownsKeyboard();
         applyOpenDepth();
         render(drawerOpenRef.current ? drawerWidth() : 0);
         gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
         gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
         gestureTarget.addEventListener("touchend", onTouchEnd, { passive: true });
         gestureTarget.addEventListener("touchcancel", onTouchCancel, { passive: true });
+        gestureTarget.addEventListener("focusin", onFocusIn);
+        gestureTarget.addEventListener("focusout", onFocusOut);
         return () => {
             if (gesture?.locked || directManipulationActive) {
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
@@ -1819,8 +1860,11 @@ export function App({
             gestureTarget.removeEventListener("touchmove", onTouchMove);
             gestureTarget.removeEventListener("touchend", onTouchEnd);
             gestureTarget.removeEventListener("touchcancel", onTouchCancel);
+            gestureTarget.removeEventListener("focusin", onFocusIn);
+            gestureTarget.removeEventListener("focusout", onFocusOut);
             settleMobileDrawerRef.current = null;
             globalThis.clearTimeout(settleTimer);
+            globalThis.clearTimeout(keyboardCornerTimer);
             if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
             if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
             if (releaseIdle !== undefined) {
