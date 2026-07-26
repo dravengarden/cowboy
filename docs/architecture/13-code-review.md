@@ -71,8 +71,9 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
 - `GET /changes` returns normalized working-tree change records.
-- `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` returns a
-  bounded unified diff.
+- `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` creates or
+  reuses an immutable unified-diff snapshot and returns its first page.
+- `GET /diff?cursor=<opaque>` returns the next page from that exact snapshot.
 - `GET /file?path=<relative>` returns bounded UTF-8 source content with an
   `ETag`.
 
@@ -81,8 +82,16 @@ validated, and contained inside its worktree. Git porcelain and Zed RPC values
 never cross this boundary. The legacy session file-tree route remains an alias
 temporarily, but the Code frontend uses only the stable namespace.
 
-The next data-plane revision adds snapshot revisions, cursors, conditional tree
-requests, Git hunk paging, and persistent browser caching without changing the
+Diff pages carry a content revision and opaque cursor. The browser appends only
+pages with the same revision, so a worktree mutation can never splice two
+different diffs together. Initial generation is deduplicated across foreground
+and prefetch requests. Server snapshots use a 256 KiB page, a 90-second idle
+TTL, and bounded 48 MiB / 12-entry cache; generation is capped at 16 MiB. A
+missing cursor snapshot returns `410 Gone`, prompting a clean restart instead
+of partial data.
+
+The next data-plane revision adds conditional tree requests, persistent browser
+caching, and windowed large-file source reads without changing the
 provider-independent response model.
 
 ## Code surface

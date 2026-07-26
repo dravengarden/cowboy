@@ -10,7 +10,9 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const MAX_CHANGES: usize = 1_000;
+#[cfg(test)]
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +34,7 @@ pub enum ChangeStatus {
     Conflicted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiffScope {
     Combined,
     Staged,
@@ -124,7 +126,28 @@ impl<'a> LocalCodeProvider<'a> {
         })
     }
 
-    pub fn diff(
+    #[cfg(test)]
+    fn diff(
+        &self,
+        relative: &str,
+        context: usize,
+        show_whitespace: bool,
+        scope: DiffScope,
+    ) -> Result<DiffDocument, String> {
+        let mut document = self.diff_snapshot(relative, context, show_whitespace, scope)?;
+        if document.text.len() > MAX_DIFF_BYTES {
+            let mut end = MAX_DIFF_BYTES;
+            while !document.text.is_char_boundary(end) {
+                end -= 1;
+            }
+            document.text.truncate(end);
+            document.truncated = true;
+            (document.added, document.removed) = count_diff_lines(&document.text);
+        }
+        Ok(document)
+    }
+
+    pub fn diff_snapshot(
         &self,
         relative: &str,
         context: usize,
@@ -153,13 +176,16 @@ impl<'a> LocalCodeProvider<'a> {
         }
         args.extend(["--".to_owned(), path.clone()]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let mut bytes = git_output(self.root, &refs, MAX_DIFF_BYTES + 1)?;
+        let mut bytes = git_output(self.root, &refs, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
         if bytes.is_empty() && scope != DiffScope::Staged && !git_path_is_tracked(self.root, &path)
         {
-            bytes = untracked_diff(self.root, &relative, MAX_DIFF_BYTES + 1)?;
+            bytes = untracked_diff(self.root, &relative, MAX_DIFF_SNAPSHOT_BYTES + 1)?;
         }
-        let truncated = bytes.len() > MAX_DIFF_BYTES;
-        bytes.truncate(MAX_DIFF_BYTES);
+        let truncated = bytes.len() > MAX_DIFF_SNAPSHOT_BYTES;
+        bytes.truncate(MAX_DIFF_SNAPSHOT_BYTES);
+        while std::str::from_utf8(&bytes).is_err() && !bytes.is_empty() {
+            bytes.pop();
+        }
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let (added, removed) = count_diff_lines(&text);
         Ok(DiffDocument {
@@ -283,7 +309,7 @@ fn git_output(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, Strin
     let output = child
         .wait_with_output()
         .map_err(|error| format!("waiting for git: {error}"))?;
-    if output.status.success() {
+    if output.status.success() || bytes.len() == limit {
         Ok(bytes)
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())

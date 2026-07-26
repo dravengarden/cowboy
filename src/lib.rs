@@ -25,6 +25,8 @@ mod code_review;
 #[cfg(feature = "full")]
 mod core;
 #[cfg(feature = "full")]
+mod diff_snapshot;
+#[cfg(feature = "full")]
 mod files;
 #[cfg(feature = "full")]
 mod inference;

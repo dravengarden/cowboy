@@ -37,6 +37,7 @@ use crate::core::{
     DispatchReq, Envelope, Event, Hub, Inbound, JudgeReq, Outbound, PersistenceHealth,
     RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
 };
+use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::persistence::EventReducer;
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
@@ -57,6 +58,7 @@ struct AppState {
     remote_runtime: Option<Arc<RemoteRuntime>>,
     web_root: PathBuf,
     usage: UsageService,
+    diff_snapshots: DiffSnapshotCache,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -508,6 +510,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             remote_runtime: remote_runtime.clone(),
             web_root: args.web_root,
             usage,
+            diff_snapshots: DiffSnapshotCache::default(),
         },
         shutdown_tx,
     )
@@ -1734,7 +1737,8 @@ struct CodeChangesResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeDiffQuery {
-    path: String,
+    path: Option<String>,
+    cursor: Option<String>,
     #[serde(default = "default_code_context")]
     context: usize,
     #[serde(default = "default_true")]
@@ -1743,7 +1747,7 @@ struct CodeDiffQuery {
     scope: CodeDiffScope,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum CodeDiffScope {
     #[default]
@@ -1770,6 +1774,8 @@ struct CodeDiffResponse {
     added: usize,
     removed: usize,
     truncated: bool,
+    next_cursor: Option<String>,
+    limited: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1918,34 +1924,73 @@ async fn api_code_diff(
     Path(session_id): Path<String>,
     Query(query): Query<CodeDiffQuery>,
 ) -> Response {
+    if let Some(cursor) = query.cursor.as_deref() {
+        return match state.diff_snapshots.next_page(&session_id, cursor).await {
+            Ok(page) => Json(CodeDiffResponse {
+                api_version: 1,
+                path: page.path,
+                revision: page.revision,
+                text: page.text,
+                added: page.added,
+                removed: page.removed,
+                truncated: page.next_cursor.is_some() || page.limited,
+                next_cursor: page.next_cursor,
+                limited: page.limited,
+            })
+            .into_response(),
+            Err(error) if error == "diff snapshot expired" => {
+                (StatusCode::GONE, error).into_response()
+            }
+            Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+        };
+    }
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).diff(
-            &query.path,
-            query.context,
-            query.show_whitespace,
-            match query.scope {
-                CodeDiffScope::Combined => crate::code_review::DiffScope::Combined,
-                CodeDiffScope::Staged => crate::code_review::DiffScope::Staged,
-                CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
-            },
-        )
-    })
-    .await;
-    let Ok(Ok(result)) = result else {
+    let Some(path) = query.path else {
+        return (StatusCode::BAD_REQUEST, "path is required").into_response();
+    };
+    let scope = match query.scope {
+        CodeDiffScope::Combined => crate::code_review::DiffScope::Combined,
+        CodeDiffScope::Staged => crate::code_review::DiffScope::Staged,
+        CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
+    };
+    let key = DiffSnapshotKey {
+        session_id,
+        cwd: cwd.clone(),
+        path: path.clone(),
+        context: query.context,
+        show_whitespace: query.show_whitespace,
+        scope,
+    };
+    let page = state
+        .diff_snapshots
+        .first_page(key, || async move {
+            tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).diff_snapshot(
+                    &path,
+                    query.context,
+                    query.show_whitespace,
+                    scope,
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())?
+        })
+        .await;
+    let Ok(page) = page else {
         return (StatusCode::BAD_REQUEST, "diff unavailable").into_response();
     };
-    let revision = format!("{:x}", Sha256::digest(result.text.as_bytes()));
     Json(CodeDiffResponse {
         api_version: 1,
-        path: result.path,
-        revision,
-        text: result.text,
-        added: result.added,
-        removed: result.removed,
-        truncated: result.truncated,
+        path: page.path,
+        revision: page.revision,
+        text: page.text,
+        added: page.added,
+        removed: page.removed,
+        truncated: page.next_cursor.is_some() || page.limited,
+        next_cursor: page.next_cursor,
+        limited: page.limited,
     })
     .into_response()
 }

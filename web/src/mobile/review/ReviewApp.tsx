@@ -11,6 +11,7 @@ import {
 import {
   Alert,
   Box,
+  Button,
   Chip,
   CircularProgress,
   IconButton,
@@ -18,9 +19,9 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
-import { fetchCodeFile } from "./codeApi";
+import { CodeApiError, fetchCodeDiffPage, fetchCodeFile } from "./codeApi";
 import { loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import {
@@ -61,6 +62,13 @@ function DocumentView({
   const settings = useReviewSettings();
   const [text, setText] = useState("");
   const [truncated, setTruncated] = useState(false);
+  const [limited, setLimited] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [revision, setRevision] = useState<string>();
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const pageController = useRef<AbortController | undefined>(undefined);
   const [counts, setCounts] = useState<{ added: number; removed: number }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -74,6 +82,11 @@ function DocumentView({
     setError(false);
     setText("");
     setCounts(undefined);
+    setLimited(false);
+    setNextCursor(undefined);
+    setRevision(undefined);
+    setLoadMoreError(false);
+    onRevision(undefined);
     const request = diffTarget
       ? loadCodeDiff(
         sessionId,
@@ -88,7 +101,10 @@ function DocumentView({
       setText(result.text);
       setTruncated(result.truncated);
       if ("added" in result) {
-        onRevision(result.revision);
+        setRevision(result.revision);
+        setNextCursor(result.nextCursor);
+        setLimited(result.limited ?? false);
+        if (!result.nextCursor) onRevision(result.revision);
         setCounts({ added: result.added, removed: result.removed });
         setHunkIndex(0);
         if (!diffTarget) return;
@@ -120,7 +136,10 @@ function DocumentView({
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
     });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      pageController.current?.abort();
+    };
   }, [
     sessionId,
     settings.contextLines,
@@ -129,7 +148,41 @@ function DocumentView({
     target.path,
     target.kind === "diff" ? target.scope : undefined,
     onRevision,
+    reloadKey,
   ]);
+
+  const loadMore = (): void => {
+    if (!nextCursor || loadingMore) return;
+    const controller = new AbortController();
+    pageController.current?.abort();
+    pageController.current = controller;
+    setLoadingMore(true);
+    setLoadMoreError(false);
+    void fetchCodeDiffPage(sessionId, nextCursor, controller.signal)
+      .then((page) => {
+        if (page.revision !== revision) {
+          throw new Error("Diff revision changed");
+        }
+        setText((current) => current + page.text);
+        setNextCursor(page.nextCursor);
+        setLimited(page.limited ?? false);
+        setTruncated(page.truncated);
+        if (!page.nextCursor) onRevision(page.revision);
+      })
+      .catch((reason) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") {
+          return;
+        }
+        if (reason instanceof CodeApiError && reason.status === 410) {
+          setReloadKey((value) => value + 1);
+          return;
+        }
+        setLoadMoreError(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingMore(false);
+      });
+  };
 
   if (loading) {
     return (
@@ -149,7 +202,7 @@ function DocumentView({
   }
   return (
     <Stack sx={{ flex: 1, minHeight: 0 }}>
-      {(truncated || counts) && (
+      {(truncated || counts || nextCursor || loadMoreError) && (
         <Stack
           direction="row"
           spacing={1}
@@ -194,11 +247,22 @@ function DocumentView({
               </IconButton>
             </>
           )}
-          {truncated && (
+          {nextCursor && (
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={loadingMore}
+              onClick={loadMore}
+              startIcon={loadingMore ? <CircularProgress size={12} /> : undefined}
+            >
+              {loadMoreError ? "Retry" : "Load more"}
+            </Button>
+          )}
+          {limited && !nextCursor && (
             <Chip
               size="small"
               color="warning"
-              label="Preview limited to 2 MB"
+              label="Preview limited to 16 MB"
             />
           )}
         </Stack>

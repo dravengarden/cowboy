@@ -29,6 +29,14 @@ export interface CodeDocument {
   revision?: string;
   text: string;
   truncated: boolean;
+  nextCursor?: string;
+  limited?: boolean;
+}
+
+export class CodeApiError extends Error {
+  constructor(public readonly status: number) {
+    super(`Code API ${status}`);
+  }
 }
 
 async function codeFetch<T>(
@@ -37,13 +45,25 @@ async function codeFetch<T>(
 ): Promise<T> {
   const response = await fetch(url, signal ? { signal } : undefined);
   if (!response.ok) {
-    throw new Error(`Code API ${response.status}`);
+    throw new CodeApiError(response.status);
   }
   const body = await response.json() as T & { apiVersion?: number };
   if (body.apiVersion !== 1) {
     throw new Error("Unsupported Code API version");
   }
   return body;
+}
+
+export function fetchCodeDiffPage(
+  sessionId: string,
+  cursor: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { added: number; removed: number }> {
+  const query = new URLSearchParams({ cursor });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
+    signal,
+  );
 }
 
 export function fetchCodeChanges(
