@@ -76,8 +76,9 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 - `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` creates or
   reuses an immutable unified-diff snapshot and returns its first page.
 - `GET /diff?cursor=<opaque>` returns the next page from that exact snapshot.
-- `GET /file?path=<relative>` returns bounded UTF-8 source content with an
-  `ETag`.
+- `GET /file?path=<relative>` returns the first 256 KiB UTF-8 source window.
+- `GET /file?path=<relative>&cursor=<opaque>` returns the next window only while
+  the file identity revision still matches; changed snapshots return `409`.
 
 Every response carries `apiVersion: 1`. Paths are resolved from the session,
 validated, and contained inside its worktree. Git porcelain and Zed RPC values
@@ -92,9 +93,14 @@ TTL, and bounded 48 MiB / 12-entry cache; generation is capped at 16 MiB. A
 missing cursor snapshot returns `410 Gone`, prompting a clean restart instead
 of partial data.
 
-The next data-plane revision adds windowed large-file source reads and
-provider-driven worktree deltas without changing the provider-independent
-response model.
+Source windows end on a complete UTF-8 and preferably line boundary. The
+revision covers the worktree-relative path plus filesystem identity, size,
+mtime, and ctime; continuations therefore reject replacement and in-place
+mutation without rereading or hashing the whole file. Reads are O(window), use
+HTTP revalidation, and cap one preview at 32 MiB.
+
+The next data-plane revision adds provider-driven worktree deltas without
+changing the provider-independent response model.
 
 ## Code surface
 

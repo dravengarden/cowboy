@@ -21,7 +21,12 @@ import {
 } from "@mui/material";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
-import { CodeApiError, fetchCodeDiffPage, fetchCodeFile } from "./codeApi";
+import {
+  CodeApiError,
+  fetchCodeDiffPage,
+  fetchCodeFile,
+  fetchCodeFilePage,
+} from "./codeApi";
 import { loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import {
@@ -100,10 +105,10 @@ function DocumentView({
     void request.then((result) => {
       setText(result.text);
       setTruncated(result.truncated);
+      setRevision(result.revision);
+      setNextCursor(result.nextCursor);
+      setLimited(result.limited ?? false);
       if ("added" in result) {
-        setRevision(result.revision);
-        setNextCursor(result.nextCursor);
-        setLimited(result.limited ?? false);
         if (!result.nextCursor) onRevision(result.revision);
         setCounts({ added: result.added, removed: result.removed });
         setHunkIndex(0);
@@ -158,22 +163,35 @@ function DocumentView({
     pageController.current = controller;
     setLoadingMore(true);
     setLoadMoreError(false);
-    void fetchCodeDiffPage(sessionId, nextCursor, controller.signal)
+    const request = target.kind === "diff"
+      ? fetchCodeDiffPage(sessionId, nextCursor, controller.signal)
+      : fetchCodeFilePage(
+        sessionId,
+        target.path,
+        nextCursor,
+        controller.signal,
+      );
+    void request
       .then((page) => {
         if (page.revision !== revision) {
-          throw new Error("Diff revision changed");
+          throw new Error("Document revision changed");
         }
         setText((current) => current + page.text);
         setNextCursor(page.nextCursor);
         setLimited(page.limited ?? false);
         setTruncated(page.truncated);
-        if (!page.nextCursor) onRevision(page.revision);
+        if (target.kind === "diff" && !page.nextCursor) {
+          onRevision(page.revision);
+        }
       })
       .catch((reason) => {
         if (reason instanceof DOMException && reason.name === "AbortError") {
           return;
         }
-        if (reason instanceof CodeApiError && reason.status === 410) {
+        if (
+          reason instanceof CodeApiError &&
+          (reason.status === 409 || reason.status === 410)
+        ) {
           setReloadKey((value) => value + 1);
           return;
         }
@@ -262,7 +280,9 @@ function DocumentView({
             <Chip
               size="small"
               color="warning"
-              label="Preview limited to 16 MB"
+              label={target.kind === "diff"
+                ? "Preview limited to 16 MB"
+                : "Preview limited to 32 MB"}
             />
           )}
         </Stack>

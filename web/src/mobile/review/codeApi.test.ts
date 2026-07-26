@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { fetchCodeTree } from "./codeApi.ts";
+import { fetchCodeFilePage, fetchCodeTree } from "./codeApi.ts";
 
 Deno.test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
   const originalFetch = globalThis.fetch;
@@ -34,6 +34,40 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
         cache: "reload",
       },
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("file continuation keeps the path and opaque cursor together", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/large.ts",
+          revision: "revision",
+          text: "next\n",
+          size: 1_000_000,
+          truncated: false,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeFilePage(
+      "session",
+      "src/large.ts",
+      "revision:262144",
+    );
+    assertEquals(
+      requested,
+      "/api/code/sessions/session/file?path=src%2Flarge.ts&cursor=revision%3A262144",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

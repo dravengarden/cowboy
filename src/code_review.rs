@@ -5,15 +5,19 @@
 //! version-pinned Zed adapter without changing the browser contract.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use sha2::Digest as _;
 
 const MAX_CHANGES: usize = 1_000;
 #[cfg(test)]
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+const FILE_PAGE_BYTES: usize = 256 * 1024;
+const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeChange {
@@ -60,9 +64,12 @@ pub struct DiffDocument {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDocument {
     pub path: String,
+    pub revision: String,
     pub text: String,
     pub size: u64,
     pub truncated: bool,
+    pub next_cursor: Option<String>,
+    pub limited: bool,
 }
 
 pub struct LocalCodeProvider<'a> {
@@ -197,7 +204,12 @@ impl<'a> LocalCodeProvider<'a> {
         })
     }
 
-    pub fn file(&self, relative: &str) -> Result<FileDocument, String> {
+    #[cfg(test)]
+    fn file(&self, relative: &str) -> Result<FileDocument, String> {
+        self.file_page(relative, None)
+    }
+
+    pub fn file_page(&self, relative: &str, cursor: Option<&str>) -> Result<FileDocument, String> {
         let relative = safe_relative(relative)?;
         let canonical_root = self
             .root
@@ -211,27 +223,89 @@ impl<'a> LocalCodeProvider<'a> {
         if !canonical_file.starts_with(&canonical_root) || !canonical_file.is_file() {
             return Err("file not found".to_owned());
         }
-        let file = File::open(&canonical_file).map_err(|error| error.to_string())?;
+        let mut file = File::open(&canonical_file).map_err(|error| error.to_string())?;
         let size = file.metadata().map_err(|error| error.to_string())?.len();
-        let mut bytes = Vec::with_capacity((size as usize).min(MAX_FILE_BYTES + 1));
-        file.take((MAX_FILE_BYTES + 1) as u64)
+        let metadata = file.metadata().map_err(|error| error.to_string())?;
+        let revision = file_revision(&relative, &metadata);
+        let offset = match cursor {
+            Some(cursor) => {
+                let (cursor_revision, offset) = parse_file_cursor(cursor)?;
+                if cursor_revision != revision {
+                    return Err("file snapshot changed".to_owned());
+                }
+                offset
+            }
+            None => 0,
+        };
+        let available = (size as usize).min(MAX_FILE_BYTES);
+        if offset >= available && !(offset == 0 && available == 0) {
+            return Err("invalid file cursor".to_owned());
+        }
+        file.seek(SeekFrom::Start(offset as u64))
+            .map_err(|error| error.to_string())?;
+        let read_limit = available.saturating_sub(offset).min(FILE_PAGE_BYTES + 4);
+        let mut bytes = Vec::with_capacity(read_limit);
+        file.take(read_limit as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         if bytes.contains(&0) {
             return Err("binary file".to_owned());
         }
-        let truncated = bytes.len() > MAX_FILE_BYTES;
-        bytes.truncate(MAX_FILE_BYTES);
-        while std::str::from_utf8(&bytes).is_err() && !bytes.is_empty() {
-            bytes.pop();
+        let valid_len = match std::str::from_utf8(&bytes) {
+            Ok(_) => bytes.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => return Err("file is not UTF-8".to_owned()),
+        };
+        let mut end = valid_len.min(FILE_PAGE_BYTES);
+        if offset + end < available
+            && let Some(newline) = bytes[..end].iter().rposition(|byte| *byte == b'\n')
+        {
+            end = newline + 1;
         }
+        bytes.truncate(end);
+        let next_offset = offset + end;
+        let next_cursor = (next_offset < available).then(|| format!("{revision}:{next_offset}"));
+        let limited = size as usize > MAX_FILE_BYTES;
         Ok(FileDocument {
             path: relative.to_string_lossy().replace('\\', "/"),
+            revision,
             text: String::from_utf8(bytes).map_err(|error| error.to_string())?,
             size,
-            truncated,
+            truncated: next_cursor.is_some() || limited,
+            next_cursor,
+            limited,
         })
     }
+}
+
+fn file_revision(relative: &Path, metadata: &std::fs::Metadata) -> String {
+    let mut digest = sha2::Sha256::new();
+    digest.update(relative.to_string_lossy().as_bytes());
+    for value in [
+        metadata.dev(),
+        metadata.ino(),
+        metadata.size(),
+        metadata.mtime() as u64,
+        metadata.mtime_nsec() as u64,
+        metadata.ctime() as u64,
+        metadata.ctime_nsec() as u64,
+    ] {
+        digest.update(value.to_le_bytes());
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn parse_file_cursor(cursor: &str) -> Result<(&str, usize), String> {
+    let (revision, offset) = cursor
+        .rsplit_once(':')
+        .ok_or_else(|| "invalid file cursor".to_owned())?;
+    if revision.len() != 64 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("invalid file cursor".to_owned());
+    }
+    let offset = offset
+        .parse::<usize>()
+        .map_err(|_| "invalid file cursor".to_owned())?;
+    Ok((revision, offset))
 }
 
 fn has_staged_change(xy: &[u8]) -> bool {
@@ -469,6 +543,29 @@ mod tests {
         let provider = LocalCodeProvider::new(&dir);
         assert_eq!(provider.file("tracked.rs").unwrap().text, "fn old() {}\n");
         assert!(provider.file("../secret").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn large_files_page_on_lines_and_reject_changed_snapshots() {
+        let dir = scratch("large-file");
+        let content: String = (0..40_000)
+            .map(|index| format!("line {index:05}\n"))
+            .collect();
+        fs::write(dir.join("large.txt"), &content).unwrap();
+        let provider = LocalCodeProvider::new(&dir);
+        let first = provider.file("large.txt").unwrap();
+        assert!(first.text.ends_with('\n'));
+        let cursor = first.next_cursor.clone().expect("second page");
+        let second = provider.file_page("large.txt", Some(&cursor)).unwrap();
+        assert!(second.text.ends_with('\n'));
+        assert_ne!(first.text, second.text);
+
+        fs::write(dir.join("large.txt"), format!("{content}changed\n")).unwrap();
+        assert_eq!(
+            provider.file_page("large.txt", Some(&cursor)).unwrap_err(),
+            "file snapshot changed"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

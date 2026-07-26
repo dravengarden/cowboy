@@ -1797,6 +1797,7 @@ struct CodeDiffResponse {
 #[derive(Debug, Deserialize)]
 struct CodeFileQuery {
     path: String,
+    cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1804,9 +1805,12 @@ struct CodeFileQuery {
 struct CodeFileResponse {
     api_version: u8,
     path: String,
+    revision: String,
     text: String,
     size: u64,
     truncated: bool,
+    next_cursor: Option<String>,
+    limited: bool,
 }
 
 /// Rank files under a session's working directory for the `@` reference picker.
@@ -2043,24 +2047,51 @@ async fn api_code_file(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Query(query): Query<CodeFileQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).file(&query.path)
+        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+            .file_page(&query.path, query.cursor.as_deref())
     })
     .await;
-    let Ok(Ok(result)) = result else {
+    let Ok(result) = result else {
         return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
     };
-    let etag = format!("\"{:x}\"", Sha256::digest(result.text.as_bytes()));
+    let result = match result {
+        Ok(result) => result,
+        Err(error) if error == "file snapshot changed" => {
+            return (StatusCode::CONFLICT, error).into_response();
+        }
+        Err(_) => return (StatusCode::BAD_REQUEST, "file unavailable").into_response(),
+    };
+    let etag = format!("\"{}\"", result.revision);
+    const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains(etag.as_str()))
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag.as_str()),
+                (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
+            ],
+        )
+            .into_response();
+    }
     let mut response = Json(CodeFileResponse {
         api_version: 1,
         path: result.path,
+        revision: result.revision,
         text: result.text,
         size: result.size,
         truncated: result.truncated,
+        next_cursor: result.next_cursor,
+        limited: result.limited,
     })
     .into_response();
     if let Ok(value) = etag.parse() {
@@ -2068,7 +2099,7 @@ async fn api_code_file(
     }
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        header::HeaderValue::from_static("private, max-age=0, must-revalidate"),
+        header::HeaderValue::from_static(FILE_CACHE_CONTROL),
     );
     response
 }

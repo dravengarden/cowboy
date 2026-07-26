@@ -139,3 +139,16 @@ export function fetchCodeFile(
     signal,
   );
 }
+
+export function fetchCodeFilePage(
+  sessionId: string,
+  path: string,
+  cursor: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { size: number }> {
+  const query = new URLSearchParams({ path, cursor });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
+    signal,
+  );
+}
