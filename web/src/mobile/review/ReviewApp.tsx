@@ -1,5 +1,5 @@
 import { RateReviewOutlined } from "@mui/icons-material";
-import { Box, Chip, Stack, Typography } from "@mui/material";
+import { Box, Chip, Stack, Toolbar, Typography } from "@mui/material";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
 import type { Mode as ThemeMode } from "../../theme";
 import { ReviewSettings } from "./ReviewSettings";
@@ -86,23 +86,26 @@ export function ReviewApp({
         component="nav"
         aria-label="Code Review controls"
         sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "flex-start",
-          minHeight: 44,
-          px: 1,
           pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
-          pl: "max(env(safe-area-inset-left, 0px), 8px)",
-          pr: "max(env(safe-area-inset-right, 0px), 8px)",
+          pl: "env(safe-area-inset-left, 0px)",
+          pr: "env(safe-area-inset-right, 0px)",
           borderTop: 1,
           borderColor: "divider",
           bgcolor: "background.default",
         }}
       >
-        <ReviewSettings
-          themeMode={themeMode}
-          onSetThemeMode={onSetThemeMode}
-        />
+        <Toolbar
+          variant="dense"
+          sx={{
+            minHeight: 44,
+            "@media (min-width: 600px)": { minHeight: 44 },
+          }}
+        >
+          <ReviewSettings
+            themeMode={themeMode}
+            onSetThemeMode={onSetThemeMode}
+          />
+        </Toolbar>
       </Box>
     </Stack>
   );
