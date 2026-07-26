@@ -3791,11 +3791,6 @@ export function Transcript({
         cancelAnimationFrame(viewportBackfillRafRef.current);
         viewportBackfillRafRef.current = 0;
       }
-      const mode = managesScrollHistoryRef.current ? "history" : "page";
-      if (mode === "history" || pageIdRef.current) {
-        if (!stick.current) captureAnchor();
-        saveViewport();
-      }
     };
   }, []);
 
