@@ -74,18 +74,18 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 
 @implementation CowboyHapticHandler {
     UIImpactFeedbackGenerator *_legacyImpactGen;
-    UISelectionFeedbackGenerator *_selectionGen;
+    UIImpactFeedbackGenerator *_drawerImpactGen;
 }
 - (instancetype)init {
     if ((self = [super init])) {
         _legacyImpactGen =
             [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        // Keep one generator alive for the lifetime of the shell. Creating a
-        // generator and calling prepare immediately before selectionChanged
-        // (as the generic Tauri plugin does) cannot warm the Taptic Engine in
-        // time. The web gesture prepares this instance at touch-down, then
-        // crosses the drawer's magnetic threshold tens of milliseconds later.
-        _selectionGen = [[UISelectionFeedbackGenerator alloc] init];
+        // The drawer is a low-priority spatial affordance, not a crisp picker
+        // selection. Keep a soft generator alive and prewarm it at touch-down;
+        // the deliberately low intensity makes the threshold feel like gentle
+        // magnetic resistance instead of a button click.
+        _drawerImpactGen =
+            [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft];
     }
     return self;
 }
@@ -95,13 +95,13 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
         ? (NSString *)message.body
         : @"legacy-impact";
     if ([intent isEqualToString:@"prepare-selection"]) {
-        [_selectionGen prepare];
+        [_drawerImpactGen prepare];
         return;
     }
     if ([intent isEqualToString:@"selection"]) {
-        [_selectionGen selectionChanged];
+        [_drawerImpactGen impactOccurredWithIntensity:0.16];
         // Keep the engine warm for a quick threshold reversal.
-        [_selectionGen prepare];
+        [_drawerImpactGen prepare];
         return;
     }
     // Backward compatibility for older web bundles.
