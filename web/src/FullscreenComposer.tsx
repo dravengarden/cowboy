@@ -116,18 +116,13 @@ export function FullscreenComposer({
   // current in-progress text at open time; on close the parent syncs it back.
   const seed = useRef(value).current;
 
-  // Raise the keyboard on open. iOS can drop a single early focus while the
-  // overlay is still painting, so focus a few times across the first frames
-  // (cheap, idempotent) — the editor lands focused with the caret at the end.
+  // Fallback for a host that does not transfer focus while mounting. Cowboy's
+  // main and row-edit entry points pass false and own one user-gesture/layout
+  // transfer; repeated timers disarm the native iOS text menu.
   useEffect(() => {
-    // The main composer focuses IN the opening user tap (flushSync) → skip the
-    // programmatic timers, which would re-focus over the armed editor and could
-    // disarm the iOS long-press menu. The row-edit overlay still uses them.
     if (!autoFocus) return undefined;
-    const timers = [0, 120, 320].map((d) =>
-      globalThis.setTimeout(() => editorRef.current?.focusEnd(), d)
-    );
-    return (): void => timers.forEach((t) => globalThis.clearTimeout(t));
+    const timer = globalThis.setTimeout(() => editorRef.current?.focusEnd(), 0);
+    return (): void => globalThis.clearTimeout(timer);
   }, [autoFocus]);
 
   const act = (fn: () => void): (() => void) => () => {

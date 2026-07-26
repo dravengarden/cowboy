@@ -17,6 +17,13 @@ export function horizontalSwipe(
   return { direction: deltaX < 0 ? "left" : "right", distance };
 }
 
+export function shouldFreezePreviewPointer(
+  pointerType: string,
+  button: number,
+): boolean {
+  return pointerType === "mouse" && button === 0;
+}
+
 export function swipeCommits(distance: number, viewportWidth: number): boolean {
   return distance >= Math.min(112, Math.max(88, viewportWidth * 0.24));
 }

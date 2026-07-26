@@ -139,6 +139,18 @@ here says otherwise.
    custom — nothing to "migrate". Re-verify the IME matrix since the shell caret
    is now native.**
 
+   **Touch pointer and focus ownership (2026-07-26):** the inline-preview
+   `freezeMousePlugin` used to freeze decorations for every primary pointer,
+   including iOS touch. Its `setFrozen(true)` on pointerdown and delayed
+   `setFrozen(false)` 100ms after pointerup changed CM state while UIKit was
+   promoting the long-press magnifier into its edit menu, cancelling the popup.
+   The freeze exists only to keep Markdown markers from shifting beneath a
+   desktop mouse click; it must accept `pointerType === "mouse"` only. Main,
+   queued, and draft fullscreen entry points must also transfer focus exactly
+   once from their opening user gesture. Delayed 60/120/200/320/400ms `focusEnd`
+   retries replace the already-armed native text interaction and suppress the
+   same menu. Never restore touch freeze or post-open focus retries.
+
 4. **A tiny "dot" after the caret / near rendered markdown on iOS.** CM6 wraps
    every widget (the placeholder, each hidden-marker widget) in a srcless
    `<img class="cm-widgetBuffer">`; iOS WebKit renders a srcless `<img>` as a

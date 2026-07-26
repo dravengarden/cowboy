@@ -857,20 +857,9 @@ export function ComposerWorkspace({
     });
     return (): void => setImageTapHandler(null);
   }, []);
-  // Focus the fullscreen editor when it opens (the inline one just unmounted, so
-  // the shared editorRef now points here). Re-focus across the sheet's slide-in
-  // (~320ms): a single early focus intermittently gets dropped by iOS while the
-  // cover is mid-transform (the "input doesn't show / no cursor" bug), so retry
-  // at a few points up to past the settle. focusEnd is idempotent once it holds.
-  useEffect(() => {
-    if (!composeFs) return undefined;
-    const timers = [60, 200, 400].map((d) =>
-      globalThis.setTimeout(() => editorRef.current?.focusEnd(), d)
-    );
-    return () => {
-      for (const t of timers) globalThis.clearTimeout(t);
-    };
-  }, [composeFs]);
+  // The expand tap transfers focus synchronously below. Never refocus from an
+  // effect: a later programmatic focus replaces iOS's user-armed text
+  // interaction and suppresses long-press Paste/Select.
   // Stopping a running turn is confirmed through a modal (Enter confirms, Esc
   // dismisses) — clicking Stop or pressing Esc in the editor opens it, rather
   // than cancelling on a single stray click/keypress.
@@ -3403,11 +3392,18 @@ function PendingRow({
   useConfirmEnter(confirmDiscardEdit, discardEdit);
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;
-    // Small delay so the sheet has mounted before we focus (desktop pops the
-    // caret; on touch the keyboard may need one tap — acceptable for an edit).
-    const t = globalThis.setTimeout(() => overlayEditorRef.current?.focusEnd(), 60);
-    return () => globalThis.clearTimeout(t);
-  }, [overlayOpen]);
+    if (touchInput) {
+      // The Edit tap's layout effect below claims the keyboard and mounts this
+      // overlay in the same task. Transfer once before paint so UIKit retains
+      // user-activated text ownership.
+      overlayEditorRef.current?.focusEnd();
+      return undefined;
+    }
+    const frame = globalThis.requestAnimationFrame(() =>
+      overlayEditorRef.current?.focusEnd()
+    );
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [overlayOpen, touchInput]);
   useLayoutEffect(() => {
     if (!editing) return undefined;
     // On TOUCH, editing a queued/draft message goes straight to the fullscreen
@@ -3577,11 +3573,8 @@ function PendingRow({
             commands={commands}
             placeholder="Edit message…"
             sendable={!!draft.trim() || editAttachments.length > 0}
-            // Desktop owns one deliberate focus transfer in the row effect.
-            // Replaying the Mobile 0/120/320ms focus retries can land after the
-            // user has already started a native IME composition and detach its
-            // marked-text channel. Touch keeps the established keyboard retries.
-            autoFocus={touchInput}
+            // The parent layout effect owns exactly one focus transfer.
+            autoFocus={false}
             showCollapse={false}
             submitLabel="Done editing"
             submitIcon={<Check />}

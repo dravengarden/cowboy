@@ -24,6 +24,7 @@ import {
   type ViewUpdate,
 } from '@codemirror/view';
 import { treeGrowthEffect, treeProgressPlugin } from './tree-progress';
+import { shouldFreezePreviewPointer } from '../touchGestures'; // LOCAL: native touch owns text interaction.
 
 // Inline preview — the Obsidian "Live Preview" model.
 //
@@ -110,7 +111,10 @@ const freezeMousePlugin = ViewPlugin.fromClass(
     private down = false;
     private releaseTimer: number | null = null;
     private readonly onDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
+      // LOCAL: this freeze only prevents desktop mouse clicks from revealing
+      // Markdown beneath the pointer. A CM dispatch during iOS touch down/up
+      // cancels the native Paste/Select menu after its magnifier appears.
+      if (!shouldFreezePreviewPointer(event.pointerType, event.button)) return;
       // Only freeze when the pointerdown lands inside the content. The
       // scrollbar (on the outer .cm-scroller) would otherwise engage the
       // freeze too — which keeps decorations stale for the whole drag

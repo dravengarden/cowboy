@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { horizontalSwipe, swipeCommits } from "./touchGestures.ts";
+import {
+  horizontalSwipe,
+  shouldFreezePreviewPointer,
+  swipeCommits,
+} from "./touchGestures.ts";
 
 Deno.test("horizontal swipe waits for a deliberate direction lock", () => {
   assertEquals(horizontalSwipe(11, 0), null);
@@ -13,4 +17,11 @@ Deno.test("horizontal navigation requires a substantial phone swipe", () => {
   assertEquals(swipeCommits(94, 390), true);
   assertEquals(swipeCommits(111, 1024), false);
   assertEquals(swipeCommits(112, 1024), true);
+});
+
+Deno.test("preview movement freeze belongs only to a primary mouse press", () => {
+  assertEquals(shouldFreezePreviewPointer("mouse", 0), true);
+  assertEquals(shouldFreezePreviewPointer("mouse", 1), false);
+  assertEquals(shouldFreezePreviewPointer("touch", 0), false);
+  assertEquals(shouldFreezePreviewPointer("pen", 0), false);
 });
