@@ -1,5 +1,15 @@
 import { assertAlmostEquals, assertEquals } from "jsr:@std/assert";
-import { mobileDrawerSurfaceVisual } from "./mobileDrawerMotion.ts";
+import {
+  mobileDrawerSurfaceVisual,
+  predictDrawerOffset,
+} from "./mobileDrawerMotion.ts";
+
+Deno.test("mobile drawer prediction removes one-frame finger lag without running away", () => {
+  assertEquals(predictDrawerOffset(120, 0.5, 8), 124);
+  assertEquals(predictDrawerOffset(120, 4, 16), 130);
+  assertEquals(predictDrawerOffset(120, -4, 16), 110);
+  assertEquals(predictDrawerOffset(120, 1, -5), 120);
+});
 
 Deno.test("mobile drawer visual follows the finger from an exact closed state", () => {
   assertEquals(mobileDrawerSurfaceVisual(0, 360, true), {

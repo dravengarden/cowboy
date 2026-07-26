@@ -92,7 +92,10 @@ import {
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { hasHorizontalScroller, horizontalSwipe } from "./touchGestures";
-import { mobileDrawerSurfaceVisual } from "./mobileDrawerMotion";
+import {
+    mobileDrawerSurfaceVisual,
+    predictDrawerOffset,
+} from "./mobileDrawerMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -1580,6 +1583,9 @@ export function App({
         let settleTimer = 0;
         let renderFrame = 0;
         let pendingOffset = 0;
+        let pendingSampleAt = 0;
+        let pendingVelocity = 0;
+        let pendingThresholdHaptic = false;
         let currentOffset = 0;
         let commit = false;
         let directManipulationActive = false;
@@ -1678,12 +1684,28 @@ export function App({
             // This stays on the compositor alongside the foreground transform.
             drawerMask.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
         };
-        const scheduleRender = (offset: number): void => {
+        const scheduleRender = (
+            offset: number,
+            sampleAt: number,
+            velocity: number,
+        ): void => {
             pendingOffset = offset;
+            pendingSampleAt = sampleAt;
+            pendingVelocity = velocity;
             if (renderFrame !== 0) return;
-            renderFrame = requestAnimationFrame(() => {
+            renderFrame = requestAnimationFrame((frameAt) => {
                 renderFrame = 0;
-                render(pendingOffset);
+                render(predictDrawerOffset(
+                    pendingOffset,
+                    pendingVelocity,
+                    frameAt - pendingSampleAt,
+                ));
+                // Keep native bridge IPC outside the raw touchmove hot path.
+                // The haptic remains aligned with the committed visual frame.
+                if (pendingThresholdHaptic) {
+                    pendingThresholdHaptic = false;
+                    navigationHaptic();
+                }
             });
         };
         const clearTransitions = (): void => {
@@ -1698,6 +1720,7 @@ export function App({
             const finish = (): void => {
                 releaseIdle = undefined;
                 directManipulationActive = false;
+                gestureTarget.removeAttribute("data-mobile-drawer-moving");
                 releaseStorePresentation?.();
                 releaseStorePresentation = undefined;
                 globalThis.dispatchEvent(
@@ -1748,6 +1771,10 @@ export function App({
                 `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
                 `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             render(targetOffset);
+            if (pendingThresholdHaptic) {
+                pendingThresholdHaptic = false;
+                requestAnimationFrame(() => navigationHaptic());
+            }
             // Mount the foreground hit layer at open-start. During close, keep
             // the open state through the last animation frame so the radius and
             // clipping cannot disappear early when React rebinds this effect.
@@ -1829,6 +1856,7 @@ export function App({
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-start"));
                 releaseStorePresentation ??= holdStorePresentation();
                 directManipulationActive = true;
+                gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
                 applyOpenDepth();
                 surface.style.transition = "none";
                 surface.style.willChange = "transform, opacity";
@@ -1854,11 +1882,11 @@ export function App({
             // iOS can deliver touchmove faster than the display refresh rate.
             // Coalesce those samples into one visual update per frame while
             // keeping velocity and the magnetic threshold on every raw sample.
-            scheduleRender(offset);
+            scheduleRender(offset, now, gesture.velocity);
             const progress = Math.max(0, Math.min(1, offset / width));
             const nextCommit = gesture.startOpen ? progress > 0.66 : progress >= 0.34;
             if (nextCommit !== commit && !gesture.thresholdHaptic) {
-                navigationHaptic();
+                pendingThresholdHaptic = true;
                 gesture.thresholdHaptic = true;
             }
             commit = nextCommit;
@@ -1930,6 +1958,7 @@ export function App({
             globalThis.clearTimeout(settleTimer);
             globalThis.clearTimeout(keyboardCornerTimer);
             if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
+            gestureTarget.removeAttribute("data-mobile-drawer-moving");
             if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
             if (releaseIdle !== undefined) {
                 if (typeof globalThis.cancelIdleCallback === "function") {
@@ -2353,6 +2382,13 @@ export function App({
                     width: "100%",
                     position: "relative",
                     overflow: mobile ? "hidden" : undefined,
+                    // Store notifications are already held during a drawer
+                    // gesture. Pause independent CSS spinners/shimmers too:
+                    // otherwise they keep consuming compositor time underneath
+                    // the frozen foreground raster on busy sessions.
+                    "&[data-mobile-drawer-moving='true'] *": {
+                        animationPlayState: "paused !important",
+                    },
                 }}
             >
             {surface === "desktop" && (
