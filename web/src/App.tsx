@@ -1536,6 +1536,7 @@ export function App({
     const drawerOpenRef = useRef(false);
     const mobileShellRef = useRef<HTMLDivElement>(null);
     const mobileDrawerRef = useRef<HTMLDivElement>(null);
+    const mobileDrawerMaskRef = useRef<HTMLDivElement>(null);
     const settleMobileDrawerRef = useRef<(
         (
             open: boolean,
@@ -1562,7 +1563,8 @@ export function App({
         const surface = columnRef.current;
         const gestureTarget = mobileShellRef.current;
         const drawer = mobileDrawerRef.current;
-        if (!surface || !gestureTarget || !drawer) return undefined;
+        const drawerMask = mobileDrawerMaskRef.current;
+        if (!surface || !gestureTarget || !drawer || !drawerMask) return undefined;
         let gesture: {
             x: number;
             y: number;
@@ -1655,6 +1657,12 @@ export function App({
             surface.style.transform =
                 `translate3d(${String(offset)}px, 0, 0) scale(${String(visual.scale)})`;
             surface.style.opacity = String(visual.opacity);
+            // The foreground recedes translucently, but the session list must
+            // remain visible only in the strip that has physically been
+            // revealed. Move an opaque app-background mask with the foreground
+            // edge so drawer labels never ghost through the page underneath.
+            // This stays on the compositor alongside the foreground transform.
+            drawerMask.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
         };
         const scheduleRender = (offset: number): void => {
             pendingOffset = offset;
@@ -1667,6 +1675,8 @@ export function App({
         const clearTransitions = (): void => {
             surface.style.removeProperty("transition");
             surface.style.removeProperty("will-change");
+            drawerMask.style.removeProperty("transition");
+            drawerMask.style.removeProperty("will-change");
         };
         const releaseDirectManipulation = (): void => {
             const finish = (): void => {
@@ -1716,6 +1726,8 @@ export function App({
             surface.style.transition =
                 `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
                 `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+            drawerMask.style.transition =
+                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             render(targetOffset);
             // Mount the foreground hit layer at open-start. During close, keep
             // the open state through the last animation frame so the radius and
@@ -1798,6 +1810,8 @@ export function App({
                 applyOpenDepth();
                 surface.style.transition = "none";
                 surface.style.willChange = "transform, opacity";
+                drawerMask.style.transition = "none";
+                drawerMask.style.willChange = "transform";
             }
             gesture.locked = true;
             event.preventDefault();
@@ -2363,6 +2377,20 @@ export function App({
                         {list}
                     </Box>
                 </Stack>
+            )}
+            {mobile && (
+                <Box
+                    ref={mobileDrawerMaskRef}
+                    aria-hidden="true"
+                    sx={{
+                        position: "absolute",
+                        zIndex: 0,
+                        inset: 0,
+                        bgcolor: "background.default",
+                        pointerEvents: "none",
+                        backfaceVisibility: "hidden",
+                    }}
+                />
             )}
             {sessionsInDrawer && !mobile ? (
                 // The shared momentum sheet presents the Sessions rail only when
