@@ -2122,6 +2122,9 @@ export function App({
     }, [active?.id]);
 
     function pick(id: string): void {
+        globalThis.dispatchEvent(
+            new CustomEvent("cowboy:transcript-save-viewport"),
+        );
         if (mobile && settleMobileDrawerRef.current) {
             // Keep the current transcript raster stable during close. Switching
             // the large active timeline mid-transform was the principal fast-

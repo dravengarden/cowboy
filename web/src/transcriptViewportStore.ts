@@ -10,6 +10,7 @@ export interface TranscriptViewport {
   pageId: string | null;
   anchorKey: string | null;
   anchorOffset: number;
+  scrollOffset: number;
   following: boolean;
   touchedAt: number;
 }

@@ -3372,6 +3372,7 @@ export function Transcript({
         pageId: mode === "page" ? pageIdRef.current ?? null : null,
         anchorKey: stick.current ? null : freezeRef.current.key,
         anchorOffset: freezeRef.current.top,
+        scrollOffset: el.scrollTop,
         following: mode === "history" && stick.current,
       });
     };
@@ -3621,6 +3622,13 @@ export function Transcript({
       detach();
       freezeRef.current.key = null;
     };
+    const onSaveViewport = (): void => {
+      // Session switching can happen while iOS momentum is still active, before
+      // the 240ms settle timer captures its final position. Snapshot in the
+      // switching tap's task while refs still identify the outgoing session.
+      if (!stick.current) captureAnchor();
+      saveViewport();
+    };
     const onDesktopNavigation = (rawEvent: Event): void => {
       const action = (rawEvent as CustomEvent<{ action?: string }>).detail
         ?.action;
@@ -3661,6 +3669,10 @@ export function Transcript({
     globalThis.addEventListener(
       "cowboy:explore-page-start",
       onExplorePageStart,
+    );
+    globalThis.addEventListener(
+      "cowboy:transcript-save-viewport",
+      onSaveViewport,
     );
     globalThis.addEventListener(
       "cowboy:transcript-direct-manipulation-start",
@@ -3751,6 +3763,10 @@ export function Transcript({
         onExplorePageStart,
       );
       globalThis.removeEventListener(
+        "cowboy:transcript-save-viewport",
+        onSaveViewport,
+      );
+      globalThis.removeEventListener(
         "cowboy:transcript-direct-manipulation-start",
         onDirectManipulationStart,
       );
@@ -3792,6 +3808,7 @@ export function Transcript({
       (mode === "history" || saved.pageId === (pageId ?? null));
     const restoreDetached = canRestore && !saved.following &&
       saved.anchorKey !== null;
+    const restoreOffset = canRestore && !saved.following;
     stick.current = canRestore ? saved.following : mode === "history";
     if (stick.current) resetSticky(sessionId);
     else setSticky(sessionId, false);
@@ -3799,6 +3816,11 @@ export function Transcript({
     let tries = 0;
     const position = (): void => {
       const el = parentRef.current;
+      if (el && restoreOffset) {
+        // Exact offset is the reliable fallback while the cached anchor row is
+        // not mounted yet (page projection/history hydration can take frames).
+        el.scrollTop = saved.scrollOffset;
+      }
       if (el && restoreDetached) {
         const anchor: FreezeAnchor = {
           key: saved.anchorKey,
@@ -3845,6 +3867,7 @@ export function Transcript({
           pageId: pageId ?? null,
           anchorKey: freezeRef.current.key,
           anchorOffset: freezeRef.current.top,
+          scrollOffset: el.scrollTop,
           following: false,
         });
       }

@@ -15,6 +15,7 @@ Deno.test("viewport positions are isolated by session and mode", () => {
     pageId: null,
     anchorKey: "message-10",
     anchorOffset: 120,
+    scrollOffset: -420,
     following: false,
   }, 1_000);
   saveTranscriptViewport({
@@ -23,6 +24,7 @@ Deno.test("viewport positions are isolated by session and mode", () => {
     pageId: "question-4",
     anchorKey: "message-14",
     anchorOffset: 80,
+    scrollOffset: -260,
     following: false,
   }, 1_100);
 
@@ -33,6 +35,10 @@ Deno.test("viewport positions are isolated by session and mode", () => {
   assertEquals(
     getTranscriptViewport("alpha", "page", 1_200)?.pageId,
     "question-4",
+  );
+  assertEquals(
+    getTranscriptViewport("alpha", "page", 1_200)?.scrollOffset,
+    -260,
   );
   assertEquals(getTranscriptViewport("beta", "history", 1_200), null);
 });
@@ -45,6 +51,7 @@ Deno.test("clearing page position preserves history position", () => {
     pageId: null,
     anchorKey: "history-row",
     anchorOffset: 32,
+    scrollOffset: -100,
     following: false,
   }, 1_000);
   saveTranscriptViewport({
@@ -53,6 +60,7 @@ Deno.test("clearing page position preserves history position", () => {
     pageId: "question-1",
     anchorKey: "page-row",
     anchorOffset: 64,
+    scrollOffset: -200,
     following: false,
   }, 1_000);
 
@@ -73,6 +81,7 @@ Deno.test("expired and removed-session positions are discarded", () => {
     pageId: null,
     anchorKey: "old-row",
     anchorOffset: 0,
+    scrollOffset: 0,
     following: false,
   }, 0);
   saveTranscriptViewport({
@@ -81,6 +90,7 @@ Deno.test("expired and removed-session positions are discarded", () => {
     pageId: null,
     anchorKey: "gone-row",
     anchorOffset: 0,
+    scrollOffset: 0,
     following: false,
   }, 24 * 60 * 60 * 1_000);
 
