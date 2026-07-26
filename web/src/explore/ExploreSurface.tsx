@@ -362,13 +362,12 @@ function PageList({
       list.scrollTop = anchor.scrollTop +
         Math.max(0, list.scrollHeight - anchor.scrollHeight);
     }
-    // A tall phone/tablet can still have no scroll range after one question
-    // boundary lands. Re-arm before the observer is recreated so it keeps
-    // filling by visible directory pages; otherwise the user cannot make a
-    // second upward approach because there is literally nothing to scroll.
-    if (list.scrollHeight <= list.clientHeight + 1) {
-      earlierRequestArmedRef.current = true;
-    }
+    // A successful request added a visible directory page, so the next approach
+    // is eligible immediately. IntersectionObserver still gates the request by
+    // the 72px boundary: while a tall viewport remains unfilled it keeps
+    // backfilling; once the prepend moves the sentinel clear it stops until the
+    // user deliberately scrolls back to the top.
+    earlierRequestArmedRef.current = true;
     prependAnchorRef.current = null;
   }, [pages.length]);
 
