@@ -121,6 +121,10 @@ import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
+// A byte-bounded history page can contain only a few tall tool/Markdown rows.
+// Permit a small chain so a phone viewport is actually filled after opening,
+// while retaining a hard ceiling that prevents downloading a whole session.
+const VIEWPORT_BACKFILL_PAGE_BUDGET = 3;
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -3047,7 +3051,9 @@ export function Transcript({
   const reportScrollableRef = useRef<() => void>(() => undefined);
   const viewportBackfillRafRef = useRef(0);
   const viewportBackfillCursorRef = useRef<number | null>(null);
-  const viewportBackfillAllowanceRef = useRef(1);
+  const viewportBackfillAllowanceRef = useRef(
+    VIEWPORT_BACKFILL_PAGE_BUDGET,
+  );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
   const historyLoadingHideTimerRef = useRef<number | null>(null);
@@ -3126,7 +3132,7 @@ export function Transcript({
     setScrollbackLoading(false);
     setShowHistoryLoadingFill(false);
     viewportBackfillCursorRef.current = null;
-    viewportBackfillAllowanceRef.current = 1;
+    viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_BUDGET;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
     requestViewportBackfillRef.current(false);
@@ -3138,10 +3144,10 @@ export function Transcript({
     };
   }, [sessionId]);
 
-  // Bootstrap at most one history page for a newly opened session, and grant
-  // one more page only when the actual viewport height grows. A page landing
-  // changes content height and React state; it must never recursively authorize
-  // the next page or one short retained tail can download the whole transcript.
+  // Bootstrap a small, hard-bounded chain of history pages for a newly opened
+  // session. Each page landing re-measures real geometry: stop as soon as the
+  // viewport fills, otherwise continue only while budget remains. This avoids
+  // both the one-page blank-screen failure and an unbounded full-history fetch.
   requestViewportBackfillRef.current = (fromResize: boolean): void => {
     if (!managesScrollHistoryRef.current) {
       setBackfillingViewport(false);
@@ -3177,14 +3183,19 @@ export function Transcript({
         void loadOlder(sessionId).finally(() => {
           if (viewportBackfillCursorRef.current === requestedCursor) {
             viewportBackfillCursorRef.current = null;
+            // The store update can render before this promise's finally runs;
+            // that layout pass correctly refuses a duplicate while the cursor
+            // is owned. Re-measure once ownership is released so a still-short
+            // viewport can spend its next bounded page.
+            requestViewportBackfillRef.current(false);
           }
         });
       }
     });
   };
 
-  // Re-check after layout changes, but the allowance above means a page landing
-  // can only stop backfill; it cannot chain another request.
+  // Re-check after a page lands so a still-short viewport can spend the next
+  // bounded allowance. Real overflow or reachedStart stops the chain.
   useLayoutEffect(() => {
     requestViewportBackfillRef.current(false);
   }, [
@@ -3702,7 +3713,7 @@ export function Transcript({
         previousHeight !== null &&
         nextHeight > previousHeight + 1
       ) {
-        viewportBackfillAllowanceRef.current = 1;
+        viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_BUDGET;
         requestViewportBackfillRef.current(true);
       }
       if (!stick.current) {
