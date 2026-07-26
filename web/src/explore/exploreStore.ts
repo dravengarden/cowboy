@@ -7,6 +7,7 @@ interface ExploreSessionState {
   projection: TranscriptProjection;
   pageId: string | null;
   pageStartId: string | null;
+  pageLoadingId: string | null;
   transitionAnchorKey: string | null;
   pageParents: Record<string, string>;
   pendingFollowUp: {
@@ -23,6 +24,7 @@ const DEFAULT_STATE: ExploreSessionState = {
   projection: "history",
   pageId: null,
   pageStartId: null,
+  pageLoadingId: null,
   transitionAnchorKey: null,
   pageParents: {},
   pendingFollowUp: null,
@@ -45,6 +47,7 @@ function restore(): void {
         // position. Only explicit page navigation requests pageStartId; setting
         // it here raced Transcript's viewport restore back to the page head.
         pageStartId: null,
+        pageLoadingId: null,
         transitionAnchorKey: null,
         pageParents: state.pageParents && typeof state.pageParents === "object"
           ? state.pageParents
@@ -98,6 +101,7 @@ function update(
     current.projection === next.projection &&
     current.pageId === next.pageId &&
     current.pageStartId === next.pageStartId &&
+    current.pageLoadingId === next.pageLoadingId &&
     current.transitionAnchorKey === next.transitionAnchorKey &&
     current.pageParents === next.pageParents &&
     current.pendingFollowUp === next.pendingFollowUp
@@ -131,11 +135,19 @@ export function setExploreAtTail(sessionId: string, atTail: boolean): void {
 
 export function navigateExplorePage(sessionId: string, pageId: string): void {
   clearTranscriptViewport(sessionId, "page");
-  update(sessionId, { pageId, pageStartId: pageId });
+  update(sessionId, {
+    pageId,
+    pageStartId: pageId,
+    pageLoadingId: pageId,
+  });
+}
+
+export function beginExplorePageLoading(sessionId: string): void {
+  update(sessionId, { pageLoadingId: "" });
 }
 
 export function resolveExplorePageStart(sessionId: string): void {
-  update(sessionId, { pageStartId: null });
+  update(sessionId, { pageStartId: null, pageLoadingId: null });
 }
 
 export function resolveProjectionAnchor(

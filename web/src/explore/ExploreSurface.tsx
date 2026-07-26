@@ -47,6 +47,7 @@ import {
 import { setSticky } from "../stickyStore";
 import { Transcript } from "../Transcript";
 import {
+  beginExplorePageLoading,
   setExplorePage,
   setExploreAtTail,
   navigateExplorePage,
@@ -690,7 +691,11 @@ export function ExploreTranscript(
   const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { pageId: retainedPageId, pageStartId } = useExploreSessionState(props.sessionId);
+  const {
+    pageId: retainedPageId,
+    pageStartId,
+    pageLoadingId,
+  } = useExploreSessionState(props.sessionId);
   const [restoringPageId, setRestoringPageId] = useState<string | null>(null);
   const retainedPageLoaded = retainedPageId === null ||
     pages.some((page) => page.id === retainedPageId);
@@ -792,11 +797,13 @@ export function ExploreTranscript(
         )
         : null;
       const scroller = row?.parentElement;
-      if (!scroller && attempts++ < 12) {
+      if (!scroller) {
+        attempts += 1;
         // Transcript derives and swaps the filtered rows after this parent
         // changes page. Do not consume the start request against the outgoing
         // DOM; wait until the target question row actually exists.
-        frame = requestAnimationFrame(positionAtStart);
+        if (attempts < 90) frame = requestAnimationFrame(positionAtStart);
+        else resolveExplorePageStart(props.sessionId);
         return;
       }
       if (!scroller) return;
@@ -809,10 +816,11 @@ export function ExploreTranscript(
       const extent = scroller.scrollHeight - scroller.clientHeight;
       stableFrames = Math.abs(extent - previousExtent) < 0.5 ? stableFrames + 1 : 0;
       previousExtent = extent;
-      if (stableFrames < 2 && attempts++ < 12) {
-        // Wait only until the lazy page DOM has held the same geometry for two
-        // paints. The first real touch/wheel immediately cancels this handshake,
-        // so startup positioning can never fight native scrolling.
+      attempts += 1;
+      if ((attempts < 18 || stableFrames < 6) && attempts < 90) {
+        // Keep the presentation overlay through the lazy Markdown/row commit,
+        // then require a real stable-paint window. Ending on the first stable
+        // frame exposed an unfinished page beneath a one-frame loading flash.
         frame = requestAnimationFrame(positionAtStart);
         return;
       }
@@ -978,6 +986,36 @@ export function ExploreTranscript(
               shortContentAtTop
             />
           )}
+        {pageLoadingId !== null && (
+          <Stack
+            role="status"
+            aria-live="polite"
+            aria-label="Loading page"
+            spacing={2.25}
+            sx={{
+              position: "absolute",
+              zIndex: 4,
+              inset: 0,
+              minHeight: 0,
+              px: { xs: 2, md: 3 },
+              pt: { xs: 3, md: 4 },
+              overflow: "hidden",
+              bgcolor: "background.default",
+            }}
+          >
+            <Skeleton variant="rounded" width="38%" height="2.75em" sx={{ alignSelf: "flex-end" }} />
+            <Stack spacing={0.75}>
+              <Skeleton variant="text" width="92%" />
+              <Skeleton variant="text" width="74%" />
+              <Skeleton variant="text" width="84%" />
+            </Stack>
+            <Skeleton variant="rounded" width="100%" height="8em" />
+            <Stack spacing={0.75}>
+              <Skeleton variant="text" width="88%" />
+              <Skeleton variant="text" width="68%" />
+            </Stack>
+          </Stack>
+        )}
         {props.desktop && (
           <Stack
             direction="row"
@@ -1127,6 +1165,7 @@ export function MobilePageDock({
       requestedBeforeSeq: null,
       requestComplete: true,
     });
+    beginExplorePageLoading(sessionId);
   };
 
   useEffect(() => {
@@ -1146,12 +1185,14 @@ export function MobilePageDock({
     const beforeSeq = pagination?.beforeSeq ?? null;
     if (!hasEarlierHistory || beforeSeq === null) {
       setPendingPrevious(null);
+      resolveExplorePageStart(sessionId);
       return;
     }
     if (!pendingPrevious.requestComplete) return;
     if (beforeSeq === pendingPrevious.requestedBeforeSeq) {
       // The request failed without advancing its immutable cursor.
       setPendingPrevious(null);
+      resolveExplorePageStart(sessionId);
       return;
     }
     setPendingPrevious({
