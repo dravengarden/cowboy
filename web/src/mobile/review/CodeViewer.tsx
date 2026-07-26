@@ -1,6 +1,12 @@
-import { EditorState, type Extension, StateEffect } from "@codemirror/state";
+import {
+  EditorState,
+  type Extension,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 import {
   Decoration,
+  type DecorationSet,
   EditorView,
   ViewPlugin,
   type ViewUpdate,
@@ -109,46 +115,58 @@ class ContextFoldWidget extends WidgetType {
   }
 }
 
-const contextFolding = ViewPlugin.fromClass(
-  class {
-    decorations;
-    private expanded = new Set<number>();
+interface ContextFoldState {
+  decorations: DecorationSet;
+  expanded: ReadonlySet<number>;
+}
 
-    constructor(view: EditorView) {
-      this.decorations = this.build(view);
-    }
+function buildContextDecorations(
+  state: EditorState,
+  expanded: ReadonlySet<number>,
+): DecorationSet {
+  const ranges = diffContextFolds(state.doc.toString())
+    .map((fold) => {
+      const from = state.doc.line(fold.fromLine).from;
+      const to = state.doc.line(fold.toLine).to;
+      if (expanded.has(from)) return undefined;
+      return Decoration.replace({
+        block: true,
+        widget: new ContextFoldWidget(fold.hiddenLines, from),
+      }).range(from, to);
+    })
+    .filter((range) => range !== undefined);
+  return Decoration.set(ranges, true);
+}
 
-    update(update: ViewUpdate): void {
-      if (update.docChanged) this.expanded.clear();
-      let changed = update.docChanged;
-      for (const transaction of update.transactions) {
-        for (const effect of transaction.effects) {
-          if (effect.is(expandContext)) {
-            this.expanded.add(effect.value);
-            changed = true;
-          }
-        }
-      }
-      if (changed) this.decorations = this.build(update.view);
-    }
-
-    private build(view: EditorView): ReturnType<typeof Decoration.set> {
-      const ranges = diffContextFolds(view.state.doc.toString())
-        .map((fold) => {
-          const from = view.state.doc.line(fold.fromLine).from;
-          const to = view.state.doc.line(fold.toLine).to;
-          if (this.expanded.has(from)) return undefined;
-          return Decoration.replace({
-            block: true,
-            widget: new ContextFoldWidget(fold.hiddenLines, from),
-          }).range(from, to);
-        })
-        .filter((range) => range !== undefined);
-      return Decoration.set(ranges, true);
-    }
+const contextFolding = StateField.define<ContextFoldState>({
+  create(state) {
+    const expanded = new Set<number>();
+    return {
+      decorations: buildContextDecorations(state, expanded),
+      expanded,
+    };
   },
-  { decorations: (value) => value.decorations },
-);
+  update(value, transaction) {
+    const expanded = transaction.docChanged
+      ? new Set<number>()
+      : new Set(value.expanded);
+    let changed = transaction.docChanged;
+    for (const effect of transaction.effects) {
+      if (effect.is(expandContext)) {
+        expanded.add(effect.value);
+        changed = true;
+      }
+    }
+    return changed
+      ? {
+        decorations: buildContextDecorations(transaction.state, expanded),
+        expanded,
+      }
+      : value;
+  },
+  provide: (field) =>
+    EditorView.decorations.from(field, (value) => value.decorations),
+});
 
 export default function CodeViewer({
   text,
