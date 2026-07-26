@@ -88,7 +88,7 @@ import {
   send,
   useStoreSelector,
 } from "./store";
-import { haptic } from "./haptic";
+import { importantHaptic, magneticHaptic } from "./haptic";
 import { useReadingSettings } from "./readingSettings";
 import {
   requestStickToBottom,
@@ -3471,7 +3471,7 @@ export function Transcript({
       const insideMagneticZone = !stick.current &&
         (managesScrollHistoryRef.current || workingRef.current) &&
         fromBottom <= magneticThreshold();
-      if (insideMagneticZone && !magneticArmed) haptic(12);
+      if (insideMagneticZone && !magneticArmed) magneticHaptic();
       magneticArmed = insideMagneticZone;
       // Detached → keep the freeze anchor fresh as the reader scrolls, so the
       // moment they stop, the held position is exactly where they left off.
@@ -3996,7 +3996,7 @@ export function Transcript({
                     color="error"
                     startIcon={<Stop sx={{ fontSize: 16 }} />}
                     onClick={(): void => {
-                      haptic(24); // medium — interrupting a turn is significant
+                      importantHaptic();
                       send({ type: "cancel", session_id: sessionId });
                     }}
                     sx={{ textTransform: "none", minHeight: 28, py: 0.25 }}

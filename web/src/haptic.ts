@@ -16,10 +16,42 @@ import {
   type HapticStyle,
   notificationHaptic,
 } from "./_shell";
+import { hapticStyleForIntent } from "./hapticIntent";
+export {
+  type CowboyHapticIntent,
+  type CowboyHapticStyle,
+  hapticStyleForIntent,
+} from "./hapticIntent";
 
-/** Fire a short impact haptic. The optional `ms` is kept for back-compat with the
- *  existing call sites and mapped to an impact style: ≤12 light, ≤24 medium, else
- *  heavy. Call from within (or just after) a user gesture. */
+/**
+ * Cowboy's product-level haptic hierarchy. Features choose meaning, never an
+ * arbitrary duration:
+ * - navigation: lightweight movement, selection, disclosure
+ * - magnetic: a spatial target or sticky boundary has engaged
+ * - confirmation: a deliberate, meaningful but non-destructive commitment
+ * - important: a high-consequence destructive/interruption confirmation
+ *
+ * Async outcomes use `notifyHaptic` below because their patterned feedback is
+ * semantically different from impact strength.
+ */
+export function navigationHaptic(): void {
+  fireImpact(hapticStyleForIntent("navigation"));
+}
+
+export function magneticHaptic(): void {
+  fireImpact(hapticStyleForIntent("magnetic"));
+}
+
+export function confirmationHaptic(): void {
+  fireImpact(hapticStyleForIntent("confirmation"));
+}
+
+export function importantHaptic(): void {
+  fireImpact(hapticStyleForIntent("important"));
+}
+
+/** Backward-compatible adapter for ordinary call sites awaiting semantic
+ * migration. New feature code must use one of the intent functions above. */
 export function haptic(ms = 12): void {
   const style: HapticStyle = ms <= 12 ? "light" : ms <= 24 ? "medium" : "heavy";
   fireImpact(style);

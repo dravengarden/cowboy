@@ -143,7 +143,7 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
-import { haptic } from "./haptic";
+import { navigationHaptic } from "./haptic";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -1701,7 +1701,7 @@ export function App({
             const progress = Math.max(0, Math.min(1, offset / width));
             const nextCommit = drawerOpen ? progress > 0.66 : progress >= 0.34;
             if (nextCommit !== commit) {
-                haptic(18);
+                navigationHaptic();
                 gesture.thresholdHaptic = true;
             }
             commit = nextCommit;
@@ -1714,7 +1714,9 @@ export function App({
                 : gesture.velocity > 0.45;
             const releaseVelocity = gesture.velocity;
             const shouldOpen = gesture.locked ? (Math.abs(gesture.velocity) >= 0.45 ? velocityCommit : commit) : drawerOpen;
-            if (gesture.locked && shouldOpen !== commit && !gesture.thresholdHaptic) haptic(18);
+            if (gesture.locked && shouldOpen !== commit && !gesture.thresholdHaptic) {
+                navigationHaptic();
+            }
             gesture = null;
             commit = false;
             settle(shouldOpen, releaseVelocity);

@@ -13,7 +13,7 @@ import {
   useJudgeResult,
 } from "./store";
 import { openJudgeInspector } from "./JudgeInspector";
-import { haptic } from "./haptic";
+import { confirmationHaptic } from "./haptic";
 
 type Kind =
   | "offline"
@@ -156,7 +156,7 @@ export function TurnStatusOverlay({
       lpFired.current = true;
       setPressing(false);
       // A firmer tap right as the inspector opens — the "you got it" confirmation.
-      haptic(24);
+      confirmationHaptic();
       openJudgeInspector(sessionId);
     }, 480);
   };

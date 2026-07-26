@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Box, Button, Stack, TextField, Typography } from "@mui/material";
 import { Sheet } from "./Sheet";
 import { SegmentedPill } from "./SegmentedPill";
-import { haptic } from "./haptic";
+import { confirmationHaptic, navigationHaptic } from "./haptic";
 import { Kbd } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import type { Delivery, DraftSchedule } from "./protocol";
@@ -47,7 +47,7 @@ export function ScheduleSheet({
 
   const commit = (): void => {
     if (!valid || fireAt === null) return;
-    haptic(24);
+    confirmationHaptic();
     onCommit(fireAt, delivery);
     onClose();
   };
@@ -67,7 +67,7 @@ export function ScheduleSheet({
       if (!editing || event.key !== "Backspace") return;
       event.preventDefault();
       event.stopPropagation();
-      haptic(24);
+      confirmationHaptic();
       onUnschedule();
       onClose();
     };
@@ -106,7 +106,7 @@ export function ScheduleSheet({
           <SegmentedPill<Delivery>
             value={delivery}
             onChange={(v): void => {
-              haptic(8);
+              navigationHaptic();
               setDelivery(v);
             }}
             options={[
@@ -146,7 +146,7 @@ export function ScheduleSheet({
               color="error"
               variant="outlined"
               onClick={(): void => {
-                haptic(24);
+                confirmationHaptic();
                 onUnschedule();
                 onClose();
               }}

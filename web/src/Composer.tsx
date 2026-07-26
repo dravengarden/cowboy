@@ -162,7 +162,7 @@ import {
 } from "./store";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { fireLabel } from "./scheduleTime";
-import { haptic } from "./haptic";
+import { haptic, importantHaptic, navigationHaptic } from "./haptic";
 import { useSortable } from "./useSortable";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
@@ -2378,7 +2378,7 @@ export function ComposerWorkspace({
         open={cancelOpen}
         onClose={(): void => setCancelOpen(false)}
         onConfirm={(): void => {
-          haptic(24); // medium — interrupting a running turn is significant
+          importantHaptic();
           send({ type: "cancel", session_id: sessionId });
           setCancelOpen(false);
         }}
@@ -2720,7 +2720,7 @@ function OptimisticDraftRow({
               size="small"
               aria-label="discard"
               onClick={(): void => {
-                haptic(24); // medium — discarding a failed message
+                importantHaptic();
                 discardQueued(sessionId, cmid);
               }}
             >
@@ -2756,9 +2756,10 @@ function ConfirmButton({
 }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const confirm = (): void => {
-    // Confirming a destructive action (error color, e.g. Clear All) gets a firmer
-    // medium tap; a benign bulk confirm (Send all) a light one.
-    haptic(confirmColor === "error" ? 24 : 12);
+    // Destructive confirmation (error, e.g. Clear All) is high-consequence;
+    // benign bulk confirmation (Send all) remains lightweight navigation.
+    if (confirmColor === "error") importantHaptic();
+    else navigationHaptic();
     onConfirm();
     setAnchor(null);
   };
@@ -3341,7 +3342,7 @@ function PendingRow({
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
   const doRemove = (): void => {
-    haptic(24); // medium — confirming an irreversible delete
+    importantHaptic();
     if (kind === "draft") removeDraft(sessionId, message.id);
     else removeQueued(sessionId, message.id);
     setConfirmRemove(false);
@@ -4029,7 +4030,7 @@ export function AutoScrollAndStop({
           open={cancelOpen}
           onClose={(): void => setCancelOpen(false)}
           onConfirm={(): void => {
-            haptic(24);
+            importantHaptic();
             send({ type: "cancel", session_id: sessionId });
             setCancelOpen(false);
           }}
@@ -4110,7 +4111,7 @@ export function AutoScrollAndStop({
         open={cancelOpen}
         onClose={(): void => setCancelOpen(false)}
         onConfirm={(): void => {
-          haptic(24);
+          importantHaptic();
           send({ type: "cancel", session_id: sessionId });
           setCancelOpen(false);
         }}
