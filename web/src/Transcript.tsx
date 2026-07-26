@@ -2059,8 +2059,8 @@ function ToolDetailsBrowser({
   );
 
   const navigation = (
-    <Box sx={{ width: "min(100%, 19rem)", mx: "auto" }}>
-      <FloatingActionIsland columns="2.75rem minmax(3.5rem, 1fr) 2.75rem 2.75rem 2.75rem">
+    <Box sx={{ width: "min(100%, 282px)", mx: "auto" }}>
+      <FloatingActionIsland columns="44px minmax(58px, 1fr) 44px 44px 44px">
         {mobileNavigationItems}
       </FloatingActionIsland>
     </Box>
