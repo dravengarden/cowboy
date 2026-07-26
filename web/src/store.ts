@@ -168,6 +168,11 @@ let state: State = {
   judgeResults: {},
   judgeRuns: {},
 };
+// React reads only this published snapshot. `state` above remains canonical and
+// can advance at websocket speed; notification pacing and gesture holds publish
+// it atomically here so an unrelated local React render cannot accidentally
+// pierce a frozen workspace by calling a selector between notifications.
+let presentedState = state;
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
 // The session the user currently has open. Remembered so every (re)connect can
@@ -301,6 +306,7 @@ let notifyScheduled = false;
 let lastNotifyAt = 0;
 let notifyTimer: ReturnType<typeof setTimeout> | undefined;
 let notifyFrame = 0;
+let presentationHoldCount = 0;
 function flushNotify(): void {
   if (notifyTimer !== undefined) {
     clearTimeout(notifyTimer);
@@ -311,9 +317,38 @@ function flushNotify(): void {
     notifyFrame = 0;
   }
   if (!notifyScheduled) return;
+  // A compositor-owned workspace gesture is presenting one stable raster.
+  // Continue reducing canonical state, but do not let any React subscriber
+  // mutate the visible tree until the gesture and its settle animation finish.
+  if (presentationHoldCount > 0) return;
   notifyScheduled = false;
+  presentedState = state;
   lastNotifyAt = performance.now();
   for (const listener of listeners) listener();
+}
+
+/** Freeze visible store subscribers while canonical websocket state continues
+ * reducing. Reference-counted so a gesture that begins during another release
+ * window cannot unfreeze the workspace early. Releasing coalesces the entire
+ * interval into one latest-snapshot notification. */
+export function holdStorePresentation(): () => void {
+  presentationHoldCount += 1;
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    presentationHoldCount = Math.max(0, presentationHoldCount - 1);
+    if (presentationHoldCount === 0 && notifyScheduled) {
+      scheduleNotifyFrame();
+    }
+  };
+}
+
+/** Canonical timeline access for the transcript's post-freeze catch-up. Unlike
+ * the React selector snapshot, this is current even while notifications are
+ * intentionally held. */
+export function canonicalTimeline(sessionId: string): Envelope[] | undefined {
+  return state.timelines.get(sessionId);
 }
 function scheduleNotifyFrame(): void {
   if (notifyFrame !== 0) return;
@@ -1832,7 +1867,7 @@ if (typeof globalThis.addEventListener === "function") {
 }
 
 export function useStore(): State {
-  return useSyncExternalStore(subscribe, () => state);
+  return useSyncExternalStore(subscribe, () => presentedState);
 }
 
 /** Subscribe to one stable slice instead of re-rendering for every unrelated
@@ -1849,7 +1884,7 @@ export function useStoreSelector<T>(
   equalRef.current = equal;
   const cacheRef = useRef<{ value: T } | undefined>(undefined);
   const getSnapshot = useCallback((): T => {
-    const next = selectorRef.current(state);
+    const next = selectorRef.current(presentedState);
     if (cacheRef.current && equalRef.current(cacheRef.current.value, next)) {
       return cacheRef.current.value;
     }

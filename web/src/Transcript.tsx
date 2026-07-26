@@ -81,6 +81,7 @@ import {
 } from "./derive";
 import type { Envelope, Status } from "./protocol";
 import {
+  canonicalTimeline,
   discardMessage,
   loadOlder,
   type QueuedMessage,
@@ -108,6 +109,7 @@ import {
   shouldBackfillTranscriptViewport,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
+import { advanceTimelinePresentation } from "./timelinePresentation";
 import {
   getTranscriptViewport,
   saveTranscriptViewport,
@@ -2898,8 +2900,41 @@ export function Transcript({
   // dropping or delaying transport data; the latest timeline flushes atomically.
   const [renderPausedForScroll, setRenderPausedForScroll] = useState(false);
   const presentedTimelineRef = useRef(timeline);
-  if (!renderPausedForScroll) presentedTimelineRef.current = timeline;
+  const latestTimelineRef = useRef(timeline);
+  latestTimelineRef.current = timeline;
+  const drawerCatchupActiveRef = useRef(false);
+  const [drawerCatchupStep, setDrawerCatchupStep] = useState(0);
+  if (!renderPausedForScroll && !drawerCatchupActiveRef.current) {
+    presentedTimelineRef.current = timeline;
+  }
   const presentedTimeline = presentedTimelineRef.current;
+  const startDrawerCatchupRef = useRef<() => void>(() => undefined);
+  startDrawerCatchupRef.current = (): void => {
+    drawerCatchupActiveRef.current = true;
+    startTransition(() => setDrawerCatchupStep((step) => step + 1));
+  };
+  useEffect(() => {
+    if (!drawerCatchupActiveRef.current) return undefined;
+    const frame = requestAnimationFrame(() => {
+      if (!drawerCatchupActiveRef.current) return;
+      const next = advanceTimelinePresentation(
+        presentedTimelineRef.current,
+        canonicalTimeline(sessionId) ?? latestTimelineRef.current,
+        // Keep each Markdown/DOM reconciliation below one display frame while
+        // still catching ordinary streamed prose faster than it arrives.
+        640,
+        2,
+      );
+      presentedTimelineRef.current = next.timeline;
+      if (next.complete) {
+        drawerCatchupActiveRef.current = false;
+        startTransition(() => setRenderPausedForScroll(false));
+        return;
+      }
+      startTransition(() => setDrawerCatchupStep((step) => step + 1));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [drawerCatchupStep, sessionId]);
   const allItems = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
   const items = useMemo(
     () =>
@@ -3380,6 +3415,10 @@ export function Transcript({
       }, 240);
     };
     const onTouchStart = (): void => {
+      // A real transcript scroll supersedes an in-flight drawer catch-up. The
+      // native-scroll settle path will atomically adopt the latest canonical
+      // timeline after the reader's gesture ends.
+      drawerCatchupActiveRef.current = false;
       touching = true;
       // Each new finger gesture is one explicit request opportunity. A page
       // landing while the reader remains near the beginning must not recursively
@@ -3408,6 +3447,7 @@ export function Transcript({
     const onDirectManipulationStart = (): void => {
       if (directManipulationActive) return;
       directManipulationActive = true;
+      drawerCatchupActiveRef.current = false;
       // Transcript's own touchstart runs before the app-shell bubble listener
       // can direction-lock the drawer gesture. It may already have detached a
       // bottom-following reader, so infer that original intent from geometry.
@@ -3440,10 +3480,11 @@ export function Transcript({
       }
       directManipulationShouldFollow = false;
       nativeScrollActiveRef.current = false;
-      // Catching up can replace a large derived timeline. Mark it non-urgent so
-      // React yields to the drawer's final compositor frames instead of turning
-      // release into one long synchronous paint.
-      startTransition(() => setRenderPausedForScroll(false));
+      // Do not replace the entire accumulated timeline in one commit. Live text
+      // chunks are coalesced into one growing envelope, so a single "latest"
+      // flush can still require a large Markdown/DOM reconciliation. Advance the
+      // frozen presentation through bounded frames instead.
+      startDrawerCatchupRef.current();
     };
     const onWheel = (event: WheelEvent): void => {
       // A wheel/trackpad gesture that continues toward the bottom can still
@@ -3705,6 +3746,7 @@ export function Transcript({
         globalThis.clearTimeout(nativeScrollSettleTimer);
       }
       cancelHistoryRelease();
+      drawerCatchupActiveRef.current = false;
       nativeScrollActiveRef.current = false;
       setRenderPausedForScroll(false);
       if (roRaf !== 0) cancelAnimationFrame(roRaf);

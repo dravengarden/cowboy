@@ -77,6 +77,7 @@ import {
     AUTO_RESUME_TEMPLATE_KEY,
     conn,
     DEFAULT_CONTINUATION_TEMPLATE,
+    holdStorePresentation,
     markSessionHydrated,
     notify,
     openSession,
@@ -1583,6 +1584,7 @@ export function App({
         let releaseIdle: number | undefined;
         let keyboardCornersSquared = false;
         let keyboardCornerTimer = 0;
+        let releaseStorePresentation: (() => void) | undefined;
         const drawerWidth = (): number => {
             const width = surface.clientWidth;
             return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
@@ -1655,6 +1657,8 @@ export function App({
             const finish = (): void => {
                 releaseIdle = undefined;
                 directManipulationActive = false;
+                releaseStorePresentation?.();
+                releaseStorePresentation = undefined;
                 globalThis.dispatchEvent(
                     new CustomEvent("cowboy:transcript-direct-manipulation-end"),
                 );
@@ -1771,6 +1775,7 @@ export function App({
                     releaseIdle = undefined;
                 }
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-start"));
+                releaseStorePresentation ??= holdStorePresentation();
                 directManipulationActive = true;
                 applyOpenDepth();
                 surface.style.transition = "none";
@@ -1856,6 +1861,8 @@ export function App({
             if (gesture?.locked || directManipulationActive) {
                 globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
             }
+            releaseStorePresentation?.();
+            releaseStorePresentation = undefined;
             gestureTarget.removeEventListener("touchstart", onTouchStart);
             gestureTarget.removeEventListener("touchmove", onTouchMove);
             gestureTarget.removeEventListener("touchend", onTouchEnd);
