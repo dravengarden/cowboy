@@ -73,19 +73,40 @@ __attribute__((constructor)) static void cowboyStripKeyboardAccessoryBar(void) {
 @end
 
 @implementation CowboyHapticHandler {
-    UIImpactFeedbackGenerator *_gen;
+    UIImpactFeedbackGenerator *_legacyImpactGen;
+    UISelectionFeedbackGenerator *_selectionGen;
 }
 - (instancetype)init {
     if ((self = [super init])) {
-        _gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        _legacyImpactGen =
+            [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        // Keep one generator alive for the lifetime of the shell. Creating a
+        // generator and calling prepare immediately before selectionChanged
+        // (as the generic Tauri plugin does) cannot warm the Taptic Engine in
+        // time. The web gesture prepares this instance at touch-down, then
+        // crosses the drawer's magnetic threshold tens of milliseconds later.
+        _selectionGen = [[UISelectionFeedbackGenerator alloc] init];
     }
     return self;
 }
 - (void)userContentController:(WKUserContentController *)ucc
       didReceiveScriptMessage:(WKScriptMessage *)message {
-    // `prepare` warms the engine so the tap fires with minimal latency.
-    [_gen prepare];
-    [_gen impactOccurred];
+    NSString *intent = [message.body isKindOfClass:[NSString class]]
+        ? (NSString *)message.body
+        : @"legacy-impact";
+    if ([intent isEqualToString:@"prepare-selection"]) {
+        [_selectionGen prepare];
+        return;
+    }
+    if ([intent isEqualToString:@"selection"]) {
+        [_selectionGen selectionChanged];
+        // Keep the engine warm for a quick threshold reversal.
+        [_selectionGen prepare];
+        return;
+    }
+    // Backward compatibility for older web bundles.
+    [_legacyImpactGen prepare];
+    [_legacyImpactGen impactOccurred];
 }
 @end
 
@@ -154,7 +175,17 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                     }
                     NSString *js =
                         @"window.__cowboyHaptic=function(){try{"
-                        @"window.webkit.messageHandlers.cowboyHaptic.postMessage(0)}catch(e){}};"
+                        @"window.webkit.messageHandlers.cowboyHaptic.postMessage('legacy-impact')"
+                        @"}catch(e){}};"
+                        // Low-latency drawer detent: prepare on touch-down, fire
+                        // the persistent native selection generator exactly when
+                        // the web gesture crosses its commit threshold.
+                        @"window.__cowboyPrepareSelectionHaptic=function(){try{"
+                        @"window.webkit.messageHandlers.cowboyHaptic.postMessage("
+                        @"'prepare-selection')}catch(e){}};"
+                        @"window.__cowboySelectionHaptic=function(){try{"
+                        @"window.webkit.messageHandlers.cowboyHaptic.postMessage('selection')"
+                        @"}catch(e){}};"
                         // Native clipboard READ (see CowboyClipboardHandler): returns
                         // a Promise<string>. The web's Paste button prefers this in
                         // the shell (navigator.clipboard.readText is blocked here).
