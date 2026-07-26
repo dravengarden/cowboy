@@ -911,7 +911,7 @@ export function MobilePageDock({
       if (!scroller) return;
       const visualStart = scroller.clientHeight - scroller.scrollHeight;
       setShowPageTop(
-        scroller.scrollTop - visualStart > scroller.clientHeight * 0.75,
+        scroller.scrollTop - visualStart > 8,
       );
     };
     const bind = (): void => {
@@ -1159,10 +1159,11 @@ export function MobilePageDock({
             "& > span": { display: "flex" },
           }}
         >
-          {showPageTop && (
-            <Tooltip title="Back to page top">
+          <Tooltip title={showPageTop ? "Back to page top" : "At page top"}>
+            <span>
               <IconButton
                 aria-label="Back to page top"
+                disabled={!showPageTop}
                 onClick={scrollPageToTop}
                 sx={{
                   width: "max(40px, 2.5rem)",
@@ -1172,12 +1173,18 @@ export function MobilePageDock({
                   borderRadius: "50%",
                   bgcolor: "action.hover",
                   "&:active": { bgcolor: "action.selected" },
+                  "&.Mui-disabled": {
+                    color: "text.disabled",
+                    borderColor: "divider",
+                    bgcolor: "action.disabledBackground",
+                    opacity: 0.58,
+                  },
                 }}
               >
                 <ArrowUpward sx={{ fontSize: "1.25em" }} />
               </IconButton>
-            </Tooltip>
-          )}
+            </span>
+          </Tooltip>
           <Tooltip title={composeOpen ? "Close question editor" : "Open question editor"}>
             <IconButton
               color="primary"
