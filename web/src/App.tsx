@@ -133,7 +133,7 @@ import { MobileConnectionBanner } from "./mobile/MobileConnectionBanner";
 import {
     ConnectionBanner,
     DetentSheet,
-    FloatingActionIsland,
+    MobileSheetActionGroup,
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
     ThemeModeControl,
@@ -422,6 +422,7 @@ function SessionList({
     activeId,
     onPick,
     onNew,
+    onClose,
     onRequestDelete,
     onRequestInfo,
     onRequestRename,
@@ -435,6 +436,7 @@ function SessionList({
     activeId: string | null;
     onPick: (id: string) => void;
     onNew: () => void;
+    onClose?: (() => void) | undefined;
     onRequestDelete: (s: SessionMeta) => void;
     onRequestInfo: (s: SessionMeta) => void;
     onRequestRename: (s: SessionMeta) => void;
@@ -640,6 +642,8 @@ function SessionList({
                 mb: desktop || mobileDrawer
                     ? 0
                     : "calc(-76px - env(safe-area-inset-bottom, 0px))",
+                position: mobileDrawer ? "relative" : undefined,
+                minHeight: 0,
             }}
         >
             {!mobileDrawer && <Box sx={{ p: 1 }}>
@@ -697,7 +701,7 @@ function SessionList({
                     pb: desktop
                         ? undefined
                         : mobileDrawer
-                        ? 0.5
+                        ? "calc(84px + env(safe-area-inset-bottom, 0px))"
                         : "calc(76px + env(safe-area-inset-bottom, 0px))",
                     // Fine-pointer desktops do not need phone-sized 44px controls
                     // in every row. Keep the generous targets for touch/tablet,
@@ -922,63 +926,32 @@ function SessionList({
             {mobileDrawer && (
                 <Box
                     sx={{
-                        flexShrink: 0,
-                        px: "max(env(safe-area-inset-right, 0px), env(safe-area-inset-left, 0px), 12px)",
-                        pt: 1,
-                        pb: "max(env(safe-area-inset-bottom, 0px), 12px)",
+                        position: "absolute",
+                        zIndex: 3,
+                        left: 0,
+                        right: 0,
+                        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
                         display: "flex",
                         justifyContent: "center",
-                        "@media (min-width: 768px)": {
-                            px: 2.5,
-                            pt: 1.25,
-                            pb: "max(env(safe-area-inset-bottom, 0px), 18px)",
-                        },
+                        pointerEvents: "none",
                     }}
                 >
-                    <FloatingActionIsland
-                        maxWidth="min(100%, 320px)"
-                        minHeight="max(54px, 3.5rem)"
-                        rim="soft"
-                    >
-                        <Button
-                            fullWidth
-                            variant="text"
-                            startIcon={<Add />}
-                            onClick={onNew}
-                            sx={(theme) => ({
-                                minWidth: 0,
-                                minHeight: "max(46px, 3rem)",
-                                px: 2.5,
-                                borderRadius: 999,
-                                color: "primary.main",
-                                fontWeight: 750,
-                                letterSpacing: "0.055em",
-                                bgcolor: alpha(
-                                    theme.palette.primary.main,
-                                    theme.palette.mode === "dark" ? 0.08 : 0.055,
-                                ),
-                                "& .MuiButton-startIcon": {
-                                    mr: 1,
-                                },
-                                "& .MuiButton-startIcon > *:nth-of-type(1)": {
-                                    fontSize: "1.75em",
-                                },
-                                "&:active": {
-                                    bgcolor: alpha(
-                                        theme.palette.primary.main,
-                                        theme.palette.mode === "dark" ? 0.16 : 0.11,
-                                    ),
-                                    transform: "scale(0.985)",
-                                },
-                                transition: theme.transitions.create(
-                                    ["background-color", "transform"],
-                                    { duration: theme.transitions.duration.shortest },
-                                ),
-                            })}
-                        >
-                            New session
-                        </Button>
-                    </FloatingActionIsland>
+                    <MobileSheetActionGroup
+                        actions={[
+                            {
+                                key: "new",
+                                label: "New session",
+                                onPress: onNew,
+                                icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
+                            },
+                            {
+                                key: "close",
+                                label: "Close sessions",
+                                onPress: onClose ?? (() => undefined),
+                                icon: <CloseIcon aria-hidden sx={{ fontSize: "1.25em" }} />,
+                            },
+                        ]}
+                    />
                 </Box>
             )}
             <Menu
@@ -2283,6 +2256,9 @@ export function App({
             activeId={active?.id ?? null}
             onPick={pick}
             onNew={(): void => setDialogOpen(true)}
+            onClose={mobile
+                ? (): void => settleMobileDrawerRef.current?.(false)
+                : undefined}
             onRequestDelete={(s): void => setPendingDelete(s)}
             onRequestInfo={(s): void => setPendingInfo(s)}
             onRequestRename={(s): void => {
