@@ -66,7 +66,17 @@ function persist(): void {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify(Object.fromEntries(states.entries())),
+    JSON.stringify(Object.fromEntries(
+      [...states.entries()].map(([sessionId, state]) => [
+        sessionId,
+        {
+          projection: state.projection,
+          pageId: state.pageId,
+          pageParents: state.pageParents,
+          pendingFollowUp: state.pendingFollowUp,
+        },
+      ]),
+    )),
   );
 }
 

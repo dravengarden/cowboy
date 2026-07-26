@@ -959,6 +959,7 @@ export function ExploreTranscript(
           )
           : (
             <Transcript
+              key={`${props.sessionId}:${current?.id ?? ""}`}
               desktopNavigation={props.desktop}
               historyPaging="page"
               sessionId={props.sessionId}

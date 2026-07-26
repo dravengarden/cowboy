@@ -17,26 +17,72 @@ export interface TranscriptViewport {
 
 const TTL_MS = 24 * 60 * 60 * 1_000;
 const MAX_ENTRIES = 32;
+const STORAGE_KEY = "cowboy:transcript-viewports:v1";
 const entries = new Map<string, TranscriptViewport>();
 
 function key(sessionId: string, mode: TranscriptViewportMode): string {
   return `${sessionId}:${mode}`;
 }
 
+function persist(): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify([...entries.values()]),
+    );
+  } catch {
+    // Reading continuity is best-effort and must never block the transcript.
+  }
+}
+
+function restore(): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "[]") as TranscriptViewport[];
+    for (const entry of stored) {
+      if (
+        entry &&
+        typeof entry.sessionId === "string" &&
+        (entry.mode === "history" || entry.mode === "page") &&
+        typeof entry.scrollOffset === "number" &&
+        typeof entry.touchedAt === "number"
+      ) {
+        entries.set(key(entry.sessionId, entry.mode), entry);
+      }
+    }
+  } catch {
+    sessionStorage.removeItem(STORAGE_KEY);
+  }
+}
+
 function prune(now = Date.now()): void {
+  let changed = false;
   for (const [entryKey, entry] of entries) {
-    if (now - entry.touchedAt > TTL_MS) entries.delete(entryKey);
+    if (now - entry.touchedAt > TTL_MS) {
+      entries.delete(entryKey);
+      changed = true;
+    }
   }
   const overflow = entries.size - MAX_ENTRIES;
-  if (overflow <= 0) return;
+  if (overflow <= 0) {
+    if (changed) persist();
+    return;
+  }
   const oldest = [...entries.entries()].sort(
     (a, b) => a[1].touchedAt - b[1].touchedAt,
   );
   for (let index = 0; index < overflow; index++) {
     const entryKey = oldest[index]?.[0];
-    if (entryKey) entries.delete(entryKey);
+    if (entryKey) {
+      entries.delete(entryKey);
+      changed = true;
+    }
   }
+  if (changed) persist();
 }
+
+restore();
 
 export function saveTranscriptViewport(
   entry: Omit<TranscriptViewport, "touchedAt">,
@@ -44,6 +90,7 @@ export function saveTranscriptViewport(
 ): void {
   entries.set(key(entry.sessionId, entry.mode), { ...entry, touchedAt: now });
   prune(now);
+  persist();
 }
 
 export function getTranscriptViewport(
@@ -76,6 +123,7 @@ export function clearTranscriptViewport(
     entries.delete(key(sessionId, "history"));
     entries.delete(key(sessionId, "page"));
   }
+  persist();
 }
 
 export function retainTranscriptViewportSessions(
@@ -84,8 +132,10 @@ export function retainTranscriptViewportSessions(
   for (const [entryKey, entry] of entries) {
     if (!sessionIds.has(entry.sessionId)) entries.delete(entryKey);
   }
+  persist();
 }
 
 export function resetTranscriptViewportStoreForTest(): void {
   entries.clear();
+  persist();
 }
