@@ -960,7 +960,7 @@ function SessionList({
                                 "& .MuiButton-startIcon": {
                                     mr: 1,
                                 },
-                                "& .MuiSvgIcon-root": {
+                                "& .MuiButton-startIcon > *:nth-of-type(1)": {
                                     fontSize: "1.75em",
                                 },
                                 "&:active": {
