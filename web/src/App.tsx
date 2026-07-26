@@ -935,7 +935,11 @@ function SessionList({
                         },
                     }}
                 >
-                    <FloatingActionIsland maxWidth="min(100%, 320px)">
+                    <FloatingActionIsland
+                        maxWidth="min(100%, 320px)"
+                        minHeight="max(54px, 3.5rem)"
+                        rim="soft"
+                    >
                         <Button
                             fullWidth
                             variant="text"
@@ -943,7 +947,7 @@ function SessionList({
                             onClick={onNew}
                             sx={(theme) => ({
                                 minWidth: 0,
-                                minHeight: 46,
+                                minHeight: "max(46px, 3rem)",
                                 px: 2.5,
                                 borderRadius: 999,
                                 color: "primary.main",
@@ -957,7 +961,7 @@ function SessionList({
                                     mr: 1,
                                 },
                                 "& .MuiSvgIcon-root": {
-                                    fontSize: 26,
+                                    fontSize: "1.75em",
                                 },
                                 "&:active": {
                                     bgcolor: alpha(
