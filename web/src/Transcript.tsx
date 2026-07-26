@@ -4014,6 +4014,15 @@ export function Transcript({
           minHeight: 0,
           overflowY: "auto",
           overflowX: "hidden",
+          // The mobile session drawer owns a non-passive horizontal touch
+          // recognizer on an ancestor. Without an explicit axis contract,
+          // iOS WebKit keeps some long Page View gestures on the main thread
+          // while it waits for that recognizer, and native vertical scrolling
+          // can fail to start even though this element has real overflow.
+          // Commit vertical movement to the async scroller immediately; a
+          // horizontal drag remains available to the drawer recognizer.
+          touchAction: "pan-y pinch-zoom",
+          WebkitOverflowScrolling: "touch",
           // column-reverse → the browser anchors from the bottom. Rows are
           // rendered newest-first below and flipped to oldest-top / newest-bottom
           // on screen; a short transcript sits at the bottom beside the composer,
