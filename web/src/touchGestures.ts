@@ -28,6 +28,13 @@ export function swipeCommits(distance: number, viewportWidth: number): boolean {
   return distance >= Math.min(112, Math.max(88, viewportWidth * 0.24));
 }
 
+/** Native selection-handle drags own the touch stream until the range collapses. */
+export function expandedSelection(
+  selection: Pick<Selection, "isCollapsed" | "rangeCount"> | null,
+): boolean {
+  return selection !== null && selection.rangeCount > 0 && !selection.isCollapsed;
+}
+
 /** Preserve native horizontal scrolling inside genuinely overflowing code. */
 export function hasHorizontalScroller(target: EventTarget | null, boundary: HTMLElement): boolean {
   let node = target instanceof HTMLElement ? target : null;

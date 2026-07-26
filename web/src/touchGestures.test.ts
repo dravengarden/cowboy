@@ -1,9 +1,16 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  expandedSelection,
   horizontalSwipe,
   shouldFreezePreviewPointer,
   swipeCommits,
 } from "./touchGestures.ts";
+
+Deno.test("expanded native text selection owns horizontal handle drags", () => {
+  assertEquals(expandedSelection(null), false);
+  assertEquals(expandedSelection({ rangeCount: 1, isCollapsed: true }), false);
+  assertEquals(expandedSelection({ rangeCount: 1, isCollapsed: false }), true);
+});
 
 Deno.test("horizontal swipe waits for a deliberate direction lock", () => {
   assertEquals(horizontalSwipe(11, 0), null);

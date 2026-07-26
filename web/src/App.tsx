@@ -92,7 +92,11 @@ import {
 } from "./store";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
-import { hasHorizontalScroller, horizontalSwipe } from "./touchGestures";
+import {
+    expandedSelection,
+    hasHorizontalScroller,
+    horizontalSwipe,
+} from "./touchGestures";
 import {
     mobileDrawerSurfaceVisual,
     predictDrawerOffset,
@@ -1854,6 +1858,7 @@ export function App({
             const target = event.target instanceof HTMLElement ? event.target : null;
             if (
                 !touch ||
+                expandedSelection(globalThis.getSelection?.() ?? null) ||
                 target?.closest("input, textarea, [contenteditable='true'], [data-mobile-drawer-ignore]") ||
                 hasHorizontalScroller(event.target, gestureTarget)
             ) {
@@ -1884,6 +1889,15 @@ export function App({
         const onTouchMove = (event: TouchEvent): void => {
             const touch = event.touches[0];
             if (!gesture || !touch) return;
+            // iOS selection handles emit ordinary document-level touchmove
+            // events. Once WebKit owns an expanded range, the drawer must stop
+            // competing for that stream; preventDefault here would move the
+            // foreground instead of extending the highlighted text.
+            if (expandedSelection(globalThis.getSelection?.() ?? null)) {
+                gesture = null;
+                commit = false;
+                return;
+            }
             const deltaX = touch.clientX - gesture.x;
             const deltaY = touch.clientY - gesture.y;
             if (!gesture.locked && Math.abs(deltaY) >= 10 && Math.abs(deltaY) > Math.abs(deltaX) * 1.15) {
