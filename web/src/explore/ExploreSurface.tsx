@@ -1048,8 +1048,10 @@ export function MobilePageDock({
                       bgcolor: "action.hover",
                       "&:active": { bgcolor: "action.selected" },
                       "&.Mui-disabled": {
-                        borderColor: "transparent",
-                        bgcolor: "transparent",
+                        color: "text.disabled",
+                        borderColor: "divider",
+                        bgcolor: "action.disabledBackground",
+                        opacity: 0.58,
                       },
                     }}
                   >
@@ -1074,8 +1076,10 @@ export function MobilePageDock({
                       bgcolor: "action.hover",
                       "&:active": { bgcolor: "action.selected" },
                       "&.Mui-disabled": {
-                        borderColor: "transparent",
-                        bgcolor: "transparent",
+                        color: "text.disabled",
+                        borderColor: "divider",
+                        bgcolor: "action.disabledBackground",
+                        opacity: 0.58,
                       },
                     }}
                   >
