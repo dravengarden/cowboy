@@ -9,16 +9,15 @@
 /* Begin PBXBuildFile section */
 		2294F498097080CF1920ED0F /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FB97B040CFF164692AD78EEE /* CoreGraphics.framework */; };
 		22F95F1869D3987C27517171 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D968930A097E1D8CE1093C8 /* WebKit.framework */; };
+		5313A4F665082C54F981EB9C /* CowboyDevBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34184753FAEDDF6B44D0ED83 /* CowboyDevBridge.swift */; };
 		74C0DA1915B715C45832C6F8 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BF25E48DEF12AEE297EEC694 /* QuartzCore.framework */; };
 		757A55B79E0996ACA0631F20 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FD431D8C24D15C8EC67C2B99 /* Security.framework */; };
 		7AEA2D19E1742D9BECA9BECF /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C8109CDA62A5CF9CC736293B /* Metal.framework */; };
 		8C566D8658DAFBD93836797B /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDE6D31B33DE21BD50F98DCB /* MetalKit.framework */; };
-		B5C4F994CE8D8F6A0E9BC380 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 0AFBCB201B1C1E4DE6493B51 /* libapp.a */; };
 		BD39776437A605B602E9620B /* assets in Resources */ = {isa = PBXBuildFile; fileRef = A5265D1AAC0F7A5D0DC19C32 /* assets */; };
 		BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */; };
 		C31E6FD8B40CFF30451BE96C /* CowboyNativeTweaks.mm in Sources */ = {isa = PBXBuildFile; fileRef = AD9A232AC9291F56B68E2F5E /* CowboyNativeTweaks.mm */; };
 		C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = C58785E3DA0343C036B5FEC7 /* main.mm */; };
-		E55112D3F7545B378B1609DF /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 8C42241D817B6D2F447C1783 /* libapp.a */; };
 		E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 58C49BC7D90084DF90F056FA /* Assets.xcassets */; };
 		F23E19ECFEE6CA710C5DADDE /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 9DA85E6BB7E1D31EB4F015DF /* libapp.a */; };
 		FD0BBA22F2CB89C20F527522 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 871A9E41BDB157298E255820 /* UIKit.framework */; };
@@ -26,8 +25,8 @@
 
 /* Begin PBXFileReference section */
 		0902CE675914417586871290 /* cowboy-app_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "cowboy-app_iOS.entitlements"; sourceTree = "<group>"; };
-		0AFBCB201B1C1E4DE6493B51 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		13951502312E668A1C091328 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		34184753FAEDDF6B44D0ED83 /* CowboyDevBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CowboyDevBridge.swift; sourceTree = "<group>"; };
 		51AC93686CCD4E1C4B3797B0 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		58C49BC7D90084DF90F056FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5E0F22EFD43C748D89BE4805 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -67,17 +66,10 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		02B3E3745B949E926CCAF795 /* debug */ = {
-			isa = PBXGroup;
-			children = (
-				0AFBCB201B1C1E4DE6493B51 /* libapp.a */,
-			);
-			path = debug;
-			sourceTree = "<group>";
-		};
 		1023F1F753CF1ECBBE096F47 /* cowboy-app */ = {
 			isa = PBXGroup;
 			children = (
+				34184753FAEDDF6B44D0ED83 /* CowboyDevBridge.swift */,
 				AD9A232AC9291F56B68E2F5E /* CowboyNativeTweaks.mm */,
 				C58785E3DA0343C036B5FEC7 /* main.mm */,
 				5032FD1E48F49B5DF31525F3 /* bindings */,
@@ -161,7 +153,6 @@
 		E930435AD5366007DED80F2D /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
-				02B3E3745B949E926CCAF795 /* debug */,
 				3F008EE08ABAF9959956BB68 /* release */,
 			);
 			path = arm64;
@@ -183,7 +174,7 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
-		"TEMP_40529538-36FD-4C33-81D5-41A12C041DA2" /* x86_64 */ = {
+		"TEMP_E9BFE910-808C-4448-B208-DD28C729A5CF" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -222,6 +213,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					76E84EC0FE11536A174C4EAC = {
+						DevelopmentTeam = 9Z95WKM9DT;
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 52C39CBE1AE93181046F0DEE /* Build configuration list for PBXProject "cowboy-app" */;
@@ -251,8 +246,6 @@
 				E5A4CBDA959B750949FD2E31 /* Assets.xcassets in Resources */,
 				BFE7050ADABBD3E40D458F07 /* LaunchScreen.storyboard in Resources */,
 				BD39776437A605B602E9620B /* assets in Resources */,
-				E55112D3F7545B378B1609DF /* libapp.a in Resources */,
-				B5C4F994CE8D8F6A0E9BC380 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -287,6 +280,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5313A4F665082C54F981EB9C /* CowboyDevBridge.swift in Sources */,
 				C31E6FD8B40CFF30451BE96C /* CowboyNativeTweaks.mm in Sources */,
 				C8E2A8BBABD8BC1259928CCE /* main.mm in Sources */,
 			);
@@ -305,6 +299,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "cowboy-app_iOS/cowboy-app_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 9Z95WKM9DT;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -319,7 +315,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = top.thundersparrow.cowboy;
-				PRODUCT_NAME = cowboy;
+				PRODUCT_NAME = "Cowboy";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -392,6 +388,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "cowboy-app_iOS/cowboy-app_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 9Z95WKM9DT;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -406,7 +404,7 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = top.thundersparrow.cowboy;
-				PRODUCT_NAME = cowboy;
+				PRODUCT_NAME = "Cowboy";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
