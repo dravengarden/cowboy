@@ -2,9 +2,9 @@
 
 Every agent is driven over the **Agent Client Protocol (ACP)**: JSON-RPC 2.0
 over stdio. cowboy depends on the official **`agent-client-protocol`** crate
-(the same one Zed uses) — "syncing Zed's protocol changes" is just `cargo
-update`. The crate is pre-1.0, so all of its surface is **isolated behind
-`src/acp.rs`**; a version bump touches one file.
+(the same one Zed uses). The stable ACP v1 wire schema is independent of the
+Rust SDK's major version. The SDK surface is isolated behind `src/acp.rs`
+(client) and `src/acp_bridge.rs` (server).
 
 cowboy implements the crate's **`Client`** trait and connects to each agent (the
 agent is the ACP *server*). This is the crate's primary supported use — no
@@ -40,7 +40,8 @@ inside `agent_main()`:
      `Event::Update`; `config_option_update` is special-cased).
    - **`on_receive_request`** → the **permission handler**: for *system*
      sessions, auto-approve; for human sessions, enqueue a pending request with a
-     oneshot channel so a human (any client) can answer it.
+     oneshot channel so a human (any client) can answer it. The request keeps
+     its real JSON-RPC id, and SDK cancellation clears the pending UI request.
 4. **Run** the connection loop (`run_session`) and **race it against
    `child.wait()`** — if the agent *process exits* before yielding control
    (→ `Crashed`), that's caught here. A still-*alive* agent that simply stops
@@ -97,7 +98,7 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 | `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; on error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered manually (see *Turn liveness*). |
 | `Cancel` | `CancelNotification` |
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
-| `SetConfigOption { config_id, value }` | if `config_id == "mode"` and a mode-select exists (gemini) → `SetSessionModeRequest`; otherwise the ext method `session/set_config_option`, whose refreshed options are pushed back to the Hub |
+| `SetConfigOption { config_id, value }` | if `config_id == "mode"` and a mode-select exists (gemini) → `SetSessionModeRequest`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |
 
 **Auto-resume tagging:** a `cmid` starting with the `__cont__` prefix marks an
 auto-continued turn — the echoed block is flagged `autoResumed: true` so the UI
@@ -178,10 +179,16 @@ provider-specific `session/update` variants through verbatim as `Event::Update`
 and **not over-normalizing** what ACP already gives. Choosing ACP is choosing
 this tradeoff deliberately.
 
-## Observed drift
+## SDK and capability boundary
 
-The crate is *strict*: it rejects unknown `sessionUpdate` variants rather than
-passing them through. An early observation — the claude adapter's
-`usage_update` (token/cost telemetry) was dropped by an older crate version — is
-why the design prefers a crate version that models a variant when available, and
-treats the verbatim-passthrough path as the escape hatch for the rest.
+The crate is strict: it rejects unknown `sessionUpdate` variants rather than
+passing them through. Cowboy therefore upgrades the SDK deliberately and uses
+typed stable variants where behavior depends on them. `usage_update` is mapped
+directly to ephemeral session usage; it is not detected by serialized field
+names or appended repeatedly to durable history.
+
+SDK 2's JSON-RPC request cancellation is enabled for permission waits and the
+stdio bridge's long-running prompts. Experimental session fork, ACP protocol
+v2, and native MCP-over-ACP remain off the production path until their schemas
+stabilize and Cowboy has an explicit ownership model for forked sessions and
+client-provided MCP lifetimes.

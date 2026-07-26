@@ -706,11 +706,10 @@ pub enum Inbound {
         args: serde_json::Value,
     },
     /// Set one config option on the session (mode / model / effort / future).
-    /// claude-agent-acp ≥ 0.31 exposes a unified `session/setSessionConfigOption`
-    /// request that handles all three via the same shape. cowboy sends it as
-    /// an ACP `ext_method` (the 0.4 crate lacks a typed wrapper); the agent
-    /// answers with the refreshed `configOptions` array, which the daemon
-    /// then re-broadcasts as [`Outbound::ConfigOptions`].
+    /// ACP exposes a unified typed `session/set_config_option` request that
+    /// handles all three via the same shape. The agent answers with the
+    /// refreshed `configOptions` array, which the daemon then re-broadcasts as
+    /// [`Outbound::ConfigOptions`].
     SetConfigOption {
         session_id: String,
         config_id: String,

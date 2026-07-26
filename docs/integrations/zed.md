@@ -49,7 +49,8 @@ The bridge supports:
   bridge stops publishing updates to dead thread entities;
 - complete retained-history replay on `session/load`;
 - prompt streaming, permission requests, cancellation, and session config
-  options;
+  options. Either `session/cancel` or JSON-RPC request cancellation stops an
+  in-flight bridge prompt;
 - daemon WebSocket recovery without terminating Zed's stdio ACP process:
   disconnects publish `reconnecting`, commands wait in the bridge, and a fresh
   bootstrap restores attached sessions, statuses, and config options. In-flight

@@ -363,24 +363,33 @@ async fn run_acp_server(
                 }) {
                     bridge.fail_prompt(&session_id, &cmid, error.to_string());
                 }
+                let cancellation = responder.cancellation();
                 cx.spawn(async move {
-                    match completion.await {
-                        Ok(PromptOutcome::Stopped(reason)) => {
-                            responder.respond(PromptResponse::new(reason))?;
-                        }
-                        Ok(PromptOutcome::Failed(error)) => {
+                    tokio::select! {
+                        outcome = completion => match outcome {
+                            Ok(PromptOutcome::Stopped(reason)) => {
+                                responder.respond(PromptResponse::new(reason))?;
+                            }
+                            Ok(PromptOutcome::Failed(error)) => {
+                                responder.respond_with_error(
+                                    agent_client_protocol::util::internal_error(error),
+                                )?;
+                            }
+                            Err(_) => {
+                                responder.respond_with_error(
+                                    agent_client_protocol::util::internal_error(
+                                        "cowboy daemon disconnected before the turn finished",
+                                    ),
+                                )?;
+                            }
+                        },
+                        () = cancellation.cancelled() => {
+                            bridge.cancel_prompts(&session_id);
                             responder.respond_with_error(
-                                agent_client_protocol::util::internal_error(error),
+                                agent_client_protocol::Error::request_cancelled(),
                             )?;
                         }
-                        Err(_) => {
-                            responder.respond_with_error(
-                                agent_client_protocol::util::internal_error(
-                                    "cowboy daemon disconnected before the turn finished",
-                                ),
-                            )?;
-                        }
-                    }
+                    };
                     Ok(())
                 })?;
                 Ok(())
@@ -404,7 +413,12 @@ async fn run_acp_server(
                     return responder
                         .respond_with_error(agent_client_protocol::util::internal_error(error));
                 }
-                let value = serde_json::to_value(&request.value).unwrap_or(serde_json::Value::Null);
+                let value = request
+                    .value
+                    .as_value_id()
+                    .map(|value| serde_json::Value::String(value.0.to_string()))
+                    .or_else(|| request.value.as_bool().map(serde_json::Value::Bool))
+                    .unwrap_or(serde_json::Value::Null);
                 let waiter = bridge.register_config_waiter(&session_id);
                 bridge.send_command(Inbound::SetConfigOption {
                     session_id: session_id.clone(),

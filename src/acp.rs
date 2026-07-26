@@ -4,7 +4,7 @@
 //! *server*) over stdio. This module is the only place that touches the
 //! `agent-client-protocol` crate, so a crate bump is contained here.
 //!
-//! The crate (0.14) is built around role-typed connections
+//! The crate is built around role-typed connections
 //! ([`agent_client_protocol::Client`]/[`Agent`] markers + [`ConnectionTo`]).
 //! `connect_with` runs the handshake + command loop in `run_session`; incoming
 //! `session/update` notifications and permission requests are handled by the
@@ -24,19 +24,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-// ACP 1.0 versioned the wire schema: the message types that were flat under
-// `schema::` in 0.14 now live under `schema::v1::` (v1 is the stable line; v2 is
-// unstable/feature-gated). `ProtocolVersion` stayed at the `schema::` root
-// (version-agnostic), and the `Agent`/`Client` traits at the crate root.
+// ACP's stable wire schema lives under `schema::v1::`; SDK major versions do
+// not change that protocol version. `ProtocolVersion` stays at the
+// version-agnostic schema root and the `Agent`/`Client` traits at the crate root.
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ClientRequest, ContentBlock, ExtRequest, InitializeRequest,
-    LoadSessionRequest, NewSessionRequest, PermissionOptionId, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest,
+    PermissionOptionId, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
     SessionConfigSelectOptions, SessionId, SessionModeId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
@@ -77,9 +76,12 @@ fn startup_full_access_mode(provider_id: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        codex_full_access_available, codex_full_access_selected, startup_full_access_mode,
+        codex_full_access_available, codex_full_access_selected, session_config_value,
+        startup_full_access_mode,
     };
-    use agent_client_protocol::schema::v1::{SessionConfigOption, SessionConfigSelectOption};
+    use agent_client_protocol::schema::v1::{
+        SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
+    };
 
     #[test]
     fn providers_use_their_native_full_access_mode() {
@@ -114,6 +116,19 @@ mod startup_mode_tests {
         assert!(!codex_full_access_selected(&restricted));
         assert!(!codex_full_access_available(&full_access));
         assert!(codex_full_access_selected(&full_access));
+    }
+
+    #[test]
+    fn config_values_preserve_typed_ids_and_booleans() {
+        let selected = session_config_value(&serde_json::json!("agent")).expect("select value");
+        assert_eq!(
+            selected.as_value_id().map(|value| value.0.as_ref()),
+            Some("agent")
+        );
+
+        let enabled = session_config_value(&serde_json::json!(true)).expect("boolean value");
+        assert_eq!(enabled, SessionConfigOptionValue::boolean(true));
+        assert!(session_config_value(&serde_json::json!(42)).is_err());
     }
 }
 
@@ -181,6 +196,16 @@ fn config_select_options_contain(options: &SessionConfigSelectOptions, value: &s
     }
 }
 
+fn session_config_value(
+    value: &serde_json::Value,
+) -> std::result::Result<SessionConfigOptionValue, &'static str> {
+    match value {
+        serde_json::Value::String(value) => Ok(SessionConfigOptionValue::value_id(value.clone())),
+        serde_json::Value::Bool(value) => Ok(SessionConfigOptionValue::boolean(*value)),
+        _ => Err("configuration values must be a string id or boolean"),
+    }
+}
+
 async fn set_startup_config_option(
     cx: &ConnectionTo<Agent>,
     session_id: &str,
@@ -188,8 +213,7 @@ async fn set_startup_config_option(
     config_id: &str,
     value: &str,
 ) -> Option<serde_json::Value> {
-    let req =
-        SetSessionConfigOptionRequest::new(acp_id.clone(), config_id.to_owned(), value.to_owned());
+    let req = SetSessionConfigOptionRequest::new(acp_id.clone(), config_id.to_owned(), value);
     match cx.send_request(req).block_task().await {
         Ok(resp) => match serde_json::to_value(&resp.config_options) {
             Ok(opts) => Some(opts),
@@ -261,8 +285,6 @@ struct ClientState {
     /// Assistant text captured for an internal prompt that requested a direct
     /// completion result. Ordinary UI prompts leave it off.
     capture: Mutex<Option<String>>,
-    /// Monotonic counter for synthesizing permission request ids.
-    next_perm: AtomicU64,
     /// The Codex adapter's authoritative session mode is Full Access. Codex has
     /// occasionally emitted permission requests after `session/load` despite
     /// that mode (`approval_policy=never`); keep those upstream regressions
@@ -460,7 +482,6 @@ async fn agent_main(
         session_id: session_id.to_owned(),
         pending: Mutex::new(HashMap::new()),
         capture: Mutex::new(None),
-        next_perm: AtomicU64::new(0),
         codex_full_access: AtomicBool::new(false),
         suppress_updates: AtomicBool::new(false),
     });
@@ -526,8 +547,12 @@ async fn agent_main(
                     };
                     return responder.respond(RequestPermissionResponse::new(outcome));
                 }
-                let n = perm_state.next_perm.fetch_add(1, Ordering::Relaxed);
-                let request_id = format!("perm-{n}");
+                // The SDK exposes the actual JSON-RPC request id. Keep its JSON
+                // representation as Cowboy's opaque UI key so numeric `1` and
+                // string `"1"` cannot collide and cancellation/response
+                // correlation remains tied to the wire request.
+                let request_id = serde_json::to_string(responder.id())
+                    .unwrap_or_else(|_| responder.id().to_string());
                 let tool_call =
                     serde_json::to_value(&req.tool_call).unwrap_or(serde_json::Value::Null);
                 let options = serde_json::to_value(&req.options).unwrap_or(serde_json::Value::Null);
@@ -537,7 +562,7 @@ async fn agent_main(
                 perm_state.sink.push(
                     &perm_state.session_id,
                     Event::PermissionRequest {
-                        request_id,
+                        request_id: request_id.clone(),
                         tool_call,
                         options,
                     },
@@ -545,10 +570,28 @@ async fn agent_main(
 
                 // Defer the actual response: blocking the dispatch loop here
                 // would stall every other incoming message (e.g. a concurrent
-                // cancel) until the user answers. The crate keeps the request
-                // open until the moved `responder` replies.
+                // cancel) until the user answers. SDK 2 exposes JSON-RPC
+                // request cancellation directly, so an upstream cancellation
+                // also clears the pending Cowboy prompt immediately.
+                let cancellation = responder.cancellation();
+                let cancelled_state = Arc::clone(&perm_state);
+                let cancelled_request_id = request_id.clone();
                 cx.spawn(async move {
-                    let chosen = rx.await.unwrap_or(None);
+                    let chosen = tokio::select! {
+                        chosen = rx => chosen.unwrap_or(None),
+                        () = cancellation.cancelled() => {
+                            cancelled_state.pending.lock().remove(&cancelled_request_id);
+                            cancelled_state.sink.push(
+                                &cancelled_state.session_id,
+                                Event::PermissionResolved {
+                                    request_id: cancelled_request_id,
+                                    option_id: None,
+                                },
+                            );
+                            responder.respond_with_error(Error::request_cancelled())?;
+                            return Ok(());
+                        }
+                    };
                     let outcome = match chosen {
                         Some(option_id) => RequestPermissionOutcome::Selected(
                             SelectedPermissionOutcome::new(PermissionOptionId::new(option_id)),
@@ -622,9 +665,9 @@ async fn agent_main(
 /// `config_option_update` is special-cased: rather than surfacing it as a
 /// generic timeline update, its `configOptions` array is pushed to the Hub's
 /// dedicated config-options channel (which hydrates the composer dropdowns).
-/// Every other variant — including the new `usage_update` — is passed through
-/// as serialized JSON (design §5), so the UI renders message / thought chunks,
-/// tool calls, plans, modes, and usage without per-variant re-modelling.
+/// Usage is kept as ephemeral session metadata. Every remaining variant is
+/// passed through as serialized JSON (design §5), so the UI renders message /
+/// thought chunks, tool calls, plans, and modes without per-variant re-modelling.
 fn handle_session_notification(state: &ClientState, notif: &SessionNotification) {
     // During a `session/load` resume the agent replays prior turns; drop them
     // — cowboy already has this history persisted (see field docs).
@@ -644,38 +687,23 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     {
         capture.push_str(&text.text);
     }
+    if let SessionUpdate::UsageUpdate(ref usage) = notif.update {
+        let raw = serde_json::to_value(&notif.update).unwrap_or(serde_json::Value::Null);
+        state.sink.set_session_usage(
+            &state.session_id,
+            crate::agent_model::SessionUsage {
+                used: usage.used,
+                size: usage.size,
+                raw,
+                observed_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
+            },
+        );
+        return;
+    }
     match serde_json::to_value(&notif.update) {
         Ok(update) => {
-            // `usage_update` carries the context-window fill (`used`/`size`). It's
-            // ephemeral LIVE state, not conversation, and the agent re-emits it
-            // several times per turn — so intercept it onto SessionMeta (drives the
-            // composer's "context X% full" ring) instead of appending a copy to the
-            // timeline every time (which bloated the persisted log). Matched on the
-            // serialized shape so it's robust to the ACP crate's representation.
-            if update
-                .get("sessionUpdate")
-                .and_then(serde_json::Value::as_str)
-                == Some("usage_update")
-            {
-                let field = |k| {
-                    update
-                        .get(k)
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0)
-                };
-                state.sink.set_session_usage(
-                    &state.session_id,
-                    crate::agent_model::SessionUsage {
-                        used: field("used"),
-                        size: field("size"),
-                        raw: update,
-                        observed_at_ms: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX)),
-                    },
-                );
-                return;
-            }
             // Honor a ScheduleWakeup BEFORE pushing — the event is still stored
             // verbatim (timeline/UI unchanged); this just adds the side effect of
             // actually firing the wakeup, which the ACP runtime otherwise drops.
@@ -1074,38 +1102,32 @@ async fn run_session(
                 let acp = acp_id.clone();
                 let state = Arc::clone(state);
                 cx.clone().spawn(async move {
-                    let params = serde_json::json!({
-                        "sessionId": acp.0,
-                        "configId": config_id,
-                        "value": value,
-                    });
-                    let params_raw = match serde_json::value::to_raw_value(&params) {
-                        Ok(r) => Arc::from(r),
+                    let config_value = match session_config_value(&value) {
+                        Ok(value) => value,
                         Err(e) => {
                             sink.broadcast_error(
                                 Some(sid.clone()),
-                                format!("encoding setConfigOption params: {e}"),
+                                format!("set {config_id}: {e}"),
                             );
                             return Ok(());
                         }
                     };
-                    let req = ClientRequest::ExtMethodRequest(ExtRequest::new(
-                        "session/set_config_option",
-                        params_raw,
-                    ));
+                    let req =
+                        SetSessionConfigOptionRequest::new(acp, config_id.clone(), config_value);
                     match cx.send_request(req).block_task().await {
-                        Ok(val) => {
-                            // Response carries `{ configOptions: [...] }`.
-                            if let Some(opts) = val.get("configOptions").cloned() {
-                                if config_id == CODEX_FULL_ACCESS_CONFIG_ID {
-                                    let selected =
-                                        serde_json::from_value::<Vec<SessionConfigOption>>(
-                                            opts.clone(),
-                                        )
-                                        .is_ok_and(|options| codex_full_access_selected(&options));
-                                    state.codex_full_access.store(selected, Ordering::SeqCst);
+                        Ok(response) => {
+                            if config_id == CODEX_FULL_ACCESS_CONFIG_ID {
+                                let selected = codex_full_access_selected(&response.config_options);
+                                state.codex_full_access.store(selected, Ordering::SeqCst);
+                            }
+                            match serde_json::to_value(response.config_options) {
+                                Ok(options) => sink.set_config_options(&sid, options),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "serializing set config response"
+                                    );
                                 }
-                                sink.set_config_options(&sid, opts);
                             }
                         }
                         Err(e) => {
