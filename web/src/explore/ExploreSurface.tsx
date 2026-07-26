@@ -41,7 +41,6 @@ import {
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
-  loadOlder,
   loadPreviousQuestionPage,
   useStoreSelector,
 } from "../store";
@@ -1248,7 +1247,11 @@ export function MobilePageDock({
               firstOrdinal={Math.max(1, total - pages.length + 1)}
               hasEarlier={hasEarlierHistory}
               loadingEarlier={loadingEarlier}
-              onReachStart={(): void => void loadOlder(sessionId)}
+              // Directory pagination is page-semantic, not transport-semantic:
+              // one answer can span many bounded event batches, none of which
+              // adds a visible row here. Fetch through the question boundary so
+              // one upward approach always reveals an earlier directory page.
+              onReachStart={(): void => void loadPreviousQuestionPage(sessionId)}
               onDismiss={closePageDirectory}
               onSelect={(id): void => {
                 navigate(id);
