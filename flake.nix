@@ -93,7 +93,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-q+Mq+Uad9zMN2uIDCpiLX1qfld8TPN6CDZyUfW69rzg=";
+        hash = "sha256-gLDf/3iWcRFGbgxznXSo7azZoAxgdCBYAZzfX68gvz8=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -118,6 +118,7 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = [ "--bin" "cowboy" "--bin" "cowboy-acp-worker" ];
+        nativeCheckInputs = [ pkgs.gitMinimal ];
         passthru.workerGeneration = worker-generation;
         meta = {
           description = "Drive coding-agent CLIs from anywhere over ACP";
