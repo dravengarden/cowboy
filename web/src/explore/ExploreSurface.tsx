@@ -362,6 +362,13 @@ function PageList({
       list.scrollTop = anchor.scrollTop +
         Math.max(0, list.scrollHeight - anchor.scrollHeight);
     }
+    // A tall phone/tablet can still have no scroll range after one question
+    // boundary lands. Re-arm before the observer is recreated so it keeps
+    // filling by visible directory pages; otherwise the user cannot make a
+    // second upward approach because there is literally nothing to scroll.
+    if (list.scrollHeight <= list.clientHeight + 1) {
+      earlierRequestArmedRef.current = true;
+    }
     prependAnchorRef.current = null;
   }, [pages.length]);
 
