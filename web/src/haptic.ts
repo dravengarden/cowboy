@@ -25,6 +25,37 @@ export {
 } from "./hapticIntent";
 import type { CowboyHapticIntent } from "./hapticIntent";
 
+interface CowboyNativeSelectionBridge {
+  readonly __cowboyPrepareSelectionHaptic?: () => void;
+  readonly __cowboySelectionHaptic?: () => void;
+}
+
+let preparedNavigationUntil = -Infinity;
+
+/** Warm the native selection generator before a drag can cross its magnetic
+ * threshold. The native shell keeps the generator alive; browsers and older
+ * shells simply retain the existing plugin path. */
+export function prepareNavigationHaptic(): void {
+  const bridge = globalThis as typeof globalThis & CowboyNativeSelectionBridge;
+  if (typeof bridge.__cowboyPrepareSelectionHaptic !== "function") return;
+  bridge.__cowboyPrepareSelectionHaptic();
+  preparedNavigationUntil = (globalThis.performance?.now?.() ?? 0) + 2_000;
+}
+
+function firePreparedNavigationHaptic(): boolean {
+  const bridge = globalThis as typeof globalThis & CowboyNativeSelectionBridge;
+  const now = globalThis.performance?.now?.() ?? 0;
+  if (
+    now > preparedNavigationUntil ||
+    typeof bridge.__cowboySelectionHaptic !== "function"
+  ) {
+    return false;
+  }
+  preparedNavigationUntil = -Infinity;
+  bridge.__cowboySelectionHaptic();
+  return true;
+}
+
 function fireIntent(intent: CowboyHapticIntent): void {
   const style = hapticStyleForIntent(intent);
   if (style === "selection") {
@@ -46,6 +77,7 @@ function fireIntent(intent: CowboyHapticIntent): void {
  * semantically different from impact strength.
  */
 export function navigationHaptic(): void {
+  if (firePreparedNavigationHaptic()) return;
   fireIntent("navigation");
 }
 

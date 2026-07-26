@@ -146,7 +146,7 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
-import { navigationHaptic } from "./haptic";
+import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -1780,6 +1780,9 @@ export function App({
             const startOpen = drawerOpenRef.current;
             const width = drawerWidth();
             presentationWidth = width;
+            // Give the persistent native selection generator a real warm-up
+            // window before this drag can cross its magnetic commit threshold.
+            prepareNavigationHaptic();
             gesture = {
                 x: touch.clientX,
                 y: touch.clientY,
