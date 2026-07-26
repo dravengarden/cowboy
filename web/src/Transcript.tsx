@@ -3850,7 +3850,7 @@ export function Transcript({
         freezeRef.current = anchor;
       } else if (el && stick.current) {
         pinTranscriptToLatest(el);
-      } else if (el && mode === "page") {
+      } else if (el && mode === "page" && !restoreOffset) {
         el.scrollTop = el.clientHeight - el.scrollHeight;
       }
       if (el) {
