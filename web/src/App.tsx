@@ -1655,7 +1655,12 @@ export function App({
                 reducedMotion,
             );
             const progress = Math.max(0, Math.min(1, offset / presentationWidth));
-            const drawerParallax = (phone ? 28 : 36) * (1 - progress);
+            // The underlay travels a meaningful fraction of its own width.
+            // A former fixed 28px offset technically moved but looked static on
+            // a phone; DeepSeek keeps the drawer visibly offstage at mid-swipe.
+            const drawerParallax = presentationWidth * (phone ? 0.28 : 0.22) *
+                (1 - progress);
+            const drawerOpacity = 0.72 + progress * 0.28;
             surface.style.transform =
                 `translate3d(${String(offset)}px, 0, 0) scale(${String(visual.scale)})`;
             surface.style.opacity = String(visual.opacity);
@@ -1665,6 +1670,7 @@ export function App({
             // foreground moves under the finger.
             drawer.style.transform =
                 `translate3d(-${String(drawerParallax)}px, 0, 0)`;
+            drawer.style.opacity = String(drawerOpacity);
             // The foreground recedes translucently, but the session list must
             // remain visible only in the strip that has physically been
             // revealed. Move an opaque app-background mask with the foreground
@@ -1739,7 +1745,8 @@ export function App({
             drawerMask.style.transition =
                 `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             drawer.style.transition =
-                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
+                `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
             render(targetOffset);
             // Mount the foreground hit layer at open-start. During close, keep
             // the open state through the last animation frame so the radius and
@@ -1823,7 +1830,7 @@ export function App({
                 surface.style.transition = "none";
                 surface.style.willChange = "transform, opacity";
                 drawer.style.transition = "none";
-                drawer.style.willChange = "transform";
+                drawer.style.willChange = "transform, opacity";
                 drawerMask.style.transition = "none";
                 drawerMask.style.willChange = "transform";
             }
