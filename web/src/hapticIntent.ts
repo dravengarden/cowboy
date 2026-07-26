@@ -4,12 +4,15 @@ export type CowboyHapticIntent =
   | "confirmation"
   | "important";
 
-export type CowboyHapticStyle = "light" | "medium" | "heavy";
+export type CowboyHapticStyle = "selection" | "medium" | "heavy";
 
 export function hapticStyleForIntent(
   intent: CowboyHapticIntent,
 ): CowboyHapticStyle {
-  if (intent === "navigation") return "light";
-  if (intent === "magnetic" || intent === "confirmation") return "medium";
+  // Spatial/navigation thresholds are quiet orientation cues, not impacts.
+  // UISelectionFeedbackGenerator is substantially subtler than even a "light"
+  // UIImpactFeedbackGenerator and matches native drawer/magnetic affordances.
+  if (intent === "navigation" || intent === "magnetic") return "selection";
+  if (intent === "confirmation") return "medium";
   return "heavy";
 }

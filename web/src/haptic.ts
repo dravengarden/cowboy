@@ -15,6 +15,7 @@ import {
   haptic as fireImpact,
   type HapticStyle,
   notificationHaptic,
+  selectionHaptic,
 } from "./_shell";
 import { hapticStyleForIntent } from "./hapticIntent";
 export {
@@ -22,6 +23,16 @@ export {
   type CowboyHapticStyle,
   hapticStyleForIntent,
 } from "./hapticIntent";
+import type { CowboyHapticIntent } from "./hapticIntent";
+
+function fireIntent(intent: CowboyHapticIntent): void {
+  const style = hapticStyleForIntent(intent);
+  if (style === "selection") {
+    selectionHaptic();
+    return;
+  }
+  fireImpact(style);
+}
 
 /**
  * Cowboy's product-level haptic hierarchy. Features choose meaning, never an
@@ -35,19 +46,19 @@ export {
  * semantically different from impact strength.
  */
 export function navigationHaptic(): void {
-  fireImpact(hapticStyleForIntent("navigation"));
+  fireIntent("navigation");
 }
 
 export function magneticHaptic(): void {
-  fireImpact(hapticStyleForIntent("magnetic"));
+  fireIntent("magnetic");
 }
 
 export function confirmationHaptic(): void {
-  fireImpact(hapticStyleForIntent("confirmation"));
+  fireIntent("confirmation");
 }
 
 export function importantHaptic(): void {
-  fireImpact(hapticStyleForIntent("important"));
+  fireIntent("important");
 }
 
 /** Backward-compatible adapter for ordinary call sites awaiting semantic
