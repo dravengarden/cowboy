@@ -2361,43 +2361,50 @@ export function App({
                 </Suspense>
             )}
             {mobile && (
-                <Stack
+                <Box
                     ref={mobileDrawerRef}
-                    role="navigation"
-                    aria-label="Sessions"
                     aria-hidden={!drawerOpen}
                     sx={{
                         position: "absolute",
                         zIndex: 0,
                         inset: 0,
-                        right: "auto",
-                        width: "min(84%, 360px)",
-                        minWidth: 0,
                         overflow: "hidden",
                         bgcolor: "background.default",
-                        pt: "env(safe-area-inset-top, 0px)",
-                        pl: "env(safe-area-inset-left, 0px)",
-                        "@media (min-width: 768px)": {
-                            width: "min(52%, 440px)",
-                        },
+                        backfaceVisibility: "hidden",
                     }}
                 >
-                    <Typography
-                        variant="h6"
+                    <Stack
+                        role="navigation"
+                        aria-label="Sessions"
                         sx={{
-                            px: 2,
-                            pt: 1.5,
-                            pb: 0.5,
-                            fontWeight: 750,
-                            letterSpacing: "-0.015em",
+                            width: "min(84%, 360px)",
+                            height: "100%",
+                            minWidth: 0,
+                            overflow: "hidden",
+                            pt: "env(safe-area-inset-top, 0px)",
+                            pl: "env(safe-area-inset-left, 0px)",
+                            "@media (min-width: 768px)": {
+                                width: "min(52%, 440px)",
+                            },
                         }}
                     >
-                        Sessions
-                    </Typography>
-                    <Box sx={{ flex: 1, minHeight: 0 }}>
-                        {list}
-                    </Box>
-                </Stack>
+                        <Typography
+                            variant="h6"
+                            sx={{
+                                px: 2,
+                                pt: 1.5,
+                                pb: 0.5,
+                                fontWeight: 750,
+                                letterSpacing: "-0.015em",
+                            }}
+                        >
+                            Sessions
+                        </Typography>
+                        <Box sx={{ flex: 1, minHeight: 0 }}>
+                            {list}
+                        </Box>
+                    </Stack>
+                </Box>
             )}
             {mobile && (
                 <Box
