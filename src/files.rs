@@ -41,6 +41,19 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<String> {
     }
 }
 
+/// Walk `root` and return a stable, lexical file listing for a tree UI.
+///
+/// The boolean is true when more matching files existed than the requested
+/// limit. Directory nodes are inferred by the client from these relative paths.
+#[must_use]
+pub fn tree(root: &Path, limit: usize) -> (Vec<String>, bool) {
+    let mut paths: Vec<String> = collect(root).into_iter().map(|entry| entry.rel).collect();
+    paths.sort();
+    let truncated = paths.len() > limit;
+    paths.truncate(limit);
+    (paths, truncated)
+}
+
 fn collect(root: &Path) -> Vec<Entry> {
     let mut out = Vec::new();
     // Defaults already respect .gitignore / .git/info/exclude and skip hidden
@@ -119,7 +132,7 @@ fn rank_fuzzy(entries: &[Entry], query: &str, limit: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::search;
+    use super::{search, tree};
     use std::fs;
     use std::path::PathBuf;
 
@@ -159,6 +172,22 @@ mod tests {
             !out.iter().any(|p| p == "README.md"),
             "non-matching paths are dropped, not just deprioritised",
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tree_is_lexical_and_reports_truncation() {
+        let dir = scratch("tree");
+        let (out, truncated) = tree(&dir, 3);
+        assert_eq!(
+            out,
+            vec![
+                "README.md".to_owned(),
+                "deep/a/b/c.txt".to_owned(),
+                "src/files.rs".to_owned(),
+            ]
+        );
+        assert!(truncated);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

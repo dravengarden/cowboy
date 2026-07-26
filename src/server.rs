@@ -960,6 +960,7 @@ async fn serve_axum(
             post(api_reconcile_project_sessions),
         )
         .route("/api/sessions/{id}/files", get(api_search_files))
+        .route("/api/sessions/{id}/file-tree", get(api_file_tree))
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/question-pages", get(api_question_pages))
         .route(
@@ -1676,6 +1677,22 @@ struct FileSearchResponse {
     files: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct FileTreeQuery {
+    #[serde(default = "default_file_tree_limit")]
+    limit: usize,
+}
+
+fn default_file_tree_limit() -> usize {
+    5_000
+}
+
+#[derive(Debug, Serialize)]
+struct FileTreeResponse {
+    files: Vec<String>,
+    truncated: bool,
+}
+
 /// Rank files under a session's working directory for the `@` reference picker.
 ///
 /// The cwd comes from the session itself (never from the client) so a browser
@@ -1703,6 +1720,32 @@ async fn api_search_files(
     .await
     .unwrap_or_default();
     Json(FileSearchResponse { files }).into_response()
+}
+
+/// Return a gitignore-aware file listing for the mobile review tree.
+///
+/// Like file search, the root is resolved from the session rather than a
+/// client-provided path. The UI infers directory nodes from relative paths.
+async fn api_file_tree(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<FileTreeQuery>,
+) -> Response {
+    let Some(cwd) = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|m| m.id == session_id)
+        .map(|m| m.cwd)
+    else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let limit = query.limit.clamp(100, 10_000);
+    let (files, truncated) =
+        tokio::task::spawn_blocking(move || crate::files::tree(std::path::Path::new(&cwd), limit))
+            .await
+            .unwrap_or_default();
+    Json(FileTreeResponse { files, truncated }).into_response()
 }
 
 #[derive(Debug, Serialize)]

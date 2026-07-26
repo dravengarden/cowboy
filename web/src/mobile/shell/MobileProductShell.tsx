@@ -58,6 +58,7 @@ export function MobileProductShell({
 }): React.JSX.Element {
   const [product, setProduct] = useState<MobileProduct>(restoredProduct);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
+  const [reviewDrawerOpen, setReviewDrawerOpen] = useState(false);
   const productRef = useRef(product);
   const shellRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
@@ -126,7 +127,8 @@ export function MobileProductShell({
       if (!touch) return;
       const ignored = ignoredGestureTarget(event.target, shell);
       const overlayOwnsGesture =
-        productRef.current === "agent" && agentDrawerOpen;
+        (productRef.current === "agent" && agentDrawerOpen) ||
+        (productRef.current === "review" && reviewDrawerOpen);
       if (!shouldReservePagerStart(ignored, overlayOwnsGesture)) {
         gesture = null;
         return;
@@ -234,7 +236,7 @@ export function MobileProductShell({
       globalThis.removeEventListener("resize", onResize);
       if (frame !== 0) globalThis.cancelAnimationFrame(frame);
     };
-  }, [agentDrawerOpen, selectProduct]);
+  }, [agentDrawerOpen, reviewDrawerOpen, selectProduct]);
 
   return (
     <Box
@@ -304,7 +306,7 @@ export function MobileProductShell({
               : "translate3d(100%, 0, 0)",
           }}
         >
-          <ReviewApp />
+          <ReviewApp onDrawerOpenChange={setReviewDrawerOpen} />
         </Box>
       </Box>
     </Box>
