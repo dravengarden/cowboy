@@ -90,6 +90,7 @@ struct Broker {
     /// Sessions whose candidate launch marked a provider generation unhealthy.
     /// Tracking the source lets deletion retract only its own failure.
     unhealthy_generations: Mutex<HashMap<(String, String), HashSet<String>>>,
+    healthy_generations: Mutex<HashSet<(String, String)>>,
     desired_generation: Mutex<String>,
     previous_generation: Mutex<Option<String>>,
     generation_commands: Mutex<HashMap<String, PathBuf>>,
@@ -120,6 +121,7 @@ impl Broker {
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
             unhealthy_generations: Mutex::new(HashMap::new()),
+            healthy_generations: Mutex::new(HashSet::new()),
             previous_generation: Mutex::new(None),
             generation_commands: Mutex::new(generation_commands),
             next_connection: AtomicU64::new(1),
@@ -219,6 +221,50 @@ impl Broker {
             sessions.remove(session_id);
             !sessions.is_empty()
         });
+    }
+
+    fn rehabilitate_generation(&self, generation: &str, provider: &str) -> Vec<String> {
+        self.healthy_generations
+            .lock()
+            .insert((generation.to_owned(), provider.to_owned()));
+        self.unhealthy_generations
+            .lock()
+            .remove(&(generation.to_owned(), provider.to_owned()));
+        let sessions = self.sessions.lock();
+        let rehabilitated: Vec<String> = self
+            .fallback_targets
+            .lock()
+            .iter()
+            .filter(|(session_id, failed_generation)| {
+                *failed_generation == generation
+                    && sessions
+                        .get(*session_id)
+                        .is_some_and(|session| session.provider == provider)
+            })
+            .map(|(session_id, _)| session_id.clone())
+            .collect();
+        drop(sessions);
+        for session_id in &rehabilitated {
+            self.unpin_fallback(session_id);
+        }
+        let draining: Vec<String> = {
+            let mut workers = self.workers.lock();
+            rehabilitated
+                .iter()
+                .filter_map(|session_id| {
+                    let worker = workers.get_mut(session_id)?;
+                    if worker.snapshot.generation == generation {
+                        return None;
+                    }
+                    worker.snapshot.drain_requested = true;
+                    Some(session_id.clone())
+                })
+                .collect()
+        };
+        for session_id in draining {
+            self.route_worker(&session_id, WorkerCommand::Drain);
+        }
+        rehabilitated
     }
 
     fn controller_for(&self, lease: u64) -> Option<mpsc::UnboundedSender<Frame>> {
@@ -331,7 +377,7 @@ impl Broker {
             .collect()
     }
 
-    fn update_snapshot(&self, snapshot: WorkerSnapshot, connection_id: u64) {
+    fn update_snapshot(&self, mut snapshot: WorkerSnapshot, connection_id: u64) {
         let session_id = snapshot.session_id.clone();
         let state = snapshot.state;
         let launch = snapshot.launch.clone();
@@ -340,6 +386,7 @@ impl Broker {
             && worker.connection_id == connection_id
             && worker.epoch == snapshot.worker_epoch
         {
+            snapshot.drain_requested |= worker.snapshot.drain_requested;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();
             accepted = true;
@@ -355,7 +402,11 @@ impl Broker {
             && let Some(failed_generation) = launch.fallback_for.as_ref()
         {
             let desired = self.desired_generation.lock().clone();
-            if desired.is_empty() || desired == *failed_generation {
+            let generation_is_healthy = self
+                .healthy_generations
+                .lock()
+                .contains(&(failed_generation.clone(), launch.provider.clone()));
+            if (desired.is_empty() || desired == *failed_generation) && !generation_is_healthy {
                 self.pin_fallback(&session_id, &launch.generation, failed_generation);
                 *self.previous_generation.lock() = Some(launch.generation.clone());
                 self.unhealthy_generations
@@ -392,9 +443,22 @@ impl Broker {
         } = registration;
         self.awaiting_reconnect.lock().remove(&session_id);
         let desired = self.desired_generation.lock().clone();
+        let fallback_provider = self
+            .sessions
+            .lock()
+            .get(&session_id)
+            .map(|session| session.provider.clone());
+        let fallback_is_healthy = fallback_for.as_ref().is_some_and(|failed| {
+            fallback_provider.as_ref().is_some_and(|provider| {
+                self.healthy_generations
+                    .lock()
+                    .contains(&(failed.clone(), provider.clone()))
+            })
+        });
         if fallback_for
             .as_ref()
             .is_some_and(|failed| desired.is_empty() || failed == &desired)
+            && !fallback_is_healthy
         {
             self.pin_fallback(
                 &session_id,
@@ -857,6 +921,7 @@ impl Broker {
             }
         };
         if generation_changed {
+            self.healthy_generations.lock().clear();
             let retained: HashSet<String> = {
                 let mut targets = self.fallback_targets.lock();
                 targets.retain(|_, failed| failed == &generation);
@@ -1636,14 +1701,21 @@ async fn handle_worker(
                 if cancelled.contains(session_id) {
                     continue;
                 }
-                broker.unhealthy_generations.lock().remove(&(
-                    worker.generation.clone(),
-                    broker
-                        .sessions
-                        .lock()
-                        .get(session_id)
-                        .map_or_else(String::new, |session| session.provider.clone()),
-                ));
+                let provider = broker
+                    .sessions
+                    .lock()
+                    .get(session_id)
+                    .map_or_else(String::new, |session| session.provider.clone());
+                let desired = broker.desired_generation.lock().clone();
+                let rehabilitated = if worker.generation == desired
+                    && matches!(
+                        worker.state,
+                        WorkerState::Running | WorkerState::Busy | WorkerState::Draining
+                    ) {
+                    broker.rehabilitate_generation(&worker.generation, &provider)
+                } else {
+                    Vec::new()
+                };
                 let worker = broker
                     .workers
                     .lock()
@@ -1654,6 +1726,11 @@ async fn handle_worker(
                 });
                 drop(cancelled);
                 broker.maybe_cutover(session_id);
+                for fallback_session in rehabilitated {
+                    if fallback_session != session_id {
+                        broker.maybe_cutover(&fallback_session);
+                    }
+                }
             }
             Frame::WorkerEvent {
                 session_id: event_session,
@@ -1923,6 +2000,119 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn healthy_generation_releases_matching_provider_fallbacks() {
+        let broker = Broker::new(AgentdArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-2".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_ready_timeout: Duration::from_millis(10),
+        });
+        for (session_id, provider) in [("sess-codex", "codex"), ("sess-claude", "claude-code")] {
+            broker.sessions.lock().insert(
+                session_id.to_owned(),
+                StartSession {
+                    session_id: session_id.to_owned(),
+                    provider: provider.to_owned(),
+                    cwd: "/work".to_owned(),
+                    agent_session_id: None,
+                    system: false,
+                    generation: "gen-1".to_owned(),
+                    fallback_for: Some("gen-2".to_owned()),
+                    adopt_only: false,
+                },
+            );
+            broker.pin_fallback(session_id, "gen-1", "gen-2");
+        }
+        broker.unhealthy_generations.lock().insert(
+            ("gen-2".to_owned(), "codex".to_owned()),
+            HashSet::from(["sess-failed".to_owned()]),
+        );
+        let (codex_tx, mut codex_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-codex".to_owned(),
+                epoch: "epoch-codex".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: Some("gen-2".to_owned()),
+                connection_id: 1,
+                tx: codex_tx,
+            })
+            .expect("register codex fallback");
+
+        assert_eq!(
+            broker.rehabilitate_generation("gen-2", "codex"),
+            vec!["sess-codex".to_owned()]
+        );
+        assert!(matches!(
+            codex_rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::Drain,
+                ..
+            })
+        ));
+        assert!(
+            broker
+                .workers
+                .lock()
+                .get("sess-codex")
+                .is_some_and(|worker| worker.snapshot.drain_requested)
+        );
+        assert!(!broker.fallback_pins.lock().contains_key("sess-codex"));
+        assert!(!broker.fallback_targets.lock().contains_key("sess-codex"));
+        assert!(broker.fallback_pins.lock().contains_key("sess-claude"));
+        assert!(broker.fallback_targets.lock().contains_key("sess-claude"));
+        assert!(broker.unhealthy_generations.lock().is_empty());
+
+        broker.sessions.lock().insert(
+            "sess-late".to_owned(),
+            StartSession {
+                session_id: "sess-late".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: "/work".to_owned(),
+                agent_session_id: None,
+                system: false,
+                generation: "gen-1".to_owned(),
+                fallback_for: Some("gen-2".to_owned()),
+                adopt_only: false,
+            },
+        );
+        let (late_tx, _late_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-late".to_owned(),
+                epoch: "epoch-late".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: Some("gen-2".to_owned()),
+                connection_id: 2,
+                tx: late_tx,
+            })
+            .expect("register late fallback");
+        assert!(!broker.fallback_pins.lock().contains_key("sess-late"));
+        let mut late_snapshot = broker
+            .workers
+            .lock()
+            .get("sess-late")
+            .expect("late worker")
+            .snapshot
+            .clone();
+        late_snapshot.drain_requested = false;
+        late_snapshot.launch = broker.sessions.lock().get("sess-late").cloned();
+        broker.update_snapshot(late_snapshot, 2);
+        assert!(!broker.fallback_pins.lock().contains_key("sess-late"));
+        assert!(broker.unhealthy_generations.lock().is_empty());
+        assert!(
+            broker
+                .workers
+                .lock()
+                .get("sess-late")
+                .is_some_and(|worker| worker.snapshot.drain_requested)
+        );
     }
 
     #[test]
