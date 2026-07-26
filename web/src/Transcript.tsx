@@ -112,6 +112,7 @@ import {
 } from "./transcriptViewport";
 import { advanceTimelinePresentation } from "./timelinePresentation";
 import {
+  canRestoreTranscriptViewport,
   getTranscriptViewport,
   saveTranscriptViewport,
 } from "./transcriptViewportStore";
@@ -3790,6 +3791,11 @@ export function Transcript({
         cancelAnimationFrame(viewportBackfillRafRef.current);
         viewportBackfillRafRef.current = 0;
       }
+      const mode = managesScrollHistoryRef.current ? "history" : "page";
+      if (mode === "history" || pageIdRef.current) {
+        if (!stick.current) captureAnchor();
+        saveViewport();
+      }
     };
   }, []);
 
@@ -3805,9 +3811,11 @@ export function Transcript({
     }
     const mode = managesScrollHistory ? "history" : "page";
     const saved = getTranscriptViewport(sessionId, mode);
-    const canRestore = saved &&
-      (saved.following || saved.anchorKey !== null) &&
-      (mode === "history" || saved.pageId === (pageId ?? null));
+    const canRestore = canRestoreTranscriptViewport(
+      saved,
+      mode,
+      pageId ?? null,
+    );
     const restoreDetached = canRestore && !saved.following &&
       saved.anchorKey !== null;
     const restoreOffset = canRestore && !saved.following;

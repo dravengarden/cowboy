@@ -41,10 +41,10 @@ function restore(): void {
       states.set(sessionId, {
         projection,
         pageId,
-        // A restored Page View is a document, not a chat tail. Reopen at the
-        // question root; otherwise the default sticky transcript position can
-        // land midway through the final answer and hide the question.
-        pageStartId: projection === "explore" ? pageId : null,
+        // A restored Page View is a continuation of the device-local reading
+        // position. Only explicit page navigation requests pageStartId; setting
+        // it here raced Transcript's viewport restore back to the page head.
+        pageStartId: null,
         transitionAnchorKey: null,
         pageParents: state.pageParents && typeof state.pageParents === "object"
           ? state.pageParents

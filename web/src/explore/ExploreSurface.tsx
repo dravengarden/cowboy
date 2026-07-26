@@ -62,6 +62,7 @@ import {
   pageContainingItemKey,
   type QuestionPage,
 } from "./questionPages";
+import { shouldAdoptLoadedPage } from "./retainedPage";
 
 const EMPTY_TIMELINE: Envelope[] = [];
 
@@ -251,8 +252,21 @@ function usePages(
       resolveProjectionAnchor(sessionId, current.id);
       return;
     }
-    if (current && current.id !== pageId) setExplorePage(sessionId, current.id);
-  }, [current?.id, pageId, sessionId, transitionAnchorKey]);
+    const currentId = current?.id ?? null;
+    // A retained page can be outside the bounded live timeline while its title
+    // is already known. Do not overwrite that durable selection with the newest
+    // loaded page during the short lazy-load window.
+    if (
+      currentId !== null &&
+      shouldAdoptLoadedPage(
+        pageId,
+        currentId,
+        pages.map((page) => page.id),
+      )
+    ) {
+      setExplorePage(sessionId, currentId);
+    }
+  }, [current?.id, pageId, pages, sessionId, transitionAnchorKey]);
 
   return {
     pages,
@@ -676,7 +690,36 @@ export function ExploreTranscript(
   const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
   const rootRef = useRef<HTMLDivElement>(null);
-  const { pageStartId } = useExploreSessionState(props.sessionId);
+  const { pageId: retainedPageId, pageStartId } = useExploreSessionState(props.sessionId);
+  const [restoringPageId, setRestoringPageId] = useState<string | null>(null);
+  const retainedPageLoaded = retainedPageId === null ||
+    pages.some((page) => page.id === retainedPageId);
+
+  useEffect(() => {
+    if (retainedPageLoaded || retainedPageId === null) {
+      setRestoringPageId(null);
+      return;
+    }
+    if (restoringPageId === retainedPageId) return;
+    setRestoringPageId(retainedPageId);
+    let active = true;
+    void loadQuestionPage(props.sessionId, retainedPageId).then((loaded) => {
+      if (!active) return;
+      setRestoringPageId(null);
+      // A deleted/corrupt page must not leave Page View behind an eternal
+      // skeleton. Only then adopt the newest valid loaded page.
+      if (!loaded && current) setExplorePage(props.sessionId, current.id);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    current?.id,
+    props.sessionId,
+    restoringPageId,
+    retainedPageLoaded,
+    retainedPageId,
+  ]);
 
   useEffect(() => {
     if (!unresolvedQuestionRoot) {
@@ -887,7 +930,7 @@ export function ExploreTranscript(
         </>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {unresolvedQuestionRoot
+        {unresolvedQuestionRoot || !retainedPageLoaded
           ? (
             <Stack
               role="status"

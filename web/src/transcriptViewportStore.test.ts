@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  canRestoreTranscriptViewport,
   clearTranscriptViewport,
   getTranscriptViewport,
   resetTranscriptViewportStoreForTest,
@@ -102,5 +103,27 @@ Deno.test("expired and removed-session positions are discarded", () => {
   assertEquals(
     getTranscriptViewport("gone", "history", 24 * 60 * 60 * 1_000 + 2),
     null,
+  );
+});
+
+Deno.test("a page offset restores even without a DOM anchor", () => {
+  saveTranscriptViewport({
+    sessionId: "page-session",
+    mode: "page",
+    pageId: "question-31",
+    anchorKey: null,
+    anchorOffset: 0,
+    scrollOffset: -420,
+    following: false,
+  });
+  const saved = getTranscriptViewport("page-session", "page");
+  assertEquals(
+    canRestoreTranscriptViewport(saved, "page", "question-31"),
+    true,
+  );
+  assertEquals(saved?.scrollOffset, -420);
+  assertEquals(
+    canRestoreTranscriptViewport(saved, "page", "question-32"),
+    false,
   );
 });

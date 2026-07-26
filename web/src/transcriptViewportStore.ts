@@ -58,6 +58,15 @@ export function getTranscriptViewport(
   return { ...entry };
 }
 
+export function canRestoreTranscriptViewport(
+  entry: TranscriptViewport | null,
+  mode: TranscriptViewportMode,
+  pageId: string | null,
+): entry is TranscriptViewport {
+  return entry !== null &&
+    (mode === "history" || entry.pageId === pageId);
+}
+
 export function clearTranscriptViewport(
   sessionId: string,
   mode?: TranscriptViewportMode,
