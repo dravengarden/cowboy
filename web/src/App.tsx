@@ -1561,6 +1561,8 @@ export function App({
             thresholdHaptic: boolean;
         } | null = null;
         let settleTimer = 0;
+        let renderFrame = 0;
+        let pendingOffset = 0;
         let commit = false;
         const drawerWidth = (): number => {
             const width = surface.clientWidth;
@@ -1570,29 +1572,45 @@ export function App({
             const width = drawerWidth();
             const progress = Math.max(0, Math.min(1, offset / width));
             const scale = 1 - progress * 0.012;
+            const cornerProgress = Math.min(1, progress * 1.6);
+            const cornerRadius = phone ? 36 : 30;
             surface.style.setProperty("--mobile-drawer-progress", String(progress));
             surface.style.transform = `translate3d(${String(offset)}px, 0, 0) scale(${String(scale)})`;
-            surface.style.borderRadius = `${String(progress * 18)}px`;
-            surface.style.boxShadow = progress > 0
-                ? `-12px 0 36px rgba(0,0,0,${String(progress * 0.18)})`
+            surface.style.borderRadius = `${String(cornerProgress * cornerRadius)}px`;
+            // Keep the shadow geometry stable throughout the drag. Animating a
+            // large blurred shadow every touch event forces WebKit to repaint;
+            // a constant composited edge gives the same depth without jank.
+            surface.style.boxShadow = progress > 0.01
+                ? "-18px 0 42px rgba(0,0,0,0.16)"
                 : "none";
             drawer.style.opacity = String(0.72 + progress * 0.28);
             drawer.style.transform = `translate3d(${String(-14 * (1 - progress))}px, 0, 0)`;
         };
+        const scheduleRender = (offset: number): void => {
+            pendingOffset = offset;
+            if (renderFrame !== 0) return;
+            renderFrame = requestAnimationFrame(() => {
+                renderFrame = 0;
+                render(pendingOffset);
+            });
+        };
+        const clearTransitions = (): void => {
+            surface.style.removeProperty("transition");
+            surface.style.removeProperty("will-change");
+            drawer.style.removeProperty("transition");
+            drawer.style.removeProperty("will-change");
+        };
         const settle = (open: boolean): void => {
             globalThis.clearTimeout(settleTimer);
+            if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
+            renderFrame = 0;
             surface.style.transition =
                 "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms ease";
             drawer.style.transition =
                 "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease";
             render(open ? drawerWidth() : 0);
             setDrawerOpen(open);
-            settleTimer = globalThis.setTimeout(() => {
-                surface.style.removeProperty("transition");
-                surface.style.removeProperty("will-change");
-                drawer.style.removeProperty("transition");
-                drawer.style.removeProperty("will-change");
-            }, 340);
+            settleTimer = globalThis.setTimeout(clearTransitions, 340);
         };
         settleMobileDrawerRef.current = settle;
         const onTouchStart = (event: TouchEvent): void => {
@@ -1649,10 +1667,13 @@ export function App({
             if (offset < 0) offset *= 0.18;
             if (offset > width) offset = width + (offset - width) * 0.18;
             surface.style.transition = "none";
-            surface.style.willChange = "transform";
+            surface.style.willChange = "transform, border-radius";
             drawer.style.transition = "none";
             drawer.style.willChange = "transform, opacity";
-            render(offset);
+            // iOS can deliver touchmove faster than the display refresh rate.
+            // Coalesce those samples into one visual update per frame while
+            // keeping velocity and the magnetic threshold on every raw sample.
+            scheduleRender(offset);
             const progress = Math.max(0, Math.min(1, offset / width));
             const nextCommit = drawerOpen ? progress > 0.66 : progress >= 0.34;
             if (nextCommit !== commit) {
@@ -1678,6 +1699,11 @@ export function App({
             settle(drawerOpen);
         };
         render(drawerOpen ? drawerWidth() : 0);
+        // `setDrawerOpen` rebinds this effect during settle. Its cleanup cancels
+        // the old timer, so the new binding owns the final transition cleanup.
+        if (surface.style.transition) {
+            settleTimer = globalThis.setTimeout(clearTransitions, 340);
+        }
         surface.addEventListener("touchstart", onTouchStart, { passive: true });
         surface.addEventListener("touchmove", onTouchMove, { passive: false });
         surface.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -1689,6 +1715,7 @@ export function App({
             surface.removeEventListener("touchcancel", onTouchCancel);
             settleMobileDrawerRef.current = null;
             globalThis.clearTimeout(settleTimer);
+            if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
         };
     }, [anySheetOpen, drawerOpen, mobile, phone]);
     // Settings + Info are one merged sheet; this picks which tab it opens on.
