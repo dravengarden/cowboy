@@ -7,6 +7,7 @@ import {
   FolderOpenOutlined,
   KeyboardArrowDown,
   KeyboardArrowUp,
+  WrapText,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -47,7 +48,10 @@ import { ReviewChanges } from "./ReviewChanges";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
-import { useReviewSettings } from "./reviewSettings";
+import {
+  updateReviewSettings,
+  useReviewSettings,
+} from "./reviewSettings";
 import type { CodeDiffScope } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
 
@@ -307,6 +311,7 @@ function DocumentView({
             text={text}
             kind={target.kind}
             softWrap={settings.softWrap}
+            fontSize={settings.codeFontSize}
             revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}
           />
         </Suspense>
@@ -323,6 +328,7 @@ export function ReviewApp({
   onDrawerOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const workspace = useActiveWorkspaceBinding();
+  const settings = useReviewSettings();
   const [target, setTarget] = useState<ReviewTarget>({ kind: "changes" });
   const [closeRequest, setCloseRequest] = useState(0);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
@@ -558,8 +564,20 @@ export function ReviewApp({
               minHeight: 44,
               "@media (min-width: 600px)": { minHeight: 44 },
             }}
-          >
+            >
             <ReviewSettings />
+            {target.kind !== "changes" && (
+              <IconButton
+                aria-label={settings.softWrap
+                  ? "Disable line wrapping"
+                  : "Enable line wrapping"}
+                color={settings.softWrap ? "primary" : "default"}
+                onClick={() =>
+                  updateReviewSettings({ softWrap: !settings.softWrap })}
+              >
+                <WrapText />
+              </IconButton>
+            )}
             {target.kind === "diff" && (
               <>
                 <Box sx={{ flex: 1 }} />

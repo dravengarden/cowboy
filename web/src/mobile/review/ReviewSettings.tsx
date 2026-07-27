@@ -6,10 +6,15 @@ import {
   Select,
   Stack,
   Switch,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { SettingsSheet } from "../../_shell";
-import { REVIEW_CONTEXT_LINES } from "./reviewSettingsModel";
+import {
+  REVIEW_CODE_FONT_SIZES,
+  REVIEW_CONTEXT_LINES,
+} from "./reviewSettingsModel";
 import {
   updateReviewSettings,
   useReviewSettings,
@@ -62,6 +67,31 @@ export function ReviewSettings(): React.JSX.Element {
         <Typography variant="overline" color="text.secondary">
           Code display
         </Typography>
+        <Stack spacing={1}>
+          <Box>
+            <Typography variant="body2" fontWeight={650}>
+              Code font size
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Only code and diff text
+            </Typography>
+          </Box>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            size="small"
+            value={settings.codeFontSize}
+            onChange={(_, value: number | null): void => {
+              if (value !== null) updateReviewSettings({ codeFontSize: value });
+            }}
+          >
+            {REVIEW_CODE_FONT_SIZES.map((value) => (
+              <ToggleButton key={value} value={value}>
+                {value}px
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+        </Stack>
         <SettingToggle
           label="Soft wrap"
           description="Wrap long code lines to the phone width"

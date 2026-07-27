@@ -172,11 +172,13 @@ export default function CodeViewer({
   text,
   kind,
   softWrap,
+  fontSize,
   revealLine,
 }: {
   text: string;
   kind: "source" | "diff";
   softWrap: boolean;
+  fontSize: number;
   revealLine?: number | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
@@ -187,7 +189,7 @@ export default function CodeViewer({
       EditorView.editable.of(false),
       cmTheme(theme, true),
       EditorView.theme({
-        "&": { height: "100%", fontSize: "0.875rem" },
+        "&": { height: "100%", fontSize: `${fontSize}px` },
         ".cm-scroller": {
           overflow: "auto",
           WebkitOverflowScrolling: "touch",
@@ -244,7 +246,7 @@ export default function CodeViewer({
     if (softWrap) values.push(EditorView.lineWrapping);
     if (kind === "diff") values.push(diffView, contextFolding);
     return values;
-  }, [kind, softWrap, theme]);
+  }, [fontSize, kind, softWrap, theme]);
 
   useEffect(() => {
     const view = editorRef.current;

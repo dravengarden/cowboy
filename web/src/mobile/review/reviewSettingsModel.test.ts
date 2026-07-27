@@ -7,6 +7,7 @@ import {
 Deno.test("review settings retain code-review-specific choices", () => {
   assertEquals(
     normalizeReviewSettings({
+      codeFontSize: 16,
       softWrap: true,
       contextLines: -1,
       showWhitespaceChanges: false,
@@ -15,6 +16,7 @@ Deno.test("review settings retain code-review-specific choices", () => {
       semanticHighlighting: false,
     }),
     {
+      codeFontSize: 16,
       softWrap: true,
       contextLines: -1,
       showWhitespaceChanges: false,
@@ -28,8 +30,8 @@ Deno.test("review settings retain code-review-specific choices", () => {
 Deno.test("review settings reject stale or malformed values", () => {
   assertEquals(
     normalizeReviewSettings({
-      // Theme, typography, and line spacing belong to Agent settings. Old
-      // Review-local values are intentionally discarded during normalization.
+      // Theme and ordinary app typography belong to Agent settings. Code font
+      // size is Review-local but only accepts supported display presets.
       codeFontSize: 99,
       lineHeight: "wide",
       softWrap: "yes",

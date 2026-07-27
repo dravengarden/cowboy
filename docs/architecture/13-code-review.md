@@ -137,6 +137,11 @@ Opening a file switches to its read-only source view while retaining hunk,
 diagnostic, and symbol navigation. Editing, terminals, task runners, and Zed UI
 settings are deliberately out of scope.
 
+Code Review owns only code-surface typography: its 12/14/16/18 px setting
+changes CodeMirror source and diff text without changing Agent or sheet text.
+Line wrapping uses the same Review setting from both the settings sheet and a
+document-toolbar shortcut.
+
 Git review keeps the complete normalized queue for next/previous navigation but
 mounts list rows in 80-entry windows. A near-viewport sentinel extends the
 window before the user reaches it, bounding initial Mobile DOM and layout work
