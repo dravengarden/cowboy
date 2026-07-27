@@ -3059,7 +3059,8 @@ export function Transcript({
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
-  const historyLoadingHideTimerRef = useRef<number | null>(null);
+  const historyLoadingShowTimerRef = useRef<number | null>(null);
+  const historyLoadingRequestRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
@@ -3114,20 +3115,35 @@ export function Transcript({
   }, [backfillingViewport]);
   requestOlderPageRef.current = (): void => {
     if (!managesScrollHistoryRef.current) return;
-    if (historyLoadingHideTimerRef.current !== null) {
-      globalThis.clearTimeout(historyLoadingHideTimerRef.current);
-      historyLoadingHideTimerRef.current = null;
+    if (historyLoadingShowTimerRef.current !== null) {
+      globalThis.clearTimeout(historyLoadingShowTimerRef.current);
+      historyLoadingShowTimerRef.current = null;
     }
-    const shownAt = performance.now();
-    setScrollbackLoading(true);
+    const request = ++historyLoadingRequestRef.current;
+    // History pages are normally prefetched from the retained local window
+    // before the reader reaches its edge. Do not flash a spinner for those
+    // cache-speed requests: iOS scroll bounce can cross the prefetch threshold
+    // repeatedly and made the old mandatory 280 ms acknowledgement look like
+    // loading caused by ordinary scrolling. Slow radios still get feedback.
+    historyLoadingShowTimerRef.current = globalThis.setTimeout(() => {
+      historyLoadingShowTimerRef.current = null;
+      if (historyLoadingRequestRef.current === request) {
+        setScrollbackLoading(true);
+      }
+    }, 300);
     void loadOlder(sessionIdRef.current).finally(() => {
-      // Keep the acknowledgement visible long enough to survive React batching
-      // and one WebKit paint, without delaying the page or blocking scrolling.
-      const remaining = Math.max(0, 280 - (performance.now() - shownAt));
-      historyLoadingHideTimerRef.current = globalThis.setTimeout(() => {
+      if (historyLoadingRequestRef.current !== request) return;
+      if (historyLoadingShowTimerRef.current !== null) {
+        globalThis.clearTimeout(historyLoadingShowTimerRef.current);
+        historyLoadingShowTimerRef.current = null;
+      }
+      // A request that crossed the delay already produced a useful progress
+      // state. Clear it with the same request ownership so an older completion
+      // cannot hide a newer page request.
+      globalThis.requestAnimationFrame(() => {
+        if (historyLoadingRequestRef.current !== request) return;
         setScrollbackLoading(false);
-        historyLoadingHideTimerRef.current = null;
-      }, remaining);
+      });
     });
   };
   useEffect(() => {
@@ -3138,11 +3154,13 @@ export function Transcript({
     viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_BUDGET;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
+    historyLoadingRequestRef.current += 1;
     requestViewportBackfillRef.current(false);
     return () => {
-      if (historyLoadingHideTimerRef.current !== null) {
-        globalThis.clearTimeout(historyLoadingHideTimerRef.current);
-        historyLoadingHideTimerRef.current = null;
+      historyLoadingRequestRef.current += 1;
+      if (historyLoadingShowTimerRef.current !== null) {
+        globalThis.clearTimeout(historyLoadingShowTimerRef.current);
+        historyLoadingShowTimerRef.current = null;
       }
     };
   }, [sessionId]);
@@ -4247,7 +4265,7 @@ export function Transcript({
       }
       {managesScrollHistory &&
         !backfillingViewport &&
-        (scrollbackLoading || paging?.loadingOlder === true) && (
+        scrollbackLoading && (
         <Box
           role="status"
           aria-live="polite"
