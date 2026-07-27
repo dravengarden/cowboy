@@ -17,18 +17,20 @@
       pkgs = import nixpkgs { inherit system; };
       shared = shared-utils.lib.${system};
 
-      # Backend and frontend are independent deployment artifacts. Excluding
-      # web/ here ensures a UI-only edit cannot change the Rust package's store
-      # path (and therefore cannot restart the API unit).
-      cowboy-src = pkgs.lib.cleanSourceWith {
-        src = ./.;
-        filter = path: type:
-          let rel = pkgs.lib.removePrefix "${toString ./.}/" (toString path);
-          in pkgs.lib.cleanSourceFilter path type
-             && (
-               !(pkgs.lib.hasPrefix "web" rel)
-               || builtins.elem rel [ "web" "web/src" "web/src/protocol.ts" ]
-             );
+      # Backend and frontend are independent deployment artifacts. Keep this
+      # closure explicit: docs, Web, native-shell, and operational edits must
+      # not change the Rust package's store path and restart the API unit.
+      # protocol.ts is the sole frontend input because Rust contract tests
+      # deliberately compile-check its wire tags.
+      cowboy-src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./src
+          ./migrations
+          ./web/src/protocol.ts
+        ];
       };
 
       # Agentd has a deliberately tiny source closure and is packaged
@@ -138,6 +140,13 @@
           mainProgram = "cowboy-agentd";
         };
       };
+
+      cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
+        test ! -e ${cowboy-src}/docs
+        test ! -e ${cowboy-src}/web/public
+        test -e ${cowboy-src}/web/src/protocol.ts
+        touch "$out"
+      '';
     in
     {
       packages.${system} = {
@@ -151,7 +160,7 @@
       # build runs TypeScript checking before Vite. Developer lint/test policy is
       # additionally enforced by `just check` in CI.
       checks.${system} = {
-        inherit cowboy cowboy-agentd cowboy-web;
+        inherit cowboy cowboy-agentd cowboy-source-boundary cowboy-web;
       };
 
       devShells.${system}.default = pkgs.mkShell {
