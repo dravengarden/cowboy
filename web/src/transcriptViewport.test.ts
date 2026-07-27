@@ -3,6 +3,7 @@ import {
   historyPrefetchTransition,
   magneticHapticTransition,
   shouldBackfillTranscriptViewport,
+  shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
 
@@ -108,6 +109,12 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
     }),
     { armed: true, request: false },
   );
+});
+
+Deno.test("history loading never repaints an active native scroll", () => {
+  assertEquals(shouldShowHistoryLoading(true, true), false);
+  assertEquals(shouldShowHistoryLoading(true, false), true);
+  assertEquals(shouldShowHistoryLoading(false, false), false);
 });
 
 Deno.test("page projection never invokes transcript-managed history loading", () => {

@@ -44,6 +44,16 @@ export function historyPrefetchTransition(
   return { armed: false, request: false };
 }
 
+export function shouldShowHistoryLoading(
+  requestOwned: boolean,
+  nativeScrollActive: boolean,
+): boolean {
+  // Mounting an overlay causes a React paint. In iOS WebKit that paint must not
+  // race the native column-reverse scroll layer: the old streamed row texture
+  // can otherwise survive over the composited composer glass for a frame.
+  return requestOwned && !nativeScrollActive;
+}
+
 export interface TranscriptMagnetInput {
   history: boolean;
   working: boolean;

@@ -108,6 +108,7 @@ import {
   historyPrefetchTransition,
   magneticHapticTransition,
   shouldBackfillTranscriptViewport,
+  shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
 import { advanceTimelinePresentation } from "./timelinePresentation";
@@ -3127,7 +3128,12 @@ export function Transcript({
     // loading caused by ordinary scrolling. Slow radios still get feedback.
     historyLoadingShowTimerRef.current = globalThis.setTimeout(() => {
       historyLoadingShowTimerRef.current = null;
-      if (historyLoadingRequestRef.current === request) {
+      if (
+        shouldShowHistoryLoading(
+          historyLoadingRequestRef.current === request,
+          nativeScrollActiveRef.current,
+        )
+      ) {
         setScrollbackLoading(true);
       }
     }, 300);
