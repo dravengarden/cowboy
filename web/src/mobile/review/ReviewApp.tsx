@@ -38,6 +38,7 @@ import {
   useActiveWorkspaceBinding,
   useControlPlaneSessionActivity,
 } from "../../controlPlane";
+import { navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
 import {
@@ -65,6 +66,7 @@ import {
   saveReviewProgress,
 } from "./reviewProgress";
 import { ReviewChanges } from "./ReviewChanges";
+import type { CodeInspectCandidate } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
@@ -142,6 +144,9 @@ function DocumentView({
     { row: number; column: number } | undefined
   >();
   const [navigation, setNavigation] = useState<CodeLocation[]>([]);
+  const [inspectCandidates, setInspectCandidates] = useState<
+    CodeInspectCandidate[]
+  >([]);
   const [navigationLoading, setNavigationLoading] = useState(false);
   const hoverController = useRef<AbortController | undefined>(undefined);
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
@@ -152,6 +157,7 @@ function DocumentView({
   }): void => {
     if (target.kind === "diff" && target.scope !== "unstaged") return;
     setInspectTarget(point);
+    setInspectCandidates([]);
     setNavigation([]);
     hoverController.current?.abort();
     const controller = new AbortController();
@@ -175,6 +181,22 @@ function DocumentView({
       if (!controller.signal.aborted) setHoverLoading(false);
     });
   }, [sessionId, target]);
+
+  const inspectCandidatesOrPoint = useCallback((
+    candidates: CodeInspectCandidate[],
+  ): void => {
+    navigationHaptic();
+    if (candidates.length === 1) {
+      inspectPoint(candidates[0]!);
+      return;
+    }
+    hoverController.current?.abort();
+    setHover(undefined);
+    setHoverLoading(false);
+    setNavigation([]);
+    setInspectCandidates(candidates);
+    setHoverOpen(true);
+  }, [inspectPoint]);
 
   const navigate = useCallback((kind: CodeNavigationKind): void => {
     if (
@@ -483,7 +505,7 @@ function DocumentView({
                 semanticHighlighting={settings.semanticHighlighting}
                 onInspect={target.kind === "source" ||
                     (target.kind === "diff" && target.scope === "unstaged")
-                  ? inspectPoint
+                  ? inspectCandidatesOrPoint
                   : undefined}
               />
             </Suspense>
@@ -495,7 +517,36 @@ function DocumentView({
         forceSheet
       >
         <Stack spacing={1.5} sx={{ pb: 2 }}>
-          {hoverLoading
+          {inspectCandidates.length > 0
+            ? (
+              <>
+                <Typography color="text.secondary">
+                  Choose the symbol you meant to inspect.
+                </Typography>
+                {inspectCandidates.map((candidate) => (
+                  <Button
+                    key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+                    variant="outlined"
+                    sx={{
+                      justifyContent: "space-between",
+                      textTransform: "none",
+                      minHeight: 48,
+                    }}
+                    onClick={() => inspectPoint(candidate)}
+                  >
+                    <span>{candidate.label}</span>
+                    <Typography
+                      component="span"
+                      variant="caption"
+                      color="text.secondary"
+                    >
+                      line {candidate.row + 1}
+                    </Typography>
+                  </Button>
+                ))}
+              </>
+            )
+            : hoverLoading
             ? (
               <Stack alignItems="center" sx={{ py: 4 }}>
                 <CircularProgress size={24} />
@@ -528,7 +579,7 @@ function DocumentView({
                 No symbol information is available at this location.
               </Typography>
             )}
-          {!hoverLoading && (
+          {inspectCandidates.length === 0 && !hoverLoading && (
             <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
               <Button size="small" onClick={() => navigate("definition")}>
                 Definition

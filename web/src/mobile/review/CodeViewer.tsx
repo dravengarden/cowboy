@@ -32,6 +32,13 @@ import {
   diffSourceProjection,
 } from "./diffSourceModel";
 import type { CodeLanguage } from "./codeApi";
+import { isInspectPress } from "./codeInspectGesture";
+
+export interface CodeInspectCandidate {
+  label: string;
+  row: number;
+  column: number;
+}
 
 class InlayHintWidget extends WidgetType {
   constructor(private readonly label: string) {
@@ -318,7 +325,7 @@ export default function CodeViewer({
   diagnostics: boolean;
   inlayHints: boolean;
   semanticHighlighting: boolean;
-  onInspect?: ((point: { row: number; column: number }) => void) | undefined;
+  onInspect?: ((candidates: CodeInspectCandidate[]) => void) | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
@@ -500,9 +507,60 @@ export default function CodeViewer({
       );
     }
     if (onInspect) {
+      let press:
+        | {
+          pointerId: number;
+          startedAt: number;
+          x: number;
+          y: number;
+          moved: number;
+        }
+        | undefined;
       values.push(
         EditorView.domEventHandlers({
-          click: (event, view) => {
+          pointerdown: (event) => {
+            if (
+              !event.isPrimary ||
+              (event.pointerType !== "touch" && event.pointerType !== "pen")
+            ) return false;
+            press = {
+              pointerId: event.pointerId,
+              startedAt: event.timeStamp,
+              x: event.clientX,
+              y: event.clientY,
+              moved: 0,
+            };
+            return false;
+          },
+          pointermove: (event) => {
+            if (!press || press.pointerId !== event.pointerId) return false;
+            press.moved = Math.max(
+              press.moved,
+              Math.hypot(event.clientX - press.x, event.clientY - press.y),
+            );
+            return false;
+          },
+          pointercancel: (event) => {
+            if (press?.pointerId === event.pointerId) press = undefined;
+            return false;
+          },
+          pointerup: (event, view) => {
+            if (!press || press.pointerId !== event.pointerId) return false;
+            const completedPress = press;
+            press = undefined;
+            const finalMovement = Math.max(
+              completedPress.moved,
+              Math.hypot(
+                event.clientX - completedPress.x,
+                event.clientY - completedPress.y,
+              ),
+            );
+            if (
+              !isInspectPress({
+                durationMs: event.timeStamp - completedPress.startedAt,
+                movementPx: finalMovement,
+              })
+            ) return false;
             const offset = view.posAtCoords({
               x: event.clientX,
               y: event.clientY,
@@ -510,15 +568,44 @@ export default function CodeViewer({
             if (offset === null) return false;
             const line = view.state.doc.lineAt(offset);
             const column = offset - line.from;
-            const adjacent = `${line.text.at(column) ?? ""}${
-              column > 0 ? line.text.at(column - 1) ?? "" : ""
-            }`;
-            if (!/[\p{L}\p{N}_$]/u.test(adjacent)) return false;
-            const point = kind === "diff"
-              ? diffPointToNewFile(text, line.number - 1, column)
-              : { row: line.number - 1, column };
-            if (!point) return false;
-            onInspect(point);
+            const candidates = Array.from(
+              line.text.matchAll(/[\p{L}\p{N}_$]+/gu),
+            ).flatMap((match) => {
+              const start = match.index;
+              const end = start + match[0].length;
+              const from = line.from + start;
+              const to = line.from + end;
+              const fromCoords = view.coordsAtPos(from);
+              const toCoords = view.coordsAtPos(to);
+              if (!fromCoords || !toCoords) return [];
+              const left = Math.min(fromCoords.left, toCoords.left);
+              const right = Math.max(fromCoords.right, toCoords.right);
+              const distance = event.clientX < left
+                ? left - event.clientX
+                : event.clientX > right
+                ? event.clientX - right
+                : 0;
+              if (distance > 36) return [];
+              const sourcePoint = kind === "diff"
+                ? diffPointToNewFile(text, line.number - 1, start)
+                : { row: line.number - 1, column: start };
+              return sourcePoint
+                ? [{
+                  candidate: {
+                    label: match[0],
+                    ...sourcePoint,
+                  },
+                  distance,
+                  contains: column >= start && column <= end,
+                }]
+                : [];
+            }).sort((a, b) =>
+              Number(b.contains) - Number(a.contains) ||
+              a.distance - b.distance ||
+              a.candidate.column - b.candidate.column
+            ).slice(0, 5).map(({ candidate }) => candidate);
+            if (candidates.length === 0) return false;
+            onInspect(candidates);
             return false;
           },
         }),
