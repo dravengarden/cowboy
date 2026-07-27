@@ -385,7 +385,7 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     // region below the composer.
     CGRect kbInParent = [parent convertRect:kbScreen fromView:nil];
     CGFloat parentBottom = CGRectGetMaxY(parent.bounds);
-    BOOL dockedToBottom = CGRectGetMaxY(kbInParent) >= parentBottom - 2;
+    BOOL frameReachesBottom = CGRectGetMaxY(kbInParent) >= parentBottom - 2;
     // During the first keyboard presentation after an interface rotation,
     // UIKeyboardFrameEnd can briefly use the new full-width keyboard geometry
     // with an old-orientation bottom coordinate. Treat a substantial full-width
@@ -395,10 +395,15 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
     BOOL fullWidthDockCandidate =
         CGRectGetHeight(kbInParent) >= 80 &&
         CGRectGetWidth(kbInParent) >= parentWidth * 0.8;
-    dockedToBottom = dockedToBottom || fullWidthDockCandidate;
-    CGFloat overlap = dockedToBottom
+    BOOL dockedToBottom = frameReachesBottom || fullWidthDockCandidate;
+    // A full-width fallback exists specifically because the notification may
+    // combine the new keyboard size with an old-orientation bottom coordinate.
+    // In that case parentBottom - minY includes the coordinate mismatch and can
+    // over-shrink the WebView by hundreds of points. The frame's own height is
+    // the only internally consistent overlap until keyboardLayoutGuide settles.
+    CGFloat overlap = frameReachesBottom
         ? MAX(0, parentBottom - CGRectGetMinY(kbInParent))
-        : 0;
+        : (fullWidthDockCandidate ? CGRectGetHeight(kbInParent) : 0);
     overlap = MIN(overlap, CGRectGetHeight(parent.bounds));
 #if DEBUG
     NSLog(@"[cowboy] keyboard note frame=%@ parent=%@ docked=%d fullWidth=%d overlap=%.1f",
