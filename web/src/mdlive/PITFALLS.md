@@ -531,10 +531,15 @@ here says otherwise.
     fallback even if its transient bottom coordinate misses the edge; genuinely
     floating iPad keyboards remain narrow and continue to overlay. Reconcile the
     guide for a bounded two-second window because iPad interface coordinates may
-    settle after the old 700ms final sample. Ignore face-up/face-down device
+    settle after the old 700ms final sample. **The fallback must derive overlap
+    from the keyboard frame's own height, never `parentBottom - frame.minY`:** the
+    latter includes the stale coordinate offset and over-shrinks the WKWebView,
+    recreating a large blank region above an iPad split keyboard. A frame that
+    genuinely reaches the current parent bottom still uses the normal
+    `parentBottom - frame.minY` intersection. Ignore face-up/face-down device
     motion so ordinary handling cannot reset a visible keyboard. Verify the exact
     cold sequence: keyboard hidden → rotate → first focus, in both directions,
-    plus a floating keyboard regression.
+    plus split and floating keyboard regressions.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
