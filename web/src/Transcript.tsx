@@ -126,7 +126,12 @@ const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
 // Permit a small chain so a phone viewport is actually filled after opening,
 // while retaining a hard ceiling that prevents downloading a whole session.
-const VIEWPORT_BACKFILL_PAGE_BUDGET = 3;
+// Tool-heavy ACP histories can consume several 64-event pages while collapsing
+// to only a handful of visible cards. Three pages still left a tall iPad
+// viewport half empty. Keep the bootstrap bounded because one history page may
+// approach 512 KiB, but allow enough cursor steps to reach useful prose/tool
+// boundaries; geometry stops the chain immediately once the viewport fills.
+const VIEWPORT_BACKFILL_PAGE_BUDGET = 6;
 
 // --- Loading primitives -----------------------------------------------------
 
