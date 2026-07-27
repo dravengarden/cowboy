@@ -116,7 +116,10 @@ function DocumentView({
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
   languageData?: CodeLanguage | undefined;
-  onNavigate: (location: CodeLocation) => void;
+  onNavigate: (
+    location: CodeLocation,
+    origin: { row: number; column: number },
+  ) => void;
 }): React.JSX.Element {
   const settings = useReviewSettings();
   const [text, setText] = useState("");
@@ -194,7 +197,7 @@ function DocumentView({
         : undefined;
       if (onlyLocation) {
         setHoverOpen(false);
-        onNavigate(onlyLocation);
+        onNavigate(onlyLocation, inspectTarget);
       } else {
         setNavigation(result.locations);
       }
@@ -524,6 +527,9 @@ function DocumentView({
               <Button size="small" onClick={() => navigate("definition")}>
                 Definition
               </Button>
+              <Button size="small" onClick={() => navigate("declaration")}>
+                Declaration
+              </Button>
               <Button size="small" onClick={() => navigate("typeDefinition")}>
                 Type
               </Button>
@@ -543,7 +549,7 @@ function DocumentView({
               sx={{ justifyContent: "flex-start", textTransform: "none" }}
               onClick={() => {
                 setHoverOpen(false);
-                onNavigate(location);
+                if (inspectTarget) onNavigate(location, inspectTarget);
               }}
             >
               {location.path}:{location.start.row + 1}
@@ -592,6 +598,9 @@ export function ReviewApp({
   >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
+  const [navigationHistory, setNavigationHistory] = useState<
+    Extract<ReviewTarget, { kind: "source" }>[]
+  >([]);
   const [managingTabs, setManagingTabs] = useState(false);
   const [tabsReadySession, setTabsReadySession] = useState<string>();
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
@@ -721,6 +730,7 @@ export function ReviewApp({
 
   useEffect(() => {
     setSourceTarget(undefined);
+    setNavigationHistory([]);
     setDiffTarget(undefined);
     setCurrentRevision(undefined);
     setReviewProgress(
@@ -730,7 +740,11 @@ export function ReviewApp({
     setTabsReadySession(workspace?.sessionId);
   }, [workspace?.sessionId]);
 
-  const openSource = (path: string, revealLine?: number): void => {
+  const openSource = (
+    path: string,
+    revealLine?: number,
+    preserveNavigation = false,
+  ): void => {
     setCurrentRevision(undefined);
     setMode("code");
     setMarkdownPreview(isMarkdownReviewPath(path));
@@ -742,6 +756,7 @@ export function ReviewApp({
     setTabs((current) =>
       openReviewTab(current, { kind: "source", path, pinned: false })
     );
+    if (!preserveNavigation) setNavigationHistory([]);
     setCloseRequest((value) => value + 1);
   };
   const openDiff = (
@@ -907,10 +922,19 @@ export function ReviewApp({
             }}
           >
             <IconButton
-              aria-label="Back to changes"
+              aria-label={mode === "code" && navigationHistory.length > 0
+                ? "Back to previous code location"
+                : "Back to changes"}
               onClick={() => {
-                if (mode === "code") setSourceTarget(undefined);
-                else setDiffTarget(undefined);
+                if (mode === "code") {
+                  const previous = navigationHistory.at(-1);
+                  if (previous) {
+                    setSourceTarget(previous);
+                    setNavigationHistory((history) => history.slice(0, -1));
+                  } else {
+                    setSourceTarget(undefined);
+                  }
+                } else setDiffTarget(undefined);
               }}
             >
               <ArrowBack />
@@ -991,8 +1015,21 @@ export function ReviewApp({
               languageData={languageData?.path === target.path
                 ? languageData
                 : undefined}
-              onNavigate={(location) =>
-                openSource(location.path, location.start.row + 1)}
+              onNavigate={(location, origin) => {
+                if (target.kind !== "source") return;
+                const previous: Extract<
+                  ReviewTarget,
+                  { kind: "source" }
+                > = {
+                  kind: "source",
+                  path: target.path,
+                  revealLine: origin.row + 1,
+                };
+                setNavigationHistory((history) =>
+                  [...history, previous].slice(-32)
+                );
+                openSource(location.path, location.start.row + 1, true);
+              }}
             />
           )}
         <Box
