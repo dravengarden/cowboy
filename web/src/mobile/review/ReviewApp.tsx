@@ -1,4 +1,5 @@
 import {
+  AccountTreeOutlined,
   ArrowBack,
   CheckCircle,
   CheckCircleOutline,
@@ -10,7 +11,6 @@ import {
   KeyboardArrowDown,
   KeyboardArrowUp,
   TabUnselected,
-  ViewSidebarOutlined,
   VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
@@ -24,9 +24,8 @@ import {
   IconButton,
   Popover,
   Stack,
+  Switch,
   Toolbar,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -1243,64 +1242,62 @@ export function ReviewApp({
               }}
             >
               <ReviewSettings language={language} />
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={mode}
-                aria-label="Code review source"
-                onChange={(_event, next: ReviewMode | null) => {
-                  if (next === null || next === mode) return;
-                  navigationHaptic();
-                  setMode(next);
-                }}
-                sx={{
-                  ml: 0.5,
-                  height: 32,
-                  p: "2px",
-                  border: 0,
-                  borderRadius: 2.25,
-                  bgcolor: "action.hover",
-                  "& .MuiToggleButtonGroup-grouped": {
-                    width: 36,
-                    minWidth: 36,
-                    height: 28,
-                    p: 0,
-                    border: 0,
-                    borderRadius: "7px !important",
-                    color: "text.secondary",
-                  },
-                  "& .MuiToggleButton-root.Mui-selected": {
-                    color: "text.primary",
-                    bgcolor: "action.selected",
-                  },
-                  "& .MuiToggleButton-root.Mui-selected:hover": {
-                    bgcolor: "action.selected",
-                  },
-                }}
+              <Stack
+                direction="row"
+                alignItems="center"
+                sx={{ ml: 0.5, mr: 0.5, height: 40 }}
               >
-                <ToggleButton value="files" aria-label="Browse files">
-                  <FolderOutlined fontSize="small" />
-                </ToggleButton>
-                <ToggleButton
-                  value="git"
-                  aria-label={`Review Git changes${
-                    changeCount > 0
-                      ? `, ${changeCount} changed ${
-                        changeCount === 1 ? "file" : "files"
-                      }`
-                      : ""
-                  }`}
+                <FolderOutlined
+                  fontSize="small"
+                  sx={{
+                    color: mode === "files"
+                      ? "text.primary"
+                      : "text.disabled",
+                  }}
+                />
+                <Switch
+                  size="small"
+                  checked={mode === "git"}
+                  inputProps={{
+                    "aria-label": `Switch to ${
+                      mode === "git" ? "Files" : "Git review"
+                    }`,
+                  }}
+                  onChange={(_event, checked) => {
+                    navigationHaptic();
+                    setMode(checked ? "git" : "files");
+                  }}
+                  sx={{
+                    mx: 0.25,
+                    "& .MuiSwitch-switchBase.Mui-checked": {
+                      color: "text.primary",
+                    },
+                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": {
+                      bgcolor: "text.primary",
+                      opacity: 0.32,
+                    },
+                    "& .MuiSwitch-track": {
+                      bgcolor: "text.disabled",
+                      opacity: 0.24,
+                    },
+                  }}
+                />
+                <Badge
+                  badgeContent={changeCount}
+                  max={99}
+                  color="default"
+                  invisible={changeCount === 0}
                 >
-                  <Badge
-                    badgeContent={changeCount}
-                    max={99}
-                    color="default"
-                    invisible={changeCount === 0}
-                  >
-                    <DifferenceOutlined fontSize="small" />
-                  </Badge>
-                </ToggleButton>
-              </ToggleButtonGroup>
+                  <DifferenceOutlined
+                    fontSize="small"
+                    sx={{
+                      color: mode === "git"
+                        ? "text.primary"
+                        : "text.disabled",
+                    }}
+                  />
+                </Badge>
+              </Stack>
               {mode === "files" && modeTabs.length > 0 && (
                 <IconButton
                   aria-label={managingTabs
@@ -1371,12 +1368,18 @@ export function ReviewApp({
               <Box sx={{ flex: 1 }} />
               <IconButton
                 aria-label={drawerOpen
-                  ? "Close worktree sidebar"
-                  : "Open worktree sidebar"}
-                color={drawerOpen ? "primary" : "default"}
+                  ? `Close ${mode === "git" ? "Git changes" : "file tree"} sidebar`
+                  : `Open ${mode === "git" ? "Git changes" : "file tree"} sidebar`}
+                aria-pressed={drawerOpen}
+                sx={{
+                  color: "text.primary",
+                  bgcolor: drawerOpen ? "action.selected" : "transparent",
+                }}
                 onClick={() => setToggleDrawerRequest((value) => value + 1)}
               >
-                <ViewSidebarOutlined />
+                {mode === "git"
+                  ? <DifferenceOutlined />
+                  : <AccountTreeOutlined />}
               </IconButton>
             </Toolbar>
           </Box>
