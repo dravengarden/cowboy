@@ -59,11 +59,13 @@ enum Request {
     OpenBuffer {
         worktree: PathBuf,
         path: PathBuf,
+        #[serde(rename = "leaseId")]
         lease_id: String,
     },
     CloseBuffer {
         worktree: PathBuf,
         path: PathBuf,
+        #[serde(rename = "leaseId")]
         lease_id: String,
     },
 }
@@ -882,6 +884,18 @@ mod tests {
             .unwrap();
             assert!(matches!(response, Response::Buffer { leases: 1, .. }));
         }
+    }
+
+    #[test]
+    fn buffer_requests_use_camel_case_lease_ids() {
+        let request: Request = serde_json::from_str(
+            r#"{"type":"openBuffer","worktree":"/tmp","path":"file.rs","leaseId":"tab-1"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request,
+            Request::OpenBuffer { lease_id, .. } if lease_id == "tab-1"
+        ));
     }
 
     #[tokio::test]
