@@ -74,6 +74,11 @@ import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
+  loadReviewMode,
+  type ReviewMode,
+  saveReviewMode,
+} from "./reviewMode";
+import {
   updateReviewSettings,
   useReviewSettings,
 } from "./reviewSettings";
@@ -105,8 +110,6 @@ type ReviewTarget =
     queue: GitReviewEntry[];
   }
   | { kind: "source"; path: string; revealLine?: number };
-
-type ReviewMode = "code" | "git";
 
 function DocumentView({
   sessionId,
@@ -703,6 +706,7 @@ export function ReviewApp({
   >([]);
   const [managingTabs, setManagingTabs] = useState(false);
   const [tabsReadySession, setTabsReadySession] = useState<string>();
+  const [modeReadySession, setModeReadySession] = useState<string>();
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
@@ -834,6 +838,8 @@ export function ReviewApp({
   }, [active, manifestRefreshRequest, workspace?.sessionId]);
 
   useEffect(() => {
+    setMode(workspace?.sessionId ? loadReviewMode(workspace.sessionId) : "git");
+    setModeReadySession(workspace?.sessionId);
     setSourceTarget(undefined);
     setNavigationHistory([]);
     setDiffTarget(undefined);
@@ -850,6 +856,15 @@ export function ReviewApp({
     );
     setTabsReadySession(workspace?.sessionId);
   }, [workspace?.sessionId]);
+
+  useEffect(() => {
+    if (
+      workspace?.sessionId === modeReadySession &&
+      modeReadySession
+    ) {
+      saveReviewMode(modeReadySession, mode);
+    }
+  }, [mode, modeReadySession, workspace?.sessionId]);
 
   const openSource = (
     path: string,
