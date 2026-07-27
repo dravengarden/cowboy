@@ -6,6 +6,12 @@ import { languages } from "@codemirror/language-data";
 import { languageFromPath } from "../../syntaxLanguages";
 
 const loadedLanguages = new Map<string, Promise<LanguageSupport>>();
+const CODEMIRROR_LANGUAGE_ALIASES: Record<string, string> = {
+  // CodeMirror has no dedicated systemd grammar. Its properties/INI mode
+  // correctly recognizes sections, assignments, comments, and escapes without
+  // pretending to understand unit-specific directives.
+  systemd: "ini",
+};
 
 export function languageDescriptionForPath(
   path: string,
@@ -13,7 +19,8 @@ export function languageDescriptionForPath(
   return LanguageDescription.matchFilename(languages, path) ??
     LanguageDescription.matchLanguageName(
       languages,
-      languageFromPath(path),
+      CODEMIRROR_LANGUAGE_ALIASES[languageFromPath(path)] ??
+        languageFromPath(path),
       false,
     );
 }
