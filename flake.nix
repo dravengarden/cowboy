@@ -10,7 +10,6 @@
   inputs.shared-utils.url =
     "git+ssh://git@github.com/dravengarden/shared-utils.git?ref=refs/heads/main";
   inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
-
   outputs = { self, nixpkgs, shared-utils }:
     let
       system = "x86_64-linux";
@@ -47,6 +46,8 @@
           ./src/bin/cowboy-agentd.rs
         ];
       };
+
+      zed-adapter-src = pkgs.lib.cleanSource ./zed-adapter;
 
       # Only behavior that runs inside a detached session contributes to the
       # pool generation. A control-plane-only change updates Cowboy without
@@ -141,6 +142,41 @@
         };
       };
 
+      cowboy-zed-adapter = pkgs.rustPlatform.buildRustPackage {
+        pname = "cowboy-zed-adapter";
+        version = "0.1.0";
+        src = zed-adapter-src;
+        cargoHash = "sha256-WHcWrwFEiv/89JPpiSPpvAsBofoTDErVgWCDQpG7jLk=";
+        meta = {
+          description = "GPL-isolated Zed protocol adapter for Cowboy Code";
+          license = pkgs.lib.licenses.gpl3Plus;
+          mainProgram = "cowboy-zed-adapter";
+        };
+      };
+
+      # Zed's official remote-development flow installs a release server on
+      # the target host rather than compiling the editor workspace there.
+      # Pin the exact preview release that corresponds to ZED_REVISION in the
+      # adapter. This keeps Cowboy's instance reproducible and independent of
+      # the user's ~/.zed_server lifecycle.
+      cowboy-zed-server = pkgs.runCommand "cowboy-zed-server-1.13.0" {
+        src = pkgs.fetchurl {
+          url =
+            "https://github.com/zed-industries/zed/releases/download/v1.13.0-pre/zed-remote-server-linux-x86_64.gz";
+          hash = "sha256-+E10MkfNuSORMNvhyRm3Ij5UfM5mrWwKSVkj+FJGQ+Y=";
+        };
+        nativeBuildInputs = [ pkgs.gzip ];
+        meta = {
+          description = "Pinned isolated Zed remote server for Cowboy Code";
+          license = pkgs.lib.licenses.gpl3Plus;
+          mainProgram = "cowboy-zed-server";
+        };
+      } ''
+          mkdir -p "$out/bin"
+          gzip -dc "$src" > "$out/bin/cowboy-zed-server"
+          chmod 0555 "$out/bin/cowboy-zed-server"
+      '';
+
       cowboy-source-boundary = pkgs.runCommand "cowboy-source-boundary" { } ''
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
@@ -153,6 +189,8 @@
         default = cowboy;
         cowboy = cowboy;
         cowboy-agentd = cowboy-agentd;
+        cowboy-zed-adapter = cowboy-zed-adapter;
+        cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
       };
 
@@ -160,7 +198,8 @@
       # build runs TypeScript checking before Vite. Developer lint/test policy is
       # additionally enforced by `just check` in CI.
       checks.${system} = {
-        inherit cowboy cowboy-agentd cowboy-source-boundary cowboy-web;
+        inherit cowboy cowboy-agentd cowboy-source-boundary cowboy-web
+          cowboy-zed-adapter cowboy-zed-server;
       };
 
       devShells.${system}.default = pkgs.mkShell {

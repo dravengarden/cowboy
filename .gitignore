@@ -1,5 +1,6 @@
 # Rust
 /target
+/zed-adapter/target
 
 # Frontend
 web/node_modules/

@@ -36,27 +36,34 @@ shellfmt-wasm:
 # Build both release artifacts for local use.
 build: build-web
     cargo build --release --locked
+    cd zed-adapter && cargo build --release --locked
 
 # Quality gates.
 fmt:
     cargo fmt --check
+    cd zed-adapter && cargo fmt --check
 
 fmt-write:
     cargo fmt
+    cd zed-adapter && cargo fmt
 
 lint:
     cargo clippy --all-targets --all-features --locked -- -D warnings
+    cd zed-adapter && cargo clippy --all-targets --locked -- -D warnings
     cd web && deno task lint
 
 dependencies:
     cargo deny check
     cargo machete --with-metadata
+    cd zed-adapter && cargo deny check
+    cd zed-adapter && cargo machete --with-metadata
 
 typecheck:
     cd web && deno task typecheck
 
 test:
     cargo test --all-targets --all-features --locked
+    cd zed-adapter && cargo test --all-targets --locked
     cd web && deno task test
 
 check: toolchain-check fmt lint dependencies typecheck test build
