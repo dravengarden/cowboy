@@ -1243,6 +1243,64 @@ export function ReviewApp({
               }}
             >
               <ReviewSettings language={language} />
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={mode}
+                aria-label="Code review source"
+                onChange={(_event, next: ReviewMode | null) => {
+                  if (next === null || next === mode) return;
+                  navigationHaptic();
+                  setMode(next);
+                }}
+                sx={{
+                  ml: 0.5,
+                  height: 32,
+                  p: "2px",
+                  border: 0,
+                  borderRadius: 2.25,
+                  bgcolor: "action.hover",
+                  "& .MuiToggleButtonGroup-grouped": {
+                    width: 36,
+                    minWidth: 36,
+                    height: 28,
+                    p: 0,
+                    border: 0,
+                    borderRadius: "7px !important",
+                    color: "text.secondary",
+                  },
+                  "& .MuiToggleButton-root.Mui-selected": {
+                    color: "text.primary",
+                    bgcolor: "action.selected",
+                  },
+                  "& .MuiToggleButton-root.Mui-selected:hover": {
+                    bgcolor: "action.selected",
+                  },
+                }}
+              >
+                <ToggleButton value="files" aria-label="Browse files">
+                  <FolderOutlined fontSize="small" />
+                </ToggleButton>
+                <ToggleButton
+                  value="git"
+                  aria-label={`Review Git changes${
+                    changeCount > 0
+                      ? `, ${changeCount} changed ${
+                        changeCount === 1 ? "file" : "files"
+                      }`
+                      : ""
+                  }`}
+                >
+                  <Badge
+                    badgeContent={changeCount}
+                    max={99}
+                    color="default"
+                    invisible={changeCount === 0}
+                  >
+                    <DifferenceOutlined fontSize="small" />
+                  </Badge>
+                </ToggleButton>
+              </ToggleButtonGroup>
               {mode === "files" && modeTabs.length > 0 && (
                 <IconButton
                   aria-label={managingTabs
@@ -1311,68 +1369,6 @@ export function ReviewApp({
                 </>
               )}
               <Box sx={{ flex: 1 }} />
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={mode}
-                aria-label="Code review source"
-                onChange={(_event, next: ReviewMode | null) => {
-                  if (next === null || next === mode) return;
-                  navigationHaptic();
-                  setMode(next);
-                }}
-                sx={{
-                  height: 36,
-                  p: "2px",
-                  border: 1,
-                  borderColor: "divider",
-                  borderRadius: 999,
-                  bgcolor: "action.hover",
-                  "& .MuiToggleButtonGroup-grouped": {
-                    width: 42,
-                    minWidth: 42,
-                    height: 30,
-                    p: 0,
-                    border: 0,
-                    borderRadius: "999px !important",
-                    color: "text.secondary",
-                  },
-                  "& .MuiToggleButton-root.Mui-selected": {
-                    color: "text.primary",
-                    bgcolor: "background.paper",
-                    boxShadow: (theme) =>
-                      theme.palette.mode === "dark"
-                        ? "0 1px 5px rgba(0,0,0,0.45)"
-                        : "0 1px 5px rgba(0,0,0,0.14)",
-                  },
-                  "& .MuiToggleButton-root.Mui-selected:hover": {
-                    bgcolor: "background.paper",
-                  },
-                }}
-              >
-                <ToggleButton value="files" aria-label="Browse files">
-                  <FolderOutlined fontSize="small" />
-                </ToggleButton>
-                <ToggleButton
-                  value="git"
-                  aria-label={`Review Git changes${
-                    changeCount > 0
-                      ? `, ${changeCount} changed ${
-                        changeCount === 1 ? "file" : "files"
-                      }`
-                      : ""
-                  }`}
-                >
-                  <Badge
-                    badgeContent={changeCount}
-                    max={99}
-                    color="default"
-                    invisible={changeCount === 0}
-                  >
-                    <DifferenceOutlined fontSize="small" />
-                  </Badge>
-                </ToggleButton>
-              </ToggleButtonGroup>
               <IconButton
                 aria-label={drawerOpen
                   ? "Close worktree sidebar"
