@@ -30,13 +30,16 @@
     "@mui/material": "^7.0.0",
     "@replit/codemirror-vim": "^6.3.0",
     "@uiw/react-codemirror": "^4.23.0",
+    "katex": "^0.16.22",
     "prettier": "^3.9.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
+    "rehype-katex": "^7.0.1",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "sql-formatter": "^15.8.2"
   },
   "devDependencies": {

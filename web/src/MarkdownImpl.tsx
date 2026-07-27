@@ -26,6 +26,9 @@ import { Check, ContentCopy } from "@mui/icons-material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkFrontmatter from "remark-frontmatter";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { ImageLightbox } from "./_shell";
 import { copyText } from "./clipboard";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
@@ -44,6 +47,7 @@ import {
   shouldUseLightweightCode,
 } from "./codeRendering";
 import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
+import { normalizeMarkdownMath } from "./markdownMath";
 
 // Extend Prism's Bash grammar inside the already-lazy Markdown bundle. Tool
 // cards only import SHELL_SYNTAX_LANGUAGE, so this semantic enhancement never
@@ -546,6 +550,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
   const theme = useTheme();
   const dark = theme.palette.mode === "dark" || invert;
   const codeTheme = dark ? oneDark : oneLight;
+  const renderedText = useMemo(() => normalizeMarkdownMath(text), [text]);
 
   // Images render as capped thumbnails in the bubble; tapping opens the shared
   // fullscreen lightbox. Gallery = this message's images (per-message scope), so
@@ -753,10 +758,23 @@ const MarkdownImpl = memo(function MarkdownImpl({
           wordBreak: "break-word",
           "& :first-child": { mt: 0 },
           "& :last-child": { mb: 0 },
+          "& .katex": { maxWidth: "100%" },
+          "& .katex-display": {
+            maxWidth: "100%",
+            overflowX: "auto",
+            overflowY: "hidden",
+            py: 0.25,
+            my: 1,
+            WebkitOverflowScrolling: "touch",
+          },
         }}
       >
-        <ReactMarkdown remarkPlugins={[remarkFrontmatter, remarkGfm]} components={components}>
-          {text}
+        <ReactMarkdown
+          remarkPlugins={[remarkFrontmatter, remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
+          components={components}
+        >
+          {renderedText}
         </ReactMarkdown>
       </Box>
       {/* plate={false}: chat images are screenshots/photos, not white-bg
