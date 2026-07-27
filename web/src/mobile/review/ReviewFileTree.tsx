@@ -113,7 +113,7 @@ function DirectoryRows({
                   fontFamily: isDirectory
                     ? undefined
                     : "var(--cowboy-font-mono)",
-                  fontSize: 14,
+                  fontSize: "0.875rem",
                 }}
               />
               {isLoading && <CircularProgress size={16} />}
@@ -505,7 +505,7 @@ export function ReviewFileTree({
                         primaryTypographyProps={{
                           noWrap: true,
                           fontFamily: "var(--cowboy-font-mono)",
-                          fontSize: 14,
+                          fontSize: "0.875rem",
                         }}
                         secondaryTypographyProps={{ noWrap: true }}
                       />

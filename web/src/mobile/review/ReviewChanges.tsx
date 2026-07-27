@@ -262,7 +262,7 @@ export function ReviewChanges({
                           primaryTypographyProps={{
                             noWrap: true,
                             fontFamily: "var(--cowboy-font-mono)",
-                            fontSize: 14,
+                            fontSize: "0.875rem",
                           }}
                           secondaryTypographyProps={{ noWrap: true }}
                         />
