@@ -449,6 +449,9 @@ export function ReviewApp({
           sessionId={workspace?.sessionId}
           cwd={workspace?.cwd}
           onOpenFile={openSource}
+          currentPath={target.kind === "changes" ? undefined : target.path}
+          onClose={() => setCloseRequest((value) => value + 1)}
+          refreshToken={dataRevision}
         />
       }
     >

@@ -3,8 +3,11 @@ import {
   ChevronRight,
   DescriptionOutlined,
   FolderOutlined,
+  MyLocation,
   Refresh,
   Search,
+  UnfoldLess,
+  UnfoldMore,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -21,6 +24,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MobileSheetActionGroup } from "../../_shell";
 import {
   type CodeTreeEntry as FileTreeEntry,
   type CodeTreePage,
@@ -38,72 +42,26 @@ function cacheKey(sessionId: string, path: string): string {
 }
 
 function DirectoryRows({
-  sessionId,
   entries,
   onOpenFile,
+  expanded,
+  pages,
+  loading,
+  failed,
+  onToggleDirectory,
+  currentPath,
   depth = 0,
 }: {
-  sessionId: string;
   entries: FileTreeEntry[];
   onOpenFile: (path: string) => void;
+  expanded: ReadonlySet<string>;
+  pages: ReadonlyMap<string, DirectoryPage>;
+  loading: ReadonlySet<string>;
+  failed: ReadonlySet<string>;
+  onToggleDirectory: (path: string) => void;
+  currentPath: string | undefined;
   depth?: number;
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [pages, setPages] = useState<ReadonlyMap<string, DirectoryPage>>(
-    new Map(),
-  );
-  const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
-  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
-  const controllers = useRef(new Map<string, AbortController>());
-
-  useEffect(() => () => {
-    controllers.current.forEach((controller) => controller.abort());
-  }, []);
-
-  const loadDirectory = useCallback(async (path: string): Promise<void> => {
-    const key = cacheKey(sessionId, path);
-    const cached = directoryCache.get(key);
-    if (cached) {
-      setPages((current) => new Map(current).set(path, cached));
-      if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
-    }
-    controllers.current.get(path)?.abort();
-    const controller = new AbortController();
-    controllers.current.set(path, controller);
-    if (!cached) {
-      setLoading((current) => new Set(current).add(path));
-    }
-    setFailed((current) => {
-      const next = new Set(current);
-      next.delete(path);
-      return next;
-    });
-    try {
-      const page = {
-        ...(await fetchCodeTree(sessionId, path, controller.signal)),
-        cachedAt: Date.now(),
-      };
-      directoryCache.set(key, page);
-      setPages((current) => new Map(current).set(path, page));
-    } catch (error) {
-      if (
-        !cached &&
-        !(error instanceof DOMException && error.name === "AbortError")
-      ) {
-        setFailed((current) => new Set(current).add(path));
-      }
-    } finally {
-      if (controllers.current.get(path) === controller) {
-        controllers.current.delete(path);
-        setLoading((current) => {
-          const next = new Set(current);
-          next.delete(path);
-          return next;
-        });
-      }
-    }
-  }, [sessionId]);
-
   return (
     <>
       {entries.map((entry) => {
@@ -115,23 +73,15 @@ function DirectoryRows({
         return (
           <Box key={entry.path}>
             <ListItemButton
+              data-code-tree-path={entry.path}
+              selected={!isDirectory && entry.path === currentPath}
               aria-expanded={isDirectory ? open : undefined}
               onClick={() => {
                 if (!isDirectory) {
                   onOpenFile(entry.path);
                   return;
                 }
-                setExpanded((current) => {
-                  const next = new Set(current);
-                  if (next.has(entry.path)) {
-                    next.delete(entry.path);
-                    controllers.current.get(entry.path)?.abort();
-                  } else {
-                    next.add(entry.path);
-                    void loadDirectory(entry.path);
-                  }
-                  return next;
-                });
+                onToggleDirectory(entry.path);
               }}
               sx={{
                 minHeight: 44,
@@ -176,7 +126,7 @@ function DirectoryRows({
                   <IconButton
                     size="small"
                     aria-label={`Retry ${entry.name}`}
-                    onClick={() => void loadDirectory(entry.path)}
+                    onClick={() => onToggleDirectory(entry.path)}
                   >
                     <Refresh fontSize="small" />
                   </IconButton>
@@ -188,9 +138,14 @@ function DirectoryRows({
             {isDirectory && open && page && (
               <>
                 <DirectoryRows
-                  sessionId={sessionId}
                   entries={page.entries}
                   onOpenFile={onOpenFile}
+                  expanded={expanded}
+                  pages={pages}
+                  loading={loading}
+                  failed={failed}
+                  onToggleDirectory={onToggleDirectory}
+                  currentPath={currentPath}
                   depth={depth + 1}
                 />
                 {page.truncated && (
@@ -215,10 +170,16 @@ export function ReviewFileTree({
   sessionId,
   cwd,
   onOpenFile,
+  currentPath,
+  onClose,
+  refreshToken,
 }: {
   sessionId: string | undefined;
   cwd: string | undefined;
   onOpenFile: (path: string) => void;
+  currentPath: string | undefined;
+  onClose: () => void;
+  refreshToken: number;
 }): React.JSX.Element {
   const [root, setRoot] = useState<DirectoryPage>({
     apiVersion: 1,
@@ -235,8 +196,21 @@ export function ReviewFileTree({
   const [searchResults, setSearchResults] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchFailed, setSearchFailed] = useState(false);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [pages, setPages] = useState<ReadonlyMap<string, DirectoryPage>>(
+    new Map(),
+  );
+  const [directoryLoading, setDirectoryLoading] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [directoryFailed, setDirectoryFailed] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const controllerRef = useRef<AbortController | null>(null);
   const searchControllerRef = useRef<AbortController | null>(null);
+  const directoryControllers = useRef(new Map<string, AbortController>());
+  const treeScrollerRef = useRef<HTMLDivElement>(null);
+  const previousRefreshToken = useRef(refreshToken);
 
   const load = useCallback(async (refresh = false): Promise<void> => {
     if (!sessionId) {
@@ -291,13 +265,110 @@ export function ReviewFileTree({
     }
   }, [sessionId]);
 
+  const loadDirectory = useCallback(async (path: string): Promise<void> => {
+    if (!sessionId) return;
+    const key = cacheKey(sessionId, path);
+    const cached = directoryCache.get(key);
+    if (cached) {
+      setPages((current) => new Map(current).set(path, cached));
+      if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
+    }
+    directoryControllers.current.get(path)?.abort();
+    const controller = new AbortController();
+    directoryControllers.current.set(path, controller);
+    if (!cached) {
+      setDirectoryLoading((current) => new Set(current).add(path));
+    }
+    setDirectoryFailed((current) => {
+      const next = new Set(current);
+      next.delete(path);
+      return next;
+    });
+    try {
+      const page = {
+        ...(await fetchCodeTree(sessionId, path, controller.signal)),
+        cachedAt: Date.now(),
+      };
+      directoryCache.set(key, page);
+      setPages((current) => new Map(current).set(path, page));
+    } catch (error) {
+      if (
+        !cached &&
+        !(error instanceof DOMException && error.name === "AbortError")
+      ) {
+        setDirectoryFailed((current) => new Set(current).add(path));
+      }
+    } finally {
+      if (directoryControllers.current.get(path) === controller) {
+        directoryControllers.current.delete(path);
+        setDirectoryLoading((current) => {
+          const next = new Set(current);
+          next.delete(path);
+          return next;
+        });
+      }
+    }
+  }, [sessionId]);
+
+  const toggleDirectory = useCallback((path: string): void => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+        directoryControllers.current.get(path)?.abort();
+      } else {
+        next.add(path);
+        void loadDirectory(path);
+      }
+      return next;
+    });
+  }, [loadDirectory]);
+
+  const rootDirectories = root.entries
+    .filter((entry) => entry.kind === "directory")
+    .map((entry) => entry.path);
+  const rootExpanded = rootDirectories.length > 0 &&
+    rootDirectories.every((path) => expanded.has(path));
+  const toggleRootDirectories = (): void => {
+    if (rootExpanded) {
+      setExpanded(new Set());
+      return;
+    }
+    setExpanded((current) => new Set([...current, ...rootDirectories]));
+    for (const path of rootDirectories) void loadDirectory(path);
+  };
+
+  const revealCurrentFile = async (): Promise<void> => {
+    if (!currentPath || !sessionId) return;
+    setQuery("");
+    const parts = currentPath.split("/");
+    const ancestors = parts.slice(0, -1).map((_, index) =>
+      parts.slice(0, index + 1).join("/")
+    );
+    setExpanded((current) => new Set([...current, ...ancestors]));
+    await Promise.all(ancestors.map(loadDirectory));
+    requestAnimationFrame(() => {
+      const escaped = CSS.escape(currentPath);
+      treeScrollerRef.current
+        ?.querySelector<HTMLElement>(`[data-code-tree-path="${escaped}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
+
   useEffect(() => {
     void load();
     return () => {
       controllerRef.current?.abort();
       searchControllerRef.current?.abort();
+      directoryControllers.current.forEach((controller) => controller.abort());
     };
   }, [load]);
+
+  useEffect(() => {
+    if (previousRefreshToken.current === refreshToken) return;
+    previousRefreshToken.current = refreshToken;
+    void load(true);
+  }, [load, refreshToken]);
 
   useEffect(() => {
     searchControllerRef.current?.abort();
@@ -334,7 +405,7 @@ export function ReviewFileTree({
   }, [query, sessionId]);
 
   return (
-    <Stack sx={{ height: "100%", minHeight: 0 }}>
+    <Stack sx={{ position: "relative", height: "100%", minHeight: 0 }}>
       <Stack
         direction="row"
         alignItems="center"
@@ -353,12 +424,6 @@ export function ReviewFileTree({
             {cwd ?? "No active session"}
           </Typography>
         </Box>
-        <IconButton
-          aria-label="Refresh worktree"
-          onClick={() => void load(true)}
-        >
-          <Refresh />
-        </IconButton>
       </Stack>
       <TextField
         value={query}
@@ -396,7 +461,10 @@ export function ReviewFileTree({
           Root folder limited to 200 entries
         </Alert>
       )}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 2 }}>
+      <Box
+        ref={treeScrollerRef}
+        sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 12 }}
+      >
         {query.trim()
           ? searching
             ? (
@@ -474,13 +542,56 @@ export function ReviewFileTree({
               {sessionId && (
                 <DirectoryRows
                   key={`${sessionId}:${revision}`}
-                  sessionId={sessionId}
                   entries={root.entries}
                   onOpenFile={onOpenFile}
+                  expanded={expanded}
+                  pages={pages}
+                  loading={directoryLoading}
+                  failed={directoryFailed}
+                  onToggleDirectory={toggleDirectory}
+                  currentPath={currentPath}
                 />
               )}
             </List>
           )}
+      </Box>
+      <Box
+        sx={{
+          position: "absolute",
+          zIndex: 2,
+          left: 0,
+          right: 0,
+          bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+          px: 2,
+          pointerEvents: "none",
+        }}
+      >
+        <MobileSheetActionGroup
+          actions={[
+            {
+              key: "close",
+              label: "Close worktree",
+              icon: <Close fontSize="small" />,
+              onPress: onClose,
+            },
+            {
+              key: "expand",
+              label: rootExpanded ? "Collapse folders" : "Expand folders",
+              icon: rootExpanded
+                ? <UnfoldLess fontSize="small" />
+                : <UnfoldMore fontSize="small" />,
+              onPress: toggleRootDirectories,
+              disabled: rootDirectories.length === 0,
+            },
+            {
+              key: "locate",
+              label: "Reveal current file",
+              icon: <MyLocation fontSize="small" />,
+              onPress: () => void revealCurrentFile(),
+              disabled: !currentPath,
+            },
+          ]}
+        />
       </Box>
     </Stack>
   );
