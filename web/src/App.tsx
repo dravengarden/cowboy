@@ -2897,14 +2897,38 @@ export function App({
                             // bar read lopsided. Dropping it gives the hamburger the
                             // same gutter, symmetric with the gear on the right.
                             <IconButton
+                                aria-label="Open sessions"
                                 onClick={(): void => {
                                     if (mobile) settleMobileDrawerRef.current?.(true);
                                     else setDrawerOpen(true);
                                 }}
+                                onPointerDown={(event): void => {
+                                    if (event.pointerType === "touch") {
+                                        event.currentTarget.dataset.touchActivated = "true";
+                                    }
+                                }}
+                                onPointerEnter={(event): void => {
+                                    if (event.pointerType === "mouse") {
+                                        delete event.currentTarget.dataset.touchActivated;
+                                    }
+                                }}
                                 // Unified 44px box + fixed 24px glyph (global
                                 // MuiIconButton) keeps the hamburger aligned with
                                 // the slash button below it at any font scale.
-                                sx={{ mr: 1 }}
+                                sx={{
+                                    mr: 1,
+                                    // iPad can advertise hover because a trackpad is
+                                    // connected, then leave :hover latched after a
+                                    // finger tap. Remember touch activation until a
+                                    // real mouse enters, so ordinary content taps do
+                                    // not leave this button looking selected.
+                                    "&[data-touch-activated='true']:hover": {
+                                        bgcolor: "transparent",
+                                    },
+                                    "&[data-touch-activated='true']:active": {
+                                        bgcolor: "action.selected",
+                                    },
+                                }}
                             >
                                 <MenuIcon />
                             </IconButton>
