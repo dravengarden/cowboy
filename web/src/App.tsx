@@ -1408,6 +1408,7 @@ const StoreTranscript = memo(function StoreTranscript({
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}
+            shortContentAtTop={desktopNavigation}
             restoreAnchorKey={transitionAnchorKey}
             onAnchorRestored={(): void => resolveProjectionAnchor(sessionId)}
         />
