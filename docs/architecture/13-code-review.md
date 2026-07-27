@@ -130,3 +130,8 @@ Mobile review defaults to a unified diff with collapsed unchanged regions.
 Opening a file switches to its read-only source view while retaining hunk,
 diagnostic, and symbol navigation. Editing, terminals, task runners, and Zed UI
 settings are deliberately out of scope.
+
+Git review keeps the complete normalized queue for next/previous navigation but
+mounts list rows in 80-entry windows. A near-viewport sentinel extends the
+window before the user reaches it, bounding initial Mobile DOM and layout work
+even when the server returns the 1,000-change maximum.

@@ -44,3 +44,18 @@ export function reviewQueue(
 ): GitReviewEntry[] {
   return sections.flatMap((section) => section.entries);
 }
+
+export function limitGitSections(
+  sections: GitReviewSection[],
+  limit: number,
+): GitReviewSection[] {
+  let remaining = Math.max(0, limit);
+  const visible: GitReviewSection[] = [];
+  for (const section of sections) {
+    if (remaining === 0) break;
+    const entries = section.entries.slice(0, remaining);
+    if (entries.length > 0) visible.push({ ...section, entries });
+    remaining -= entries.length;
+  }
+  return visible;
+}

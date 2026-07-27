@@ -20,11 +20,12 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
 import {
   type GitReviewEntry,
   groupGitChanges,
+  limitGitSections,
   reviewQueue,
 } from "./gitReviewModel";
 import { invalidateDiffCache } from "./diffCache";
@@ -38,6 +39,8 @@ const statusLabel: Record<CodeChangeStatus, string> = {
   untracked: "U",
   conflicted: "!",
 };
+
+const REVIEW_WINDOW_SIZE = 80;
 
 function ChangeIcon(
   { status }: { status: CodeChangeStatus },
@@ -69,8 +72,20 @@ export function ReviewChanges({
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(REVIEW_WINDOW_SIZE);
+  const scrollRoot = useRef<HTMLDivElement>(null);
+  const loadMoreSentinel = useRef<HTMLDivElement>(null);
   const sections = useMemo(() => groupGitChanges(changes), [changes]);
   const queue = useMemo(() => reviewQueue(sections), [sections]);
+  const sectionCounts = useMemo(
+    () => new Map(sections.map((section) => [section.kind, section.entries.length])),
+    [sections],
+  );
+  const visibleSections = useMemo(
+    () => limitGitSections(sections, visibleCount),
+    [sections, visibleCount],
+  );
+  const renderedCount = Math.min(visibleCount, queue.length);
 
   const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
     if (!sessionId) {
@@ -84,6 +99,7 @@ export function ReviewChanges({
       setChanges(result.changes);
       setHead(result.head);
       setTruncated(result.truncated);
+      setVisibleCount(REVIEW_WINDOW_SIZE);
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
         setError(true);
@@ -98,6 +114,24 @@ export function ReviewChanges({
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => {
+    const root = scrollRoot.current;
+    const sentinel = loadMoreSentinel.current;
+    if (!root || !sentinel || renderedCount >= queue.length) return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((current) =>
+            Math.min(current + REVIEW_WINDOW_SIZE, queue.length)
+          );
+        }
+      },
+      { root, rootMargin: "480px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [queue.length, renderedCount]);
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
@@ -134,7 +168,10 @@ export function ReviewChanges({
           Showing the first 1,000 changes
         </Alert>
       )}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 8 }}>
+      <Box
+        ref={scrollRoot}
+        sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 8 }}
+      >
         {loading
           ? (
             <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
@@ -154,7 +191,7 @@ export function ReviewChanges({
           )
           : (
             <Stack spacing={1.25}>
-              {sections.map((section) => (
+              {visibleSections.map((section) => (
                 <Box component="section" key={section.kind}>
                   <Stack
                     direction="row"
@@ -171,7 +208,7 @@ export function ReviewChanges({
                       {section.label}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {section.entries.length}
+                      {sectionCounts.get(section.kind)}
                     </Typography>
                   </Stack>
                   <List
@@ -239,6 +276,21 @@ export function ReviewChanges({
                   </List>
                 </Box>
               ))}
+              {renderedCount < queue.length && (
+                <Box
+                  ref={loadMoreSentinel}
+                  role="status"
+                  sx={{
+                    minHeight: 32,
+                    display: "grid",
+                    placeItems: "center",
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary">
+                    {`Showing ${renderedCount} of ${queue.length}`}
+                  </Typography>
+                </Box>
+              )}
             </Stack>
           )}
       </Box>

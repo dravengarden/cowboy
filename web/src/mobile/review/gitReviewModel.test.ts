@@ -1,6 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
 import type { CodeChange } from "./codeApi.ts";
-import { groupGitChanges, reviewQueue } from "./gitReviewModel.ts";
+import {
+  groupGitChanges,
+  limitGitSections,
+  reviewQueue,
+} from "./gitReviewModel.ts";
 
 function change(
   path: string,
@@ -42,4 +46,28 @@ Deno.test("git review groups conflicts and duplicates partial changes by intent"
       "staged:staged.ts",
     ],
   );
+});
+
+Deno.test("git review window preserves section order and intent", () => {
+  const sections = groupGitChanges([
+    change("conflict.ts", { status: "conflicted" }),
+    change("first.ts"),
+    change("partial.ts", { staged: true, unstaged: true }),
+    change("staged.ts", { staged: true, unstaged: false }),
+  ]);
+
+  const visible = limitGitSections(sections, 3);
+  assertEquals(visible.map((section) => section.kind), [
+    "conflicts",
+    "unstaged",
+  ]);
+  assertEquals(
+    reviewQueue(visible).map(({ change, scope }) => `${scope}:${change.path}`),
+    [
+      "combined:conflict.ts",
+      "unstaged:first.ts",
+      "unstaged:partial.ts",
+    ],
+  );
+  assertEquals(reviewQueue(sections).length, 5);
 });
