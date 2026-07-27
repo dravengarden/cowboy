@@ -31,6 +31,8 @@ settings. It may read the repository's `.zed/settings.json` because project
 settings describe the worktree. It does not inherit Hawk Zed's UI settings.
 Selected language servers and extensions may be shared through an explicit,
 read-only package/config source rather than by sharing mutable Zed state.
+The process, licensing, trust, and version-pinning contract is defined in
+[14-zed-code-provider.md](14-zed-code-provider.md).
 
 ## Latency model
 

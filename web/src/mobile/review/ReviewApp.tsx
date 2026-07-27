@@ -411,6 +411,9 @@ export function ReviewApp({
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
   const [changeCount, setChangeCount] = useState(0);
+  const [language, setLanguage] = useState<
+    import("./codeApi").CodeLanguageCapabilities
+  >();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
   const [tabsReadySession, setTabsReadySession] = useState<string>();
   const manifestRevision = useRef<string | undefined>(undefined);
@@ -427,6 +430,7 @@ export function ReviewApp({
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
+    setLanguage(undefined);
   }, [workspace?.sessionId]);
 
   useEffect(() => {
@@ -438,6 +442,7 @@ export function ReviewApp({
       void fetchCodeManifest(workspace.sessionId, controller.signal)
         .then((manifest) => {
           setChangeCount(manifest.changeCount);
+          setLanguage(manifest.language);
           const previous = manifestRevision.current;
           manifestRevision.current = manifest.revision;
           if (previous && previous !== manifest.revision) {
@@ -744,7 +749,7 @@ export function ReviewApp({
               "@media (min-width: 600px)": { minHeight: 44 },
             }}
             >
-            <ReviewSettings />
+            <ReviewSettings language={language} />
             {target.kind !== "changes" && !(
               target.kind === "source" &&
               isMarkdownReviewPath(target.path) &&

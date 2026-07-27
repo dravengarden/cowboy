@@ -44,6 +44,15 @@ export interface CodeManifest {
   revision: string;
   head?: string;
   changeCount: number;
+  language: CodeLanguageCapabilities;
+}
+
+export interface CodeLanguageCapabilities {
+  provider: string;
+  state: "restricted" | "warming" | "ready" | "unavailable" | "failed";
+  diagnostics: boolean;
+  inlayHints: boolean;
+  semanticTokens: boolean;
 }
 
 export interface CodeSearchResults {

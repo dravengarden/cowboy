@@ -25,11 +25,13 @@ function SettingToggle({
   description,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   description: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }): React.JSX.Element {
   return (
     <FormControlLabel
@@ -37,6 +39,7 @@ function SettingToggle({
       control={
         <Switch
           checked={checked}
+          disabled={disabled}
           onChange={(_, next): void => onChange(next)}
         />
       }
@@ -59,7 +62,11 @@ function SettingToggle({
   );
 }
 
-export function ReviewSettings(): React.JSX.Element {
+export function ReviewSettings({
+  language,
+}: {
+  language: import("./codeApi").CodeLanguageCapabilities | undefined;
+}): React.JSX.Element {
   const settings = useReviewSettings();
   return (
     <SettingsSheet title="Code Review settings" cover>
@@ -152,12 +159,14 @@ export function ReviewSettings(): React.JSX.Element {
           description="Show LSP errors and warnings"
           checked={settings.diagnostics}
           onChange={(diagnostics): void => updateReviewSettings({ diagnostics })}
+          disabled={!language?.diagnostics}
         />
         <SettingToggle
           label="Inlay hints"
           description="Show inferred types and parameter names"
           checked={settings.inlayHints}
           onChange={(inlayHints): void => updateReviewSettings({ inlayHints })}
+          disabled={!language?.inlayHints}
         />
         <SettingToggle
           label="Semantic highlighting"
@@ -165,7 +174,14 @@ export function ReviewSettings(): React.JSX.Element {
           checked={settings.semanticHighlighting}
           onChange={(semanticHighlighting): void =>
             updateReviewSettings({ semanticHighlighting })}
+          disabled={!language?.semanticTokens}
         />
+        {language?.state !== "ready" && (
+          <Typography variant="caption" color="text.secondary">
+            Language intelligence is {language?.state ?? "unavailable"} for this
+            worktree. Syntax highlighting remains available locally.
+          </Typography>
+        )}
       </Stack>
     </SettingsSheet>
   );

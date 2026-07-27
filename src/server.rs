@@ -1769,6 +1769,17 @@ struct CodeManifestResponse {
     revision: String,
     head: Option<String>,
     change_count: usize,
+    language: CodeLanguageCapabilities,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeLanguageCapabilities {
+    provider: &'static str,
+    state: &'static str,
+    diagnostics: bool,
+    inlay_hints: bool,
+    semantic_tokens: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2008,6 +2019,13 @@ async fn api_code_manifest(
         revision: manifest.revision,
         head: manifest.head,
         change_count: manifest.change_count,
+        language: CodeLanguageCapabilities {
+            provider: "none",
+            state: "unavailable",
+            diagnostics: false,
+            inlay_hints: false,
+            semantic_tokens: false,
+        },
     })
     .into_response();
     response
