@@ -57,11 +57,13 @@ export function ReviewChanges({
   onOpenDiff,
   reviewed,
   onRefresh,
+  onRevision,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
   reviewed: ReadonlySet<string>;
   onRefresh: () => void;
+  onRevision: (revision: string) => void;
 }): React.JSX.Element {
   const [changes, setChanges] = useState<
     Awaited<
@@ -100,6 +102,7 @@ export function ReviewChanges({
       setHead(result.head);
       setTruncated(result.truncated);
       setVisibleCount(REVIEW_WINDOW_SIZE);
+      onRevision(result.revision);
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
         setError(true);
@@ -107,7 +110,7 @@ export function ReviewChanges({
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [sessionId]);
+  }, [onRevision, sessionId]);
 
   useEffect(() => {
     const controller = new AbortController();

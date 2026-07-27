@@ -19,6 +19,7 @@ export type CodeDiffScope = "combined" | "staged" | "unstaged";
 export interface CodeChanges {
   apiVersion: 1;
   head?: string;
+  revision: string;
   changes: CodeChange[];
   truncated: boolean;
 }

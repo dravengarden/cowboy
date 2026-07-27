@@ -46,6 +46,7 @@ pub enum DiffScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeList {
     pub head: Option<String>,
+    pub revision: String,
     pub changes: Vec<CodeChange>,
     pub truncated: bool,
 }
@@ -124,6 +125,16 @@ impl LocalCodeProvider {
             .filter(|value| !value.is_empty())
     }
 
+    fn worktree_revision(head: Option<&str>, status: &[u8]) -> String {
+        let mut digest = sha2::Sha256::new();
+        if let Some(head) = head {
+            digest.update(head.as_bytes());
+        }
+        digest.update([0]);
+        digest.update(status);
+        format!("{:x}", digest.finalize())
+    }
+
     #[cfg(test)]
     fn file(&self, relative: &str) -> Result<FileDocument, String> {
         self.file_page(relative, None)
@@ -139,15 +150,9 @@ impl CodeProvider for LocalCodeProvider {
             4 * 1024 * 1024,
         )?;
         let head = self.head();
-        let mut digest = sha2::Sha256::new();
-        if let Some(head) = &head {
-            digest.update(head.as_bytes());
-        }
-        digest.update([0]);
-        digest.update(&status);
         Ok(WorktreeManifest {
             provider: "local",
-            revision: format!("{:x}", digest.finalize()),
+            revision: Self::worktree_revision(head.as_deref(), &status),
             head,
         })
     }
@@ -207,8 +212,10 @@ impl CodeProvider for LocalCodeProvider {
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         let truncated = changes.len() > MAX_CHANGES;
         changes.truncate(MAX_CHANGES);
+        let head = self.head();
         Ok(ChangeList {
-            head: self.head(),
+            revision: Self::worktree_revision(head.as_deref(), &output),
+            head,
             changes,
             truncated,
         })
@@ -537,6 +544,7 @@ mod tests {
         fs::write(dir.join("new.txt"), "hello\n").unwrap();
         let provider = LocalCodeProvider::new(&dir);
         let changes = provider.changes().unwrap();
+        assert_eq!(changes.revision, provider.manifest().unwrap().revision);
         assert_eq!(changes.changes.len(), 2);
         assert!(changes.changes.iter().any(|change| {
             change.path == "tracked.rs"

@@ -19,7 +19,14 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
 import {
   CodeApiError,
@@ -322,6 +329,9 @@ export function ReviewApp({
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
+  const adoptManifestRevision = useCallback((revision: string): void => {
+    manifestRevision.current = revision;
+  }, []);
 
   useEffect(() => {
     manifestRevision.current = undefined;
@@ -346,7 +356,6 @@ export function ReviewApp({
         // The ordinary tree/changes error surfaces remain authoritative.
         .catch(() => undefined);
     };
-    refreshManifest();
     const timer = globalThis.setInterval(refreshManifest, 5_000);
     return () => {
       globalThis.clearInterval(timer);
@@ -517,6 +526,7 @@ export function ReviewApp({
               sessionId={workspace.sessionId}
               onOpenDiff={openDiff}
               reviewed={new Set(Object.keys(reviewProgress))}
+              onRevision={adoptManifestRevision}
               onRefresh={() => {
                 setReviewProgress({});
                 saveReviewProgress(workspace.sessionId, {});

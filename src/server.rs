@@ -1748,6 +1748,7 @@ struct CodeChangeResponse {
 struct CodeChangesResponse {
     api_version: u8,
     head: Option<String>,
+    revision: String,
     changes: Vec<CodeChangeResponse>,
     truncated: bool,
 }
@@ -2005,6 +2006,7 @@ async fn api_code_changes(
     Json(CodeChangesResponse {
         api_version: 1,
         head: result.head,
+        revision: result.revision,
         changes: result
             .changes
             .into_iter()

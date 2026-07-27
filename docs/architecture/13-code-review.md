@@ -74,7 +74,8 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 - `GET /manifest` returns the provider identity, current Git head, and a small
   worktree revision suitable for conditional revalidation.
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
-- `GET /changes` returns normalized working-tree change records.
+- `GET /changes` returns normalized working-tree change records and the
+  revision of that exact status snapshot.
 - `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` creates or
   reuses an immutable unified-diff snapshot and returns its first page.
 - `GET /diff?cursor=<opaque>` returns the next page from that exact snapshot.
@@ -106,7 +107,9 @@ mutation without rereading or hashing the whole file. Reads are O(window), use
 HTTP revalidation, and cap one preview at 32 MiB.
 
 While Code is visible, Mobile conditionally revalidates the manifest every five
-seconds. A revision change refreshes the changes surface and invalidates diff
+seconds. The initial changes response seeds the same revision, avoiding a
+duplicate manifest and Git status request during first paint. A later revision
+change refreshes the changes surface and invalidates diff
 snapshots without interrupting the file currently being read. Hidden Code
 surfaces do no polling. The next data-plane revision can replace this bounded
 poll with provider-driven worktree deltas without changing the
