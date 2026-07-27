@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   fetchCodeFilePage,
   fetchCodeManifest,
+  fetchCodeSearch,
   fetchCodeTree,
 } from "./codeApi.ts";
 
@@ -38,6 +39,29 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
         cache: "reload",
       },
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("search stays inside the stable Code data plane", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ apiVersion: 1, files: ["src/main.rs"] }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeSearch("session/id", "main rs");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/search?q=main+rs&limit=50",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

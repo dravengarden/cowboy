@@ -1,25 +1,30 @@
 import {
+  Close,
   ChevronRight,
   DescriptionOutlined,
   FolderOutlined,
   Refresh,
+  Search,
 } from "@mui/icons-material";
 import {
   Alert,
   Box,
   CircularProgress,
   IconButton,
+  InputAdornment,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type CodeTreeEntry as FileTreeEntry,
   type CodeTreePage,
+  fetchCodeSearch,
   fetchCodeTree,
 } from "./codeApi";
 
@@ -226,7 +231,12 @@ export function ReviewFileTree({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<string[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
+  const searchControllerRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (refresh = false): Promise<void> => {
     if (!sessionId) {
@@ -283,8 +293,45 @@ export function ReviewFileTree({
 
   useEffect(() => {
     void load();
-    return () => controllerRef.current?.abort();
+    return () => {
+      controllerRef.current?.abort();
+      searchControllerRef.current?.abort();
+    };
   }, [load]);
+
+  useEffect(() => {
+    searchControllerRef.current?.abort();
+    const trimmed = query.trim();
+    if (!sessionId || !trimmed) {
+      setSearchResults([]);
+      setSearching(false);
+      setSearchFailed(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    searchControllerRef.current = controller;
+    setSearching(true);
+    setSearchFailed(false);
+    const timer = globalThis.setTimeout(() => {
+      void fetchCodeSearch(sessionId, trimmed, controller.signal)
+        .then((result) => setSearchResults(result.files))
+        .catch((error) => {
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            setSearchFailed(true);
+          }
+        })
+        .finally(() => {
+          if (searchControllerRef.current === controller) {
+            searchControllerRef.current = null;
+            setSearching(false);
+          }
+        });
+    }, 180);
+    return () => {
+      globalThis.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, sessionId]);
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
@@ -313,13 +360,93 @@ export function ReviewFileTree({
           <Refresh />
         </IconButton>
       </Stack>
+      <TextField
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Find a file"
+        aria-label="Find a file"
+        size="small"
+        fullWidth
+        slotProps={{
+          input: {
+            startAdornment: (
+              <InputAdornment position="start">
+                <Search fontSize="small" />
+              </InputAdornment>
+            ),
+            endAdornment: query
+              ? (
+                <InputAdornment position="end">
+                  <IconButton
+                    size="small"
+                    aria-label="Clear file search"
+                    onClick={() => setQuery("")}
+                  >
+                    <Close fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              )
+              : undefined,
+          },
+        }}
+        sx={{ px: 1.5, pb: 1.25 }}
+      />
       {root.truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
           Root folder limited to 200 entries
         </Alert>
       )}
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.75, pb: 2 }}>
-        {loading
+        {query.trim()
+          ? searching
+            ? (
+              <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
+                <CircularProgress size={24} />
+              </Box>
+            )
+            : searchFailed
+            ? <Alert severity="error">File search is unavailable</Alert>
+            : searchResults.length === 0
+            ? (
+              <Typography
+                color="text.secondary"
+                textAlign="center"
+                sx={{ pt: 6 }}
+              >
+                No matching files
+              </Typography>
+            )
+            : (
+              <List disablePadding>
+                {searchResults.map((path) => {
+                  const split = path.lastIndexOf("/");
+                  return (
+                    <ListItemButton
+                      key={path}
+                      onClick={() => onOpenFile(path)}
+                      sx={{ minHeight: 48, borderRadius: 2 }}
+                    >
+                      <ListItemIcon
+                        sx={{ minWidth: 34, color: "text.secondary" }}
+                      >
+                        <DescriptionOutlined fontSize="small" />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={split >= 0 ? path.slice(split + 1) : path}
+                        secondary={split >= 0 ? path.slice(0, split) : undefined}
+                        primaryTypographyProps={{
+                          noWrap: true,
+                          fontFamily: "var(--cowboy-font-mono)",
+                          fontSize: 14,
+                        }}
+                        secondaryTypographyProps={{ noWrap: true }}
+                      />
+                    </ListItemButton>
+                  );
+                })}
+              </List>
+            )
+          : loading
           ? (
             <Box sx={{ display: "grid", placeItems: "center", pt: 6 }}>
               <CircularProgress size={24} />

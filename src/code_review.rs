@@ -94,6 +94,7 @@ pub struct CodeTreePage {
 pub trait CodeProvider {
     fn manifest(&self) -> Result<WorktreeManifest, String>;
     fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String>;
+    fn search(&self, query: &str, limit: usize) -> Vec<String>;
     fn changes(&self) -> Result<ChangeList, String>;
     fn diff_snapshot(
         &self,
@@ -171,6 +172,10 @@ impl CodeProvider for LocalCodeProvider {
                 .collect(),
             truncated,
         })
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<String> {
+        crate::files::search(&self.root, query, limit)
     }
 
     fn changes(&self) -> Result<ChangeList, String> {
@@ -545,6 +550,11 @@ mod tests {
         let provider = LocalCodeProvider::new(&dir);
         let changes = provider.changes().unwrap();
         assert_eq!(changes.revision, provider.manifest().unwrap().revision);
+        assert!(
+            provider
+                .search("tracked", 20)
+                .contains(&"tracked.rs".to_owned())
+        );
         assert_eq!(changes.changes.len(), 2);
         assert!(changes.changes.iter().any(|change| {
             change.path == "tracked.rs"

@@ -967,6 +967,7 @@ async fn serve_axum(
         .route("/api/sessions/{id}/files", get(api_search_files))
         .route("/api/sessions/{id}/file-tree", get(api_file_tree))
         .route("/api/code/sessions/{id}/tree", get(api_file_tree))
+        .route("/api/code/sessions/{id}/search", get(api_code_search))
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
@@ -1688,6 +1689,13 @@ struct FileSearchResponse {
     files: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeSearchResponse {
+    api_version: u8,
+    files: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct FileTreeQuery {
     #[serde(default)]
@@ -1852,6 +1860,27 @@ async fn api_search_files(
     .await
     .unwrap_or_default();
     Json(FileSearchResponse { files }).into_response()
+}
+
+async fn api_code_search(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<FileSearchQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let limit = query.limit.clamp(1, 100);
+    let files = tokio::task::spawn_blocking(move || {
+        crate::code_review::LocalCodeProvider::new(cwd).search(&query.q, limit)
+    })
+    .await
+    .unwrap_or_default();
+    Json(CodeSearchResponse {
+        api_version: 1,
+        files,
+    })
+    .into_response()
 }
 
 /// Return one gitignore-aware directory page for the mobile review tree.

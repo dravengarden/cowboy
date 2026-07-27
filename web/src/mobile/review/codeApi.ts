@@ -45,6 +45,11 @@ export interface CodeManifest {
   head?: string;
 }
 
+export interface CodeSearchResults {
+  apiVersion: 1;
+  files: string[];
+}
+
 export interface CodeDocument {
   apiVersion: 1;
   path: string;
@@ -123,6 +128,18 @@ export function fetchCodeTree(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/tree${query}`,
     signal,
     refresh ? "reload" : "default",
+  );
+}
+
+export function fetchCodeSearch(
+  sessionId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<CodeSearchResults> {
+  const params = new URLSearchParams({ q: query, limit: "50" });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/search?${params}`,
+    signal,
   );
 }
 

@@ -55,6 +55,8 @@ pages carry a content revision and matching `ETag`; browser HTTP storage keeps
 them fresh for 15 seconds and may paint stale data for up to two minutes while
 revalidating. The in-memory tree paints immediately, then revalidates expired
 pages without blanking expanded folders. Explicit refresh uses cache reload.
+The Mobile drawer debounces file queries and caps results at 50, so navigating a
+large worktree does not require expanding its hierarchy.
 
 ## Scan policy
 
@@ -74,6 +76,7 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 - `GET /manifest` returns the provider identity, current Git head, and a small
   worktree revision suitable for conditional revalidation.
 - `GET /tree?path=<relative>&limit=<n>` returns immediate directory children.
+- `GET /search?q=<query>&limit=<n>` returns gitignore-aware fuzzy-ranked files.
 - `GET /changes` returns normalized working-tree change records and the
   revision of that exact status snapshot.
 - `GET /diff?path=<relative>&context=<n>&showWhitespace=<bool>` creates or
