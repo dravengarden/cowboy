@@ -4,6 +4,7 @@ import {
   CheckCircleOutline,
   ChevronLeft,
   ChevronRight,
+  CodeOutlined,
   DifferenceOutlined,
   FolderOpenOutlined,
   KeyboardArrowDown,
@@ -654,25 +655,48 @@ export function ReviewApp({
                 </IconButton>
               </>
             )}
-            <IconButton
-              aria-label={mode === "git"
-                ? "Switch to Code review"
-                : "Switch to Git review"}
-              color={mode === "git" ? "primary" : "default"}
-              onClick={() => {
-                setMode((current) => current === "git" ? "code" : "git");
-                if (!drawerOpen) {
-                  setToggleDrawerRequest((value) => value + 1);
-                }
-              }}
+            <Box
+              role="group"
+              aria-label="Review mode"
               sx={{
                 position: "absolute",
                 left: "50%",
                 transform: "translateX(-50%)",
+                display: "flex",
+                p: "2px",
+                border: 1,
+                borderColor: "divider",
+                borderRadius: 99,
+                bgcolor: "background.paper",
               }}
             >
-              <DifferenceOutlined />
-            </IconButton>
+              <IconButton
+                aria-label="Code review"
+                aria-pressed={mode === "code"}
+                color={mode === "code" ? "primary" : "default"}
+                onClick={() => setMode("code")}
+                sx={{
+                  width: 40,
+                  height: 40,
+                  bgcolor: mode === "code" ? "action.selected" : "transparent",
+                }}
+              >
+                <CodeOutlined />
+              </IconButton>
+              <IconButton
+                aria-label="Git review"
+                aria-pressed={mode === "git"}
+                color={mode === "git" ? "primary" : "default"}
+                onClick={() => setMode("git")}
+                sx={{
+                  width: 40,
+                  height: 40,
+                  bgcolor: mode === "git" ? "action.selected" : "transparent",
+                }}
+              >
+                <DifferenceOutlined />
+              </IconButton>
+            </Box>
             <Box sx={{ flex: 1 }} />
             <IconButton
               aria-label={drawerOpen
