@@ -1768,6 +1768,7 @@ struct CodeManifestResponse {
     provider: &'static str,
     revision: String,
     head: Option<String>,
+    change_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2006,6 +2007,7 @@ async fn api_code_manifest(
         provider: manifest.provider,
         revision: manifest.revision,
         head: manifest.head,
+        change_count: manifest.change_count,
     })
     .into_response();
     response

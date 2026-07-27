@@ -14,6 +14,7 @@ import {
 } from "@mui/icons-material";
 import {
   Alert,
+  Badge,
   Box,
   Button,
   Chip,
@@ -396,6 +397,7 @@ export function ReviewApp({
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
+  const [changeCount, setChangeCount] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
     manifestRevision.current = revision;
@@ -408,6 +410,7 @@ export function ReviewApp({
   useEffect(() => {
     manifestRevision.current = undefined;
     setDataRevision(0);
+    setChangeCount(0);
   }, [workspace?.sessionId]);
 
   useEffect(() => {
@@ -418,6 +421,7 @@ export function ReviewApp({
       controller = new AbortController();
       void fetchCodeManifest(workspace.sessionId, controller.signal)
         .then((manifest) => {
+          setChangeCount(manifest.changeCount);
           const previous = manifestRevision.current;
           manifestRevision.current = manifest.revision;
           if (previous && previous !== manifest.revision) {
@@ -721,15 +725,26 @@ export function ReviewApp({
             )}
             <Box sx={{ flex: 1 }} />
             <IconButton
-              aria-label={mode === "git"
+              aria-label={`${mode === "git"
                 ? "Disable Git review"
-                : "Enable Git review"}
+                : "Enable Git review"}${
+                changeCount > 0
+                  ? `, ${changeCount} changed ${changeCount === 1 ? "file" : "files"}`
+                  : ""
+              }`}
               aria-pressed={mode === "git"}
               color={mode === "git" ? "primary" : "default"}
               onClick={() =>
                 setMode((current) => current === "git" ? "code" : "git")}
             >
-              <DifferenceOutlined />
+              <Badge
+                badgeContent={changeCount}
+                max={99}
+                color="primary"
+                invisible={changeCount === 0}
+              >
+                <DifferenceOutlined />
+              </Badge>
             </IconButton>
             <IconButton
               aria-label={drawerOpen

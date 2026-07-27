@@ -43,6 +43,7 @@ export interface CodeManifest {
   provider: string;
   revision: string;
   head?: string;
+  changeCount: number;
 }
 
 export interface CodeSearchResults {

@@ -76,6 +76,7 @@ pub struct WorktreeManifest {
     pub provider: &'static str,
     pub revision: String,
     pub head: Option<String>,
+    pub change_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +137,26 @@ impl LocalCodeProvider {
         format!("{:x}", digest.finalize())
     }
 
+    fn status_change_count(status: &[u8]) -> usize {
+        let mut fields = status
+            .split(|byte| *byte == 0)
+            .filter(|field| !field.is_empty());
+        let mut count = 0;
+        while let Some(field) = fields.next() {
+            if field.len() < 4 {
+                continue;
+            }
+            count += 1;
+            let xy = &field[..2];
+            if xy.contains(&b'R') || xy.contains(&b'C') {
+                // Porcelain v1 -z emits the second rename/copy path as the next
+                // NUL-delimited field; it belongs to the same changed file.
+                let _ = fields.next();
+            }
+        }
+        count
+    }
+
     #[cfg(test)]
     fn file(&self, relative: &str) -> Result<FileDocument, String> {
         self.file_page(relative, None)
@@ -155,6 +176,7 @@ impl CodeProvider for LocalCodeProvider {
             provider: "local",
             revision: Self::worktree_revision(head.as_deref(), &status),
             head,
+            change_count: Self::status_change_count(&status),
         })
     }
 
@@ -587,9 +609,11 @@ mod tests {
         let clean = provider.manifest().unwrap();
         assert_eq!(clean.provider, "local");
         assert!(clean.head.is_some());
+        assert_eq!(clean.change_count, 0);
         fs::write(dir.join("tracked.rs"), "fn changed() {}\n").unwrap();
         let changed = provider.manifest().unwrap();
         assert_ne!(clean.revision, changed.revision);
+        assert_eq!(changed.change_count, 1);
         fs::remove_dir_all(dir).unwrap();
     }
 
