@@ -193,12 +193,14 @@ export default function CodeViewer({
         ".cm-scroller": {
           fontSize: `${fontSize}px`,
           overflow: "auto",
+          overflowX: softWrap ? "hidden" : "auto",
           WebkitOverflowScrolling: "touch",
         },
         ".cm-content": {
           fontSize: `${fontSize}px`,
           padding: "12px 0 48px",
-          minWidth: "max-content",
+          minWidth: softWrap ? 0 : "max-content",
+          width: softWrap ? "100%" : "max-content",
         },
         ".cm-line": { padding: "0 12px" },
         ".cm-gutters": {

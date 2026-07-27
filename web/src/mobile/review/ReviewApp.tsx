@@ -7,6 +7,7 @@ import {
   FolderOpenOutlined,
   KeyboardArrowDown,
   KeyboardArrowUp,
+  ViewSidebarOutlined,
   WrapText,
 } from "@mui/icons-material";
 import {
@@ -331,6 +332,8 @@ export function ReviewApp({
   const settings = useReviewSettings();
   const [target, setTarget] = useState<ReviewTarget>({ kind: "changes" });
   const [closeRequest, setCloseRequest] = useState(0);
+  const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
@@ -442,8 +445,12 @@ export function ReviewApp({
 
   return (
     <ReviewDrawerShell
-      onOpenChange={onDrawerOpenChange}
+      onOpenChange={(open) => {
+        setDrawerOpen(open);
+        onDrawerOpenChange(open);
+      }}
       closeRequest={closeRequest}
+      toggleRequest={toggleDrawerRequest}
       drawer={
         <ReviewFileTree
           sessionId={workspace?.sessionId}
@@ -607,6 +614,16 @@ export function ReviewApp({
                 </IconButton>
               </>
             )}
+            <Box sx={{ flex: 1 }} />
+            <IconButton
+              aria-label={drawerOpen
+                ? "Close worktree sidebar"
+                : "Open worktree sidebar"}
+              color={drawerOpen ? "primary" : "default"}
+              onClick={() => setToggleDrawerRequest((value) => value + 1)}
+            >
+              <ViewSidebarOutlined />
+            </IconButton>
           </Toolbar>
         </Box>
       </Stack>

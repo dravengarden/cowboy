@@ -19,23 +19,30 @@ export function ReviewDrawerShell({
   children,
   onOpenChange,
   closeRequest = 0,
+  toggleRequest = 0,
 }: {
   drawer: React.ReactNode;
   children: React.ReactNode;
   onOpenChange: (open: boolean) => void;
   closeRequest?: number;
+  toggleRequest?: number;
 }): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const maskRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<() => void>(() => undefined);
+  const toggleRef = useRef<() => void>(() => undefined);
   const openRef = useRef(false);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (closeRequest > 0) closeRef.current();
   }, [closeRequest]);
+
+  useEffect(() => {
+    if (toggleRequest > 0) toggleRef.current();
+  }, [toggleRequest]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -131,6 +138,7 @@ export function ReviewDrawerShell({
       }, duration + 20);
     };
     closeRef.current = () => settle(false);
+    toggleRef.current = () => settle(!openRef.current);
 
     const onTouchStart = (event: TouchEvent): void => {
       const touch = event.touches[0];
@@ -179,6 +187,9 @@ export function ReviewDrawerShell({
       if (!swipe || !directionAllowed) return;
       if (!gesture.locked) {
         gesture.locked = true;
+        const radius = root.clientWidth < 768 ? 36 : 30;
+        surface.style.borderRadius = `${String(radius)}px`;
+        surface.style.boxShadow = "18px 0 42px rgba(0,0,0,0.16)";
         for (const element of [surface, drawerElement, mask]) {
           element.style.transition = "none";
           element.style.willChange = "transform, opacity";
@@ -230,6 +241,7 @@ export function ReviewDrawerShell({
       globalThis.removeEventListener("resize", onResize);
       if (frame !== 0) cancelAnimationFrame(frame);
       closeRef.current = () => undefined;
+      toggleRef.current = () => undefined;
     };
   }, [onOpenChange]);
 
