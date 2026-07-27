@@ -25,6 +25,8 @@ import {
   Popover,
   Stack,
   Toolbar,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -1309,35 +1311,68 @@ export function ReviewApp({
                 </>
               )}
               <Box sx={{ flex: 1 }} />
-              <IconButton
-                aria-label="Browse files"
-                aria-pressed={mode === "files"}
-                color={mode === "files" ? "primary" : "default"}
-                onClick={() => setMode("files")}
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={mode}
+                aria-label="Code review source"
+                onChange={(_event, next: ReviewMode | null) => {
+                  if (next === null || next === mode) return;
+                  navigationHaptic();
+                  setMode(next);
+                }}
+                sx={{
+                  height: 36,
+                  p: "2px",
+                  border: 1,
+                  borderColor: "divider",
+                  borderRadius: 999,
+                  bgcolor: "action.hover",
+                  "& .MuiToggleButtonGroup-grouped": {
+                    width: 42,
+                    minWidth: 42,
+                    height: 30,
+                    p: 0,
+                    border: 0,
+                    borderRadius: "999px !important",
+                    color: "text.secondary",
+                  },
+                  "& .MuiToggleButton-root.Mui-selected": {
+                    color: "text.primary",
+                    bgcolor: "background.paper",
+                    boxShadow: (theme) =>
+                      theme.palette.mode === "dark"
+                        ? "0 1px 5px rgba(0,0,0,0.45)"
+                        : "0 1px 5px rgba(0,0,0,0.14)",
+                  },
+                  "& .MuiToggleButton-root.Mui-selected:hover": {
+                    bgcolor: "background.paper",
+                  },
+                }}
               >
-                <FolderOutlined />
-              </IconButton>
-              <IconButton
-                aria-label={`Review Git changes${
-                  changeCount > 0
-                    ? `, ${changeCount} changed ${
-                      changeCount === 1 ? "file" : "files"
-                    }`
-                    : ""
-                }`}
-                aria-pressed={mode === "git"}
-                color={mode === "git" ? "primary" : "default"}
-                onClick={() => setMode("git")}
-              >
-                <Badge
-                  badgeContent={changeCount}
-                  max={99}
-                  color="primary"
-                  invisible={changeCount === 0}
+                <ToggleButton value="files" aria-label="Browse files">
+                  <FolderOutlined fontSize="small" />
+                </ToggleButton>
+                <ToggleButton
+                  value="git"
+                  aria-label={`Review Git changes${
+                    changeCount > 0
+                      ? `, ${changeCount} changed ${
+                        changeCount === 1 ? "file" : "files"
+                      }`
+                      : ""
+                  }`}
                 >
-                  <DifferenceOutlined />
-                </Badge>
-              </IconButton>
+                  <Badge
+                    badgeContent={changeCount}
+                    max={99}
+                    color="default"
+                    invisible={changeCount === 0}
+                  >
+                    <DifferenceOutlined fontSize="small" />
+                  </Badge>
+                </ToggleButton>
+              </ToggleButtonGroup>
               <IconButton
                 aria-label={drawerOpen
                   ? "Close worktree sidebar"
