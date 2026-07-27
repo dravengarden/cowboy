@@ -67,14 +67,20 @@ export function MobileProductShell({
   const railRef = useRef<HTMLDivElement>(null);
   const agentPageRef = useRef<HTMLDivElement>(null);
   const reviewPageRef = useRef<HTMLDivElement>(null);
+  const settleTimerRef = useRef<number | undefined>(undefined);
   const workspace = useActiveWorkspaceBinding();
 
   const selectProduct = useCallback((next: MobileProduct): void => {
     const shell = shellRef.current;
     productRef.current = next;
-    setProduct(next);
     globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
-    if (!shell) return;
+    if (!shell) {
+      setProduct(next);
+      return;
+    }
+    if (settleTimerRef.current !== undefined) {
+      globalThis.clearTimeout(settleTimerRef.current);
+    }
     const pages = [agentPageRef.current, reviewPageRef.current];
     for (const page of pages) {
       if (!page) continue;
@@ -89,10 +95,23 @@ export function MobileProductShell({
       reviewPageRef.current.style.transform =
         `translate3d(${String(shell.clientWidth + offset)}px, 0, 0)`;
     }
-    globalThis.setTimeout(() => {
+    settleTimerRef.current = globalThis.setTimeout(() => {
       for (const page of pages) page?.style.removeProperty("transition");
+      settleTimerRef.current = undefined;
+      // Keep the settle animation compositor-only. Updating `product` changes
+      // inert/aria state and starts or pauses Review data work, so committing
+      // it on the first animation frame makes iPad WebKit repaint both large
+      // application surfaces while they are moving.
+      setProduct(next);
     }, 240);
   }, []);
+
+  useEffect(() =>
+    () => {
+      if (settleTimerRef.current !== undefined) {
+        globalThis.clearTimeout(settleTimerRef.current);
+      }
+    }, []);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -281,6 +300,10 @@ export function MobileProductShell({
             minWidth: 0,
             overflow: "hidden",
             backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden",
+            contain: "layout paint style",
+            isolation: "isolate",
+            willChange: "transform",
             transform: product === "agent"
               ? "translate3d(0, 0, 0)"
               : "translate3d(-100%, 0, 0)",
@@ -304,6 +327,10 @@ export function MobileProductShell({
             minWidth: 0,
             overflow: "hidden",
             backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden",
+            contain: "layout paint style",
+            isolation: "isolate",
+            willChange: "transform",
             transform: product === "review"
               ? "translate3d(0, 0, 0)"
               : "translate3d(100%, 0, 0)",
