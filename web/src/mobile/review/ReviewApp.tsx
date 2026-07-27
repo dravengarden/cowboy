@@ -39,6 +39,7 @@ import {
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
+  fetchCodeChanges,
   fetchCodeManifest,
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
@@ -60,6 +61,18 @@ import {
 } from "./reviewSettings";
 import type { CodeDiffScope } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
+import { groupGitChanges, reviewQueue } from "./gitReviewModel";
+import { ReviewTabStrip } from "./ReviewTabStrip";
+import {
+  closeOtherReviewTabs,
+  closeReviewTab,
+  loadReviewTabs,
+  openReviewTab,
+  reviewTabKey,
+  saveReviewTabs,
+  toggleReviewTabPin,
+  type ReviewTab,
+} from "./reviewTabs";
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
 
@@ -398,6 +411,8 @@ export function ReviewApp({
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
   const [changeCount, setChangeCount] = useState(0);
+  const [tabs, setTabs] = useState<ReviewTab[]>([]);
+  const [tabsReadySession, setTabsReadySession] = useState<string>();
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
     manifestRevision.current = revision;
@@ -408,6 +423,7 @@ export function ReviewApp({
   }, [onDrawerOpenChange]);
 
   useEffect(() => {
+    setTabsReadySession(undefined);
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
@@ -446,6 +462,8 @@ export function ReviewApp({
     setReviewProgress(
       workspace?.sessionId ? loadReviewProgress(workspace.sessionId) : {},
     );
+    setTabs(workspace?.sessionId ? loadReviewTabs(workspace.sessionId) : []);
+    setTabsReadySession(workspace?.sessionId);
   }, [workspace?.sessionId]);
 
   const openSource = (path: string): void => {
@@ -453,6 +471,9 @@ export function ReviewApp({
     setMode("code");
     setMarkdownPreview(isMarkdownReviewPath(path));
     setSourceTarget({ kind: "source", path });
+    setTabs((current) =>
+      openReviewTab(current, { kind: "source", path, pinned: false })
+    );
     setCloseRequest((value) => value + 1);
   };
   const openDiff = (
@@ -467,6 +488,51 @@ export function ReviewApp({
       scope: entry.scope,
       queue,
     });
+    setTabs((current) =>
+      openReviewTab(current, {
+        kind: "diff",
+        path: entry.change.path,
+        scope: entry.scope,
+        pinned: false,
+      })
+    );
+  };
+  useEffect(() => {
+    if (workspace?.sessionId === tabsReadySession && tabsReadySession) {
+      saveReviewTabs(tabsReadySession, tabs);
+    }
+  }, [tabs, tabsReadySession, workspace?.sessionId]);
+  const activateTab = useCallback(async (tab: ReviewTab): Promise<void> => {
+    if (tab.kind === "source") {
+      openSource(tab.path);
+      return;
+    }
+    if (!workspace?.sessionId) return;
+    try {
+      const changes = await fetchCodeChanges(workspace.sessionId);
+      const queue = reviewQueue(groupGitChanges(changes.changes));
+      const entry = queue.find((candidate) =>
+        candidate.change.path === tab.path && candidate.scope === tab.scope
+      );
+      if (entry) openDiff(entry, queue);
+      else setTabs((current) => closeReviewTab(current, reviewTabKey(tab)));
+    } catch {
+      // The existing changes surface owns retry/error presentation.
+    }
+  }, [workspace?.sessionId]);
+  const activeTabKey = target.kind === "source"
+    ? reviewTabKey({ ...target, pinned: false })
+    : target.kind === "diff"
+    ? reviewTabKey({ ...target, pinned: false })
+    : undefined;
+  const closeTab = (key: string): void => {
+    const next = closeReviewTab(tabs, key);
+    setTabs(next);
+    if (activeTabKey !== key) return;
+    const fallback = next.at(-1);
+    if (fallback) void activateTab(fallback);
+    else if (mode === "code") setSourceTarget(undefined);
+    else setDiffTarget(undefined);
   };
   const reviewIndex = target.kind === "diff"
     ? target.queue.findIndex((entry) =>
@@ -606,6 +672,16 @@ export function ReviewApp({
             )}
           </Stack>
         )}
+        <ReviewTabStrip
+          tabs={tabs}
+          activeKey={activeTabKey}
+          onActivate={(tab) => void activateTab(tab)}
+          onClose={closeTab}
+          onCloseOthers={(key) =>
+            setTabs((current) => closeOtherReviewTabs(current, key))}
+          onTogglePin={(key) =>
+            setTabs((current) => toggleReviewTabPin(current, key))}
+        />
         {!workspace
           ? (
             <Stack
