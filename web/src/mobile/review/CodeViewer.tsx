@@ -14,8 +14,10 @@ import {
 } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { Box, useTheme } from "@mui/material";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { LanguageSupport } from "@codemirror/language";
 import { cmTheme } from "../../cmTheme";
+import { loadCodeLanguage } from "./codeLanguage";
 import { changedWordRange } from "./diffWordModel";
 import { diffContextFolds } from "./diffContextModel";
 
@@ -171,18 +173,35 @@ const contextFolding = StateField.define<ContextFoldState>({
 export default function CodeViewer({
   text,
   kind,
+  path,
   softWrap,
   fontSize,
   revealLine,
 }: {
   text: string;
   kind: "source" | "diff";
+  path: string;
   softWrap: boolean;
   fontSize: number;
   revealLine?: number | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
+  const [language, setLanguage] = useState<LanguageSupport | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    setLanguage(null);
+    if (kind === "source") {
+      void loadCodeLanguage(path).then((support) => {
+        if (current) setLanguage(support);
+      });
+    }
+    return () => {
+      current = false;
+    };
+  }, [kind, path]);
+
   const extensions = useMemo(() => {
     const values: Extension[] = [
       EditorState.readOnly.of(true),
@@ -248,9 +267,10 @@ export default function CodeViewer({
       }),
     ];
     if (softWrap) values.push(EditorView.lineWrapping);
+    if (language) values.push(language);
     if (kind === "diff") values.push(diffView, contextFolding);
     return values;
-  }, [fontSize, kind, softWrap, theme]);
+  }, [fontSize, kind, language, softWrap, theme]);
 
   useEffect(() => {
     const view = editorRef.current;

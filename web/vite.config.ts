@@ -45,12 +45,25 @@ export default defineConfig({
             // its small deps). Split from the entry so the ~400 KB editor
             // fetches in parallel with — and caches independently of — the app
             // shell. No react/emotion cross-import cycle here, so it's safe to
-            // hoist out (unlike react/mui). Vim is already its own lazy chunk
-            // (desktop-only dynamic import), so it's not pulled in here.
-            if (
-              id.includes("@codemirror") ||
+          // hoist out (unlike react/mui). Vim is already its own lazy chunk
+          // (desktop-only dynamic import), so it's not pulled in here.
+          if (
+              // Keep Code Review language packages behind their native dynamic
+              // imports. Hoisting every `lang-*`, parser, and legacy mode into
+              // `editor` turns opening one source file into a 1.6 MB download.
+              // Markdown is the one statically used language (the composer).
+              id.includes("@codemirror/lang-markdown") ||
+              (
+                id.includes("@codemirror") &&
+                !id.includes("@codemirror/language-data") &&
+                !id.includes("@codemirror/lang-") &&
+                !id.includes("@codemirror/legacy-modes")
+              ) ||
               id.includes("@uiw/react-codemirror") ||
-              id.includes("@lezer") ||
+              id.includes("@lezer/common") ||
+              id.includes("@lezer/highlight") ||
+              id.includes("@lezer/lr") ||
+              id.includes("@lezer/markdown") ||
               id.includes("/crelt/") ||
               id.includes("/style-mod/") ||
               id.includes("/w3c-keyname/")

@@ -82,7 +82,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = pkgs.lib.cleanSource ./.;
-        depsHash = "sha256-bLfmjOp9Z9e0jOhbt0obzs7SN76KeDRbhmfmP9v4MyA=";
+        depsHash = "sha256-PutelqKh3fSO/fxmlKxg19fupluO1QwsrEnl19CAa+E=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor

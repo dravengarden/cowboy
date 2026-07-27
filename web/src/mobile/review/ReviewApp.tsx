@@ -311,6 +311,7 @@ function DocumentView({
           <CodeViewer
             text={text}
             kind={target.kind}
+            path={target.path}
             softWrap={settings.softWrap}
             fontSize={settings.codeFontSize}
             revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}

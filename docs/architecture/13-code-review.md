@@ -126,6 +126,12 @@ incremental parsing, selection, wrapping, gutters, diagnostics, and merge
 views. Load language packages on demand and do expensive decoration work only
 for visible ranges.
 
+Source views resolve CodeMirror's language description from the path, including
+special repository filenames such as `Cargo.lock`, then load only that grammar.
+Plain text paints immediately while the parser chunk arrives; unknown files
+remain plain instead of guessing. Unified diffs retain their structural
+decorations until the data plane can provide source-aligned syntax spans.
+
 Do not use Monaco for the mobile surface: its editor/workbench capabilities and
 download cost are unnecessary for a read-only phone workflow. Do not render a
 whole file as highlighted HTML: it creates a large DOM, makes incremental LSP
