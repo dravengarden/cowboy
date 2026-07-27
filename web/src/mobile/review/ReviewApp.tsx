@@ -33,7 +33,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { useActiveWorkspaceBinding } from "../../controlPlane";
+import {
+  useActiveWorkspaceBinding,
+  useControlPlaneSessionActivity,
+} from "../../controlPlane";
 import { Markdown } from "../../Markdown";
 import {
   CodeApiError,
@@ -403,6 +406,9 @@ export function ReviewApp({
   onDrawerOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const workspace = useActiveWorkspaceBinding();
+  const controlPlaneActivity = useControlPlaneSessionActivity(
+    workspace?.sessionId,
+  );
   const settings = useReviewSettings();
   const [mode, setMode] = useState<ReviewMode>("git");
   const [markdownPreview, setMarkdownPreview] = useState(true);
@@ -429,6 +435,7 @@ export function ReviewApp({
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
   const [tabsReadySession, setTabsReadySession] = useState<string>();
+  const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
     manifestRevision.current = revision;
@@ -452,28 +459,43 @@ export function ReviewApp({
     const leaseId = crypto.randomUUID();
     let released = false;
     let opened = false;
+    const retryTimers: number[] = [];
     const release = (): void => {
       if (!opened) return;
       opened = false;
       void closeCodeBuffer(sessionId, path, leaseId).catch(() => undefined);
     };
+    const loadLanguage = (): void => {
+      void fetchCodeLanguage(sessionId, path)
+        .then((value) => {
+          if (!released) setLanguageData(value);
+        })
+        // File rendering remains useful while a language server is cold or
+        // unavailable.
+        .catch(() => undefined);
+    };
     void openCodeBuffer(sessionId, path, leaseId)
       .then(() => {
         opened = true;
-        return fetchCodeLanguage(sessionId, path);
+        if (released) {
+          release();
+          return;
+        }
+        loadLanguage();
+        // Zed starts an LSP only after the first buffer registration. Keep the
+        // source visible immediately, then revalidate after typical warm and
+        // cold language-server startup windows.
+        retryTimers.push(globalThis.setTimeout(loadLanguage, 8_000));
+        retryTimers.push(globalThis.setTimeout(loadLanguage, 30_000));
       })
-      .then((value) => {
-        if (!released) setLanguageData(value);
-        if (released) release();
-      })
-      // File rendering remains useful when language intelligence is unavailable.
       .catch(() => undefined);
     return () => {
       released = true;
+      retryTimers.forEach((timer) => globalThis.clearTimeout(timer));
       setLanguageData(undefined);
       release();
     };
-  }, [active, leasedPath, workspace?.sessionId]);
+  }, [active, dataRevision, leasedPath, workspace?.sessionId]);
 
   useEffect(() => {
     setTabsReadySession(undefined);
@@ -482,6 +504,18 @@ export function ReviewApp({
     setChangeCount(0);
     setLanguage(undefined);
   }, [workspace?.sessionId]);
+
+  useEffect(() => {
+    if (!active || !workspace?.sessionId) return undefined;
+    // ACP streams can emit many updates for one tool call. Coalesce them into
+    // one filesystem revalidation after the burst instead of repeatedly
+    // running git status while text is still streaming.
+    const timer = globalThis.setTimeout(
+      () => setManifestRefreshRequest((value) => value + 1),
+      600,
+    );
+    return () => globalThis.clearTimeout(timer);
+  }, [active, controlPlaneActivity, workspace?.sessionId]);
 
   useEffect(() => {
     if (!active || !workspace?.sessionId) return undefined;
@@ -504,12 +538,22 @@ export function ReviewApp({
         .catch(() => undefined);
     };
     refreshManifest();
-    const timer = globalThis.setInterval(refreshManifest, 5_000);
+    // Zed/control-plane activity handles the ordinary fast path. Retain a low
+    // frequency check for files changed by shells, editors, or Git outside
+    // Cowboy, and revalidate immediately when Mobile returns to the foreground.
+    const timer = globalThis.setInterval(refreshManifest, 30_000);
+    const refreshVisible = (): void => {
+      if (document.visibilityState === "visible") refreshManifest();
+    };
+    document.addEventListener("visibilitychange", refreshVisible);
+    globalThis.addEventListener("online", refreshManifest);
     return () => {
       globalThis.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
+      globalThis.removeEventListener("online", refreshManifest);
       controller?.abort();
     };
-  }, [active, workspace?.sessionId]);
+  }, [active, manifestRefreshRequest, workspace?.sessionId]);
 
   useEffect(() => {
     setSourceTarget(undefined);

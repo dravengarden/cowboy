@@ -89,11 +89,16 @@ function languageDecorations(
         from,
         Math.min(endLine.to, endLine.from + diagnostic.end.column),
       );
+      const diagnosticTo = Math.min(
+        state.doc.length,
+        Math.max(from < state.doc.length ? from + 1 : from, to),
+      );
+      if (diagnosticTo <= from) continue;
       ranges.push(
         Decoration.mark({
           class: `cowboy-diagnostic cowboy-diagnostic-${diagnostic.severity}`,
           attributes: { title: diagnostic.message },
-        }).range(from, Math.max(from + 1, to)),
+        }).range(from, diagnosticTo),
       );
     }
   }

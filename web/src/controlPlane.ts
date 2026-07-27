@@ -55,3 +55,23 @@ export function useActiveWorkspaceBinding(): WorkspaceBinding | null {
       previous?.title === next?.title,
   );
 }
+
+/** A cheap invalidation signal for session-owned data planes.
+ *
+ * Review deliberately shares Agent's control-plane socket. File operations
+ * performed by the active agent produce timeline events, so the latest sequence
+ * is a useful prompt to revalidate Code's stable HTTP data plane without
+ * creating another websocket. The data plane retains a slow polling fallback
+ * for edits made outside Cowboy.
+ */
+export function useControlPlaneSessionActivity(
+  sessionId: string | undefined,
+): string {
+  return useStoreSelector((snapshot) => {
+    if (!sessionId) return "none";
+    const timeline = snapshot.timelines.get(sessionId);
+    return `${snapshot.connected ? "online" : "offline"}:${
+      timeline?.at(-1)?.seq ?? 0
+    }`;
+  });
+}

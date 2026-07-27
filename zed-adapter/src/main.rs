@@ -17,6 +17,9 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
 const ZED_REVISION: &str = "aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45";
+const MAX_DIAGNOSTICS: usize = 1_000;
+const MAX_INLAY_HINTS: usize = 2_000;
+const MAX_SEMANTIC_TOKEN_WORDS: usize = 50_000;
 
 #[derive(Parser)]
 struct Cli {
@@ -136,6 +139,7 @@ struct BufferLease {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BufferVersionEntry {
     replica_id: u32,
     timestamp: u32,
@@ -179,6 +183,34 @@ struct ZedRuntime {
     events: broadcast::Sender<proto::Envelope>,
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
+}
+
+struct ExtensionManifest {
+    id: String,
+    version: String,
+}
+
+fn extension_manifest(contents: &str) -> Result<ExtensionManifest> {
+    fn string_field(contents: &str, wanted: &str) -> Option<String> {
+        contents
+            .lines()
+            .map(str::trim)
+            .take_while(|line| !line.starts_with('['))
+            .filter_map(|line| line.split_once('='))
+            .find_map(|(key, value)| {
+                (key.trim() == wanted).then(|| {
+                    value
+                        .trim()
+                        .strip_prefix('"')?
+                        .strip_suffix('"')
+                        .map(str::to_owned)
+                })?
+            })
+    }
+    let id = string_field(contents, "id").context("extension manifest has no string id")?;
+    let version =
+        string_field(contents, "version").context("extension manifest has no string version")?;
+    Ok(ExtensionManifest { id, version })
 }
 
 async fn verify_zed_server(path: &Path) -> Result<()> {
@@ -300,6 +332,64 @@ impl ZedRuntime {
         self.outbound
             .send(envelope)
             .map_err(|_| anyhow::anyhow!("Zed writer task stopped"))
+    }
+
+    async fn sync_extensions(&self, data_home: &Path) -> Result<usize> {
+        let root = data_home.join("zed/remote_extensions");
+        let mut directory = match tokio::fs::read_dir(&root).await {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let mut extensions = Vec::new();
+        while let Some(entry) = directory.next_entry().await? {
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let manifest_path = entry.path().join("extension.toml");
+            // Zed may leave a partially downloaded extension directory behind
+            // (manifest present, wasm absent). Advertising it makes the server
+            // reject the entire sync. Ignore it until the official Zed import
+            // becomes complete on a later adapter restart.
+            if !entry.path().join("extension.wasm").is_file() {
+                continue;
+            }
+            let manifest = match tokio::fs::read_to_string(&manifest_path).await {
+                Ok(contents) => extension_manifest(&contents)
+                    .with_context(|| format!("invalid {}", manifest_path.display()))?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            extensions.push(proto::Extension {
+                id: manifest.id,
+                version: manifest.version,
+                dev: false,
+            });
+        }
+        extensions.sort_by(|left, right| left.id.cmp(&right.id));
+        let count = extensions.len();
+        let response = tokio::time::timeout(
+            Duration::from_secs(30),
+            self.request(proto::envelope::Payload::SyncExtensions(
+                proto::SyncExtensions { extensions },
+            )),
+        )
+        .await
+        .context("Zed extension sync timed out")??;
+        let Some(proto::envelope::Payload::SyncExtensionsResponse(response)) = response.payload
+        else {
+            bail!("Zed returned the wrong SyncExtensions response");
+        };
+        if !response.missing_extensions.is_empty() {
+            let missing = response
+                .missing_extensions
+                .iter()
+                .map(|extension| extension.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("Zed could not load extensions: {missing}");
+        }
+        Ok(count)
     }
 
     async fn request(&self, payload: proto::envelope::Payload) -> Result<proto::Envelope> {
@@ -439,6 +529,22 @@ impl ZedRuntime {
         })
         .await
         .context("Zed did not publish the initial buffer state")??;
+        // Opening shares the buffer contents but, like Zed's own remote client,
+        // the peer must explicitly register that buffer with the headless
+        // project's language servers. Without this request every later LSP
+        // query is valid yet has no servers to answer it.
+        let response = self
+            .request(proto::envelope::Payload::RegisterBufferWithLanguageServers(
+                proto::RegisterBufferWithLanguageServers {
+                    project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                    buffer_id,
+                    only_servers: Vec::new(),
+                },
+            ))
+            .await?;
+        if !matches!(response.payload, Some(proto::envelope::Payload::Ack(_))) {
+            bail!("Zed returned the wrong RegisterBufferWithLanguageServers response");
+        }
         Ok((buffer_id, version))
     }
 
@@ -514,6 +620,7 @@ impl ZedRuntime {
                     message: diagnostic.message,
                 })
             })
+            .take(MAX_DIAGNOSTICS)
             .collect();
 
         let inlay_hints = inlay_hints
@@ -525,6 +632,7 @@ impl ZedRuntime {
             })
             .flat_map(|response| response.hints)
             .filter_map(language_inlay_hint)
+            .take(MAX_INLAY_HINTS)
             .collect();
 
         let semantic_tokens = semantic_tokens
@@ -535,6 +643,7 @@ impl ZedRuntime {
                 _ => None,
             })
             .flat_map(|response| response.data)
+            .take(MAX_SEMANTIC_TOKEN_WORDS)
             .collect();
 
         Ok((diagnostics, inlay_hints, semantic_tokens))
@@ -557,7 +666,7 @@ impl ZedRuntime {
         if !matches!(response.payload, Some(proto::envelope::Payload::Ack(_))) {
             bail!("Zed returned the wrong LspQuery acknowledgement");
         }
-        tokio::time::timeout(Duration::from_secs(8), async {
+        tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let envelope = events.recv().await?;
                 if let Some(proto::envelope::Payload::LspQueryResponse(response)) = envelope.payload
@@ -1025,6 +1134,9 @@ async fn serve(socket: PathBuf, zed_server: PathBuf, state_dir: PathBuf) -> Resu
     let worktrees: Worktrees = Arc::default();
     let buffers: Buffers = Arc::default();
     let zed = Arc::new(ZedRuntime::start(&zed_server, &state_dir).await?);
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        zed.sync_extensions(Path::new(&data_home)).await?;
+    }
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -1307,6 +1419,43 @@ mod tests {
             request,
             Request::OpenBuffer { lease_id, .. } if lease_id == "tab-1"
         ));
+    }
+
+    #[test]
+    fn buffer_versions_use_the_stable_camel_case_contract() {
+        let value = serde_json::to_value(Response::BufferLanguage {
+            api_version: ADAPTER_VERSION,
+            worktree: PathBuf::from("/tmp"),
+            path: PathBuf::from("file.rs"),
+            version: vec![BufferVersionEntry {
+                replica_id: 7,
+                timestamp: 11,
+            }],
+            diagnostics: Vec::new(),
+            inlay_hints: Vec::new(),
+            semantic_tokens: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(value["version"][0]["replicaId"], 7);
+        assert_eq!(value["version"][0]["timestamp"], 11);
+        assert!(value["version"][0].get("replica_id").is_none());
+    }
+
+    #[test]
+    fn extension_manifest_reads_only_top_level_identity() {
+        let manifest = extension_manifest(
+            r#"
+id = "nix"
+name = "Nix"
+version = "0.1.4"
+
+[lib]
+version = "0.7.0"
+"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.id, "nix");
+        assert_eq!(manifest.version, "0.1.4");
     }
 
     #[tokio::test]
