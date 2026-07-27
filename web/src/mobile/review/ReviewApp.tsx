@@ -24,6 +24,7 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
   lazy,
   Suspense,
@@ -453,6 +454,7 @@ export function ReviewApp({
         // The ordinary tree/changes error surfaces remain authoritative.
         .catch(() => undefined);
     };
+    refreshManifest();
     const timer = globalThis.setInterval(refreshManifest, 5_000);
     return () => {
       globalThis.clearInterval(timer);
@@ -677,16 +679,6 @@ export function ReviewApp({
             )}
           </Stack>
         )}
-        <ReviewTabStrip
-          tabs={tabs}
-          activeKey={activeTabKey}
-          onActivate={(tab) => void activateTab(tab)}
-          onClose={closeTab}
-          onCloseOthers={(key) =>
-            setTabs((current) => closeOtherReviewTabs(current, key))}
-          onTogglePin={(key) =>
-            setTabs((current) => toggleReviewTabPin(current, key))}
-        />
         {!workspace
           ? (
             <Stack
@@ -731,23 +723,48 @@ export function ReviewApp({
             />
           )}
         <Box
-          component="nav"
-          aria-label="Code Review controls"
           sx={{
-            pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
-            pl: "env(safe-area-inset-left, 0px)",
-            pr: "env(safe-area-inset-right, 0px)",
+            flexShrink: 0,
             borderTop: 1,
             borderColor: "divider",
-            bgcolor: "background.default",
+            bgcolor: (theme) =>
+              alpha(
+                theme.palette.background.default,
+                theme.palette.mode === "dark" ? 0.72 : 0.76,
+              ),
+            backdropFilter: "blur(30px) saturate(200%)",
+            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+            boxShadow: (theme) =>
+              theme.palette.mode === "dark"
+                ? "0 -1px 24px rgba(0,0,0,0.5)"
+                : "0 -1px 24px rgba(0,0,0,0.07)",
           }}
         >
-          <Toolbar
-            variant="dense"
+          <ReviewTabStrip
+            tabs={tabs}
+            activeKey={activeTabKey}
+            onActivate={(tab) => void activateTab(tab)}
+            onClose={closeTab}
+            onCloseOthers={(key) =>
+              setTabs((current) => closeOtherReviewTabs(current, key))}
+            onTogglePin={(key) =>
+              setTabs((current) => toggleReviewTabPin(current, key))}
+          />
+          <Box
+            component="nav"
+            aria-label="Code Review controls"
             sx={{
-              minHeight: 44,
-              "@media (min-width: 600px)": { minHeight: 44 },
+              pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
+              pl: "env(safe-area-inset-left, 0px)",
+              pr: "env(safe-area-inset-right, 0px)",
             }}
+          >
+            <Toolbar
+              variant="dense"
+              sx={{
+                minHeight: 44,
+                "@media (min-width: 600px)": { minHeight: 44 },
+              }}
             >
             <ReviewSettings language={language} />
             {target.kind !== "changes" && !(
@@ -836,7 +853,8 @@ export function ReviewApp({
             >
               <ViewSidebarOutlined />
             </IconButton>
-          </Toolbar>
+            </Toolbar>
+          </Box>
         </Box>
       </Stack>
     </ReviewDrawerShell>

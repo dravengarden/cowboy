@@ -2,9 +2,12 @@ import {
   Add,
   CallSplit,
   CheckCircleOutline,
+  ChevronRight,
   DeleteOutline,
   DescriptionOutlined,
   ErrorOutline,
+  ExpandMore,
+  FolderOutlined,
   Refresh,
 } from "@mui/icons-material";
 import {
@@ -29,6 +32,10 @@ import {
   limitGitSections,
   reviewQueue,
 } from "./gitReviewModel";
+import {
+  buildGitChangeTree,
+  type GitChangeTreeNode,
+} from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
@@ -50,6 +57,116 @@ function ChangeIcon(
   if (status === "renamed") return <CallSplit />;
   if (status === "conflicted") return <ErrorOutline />;
   return <DescriptionOutlined />;
+}
+
+function GitTreeRows({
+  nodes,
+  depth,
+  collapsed,
+  onToggle,
+  onOpenDiff,
+  queue,
+  reviewed,
+}: {
+  nodes: GitChangeTreeNode[];
+  depth: number;
+  collapsed: ReadonlySet<string>;
+  onToggle: (path: string) => void;
+  onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
+  queue: GitReviewEntry[];
+  reviewed: ReadonlySet<string>;
+}): React.JSX.Element {
+  return (
+    <>
+      {nodes.map((node) => {
+        if (node.kind === "directory") {
+          const isCollapsed = collapsed.has(node.path);
+          return (
+            <Box key={`directory:${node.path}`}>
+              <ListItemButton
+                onClick={() => onToggle(node.path)}
+                sx={{
+                  minHeight: 46,
+                  pl: 1 + depth * 2,
+                  pr: 1.25,
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 30, color: "text.secondary" }}>
+                  {isCollapsed
+                    ? <ChevronRight fontSize="small" />
+                    : <ExpandMore fontSize="small" />}
+                </ListItemIcon>
+                <FolderOutlined
+                  fontSize="small"
+                  sx={{ mr: 1.25, color: "text.secondary" }}
+                />
+                <ListItemText
+                  primary={node.name}
+                  primaryTypographyProps={{
+                    noWrap: true,
+                    fontFamily: "var(--cowboy-font-mono)",
+                    fontSize: "0.875rem",
+                  }}
+                />
+              </ListItemButton>
+              {!isCollapsed && (
+                <GitTreeRows
+                  nodes={node.children}
+                  depth={depth + 1}
+                  collapsed={collapsed}
+                  onToggle={onToggle}
+                  onOpenDiff={onOpenDiff}
+                  queue={queue}
+                  reviewed={reviewed}
+                />
+              )}
+            </Box>
+          );
+        }
+        const entry = node.entry;
+        if (!entry) return null;
+        const isReviewed = reviewed.has(
+          reviewEntryKey(entry.change.path, entry.scope),
+        );
+        return (
+          <ListItemButton
+            key={`${entry.scope}:${entry.change.path}`}
+            onClick={() => onOpenDiff(entry, queue)}
+            sx={{
+              minHeight: 52,
+              pl: 1 + depth * 2,
+              pr: 1.25,
+            }}
+          >
+            <ListItemIcon
+              sx={{
+                minWidth: 34,
+                color: isReviewed ? "success.main" : "text.secondary",
+              }}
+            >
+              {isReviewed
+                ? <CheckCircleOutline fontSize="small" />
+                : <ChangeIcon status={entry.change.status} />}
+            </ListItemIcon>
+            <ListItemText
+              primary={node.name}
+              primaryTypographyProps={{
+                noWrap: true,
+                fontFamily: "var(--cowboy-font-mono)",
+                fontSize: "0.875rem",
+              }}
+            />
+            <Chip
+              size="small"
+              label={statusLabel[entry.change.status]}
+              color={entry.change.status === "conflicted" ? "error" : "default"}
+              sx={{ minWidth: 32 }}
+            />
+          </ListItemButton>
+        );
+      })}
+    </>
+  );
 }
 
 export function ReviewChanges({
@@ -78,6 +195,7 @@ export function ReviewChanges({
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [visibleCount, setVisibleCount] = useState(REVIEW_WINDOW_SIZE);
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
@@ -107,6 +225,7 @@ export function ReviewChanges({
       setHead(result.head);
       setTruncated(result.truncated);
       setVisibleCount(REVIEW_WINDOW_SIZE);
+      setCollapsed(new Set());
       onRevision(result.revision);
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -243,65 +362,25 @@ export function ReviewChanges({
                   <List
                     disablePadding
                     sx={{
-                      border: 1,
+                      borderTop: 1,
                       borderColor: "divider",
-                      borderRadius: 2.5,
-                      overflow: "hidden",
                     }}
                   >
-                    {section.entries.map((entry, index) => (
-                      <ListItemButton
-                        key={`${entry.scope}:${entry.change.path}`}
-                        onClick={() => onOpenDiff(entry, queue)}
-                        divider={index < section.entries.length - 1}
-                        sx={{ minHeight: 56, px: 1.25 }}
-                      >
-                        <ListItemIcon
-                          sx={{
-                            minWidth: 36,
-                            color: reviewed.has(
-                                reviewEntryKey(
-                                  entry.change.path,
-                                  entry.scope,
-                                ),
-                              )
-                              ? "success.main"
-                              : "text.secondary",
-                          }}
-                        >
-                          {reviewed.has(
-                              reviewEntryKey(entry.change.path, entry.scope),
-                            )
-                            ? <CheckCircleOutline />
-                            : <ChangeIcon status={entry.change.status} />}
-                        </ListItemIcon>
-                        <ListItemText
-                          primary={entry.change.path.split("/").pop()}
-                          secondary={entry.change.path.includes("/")
-                            ? entry.change.path.slice(
-                              0,
-                              entry.change.path.lastIndexOf("/"),
-                            )
-                            : entry.change.oldPath
-                            ? `from ${entry.change.oldPath}`
-                            : undefined}
-                          primaryTypographyProps={{
-                            noWrap: true,
-                            fontFamily: "var(--cowboy-font-mono)",
-                            fontSize: "0.875rem",
-                          }}
-                          secondaryTypographyProps={{ noWrap: true }}
-                        />
-                        <Chip
-                          size="small"
-                          label={statusLabel[entry.change.status]}
-                          color={entry.change.status === "conflicted"
-                            ? "error"
-                            : "default"}
-                          sx={{ minWidth: 32 }}
-                        />
-                      </ListItemButton>
-                    ))}
+                    <GitTreeRows
+                      nodes={buildGitChangeTree(section.entries)}
+                      depth={0}
+                      collapsed={collapsed}
+                      onToggle={(path) =>
+                        setCollapsed((current) => {
+                          const next = new Set(current);
+                          if (next.has(path)) next.delete(path);
+                          else next.add(path);
+                          return next;
+                        })}
+                      onOpenDiff={onOpenDiff}
+                      queue={queue}
+                      reviewed={reviewed}
+                    />
                   </List>
                 </Box>
               ))}

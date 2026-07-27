@@ -114,6 +114,7 @@ export function fetchCodeChanges(
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/changes`,
     signal,
+    "no-store",
   );
 }
 
@@ -124,6 +125,7 @@ export function fetchCodeManifest(
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/manifest`,
     signal,
+    "no-store",
   );
 }
 
