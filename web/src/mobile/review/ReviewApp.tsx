@@ -598,6 +598,7 @@ export function ReviewApp({
   >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
+  const [staleDiffPath, setStaleDiffPath] = useState<string>();
   const [navigationHistory, setNavigationHistory] = useState<
     Extract<ReviewTarget, { kind: "source" }>[]
   >([]);
@@ -763,6 +764,7 @@ export function ReviewApp({
     entry: GitReviewEntry,
     queue: GitReviewEntry[],
   ): void => {
+    setStaleDiffPath(undefined);
     setCurrentRevision(undefined);
     setMode("git");
     setDiffTarget({
@@ -798,7 +800,13 @@ export function ReviewApp({
         candidate.change.path === tab.path && candidate.scope === tab.scope
       );
       if (entry) openDiff(entry, queue);
-      else setTabs((current) => closeReviewTab(current, reviewTabKey(tab)));
+      else {
+        // Restored Git tabs can outlive the change they represented. Clicking
+        // a tab is navigation, never implicit deletion: keep it until the user
+        // deliberately closes it and explain why there is no diff to open.
+        setDiffTarget(undefined);
+        setStaleDiffPath(tab.path);
+      }
     } catch {
       // The existing changes surface owns retry/error presentation.
     }
@@ -999,10 +1007,17 @@ export function ReviewApp({
                 ? <DifferenceOutlined color="disabled" />
                 : <FolderOpenOutlined color="disabled" />}
               <Typography color="text.secondary">
-                {mode === "git"
+                {mode === "git" && staleDiffPath
+                  ? `${staleDiffPath.split("/").at(-1) ?? staleDiffPath} is no longer changed`
+                  : mode === "git"
                   ? "Select a changed file from Git review"
                   : "Select a file from the Worktree"}
               </Typography>
+              {mode === "git" && staleDiffPath && (
+                <Typography variant="caption" color="text.secondary">
+                  The tab is preserved. Close it explicitly when you no longer need it.
+                </Typography>
+              )}
             </Stack>
           )
           : (
