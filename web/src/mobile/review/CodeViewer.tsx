@@ -15,9 +15,15 @@ import {
 import CodeMirror from "@uiw/react-codemirror";
 import { Box, useTheme } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { LanguageSupport } from "@codemirror/language";
+import {
+  HighlightStyle,
+  type LanguageSupport,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { cmTheme } from "../../cmTheme";
 import { loadCodeLanguage } from "./codeLanguage";
+import { codeSyntaxPalette } from "./codeSyntaxTheme";
 import { changedWordRange } from "./diffWordModel";
 import { diffContextFolds } from "./diffContextModel";
 import type { CodeLanguage } from "./codeApi";
@@ -309,10 +315,58 @@ export default function CodeViewer({
   }, [kind, path]);
 
   const extensions = useMemo(() => {
+    const syntax = codeSyntaxPalette(theme.palette.mode);
+    const highlightStyle = HighlightStyle.define([
+      { tag: tags.keyword, color: syntax.keyword, fontWeight: "600" },
+      {
+        tag: [tags.string, tags.special(tags.string), tags.regexp, tags.escape],
+        color: syntax.string,
+      },
+      {
+        tag: [tags.number, tags.bool, tags.null],
+        color: syntax.number,
+      },
+      {
+        tag: [tags.typeName, tags.className, tags.namespace],
+        color: syntax.type,
+      },
+      {
+        tag: [tags.function(tags.variableName), tags.function(tags.propertyName)],
+        color: syntax.function,
+      },
+      {
+        tag: [tags.propertyName, tags.attributeName, tags.labelName],
+        color: syntax.property,
+      },
+      {
+        tag: [tags.constant(tags.name), tags.standard(tags.name), tags.local(tags.name)],
+        color: syntax.constant,
+      },
+      {
+        tag: [tags.operator, tags.punctuation, tags.bracket],
+        color: syntax.operator,
+      },
+      {
+        tag: [tags.comment, tags.docComment, tags.meta],
+        color: syntax.muted,
+        fontStyle: "italic",
+      },
+      { tag: [tags.tagName, tags.heading], color: syntax.tag },
+      {
+        tag: [tags.variableName, tags.name],
+        color: syntax.foreground,
+      },
+      {
+        tag: tags.invalid,
+        color: syntax.invalid,
+        textDecoration: "underline wavy",
+      },
+    ]);
     const values: Extension[] = [
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
       cmTheme(theme, true),
+      syntaxHighlighting(highlightStyle),
       EditorView.theme({
         "&": { height: "100%", fontSize: `${fontSize}px` },
         ".cm-scroller": {
@@ -390,12 +444,15 @@ export default function CodeViewer({
         ".cowboy-diagnostic-3, .cowboy-diagnostic-4": {
           textDecorationColor: theme.palette.info.main,
         },
-        ".cowboy-semantic-0": { color: theme.palette.primary.main },
-        ".cowboy-semantic-1": { color: theme.palette.secondary.main },
-        ".cowboy-semantic-2": { color: theme.palette.success.main },
-        ".cowboy-semantic-3": { color: theme.palette.warning.main },
-        ".cowboy-semantic-4": { color: theme.palette.info.main },
-        ".cowboy-semantic-5": { fontStyle: "italic" },
+        ".cowboy-semantic-0": { color: syntax.keyword },
+        ".cowboy-semantic-1": { color: syntax.type },
+        ".cowboy-semantic-2": { color: syntax.function },
+        ".cowboy-semantic-3": { color: syntax.string },
+        ".cowboy-semantic-4": { color: syntax.number },
+        ".cowboy-semantic-5": {
+          color: syntax.property,
+          fontStyle: "italic",
+        },
       }),
     ];
     if (softWrap) values.push(EditorView.lineWrapping);
