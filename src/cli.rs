@@ -85,6 +85,12 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_RUNTIME_SOCKET")]
     pub runtime_socket: Option<PathBuf>,
 
+    /// Unix socket of Cowboy's isolated Zed protocol adapter. When omitted,
+    /// code review remains available but language intelligence is reported as
+    /// unavailable.
+    #[arg(long, env = "COWBOY_ZED_ADAPTER_SOCKET")]
+    pub zed_adapter_socket: Option<PathBuf>,
+
     /// Desired detached worker generation. Agentd uses this for new sessions;
     /// workers already serving a turn remain on their current generation until
     /// the rollout reaches a safe boundary.

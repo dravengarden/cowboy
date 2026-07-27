@@ -45,6 +45,7 @@ enum CommandKind {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Request {
     Health,
+    EnsureWorktree { path: PathBuf, trusted: bool },
     OpenWorktree { path: PathBuf, trusted: bool },
     CloseWorktree { path: PathBuf },
 }
@@ -309,49 +310,11 @@ async fn respond(request: Request, worktrees: &Worktrees, zed: Option<&Zed>) -> 
             zed_revision: ZED_REVISION,
             worktrees: worktrees.read().await.len(),
         },
+        Request::EnsureWorktree { path, trusted } => {
+            ensure_worktree(path, trusted, false, worktrees, zed).await?
+        }
         Request::OpenWorktree { path, trusted } => {
-            let path = tokio::fs::canonicalize(path).await?;
-            if !path.is_dir() {
-                bail!("worktree is not a directory");
-            }
-            let mut all = worktrees.write().await;
-            if !all.contains_key(&path) {
-                let (remote_id, state) = if let Some(zed) = zed {
-                    zed.lock().await.open_worktree(&path, trusted).await?
-                } else {
-                    (
-                        u64::try_from(all.len() + 1)?,
-                        if trusted {
-                            WorktreeState::Warming
-                        } else {
-                            WorktreeState::Restricted
-                        },
-                    )
-                };
-                all.insert(
-                    path.clone(),
-                    WorktreeLease {
-                        state,
-                        leases: 0,
-                        remote_id,
-                    },
-                );
-            }
-            let lease = all.get_mut(&path).expect("worktree was just inserted");
-            lease.leases += 1;
-            if trusted && matches!(lease.state, WorktreeState::Restricted) {
-                lease.state = if let Some(zed) = zed {
-                    zed.lock().await.set_trust(lease.remote_id, true).await?
-                } else {
-                    WorktreeState::Warming
-                };
-            }
-            Response::Worktree {
-                api_version: ADAPTER_VERSION,
-                path,
-                state: lease.state,
-                leases: lease.leases,
-            }
+            ensure_worktree(path, trusted, true, worktrees, zed).await?
         }
         Request::CloseWorktree { path } => {
             let path = tokio::fs::canonicalize(path).await?;
@@ -375,6 +338,59 @@ async fn respond(request: Request, worktrees: &Worktrees, zed: Option<&Zed>) -> 
             }
             response
         }
+    })
+}
+
+async fn ensure_worktree(
+    path: PathBuf,
+    trusted: bool,
+    acquire_lease: bool,
+    worktrees: &Worktrees,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let path = tokio::fs::canonicalize(path).await?;
+    if !path.is_dir() {
+        bail!("worktree is not a directory");
+    }
+    let mut all = worktrees.write().await;
+    if !all.contains_key(&path) {
+        let (remote_id, state) = if let Some(zed) = zed {
+            zed.lock().await.open_worktree(&path, trusted).await?
+        } else {
+            (
+                u64::try_from(all.len() + 1)?,
+                if trusted {
+                    WorktreeState::Warming
+                } else {
+                    WorktreeState::Restricted
+                },
+            )
+        };
+        all.insert(
+            path.clone(),
+            WorktreeLease {
+                state,
+                leases: 0,
+                remote_id,
+            },
+        );
+    }
+    let lease = all.get_mut(&path).expect("worktree was just inserted");
+    if acquire_lease {
+        lease.leases += 1;
+    }
+    if trusted && matches!(lease.state, WorktreeState::Restricted) {
+        lease.state = if let Some(zed) = zed {
+            zed.lock().await.set_trust(lease.remote_id, true).await?
+        } else {
+            WorktreeState::Warming
+        };
+    }
+    Ok(Response::Worktree {
+        api_version: ADAPTER_VERSION,
+        path,
+        state: lease.state,
+        leases: lease.leases,
     })
 }
 
@@ -539,6 +555,33 @@ mod tests {
             .await
             .unwrap();
         assert!(worktrees.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_worktree_is_idempotent_and_does_not_acquire_a_lease() {
+        let root = std::env::current_dir().unwrap();
+        let worktrees: Worktrees = Arc::default();
+        for _ in 0..2 {
+            let response = respond(
+                Request::EnsureWorktree {
+                    path: root.clone(),
+                    trusted: true,
+                },
+                &worktrees,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                response,
+                Response::Worktree {
+                    state: WorktreeState::Warming,
+                    leases: 0,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(worktrees.read().await.len(), 1);
     }
 
     #[tokio::test]

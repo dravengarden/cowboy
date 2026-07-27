@@ -51,6 +51,8 @@ Cowboy talks to the adapter over a private Unix socket. The adapter owns Zed
 `Envelope`, project/worktree IDs, scan IDs, buffer IDs, language-server IDs,
 reconnect, and replay. Cowboy sees only versioned product messages:
 
+- idempotently ensure a worktree for manifest/capability discovery without
+  acquiring a UI lease;
 - open/close a canonical worktree lease;
 - subscribe to monotonic worktree deltas;
 - open/close a read-only buffer lease;
@@ -69,3 +71,9 @@ must not blank Code, block Agent traffic, or restart Cowboy. It disables only
 language intelligence and provider-driven deltas, exposes the reason in
 capabilities, and retries with bounded backoff. A low-frequency manifest
 reconciliation remains active even after delta streaming is healthy.
+
+The first production slice implements the idempotent ensure and leased
+open/close operations against the pinned Zed server. Cowboy's manifest reports
+`provider: "zed"` and `state: "ready"` only after the ensure response succeeds;
+individual LSP capabilities remain false until their stable adapter messages
+are implemented.

@@ -46,6 +46,8 @@ use crate::runtime_wire::StartSession;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 
 struct AppState {
@@ -60,6 +62,7 @@ struct AppState {
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
+    zed_adapter_socket: Option<PathBuf>,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -512,6 +515,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
+            zed_adapter_socket: args.zed_adapter_socket,
         },
         shutdown_tx,
     )
@@ -1782,6 +1786,56 @@ struct CodeLanguageCapabilities {
     semantic_tokens: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum ZedAdapterResponse {
+    Worktree {
+        api_version: u8,
+        state: String,
+    },
+    Error {
+        message: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+async fn ensure_zed_worktree(socket: &FsPath, cwd: &str) -> anyhow::Result<bool> {
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        UnixStream::connect(socket),
+    )
+    .await
+    .context("Zed adapter connect timed out")??;
+    let (read, mut write) = stream.into_split();
+    let request = serde_json::json!({
+        "type": "ensureWorktree",
+        "path": cwd,
+        "trusted": true,
+    });
+    write.write_all(request.to_string().as_bytes()).await?;
+    write.write_all(b"\n").await?;
+    write.shutdown().await?;
+    let mut line = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        BufReader::new(read).read_line(&mut line),
+    )
+    .await
+    .context("Zed adapter response timed out")??;
+    match serde_json::from_str::<ZedAdapterResponse>(&line)? {
+        ZedAdapterResponse::Worktree {
+            api_version: 1,
+            state,
+        } => Ok(state == "ready"),
+        ZedAdapterResponse::Worktree { api_version, .. } => {
+            anyhow::bail!("unsupported Zed adapter API version {api_version}")
+        }
+        ZedAdapterResponse::Error { message } => anyhow::bail!("{message}"),
+        ZedAdapterResponse::Other => anyhow::bail!("unexpected Zed adapter response"),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeDiffQuery {
@@ -1990,14 +2044,31 @@ async fn api_code_manifest(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let language_ready = if let Some(socket) = &state.zed_adapter_socket {
+        match ensure_zed_worktree(socket, &cwd).await {
+            Ok(ready) => ready,
+            Err(error) => {
+                tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let manifest_cwd = cwd;
     let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(cwd).manifest()
+        crate::code_review::LocalCodeProvider::new(manifest_cwd).manifest()
     })
     .await;
     let Ok(Ok(manifest)) = result else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable").into_response();
     };
-    let etag = format!("\"{}\"", manifest.revision);
+    let language_state = if language_ready {
+        "ready"
+    } else {
+        "unavailable"
+    };
+    let etag = format!("\"{}-{language_state}\"", manifest.revision);
     const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
     if headers
         .get(header::IF_NONE_MATCH)
@@ -2020,8 +2091,8 @@ async fn api_code_manifest(
         head: manifest.head,
         change_count: manifest.change_count,
         language: CodeLanguageCapabilities {
-            provider: "none",
-            state: "unavailable",
+            provider: if language_ready { "zed" } else { "none" },
+            state: language_state,
             diagnostics: false,
             inlay_hints: false,
             semantic_tokens: false,
@@ -3265,6 +3336,43 @@ mod code_tree_cache_tests {
             kind: "directory",
         }];
         assert_ne!(revision, file_tree_revision("", &renamed, false));
+    }
+}
+
+#[cfg(test)]
+mod zed_adapter_tests {
+    use super::*;
+    use tokio::net::UnixListener;
+
+    #[tokio::test]
+    async fn ensure_worktree_uses_the_stable_adapter_contract() {
+        let socket = std::env::temp_dir().join(format!(
+            "cowboy-zed-client-test-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut request = String::new();
+            BufReader::new(read).read_line(&mut request).await.unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["type"], "ensureWorktree");
+            assert_eq!(request["path"], "/tmp/worktree");
+            assert_eq!(request["trusted"], true);
+            write
+                .write_all(b"{\"type\":\"worktree\",\"api_version\":1,\"state\":\"ready\"}\n")
+                .await
+                .unwrap();
+        });
+
+        assert!(ensure_zed_worktree(&socket, "/tmp/worktree").await.unwrap());
+        server.await.unwrap();
+        tokio::fs::remove_file(socket).await.unwrap();
     }
 }
 
