@@ -40,12 +40,15 @@ function ignoredGestureTarget(
   boundary: HTMLElement,
 ): boolean {
   const element = target instanceof HTMLElement ? target : null;
+  const explicitlyAllowsPager =
+    element?.closest("[data-mobile-pager-allow]") != null;
   return (
     expandedSelection(globalThis.getSelection?.() ?? null) ||
-    element?.closest(
-        "input, textarea, [contenteditable='true'], [data-mobile-pager-ignore]",
-      ) != null ||
-    hasHorizontalScroller(target, boundary)
+    (!explicitlyAllowsPager &&
+      (element?.closest(
+          "input, textarea, [contenteditable='true'], [data-mobile-pager-ignore]",
+        ) != null ||
+        hasHorizontalScroller(target, boundary)))
   );
 }
 

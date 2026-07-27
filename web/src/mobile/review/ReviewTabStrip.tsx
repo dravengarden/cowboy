@@ -133,6 +133,11 @@ export function ReviewTabStrip({
             </Box>
           );
         })}
+        <Box
+          aria-hidden
+          data-mobile-pager-allow
+          sx={{ flex: "1 0 72px", minHeight: 42 }}
+        />
       </Stack>
       <Menu
         anchorEl={menu?.anchor}
