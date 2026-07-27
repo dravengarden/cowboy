@@ -1,6 +1,7 @@
 import {
   EditorState,
   type Extension,
+  type Range,
   StateEffect,
   StateField,
 } from "@codemirror/state";
@@ -20,12 +21,16 @@ import {
   type LanguageSupport,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { tags } from "@lezer/highlight";
+import { highlightTree, tags } from "@lezer/highlight";
 import { cmTheme } from "../../cmTheme";
 import { loadCodeLanguage } from "./codeLanguage";
 import { codeSyntaxPalette } from "./codeSyntaxTheme";
 import { changedWordRange } from "./diffWordModel";
 import { diffContextFolds } from "./diffContextModel";
+import {
+  diffPointToNewFile,
+  diffSourceProjection,
+} from "./diffSourceModel";
 import type { CodeLanguage } from "./codeApi";
 
 class InlayHintWidget extends WidgetType {
@@ -56,7 +61,7 @@ function languageDecorations(
   semanticHighlighting: boolean,
 ): DecorationSet {
   if (!language) return Decoration.none;
-  const ranges = [];
+  const ranges: Range<Decoration>[] = [];
   if (semanticHighlighting) {
     let row = 0;
     let column = 0;
@@ -122,6 +127,22 @@ function languageDecorations(
       );
     }
   }
+  return Decoration.set(ranges, true);
+}
+
+function diffLanguageDecorations(
+  text: string,
+  language: LanguageSupport,
+  highlighter: HighlightStyle,
+): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  const projection = diffSourceProjection(text);
+  const tree = language.language.parser.parse(projection);
+  highlightTree(tree, highlighter, (from, to, classes) => {
+    if (to > from) {
+      ranges.push(Decoration.mark({ class: classes }).range(from, to));
+    }
+  });
   return Decoration.set(ranges, true);
 }
 
@@ -306,11 +327,9 @@ export default function CodeViewer({
   useEffect(() => {
     let current = true;
     setLanguage(null);
-    if (kind === "source") {
-      void loadCodeLanguage(path).then((support) => {
-        if (current) setLanguage(support);
-      });
-    }
+    void loadCodeLanguage(path).then((support) => {
+      if (current) setLanguage(support);
+    });
     return () => {
       current = false;
     };
@@ -458,8 +477,15 @@ export default function CodeViewer({
       }),
     ];
     if (softWrap) values.push(EditorView.lineWrapping);
-    if (language) values.push(language);
+    if (kind === "source" && language) values.push(language);
     if (kind === "diff") values.push(diffView, contextFolding);
+    if (kind === "diff" && language) {
+      values.push(
+        EditorView.decorations.of(
+          diffLanguageDecorations(text, language, highlightStyle),
+        ),
+      );
+    }
     if (kind === "source" && languageData) {
       values.push(
         EditorView.decorations.of(
@@ -473,7 +499,7 @@ export default function CodeViewer({
         ),
       );
     }
-    if (kind === "source" && onInspect) {
+    if (onInspect) {
       values.push(
         EditorView.domEventHandlers({
           click: (event, view) => {
@@ -488,10 +514,11 @@ export default function CodeViewer({
               column > 0 ? line.text.at(column - 1) ?? "" : ""
             }`;
             if (!/[\p{L}\p{N}_$]/u.test(adjacent)) return false;
-            onInspect({
-              row: line.number - 1,
-              column,
-            });
+            const point = kind === "diff"
+              ? diffPointToNewFile(text, line.number - 1, column)
+              : { row: line.number - 1, column };
+            if (!point) return false;
+            onInspect(point);
             return false;
           },
         }),

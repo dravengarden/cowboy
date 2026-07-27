@@ -150,7 +150,7 @@ function DocumentView({
     row: number;
     column: number;
   }): void => {
-    if (target.kind !== "source") return;
+    if (target.kind === "diff" && target.scope !== "unstaged") return;
     setInspectTarget(point);
     setNavigation([]);
     hoverController.current?.abort();
@@ -177,7 +177,10 @@ function DocumentView({
   }, [sessionId, target]);
 
   const navigate = useCallback((kind: CodeNavigationKind): void => {
-    if (target.kind !== "source" || !inspectTarget) return;
+    if (
+      !inspectTarget ||
+      (target.kind === "diff" && target.scope !== "unstaged")
+    ) return;
     hoverController.current?.abort();
     const controller = new AbortController();
     hoverController.current = controller;
@@ -478,7 +481,10 @@ function DocumentView({
                 diagnostics={settings.diagnostics}
                 inlayHints={settings.inlayHints}
                 semanticHighlighting={settings.semanticHighlighting}
-                onInspect={target.kind === "source" ? inspectPoint : undefined}
+                onInspect={target.kind === "source" ||
+                    (target.kind === "diff" && target.scope === "unstaged")
+                  ? inspectPoint
+                  : undefined}
               />
             </Suspense>
       )}
