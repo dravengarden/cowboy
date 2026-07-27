@@ -76,6 +76,19 @@ enum Request {
         worktree: PathBuf,
         path: PathBuf,
     },
+    BufferHover {
+        worktree: PathBuf,
+        path: PathBuf,
+        row: u32,
+        column: u32,
+    },
+    BufferNavigate {
+        worktree: PathBuf,
+        path: PathBuf,
+        row: u32,
+        column: u32,
+        kind: NavigationKind,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -109,6 +122,18 @@ enum Response {
         diagnostics: Vec<LanguageDiagnostic>,
         inlay_hints: Vec<LanguageInlayHint>,
         semantic_tokens: Vec<u32>,
+    },
+    BufferHover {
+        api_version: u8,
+        worktree: PathBuf,
+        path: PathBuf,
+        contents: Vec<LanguageHoverBlock>,
+    },
+    BufferNavigation {
+        api_version: u8,
+        worktree: PathBuf,
+        path: PathBuf,
+        locations: Vec<LanguageLocation>,
     },
     Error {
         api_version: u8,
@@ -172,7 +197,35 @@ struct LanguageInlayHint {
     padding_right: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguageHoverBlock {
+    text: String,
+    language: Option<String>,
+    markdown: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum NavigationKind {
+    Definition,
+    Declaration,
+    TypeDefinition,
+    Implementation,
+    References,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguageLocation {
+    path: PathBuf,
+    start: LanguagePoint,
+    end: LanguagePoint,
+}
+
 type Buffers = Arc<RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>>;
+type BufferFiles = Arc<RwLock<HashMap<u64, proto::File>>>;
+type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
 type Zed = Arc<ZedRuntime>;
 type PendingRequests = Arc<Mutex<HashMap<u32, oneshot::Sender<proto::Envelope>>>>;
 
@@ -181,6 +234,8 @@ struct ZedRuntime {
     outbound: mpsc::UnboundedSender<proto::Envelope>,
     pending: PendingRequests,
     events: broadcast::Sender<proto::Envelope>,
+    buffer_files: BufferFiles,
+    worktree_paths: WorktreePaths,
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
 }
@@ -287,12 +342,15 @@ impl ZedRuntime {
         let (outbound, outbound_rx) = mpsc::unbounded_channel();
         let pending = PendingRequests::default();
         let (events, _) = broadcast::channel(1_024);
+        let buffer_files = BufferFiles::default();
+        let worktree_paths = WorktreePaths::default();
         tokio::spawn(write_messages(input, outbound_rx));
         tokio::spawn(read_messages(
             output,
             outbound.clone(),
             Arc::clone(&pending),
             events.clone(),
+            Arc::clone(&buffer_files),
         ));
         outbound
             .send(proto::Envelope {
@@ -309,6 +367,8 @@ impl ZedRuntime {
             outbound,
             pending,
             events,
+            buffer_files,
+            worktree_paths,
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
         })
@@ -427,6 +487,10 @@ impl ZedRuntime {
             bail!("Zed returned the wrong AddWorktree response");
         };
         let worktree_id = response.worktree_id;
+        self.worktree_paths
+            .write()
+            .await
+            .insert(worktree_id, path.to_path_buf());
 
         let state = self.set_trust(worktree_id, trusted).await?;
         Ok((worktree_id, state))
@@ -649,6 +713,112 @@ impl ZedRuntime {
         Ok((diagnostics, inlay_hints, semantic_tokens))
     }
 
+    async fn hover(
+        &self,
+        buffer_id: u64,
+        version: &[BufferVersionEntry],
+        offset: u64,
+    ) -> Result<Vec<LanguageHoverBlock>> {
+        let responses = self
+            .lsp_query(proto::lsp_query::Request::GetHover(proto::GetHover {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position: Some(proto::Anchor {
+                    replica_id: u32::MIN,
+                    timestamp: u32::MIN,
+                    offset,
+                    bias: proto::Bias::Left as i32,
+                    buffer_id: Some(buffer_id),
+                }),
+                version: proto_version(version),
+            }))
+            .await?;
+        Ok(responses
+            .into_iter()
+            .filter_map(|response| match response.response? {
+                proto::lsp_response::Response::GetHoverResponse(value) => Some(value),
+                _ => None,
+            })
+            .flat_map(|response| response.contents)
+            .map(|block| LanguageHoverBlock {
+                text: block.text,
+                language: block.language,
+                markdown: block.is_markdown,
+            })
+            .take(32)
+            .collect())
+    }
+
+    async fn navigate(
+        &self,
+        buffer_id: u64,
+        version: &[BufferVersionEntry],
+        offset: u64,
+        kind: NavigationKind,
+    ) -> Result<Vec<LanguageLocation>> {
+        let responses = self
+            .lsp_query(navigation_request(buffer_id, version, offset, kind))
+            .await?;
+        let locations = responses
+            .into_iter()
+            .flat_map(|response| match response.response {
+                Some(proto::lsp_response::Response::GetDefinitionResponse(value)) => value
+                    .links
+                    .into_iter()
+                    .filter_map(|link| link.target)
+                    .collect(),
+                Some(proto::lsp_response::Response::GetDeclarationResponse(value)) => value
+                    .links
+                    .into_iter()
+                    .filter_map(|link| link.target)
+                    .collect(),
+                Some(proto::lsp_response::Response::GetTypeDefinitionResponse(value)) => value
+                    .links
+                    .into_iter()
+                    .filter_map(|link| link.target)
+                    .collect(),
+                Some(proto::lsp_response::Response::GetImplementationResponse(value)) => value
+                    .links
+                    .into_iter()
+                    .filter_map(|link| link.target)
+                    .collect(),
+                Some(proto::lsp_response::Response::GetReferencesResponse(value)) => {
+                    value.locations
+                }
+                _ => Vec::new(),
+            })
+            .take(256)
+            .collect::<Vec<_>>();
+        let files = self.buffer_files.read().await;
+        let worktrees = self.worktree_paths.read().await;
+        let mut result = Vec::with_capacity(locations.len());
+        for location in locations {
+            let Some(file) = files.get(&location.buffer_id) else {
+                continue;
+            };
+            let Some(start) = location.start else {
+                continue;
+            };
+            let end = location.end.unwrap_or_else(|| start.clone());
+            let Some(worktree) = worktrees.get(&file.worktree_id) else {
+                continue;
+            };
+            let path = worktree.join(&file.path);
+            let text = tokio::fs::read_to_string(&path).await.ok();
+            let Some(text) = text else {
+                continue;
+            };
+            let Some(start) = offset_to_utf16_point(&text, start.offset) else {
+                continue;
+            };
+            let Some(end) = offset_to_utf16_point(&text, end.offset) else {
+                continue;
+            };
+            result.push(LanguageLocation { path, start, end });
+        }
+        Ok(result)
+    }
+
     async fn lsp_query(
         &self,
         request: proto::lsp_query::Request,
@@ -678,6 +848,64 @@ impl ZedRuntime {
         })
         .await
         .context("Zed language query timed out")?
+    }
+}
+
+fn navigation_request(
+    buffer_id: u64,
+    version: &[BufferVersionEntry],
+    offset: u64,
+    kind: NavigationKind,
+) -> proto::lsp_query::Request {
+    let position = Some(proto::Anchor {
+        replica_id: u32::MIN,
+        timestamp: u32::MIN,
+        offset,
+        bias: proto::Bias::Left as i32,
+        buffer_id: Some(buffer_id),
+    });
+    let version = proto_version(version);
+    match kind {
+        NavigationKind::Definition => {
+            proto::lsp_query::Request::GetDefinition(proto::GetDefinition {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::Declaration => {
+            proto::lsp_query::Request::GetDeclaration(proto::GetDeclaration {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::TypeDefinition => {
+            proto::lsp_query::Request::GetTypeDefinition(proto::GetTypeDefinition {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::Implementation => {
+            proto::lsp_query::Request::GetImplementation(proto::GetImplementation {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
+        NavigationKind::References => {
+            proto::lsp_query::Request::GetReferences(proto::GetReferences {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                position,
+                version,
+            })
+        }
     }
 }
 
@@ -774,6 +1002,7 @@ async fn read_messages(
     outbound: mpsc::UnboundedSender<proto::Envelope>,
     pending: PendingRequests,
     events: broadcast::Sender<proto::Envelope>,
+    buffer_files: BufferFiles,
 ) {
     let next_message_id = AtomicU32::new(1_000_000_000);
     let next_worktree_id = AtomicU64::new(1);
@@ -839,6 +1068,12 @@ async fn read_messages(
             continue;
         }
 
+        if let Some(proto::envelope::Payload::CreateBufferForPeer(message)) = &envelope.payload
+            && let Some(proto::create_buffer_for_peer::Variant::State(state)) = &message.variant
+            && let Some(file) = &state.file
+        {
+            buffer_files.write().await.insert(state.id, file.clone());
+        }
         let _ = events.send(envelope);
     }
 }
@@ -897,6 +1132,19 @@ async fn respond(
         Request::BufferLanguage { worktree, path } => {
             buffer_language(worktree, path, buffers, zed).await?
         }
+        Request::BufferHover {
+            worktree,
+            path,
+            row,
+            column,
+        } => buffer_hover(worktree, path, row, column, buffers, zed).await?,
+        Request::BufferNavigate {
+            worktree,
+            path,
+            row,
+            column,
+            kind,
+        } => buffer_navigate(worktree, path, row, column, kind, buffers, zed).await?,
     })
 }
 
@@ -927,6 +1175,116 @@ async fn buffer_language(
         diagnostics,
         inlay_hints,
         semantic_tokens,
+    })
+}
+
+fn utf16_point_to_offset(text: &str, row: u32, column: u32) -> Result<u64> {
+    let mut line_start = 0usize;
+    let mut lines = text.split_inclusive('\n');
+    let line = lines
+        .nth(usize::try_from(row)?)
+        .context("hover row is outside the buffer")?;
+    for preceding in text.split_inclusive('\n').take(usize::try_from(row)?) {
+        line_start += preceding.len();
+    }
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let mut utf16 = 0u32;
+    let mut byte = 0usize;
+    for character in line.chars() {
+        if utf16 >= column {
+            break;
+        }
+        let width = u32::try_from(character.len_utf16())?;
+        if utf16 + width > column {
+            bail!("hover column splits a UTF-16 character");
+        }
+        utf16 += width;
+        byte += character.len_utf8();
+    }
+    if utf16 < column {
+        bail!("hover column is outside the buffer");
+    }
+    Ok(u64::try_from(line_start + byte)?)
+}
+
+fn offset_to_utf16_point(text: &str, offset: u64) -> Option<LanguagePoint> {
+    let offset = usize::try_from(offset).ok()?;
+    if offset > text.len() || !text.is_char_boundary(offset) {
+        return None;
+    }
+    let prefix = &text[..offset];
+    let row = u32::try_from(prefix.bytes().filter(|byte| *byte == b'\n').count()).ok()?;
+    let line = prefix.rsplit_once('\n').map_or(prefix, |(_, line)| line);
+    let column = u32::try_from(line.encode_utf16().count()).ok()?;
+    Some(LanguagePoint { row, column })
+}
+
+async fn buffer_hover(
+    worktree: PathBuf,
+    path: PathBuf,
+    row: u32,
+    column: u32,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let (buffer_id, version) = {
+        let all = buffers.read().await;
+        let lease = all
+            .get(&(worktree.clone(), path.clone()))
+            .context("buffer is not open")?;
+        (lease.remote_id, lease.version.clone())
+    };
+    let text = tokio::fs::read_to_string(worktree.join(&path)).await?;
+    let offset = utf16_point_to_offset(&text, row, column)?;
+    let contents = if let Some(zed) = zed {
+        zed.hover(buffer_id, &version, offset).await?
+    } else {
+        Vec::new()
+    };
+    Ok(Response::BufferHover {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        contents,
+    })
+}
+
+async fn buffer_navigate(
+    worktree: PathBuf,
+    path: PathBuf,
+    row: u32,
+    column: u32,
+    kind: NavigationKind,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let (buffer_id, version) = {
+        let all = buffers.read().await;
+        let lease = all
+            .get(&(worktree.clone(), path.clone()))
+            .context("buffer is not open")?;
+        (lease.remote_id, lease.version.clone())
+    };
+    let text = tokio::fs::read_to_string(worktree.join(&path)).await?;
+    let offset = utf16_point_to_offset(&text, row, column)?;
+    let mut locations = if let Some(zed) = zed {
+        zed.navigate(buffer_id, &version, offset, kind).await?
+    } else {
+        Vec::new()
+    };
+    for location in &mut locations {
+        if let Ok(relative) = location.path.strip_prefix(&worktree) {
+            location.path = relative.to_path_buf();
+        }
+    }
+    locations.retain(|location| !location.path.is_absolute());
+    Ok(Response::BufferNavigation {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        locations,
     })
 }
 
@@ -1439,6 +1797,18 @@ mod tests {
         assert_eq!(value["version"][0]["replicaId"], 7);
         assert_eq!(value["version"][0]["timestamp"], 11);
         assert!(value["version"][0].get("replica_id").is_none());
+    }
+
+    #[test]
+    fn hover_points_convert_utf16_columns_to_utf8_offsets() {
+        assert_eq!(utf16_point_to_offset("zero\nα😀x\n", 1, 0).unwrap(), 5);
+        assert_eq!(utf16_point_to_offset("zero\nα😀x\n", 1, 1).unwrap(), 7);
+        assert_eq!(utf16_point_to_offset("zero\nα😀x\n", 1, 3).unwrap(), 11);
+        assert!(utf16_point_to_offset("zero\nα😀x\n", 1, 2).is_err());
+        assert!(utf16_point_to_offset("zero\nα😀x\n", 9, 0).is_err());
+        let point = offset_to_utf16_point("zero\nα😀x\n", 11).unwrap();
+        assert_eq!((point.row, point.column), (1, 3));
+        assert!(offset_to_utf16_point("😀", 1).is_none());
     }
 
     #[test]

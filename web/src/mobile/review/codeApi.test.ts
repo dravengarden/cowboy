@@ -4,6 +4,7 @@ import {
   fetchCodeFilePage,
   fetchCodeLanguage,
   fetchCodeManifest,
+  fetchCodeNavigation,
   fetchCodeSearch,
   fetchCodeTree,
   openCodeBuffer,
@@ -47,6 +48,36 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
   }
 });
 
+Deno.test("navigation hides Zed buffer identities behind Code paths", async () => {
+  const original = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        apiVersion: 1,
+        path: "src/main.rs",
+        locations: [],
+      })),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeNavigation(
+      "session/id",
+      "src/main.rs",
+      4,
+      12,
+      "typeDefinition",
+    );
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/intelligence/navigation?path=src%2Fmain.rs&row=4&column=12&kind=typeDefinition",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 Deno.test("language intelligence stays inside the stable Code data plane", async () => {
   const originalFetch = globalThis.fetch;
   let requested = "";
@@ -74,6 +105,31 @@ Deno.test("language intelligence stays inside the stable Code data plane", async
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("hover queries use stable UTF-16 Code coordinates", async () => {
+  const original = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        apiVersion: 1,
+        path: "src/main.rs",
+        contents: [],
+      })),
+    );
+  }) as typeof fetch;
+  try {
+    const { fetchCodeHover } = await import("./codeApi.ts");
+    await fetchCodeHover("session/id", "src/main.rs", 4, 12);
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/intelligence/hover?path=src%2Fmain.rs&row=4&column=12",
+    );
+  } finally {
+    globalThis.fetch = original;
   }
 });
 

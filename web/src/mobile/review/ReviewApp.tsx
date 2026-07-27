@@ -39,16 +39,22 @@ import {
   useControlPlaneSessionActivity,
 } from "../../controlPlane";
 import { Markdown } from "../../Markdown";
+import { Sheet } from "../../Sheet";
 import {
   CodeApiError,
   closeCodeBuffer,
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
+  fetchCodeHover,
+  fetchCodeNavigation,
   fetchCodeChanges,
   fetchCodeLanguage,
   fetchCodeManifest,
   openCodeBuffer,
+  type CodeHover,
+  type CodeLocation,
+  type CodeNavigationKind,
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
@@ -93,7 +99,7 @@ type ReviewTarget =
     scope: CodeDiffScope;
     queue: GitReviewEntry[];
   }
-  | { kind: "source"; path: string };
+  | { kind: "source"; path: string; revealLine?: number };
 
 type ReviewMode = "code" | "git";
 
@@ -103,12 +109,14 @@ function DocumentView({
   onRevision,
   markdownPreview,
   languageData,
+  onNavigate,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
   languageData?: CodeLanguage | undefined;
+  onNavigate: (location: CodeLocation) => void;
 }): React.JSX.Element {
   const settings = useReviewSettings();
   const [text, setText] = useState("");
@@ -124,7 +132,78 @@ function DocumentView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [hunkIndex, setHunkIndex] = useState(0);
+  const [hover, setHover] = useState<CodeHover>();
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const [hoverLoading, setHoverLoading] = useState(false);
+  const [inspectTarget, setInspectTarget] = useState<
+    { row: number; column: number } | undefined
+  >();
+  const [navigation, setNavigation] = useState<CodeLocation[]>([]);
+  const [navigationLoading, setNavigationLoading] = useState(false);
+  const hoverController = useRef<AbortController | undefined>(undefined);
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
+
+  const inspectPoint = useCallback((point: {
+    row: number;
+    column: number;
+  }): void => {
+    if (target.kind !== "source") return;
+    setInspectTarget(point);
+    setNavigation([]);
+    hoverController.current?.abort();
+    const controller = new AbortController();
+    hoverController.current = controller;
+    setHover(undefined);
+    setHoverLoading(true);
+    setHoverOpen(true);
+    void fetchCodeHover(
+      sessionId,
+      target.path,
+      point.row,
+      point.column,
+      controller.signal,
+    ).then((value) => {
+      if (!controller.signal.aborted) setHover(value);
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setHover({ apiVersion: 1, path: target.path, contents: [] });
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setHoverLoading(false);
+    });
+  }, [sessionId, target]);
+
+  const navigate = useCallback((kind: CodeNavigationKind): void => {
+    if (target.kind !== "source" || !inspectTarget) return;
+    hoverController.current?.abort();
+    const controller = new AbortController();
+    hoverController.current = controller;
+    setNavigation([]);
+    setNavigationLoading(true);
+    void fetchCodeNavigation(
+      sessionId,
+      target.path,
+      inspectTarget.row,
+      inspectTarget.column,
+      kind,
+      controller.signal,
+    ).then((result) => {
+      if (controller.signal.aborted) return;
+      const onlyLocation = result.locations.length === 1
+        ? result.locations[0]
+        : undefined;
+      if (onlyLocation) {
+        setHoverOpen(false);
+        onNavigate(onlyLocation);
+      } else {
+        setNavigation(result.locations);
+      }
+    }).catch(() => {
+      if (!controller.signal.aborted) setNavigation([]);
+    }).finally(() => {
+      if (!controller.signal.aborted) setNavigationLoading(false);
+    });
+  }, [inspectTarget, onNavigate, sessionId, target]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -137,6 +216,8 @@ function DocumentView({
     setNextCursor(undefined);
     setRevision(undefined);
     setLoadMoreError(false);
+    setHoverOpen(false);
+    hoverController.current?.abort();
     onRevision(undefined);
     const request = diffTarget
       ? loadCodeDiff(
@@ -190,6 +271,7 @@ function DocumentView({
     return () => {
       controller.abort();
       pageController.current?.abort();
+      hoverController.current?.abort();
     };
   }, [
     sessionId,
@@ -386,14 +468,89 @@ function DocumentView({
                 path={target.path}
                 softWrap={settings.softWrap}
                 fontSize={settings.codeFontSize}
-                revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}
+                revealLine={target.kind === "diff"
+                  ? hunks[hunkIndex]
+                  : target.revealLine}
                 languageData={target.kind === "source" ? languageData : undefined}
                 diagnostics={settings.diagnostics}
                 inlayHints={settings.inlayHints}
                 semanticHighlighting={settings.semanticHighlighting}
+                onInspect={target.kind === "source" ? inspectPoint : undefined}
               />
             </Suspense>
+      )}
+      <Sheet
+        open={hoverOpen}
+        onClose={() => setHoverOpen(false)}
+        title="Symbol"
+        forceSheet
+      >
+        <Stack spacing={1.5} sx={{ pb: 2 }}>
+          {hoverLoading
+            ? (
+              <Stack alignItems="center" sx={{ py: 4 }}>
+                <CircularProgress size={24} />
+              </Stack>
+            )
+            : hover?.contents.length
+            ? hover.contents.map((block, index) =>
+              block.markdown
+                ? <Markdown key={index} text={block.text} touchWrap />
+                : (
+                  <Box
+                    key={index}
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      p: 1.5,
+                      overflowX: "auto",
+                      borderRadius: 2,
+                      bgcolor: "action.hover",
+                      fontFamily: "var(--cowboy-font-mono)",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {block.text}
+                  </Box>
+                )
+            )
+            : (
+              <Typography color="text.secondary" sx={{ py: 3 }}>
+                No symbol information is available at this location.
+              </Typography>
+            )}
+          {!hoverLoading && (
+            <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
+              <Button size="small" onClick={() => navigate("definition")}>
+                Definition
+              </Button>
+              <Button size="small" onClick={() => navigate("typeDefinition")}>
+                Type
+              </Button>
+              <Button size="small" onClick={() => navigate("implementation")}>
+                Implementations
+              </Button>
+              <Button size="small" onClick={() => navigate("references")}>
+                References
+              </Button>
+            </Stack>
           )}
+          {navigationLoading && <CircularProgress size={20} />}
+          {navigation.map((location) => (
+            <Button
+              key={`${location.path}:${location.start.row}:${location.start.column}`}
+              variant="outlined"
+              sx={{ justifyContent: "flex-start", textTransform: "none" }}
+              onClick={() => {
+                setHoverOpen(false);
+                onNavigate(location);
+              }}
+            >
+              {location.path}:{location.start.row + 1}
+            </Button>
+          ))}
+        </Stack>
+      </Sheet>
       </Box>
     </Stack>
   );
@@ -573,11 +730,15 @@ export function ReviewApp({
     setTabsReadySession(workspace?.sessionId);
   }, [workspace?.sessionId]);
 
-  const openSource = (path: string): void => {
+  const openSource = (path: string, revealLine?: number): void => {
     setCurrentRevision(undefined);
     setMode("code");
     setMarkdownPreview(isMarkdownReviewPath(path));
-    setSourceTarget({ kind: "source", path });
+    setSourceTarget({
+      kind: "source",
+      path,
+      ...(revealLine === undefined ? {} : { revealLine }),
+    });
     setTabs((current) =>
       openReviewTab(current, { kind: "source", path, pinned: false })
     );
@@ -830,6 +991,8 @@ export function ReviewApp({
               languageData={languageData?.path === target.path
                 ? languageData
                 : undefined}
+              onNavigate={(location) =>
+                openSource(location.path, location.start.row + 1)}
             />
           )}
         <Box

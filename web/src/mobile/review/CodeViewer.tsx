@@ -285,6 +285,7 @@ export default function CodeViewer({
   diagnostics,
   inlayHints,
   semanticHighlighting,
+  onInspect,
 }: {
   text: string;
   kind: "source" | "diff";
@@ -296,6 +297,7 @@ export default function CodeViewer({
   diagnostics: boolean;
   inlayHints: boolean;
   semanticHighlighting: boolean;
+  onInspect?: ((point: { row: number; column: number }) => void) | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
@@ -471,6 +473,30 @@ export default function CodeViewer({
         ),
       );
     }
+    if (kind === "source" && onInspect) {
+      values.push(
+        EditorView.domEventHandlers({
+          click: (event, view) => {
+            const offset = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            if (offset === null) return false;
+            const line = view.state.doc.lineAt(offset);
+            const column = offset - line.from;
+            const adjacent = `${line.text.at(column) ?? ""}${
+              column > 0 ? line.text.at(column - 1) ?? "" : ""
+            }`;
+            if (!/[\p{L}\p{N}_$]/u.test(adjacent)) return false;
+            onInspect({
+              row: line.number - 1,
+              column,
+            });
+            return false;
+          },
+        }),
+      );
+    }
     return values;
   }, [
     diagnostics,
@@ -479,6 +505,7 @@ export default function CodeViewer({
     kind,
     language,
     languageData,
+    onInspect,
     semanticHighlighting,
     softWrap,
     text,

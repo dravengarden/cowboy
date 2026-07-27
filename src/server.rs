@@ -978,6 +978,14 @@ async fn serve_axum(
         .route("/api/code/sessions/{id}/file", get(api_code_file))
         .route("/api/code/sessions/{id}/language", get(api_code_language))
         .route(
+            "/api/code/sessions/{id}/intelligence/hover",
+            get(api_code_hover),
+        )
+        .route(
+            "/api/code/sessions/{id}/intelligence/navigation",
+            get(api_code_navigation),
+        )
+        .route(
             "/api/code/sessions/{id}/buffer",
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
@@ -1789,6 +1797,8 @@ struct CodeLanguageCapabilities {
     diagnostics: bool,
     inlay_hints: bool,
     semantic_tokens: bool,
+    hover: bool,
+    navigation: bool,
 }
 
 #[derive(Deserialize)]
@@ -1810,6 +1820,16 @@ enum ZedAdapterResponse {
         diagnostics: Vec<CodeDiagnostic>,
         inlay_hints: Vec<CodeInlayHint>,
         semantic_tokens: Vec<u32>,
+    },
+    BufferHover {
+        api_version: u8,
+        path: String,
+        contents: Vec<CodeHoverBlock>,
+    },
+    BufferNavigation {
+        api_version: u8,
+        path: String,
+        locations: Vec<CodeLocation>,
     },
     Error {
         message: String,
@@ -1863,6 +1883,38 @@ struct CodeLanguageResponse {
     semantic_tokens: Vec<u32>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeHoverBlock {
+    text: String,
+    language: Option<String>,
+    markdown: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeHoverResponse {
+    api_version: u8,
+    path: String,
+    contents: Vec<CodeHoverBlock>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeLocation {
+    path: String,
+    start: CodePoint,
+    end: CodePoint,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeNavigationResponse {
+    api_version: u8,
+    path: String,
+    locations: Vec<CodeLocation>,
+}
+
 async fn zed_adapter_request(
     socket: &FsPath,
     request: serde_json::Value,
@@ -1887,10 +1939,14 @@ async fn zed_adapter_request(
     match serde_json::from_str::<ZedAdapterResponse>(&line)? {
         response @ (ZedAdapterResponse::Worktree { api_version: 1, .. }
         | ZedAdapterResponse::Buffer { api_version: 1, .. }
-        | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }) => Ok(response),
+        | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }
+        | ZedAdapterResponse::BufferHover { api_version: 1, .. }
+        | ZedAdapterResponse::BufferNavigation { api_version: 1, .. }) => Ok(response),
         ZedAdapterResponse::Worktree { api_version, .. }
         | ZedAdapterResponse::Buffer { api_version, .. }
-        | ZedAdapterResponse::BufferLanguage { api_version, .. } => {
+        | ZedAdapterResponse::BufferLanguage { api_version, .. }
+        | ZedAdapterResponse::BufferHover { api_version, .. }
+        | ZedAdapterResponse::BufferNavigation { api_version, .. } => {
             anyhow::bail!("unsupported Zed adapter API version {api_version}")
         }
         ZedAdapterResponse::Error { message } => anyhow::bail!("{message}"),
@@ -2189,6 +2245,8 @@ async fn api_code_manifest(
             diagnostics: language_ready,
             inlay_hints: language_ready,
             semantic_tokens: language_ready,
+            hover: language_ready,
+            navigation: language_ready,
         },
     })
     .into_response();
@@ -2393,6 +2451,31 @@ struct CodeLanguageQuery {
     path: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CodeHoverQuery {
+    path: String,
+    row: u32,
+    column: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CodeNavigationKind {
+    Definition,
+    Declaration,
+    TypeDefinition,
+    Implementation,
+    References,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeNavigationQuery {
+    path: String,
+    row: u32,
+    column: u32,
+    kind: CodeNavigationKind,
+}
+
 async fn api_code_language(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -2447,6 +2530,113 @@ async fn api_code_language(
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "language intelligence unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn api_code_hover(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeHoverQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let Some(socket) = &state.zed_adapter_socket else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "language service unavailable",
+        )
+            .into_response();
+    };
+    if query.path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
+    }
+    match zed_adapter_request(
+        socket,
+        serde_json::json!({
+            "type": "bufferHover",
+            "worktree": cwd,
+            "path": query.path,
+            "row": query.row,
+            "column": query.column,
+        }),
+    )
+    .await
+    {
+        Ok(ZedAdapterResponse::BufferHover { path, contents, .. }) => Json(CodeHoverResponse {
+            api_version: 1,
+            path,
+            contents,
+        })
+        .into_response(),
+        Ok(_) => (
+            StatusCode::BAD_GATEWAY,
+            "unexpected language service response",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::debug!(session = %session_id, %error, "Zed hover query failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "symbol information unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn api_code_navigation(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeNavigationQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let Some(socket) = &state.zed_adapter_socket else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "language service unavailable",
+        )
+            .into_response();
+    };
+    if query.path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
+    }
+    match zed_adapter_request(
+        socket,
+        serde_json::json!({
+            "type": "bufferNavigate",
+            "worktree": cwd,
+            "path": query.path,
+            "row": query.row,
+            "column": query.column,
+            "kind": query.kind,
+        }),
+    )
+    .await
+    {
+        Ok(ZedAdapterResponse::BufferNavigation {
+            path, locations, ..
+        }) => Json(CodeNavigationResponse {
+            api_version: 1,
+            path,
+            locations,
+        })
+        .into_response(),
+        Ok(_) => (
+            StatusCode::BAD_GATEWAY,
+            "unexpected language service response",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::debug!(session = %session_id, %error, "Zed navigation query failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "symbol navigation unavailable",
             )
                 .into_response()
         }

@@ -53,6 +53,8 @@ export interface CodeLanguageCapabilities {
   diagnostics: boolean;
   inlayHints: boolean;
   semanticTokens: boolean;
+  hover: boolean;
+  navigation: boolean;
 }
 
 export interface CodeSearchResults {
@@ -104,6 +106,37 @@ export interface CodeLanguage {
   diagnostics: CodeDiagnostic[];
   inlayHints: CodeInlayHint[];
   semanticTokens: number[];
+}
+
+export interface CodeHoverBlock {
+  text: string;
+  language?: string;
+  markdown: boolean;
+}
+
+export interface CodeHover {
+  apiVersion: 1;
+  path: string;
+  contents: CodeHoverBlock[];
+}
+
+export type CodeNavigationKind =
+  | "definition"
+  | "declaration"
+  | "typeDefinition"
+  | "implementation"
+  | "references";
+
+export interface CodeLocation {
+  path: string;
+  start: { row: number; column: number };
+  end: { row: number; column: number };
+}
+
+export interface CodeNavigation {
+  apiVersion: 1;
+  path: string;
+  locations: CodeLocation[];
 }
 
 export class CodeApiError extends Error {
@@ -180,6 +213,48 @@ export function fetchCodeLanguage(
   const query = new URLSearchParams({ path });
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/language?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeHover(
+  sessionId: string,
+  path: string,
+  row: number,
+  column: number,
+  signal?: AbortSignal,
+): Promise<CodeHover> {
+  const query = new URLSearchParams({
+    path,
+    row: String(row),
+    column: String(column),
+  });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/intelligence/hover?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeNavigation(
+  sessionId: string,
+  path: string,
+  row: number,
+  column: number,
+  kind: CodeNavigationKind,
+  signal?: AbortSignal,
+): Promise<CodeNavigation> {
+  const query = new URLSearchParams({
+    path,
+    row: String(row),
+    column: String(column),
+    kind,
+  });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/intelligence/navigation?${query}`,
     signal,
     "no-store",
   );
