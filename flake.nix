@@ -146,7 +146,14 @@
         pname = "cowboy-zed-adapter";
         version = "0.1.0";
         src = zed-adapter-src;
-        cargoHash = "sha256-WHcWrwFEiv/89JPpiSPpvAsBofoTDErVgWCDQpG7jLk=";
+        cargoLock = {
+          lockFile = ./zed-adapter/Cargo.lock;
+          outputHashes = {
+            "proto-0.1.0" =
+              "sha256-sAjiYGwmQB+Zzb/b7PGm4Nfv36Vb0myqKIBfpuHGTik=";
+          };
+        };
+        nativeBuildInputs = [ pkgs.protobuf ];
         meta = {
           description = "GPL-isolated Zed protocol adapter for Cowboy Code";
           license = pkgs.lib.licenses.gpl3Plus;
@@ -183,6 +190,38 @@
         test -e ${cowboy-src}/web/src/protocol.ts
         touch "$out"
       '';
+
+      cowboy-zed-integration = pkgs.runCommand "cowboy-zed-integration" {
+        nativeBuildInputs = [ pkgs.coreutils pkgs.jq pkgs.netcat-openbsd ];
+      } ''
+        runtime="$TMPDIR/cowboy-zed"
+        export HOME="$runtime/home"
+        export XDG_CACHE_HOME="$runtime/cache"
+        export XDG_CONFIG_HOME="$runtime/config"
+        export XDG_DATA_HOME="$runtime/data"
+        export XDG_STATE_HOME="$runtime/state"
+        mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" \
+          "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+        ${cowboy-zed-adapter}/bin/cowboy-zed-adapter serve \
+          --socket "$runtime/adapter.sock" \
+          --zed-server ${cowboy-zed-server}/bin/cowboy-zed-server \
+          --state-dir "$runtime/state" &
+        adapter_pid=$!
+        trap 'kill "$adapter_pid" 2>/dev/null || true; wait "$adapter_pid" 2>/dev/null || true' EXIT
+
+        ${cowboy-zed-adapter}/bin/cowboy-zed-adapter probe \
+          --socket "$runtime/adapter.sock" --wait-ms 30000 >/dev/null
+        printf '%s\n' \
+          '{"type":"openWorktree","path":"${./.}","trusted":true}' \
+          | nc -N -U "$runtime/adapter.sock" \
+          | jq -e '.type == "worktree" and .state == "ready" and .leases == 1' \
+          >/dev/null
+        printf '%s\n' \
+          '{"type":"closeWorktree","path":"${./.}"}' \
+          | nc -N -U "$runtime/adapter.sock" \
+          | jq -e '.type == "worktree" and .leases == 0' >/dev/null
+        touch "$out"
+      '';
     in
     {
       packages.${system} = {
@@ -199,6 +238,7 @@
       # additionally enforced by `just check` in CI.
       checks.${system} = {
         inherit cowboy cowboy-agentd cowboy-source-boundary cowboy-web
+          cowboy-zed-integration
           cowboy-zed-adapter cowboy-zed-server;
       };
 

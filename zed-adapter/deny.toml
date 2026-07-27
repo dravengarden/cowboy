@@ -22,9 +22,17 @@ highlight = "all"
 skip = [
   { name = "syn", version = "=2.0.119" },
   { name = "syn", version = "=3.0.3" },
+  # Zed 1.13's generated proto crate still builds with prost 0.9. Keep these
+  # exact build-only duplicates until the coordinated Zed pin moves forward.
+  { name = "heck", version = "=0.3.3" },
+  { name = "linux-raw-sys", version = "=0.4.15" },
+  { name = "rustix", version = "=0.38.44" },
 ]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+  "https://github.com/zed-industries/zed",
+]
