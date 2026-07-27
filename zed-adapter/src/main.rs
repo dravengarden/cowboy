@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
@@ -33,6 +34,8 @@ enum CommandKind {
     Probe {
         #[arg(long)]
         socket: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        wait_ms: u64,
     },
 }
 
@@ -201,10 +204,20 @@ async fn serve(socket: PathBuf, zed_server: PathBuf, state_dir: PathBuf) -> Resu
     Ok(())
 }
 
-async fn probe(socket: PathBuf) -> Result<()> {
-    let stream = UnixStream::connect(&socket)
-        .await
-        .with_context(|| format!("failed to connect to {}", socket.display()))?;
+async fn probe(socket: PathBuf, wait: Duration) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + wait;
+    let stream = loop {
+        match UnixStream::connect(&socket).await {
+            Ok(stream) => break stream,
+            Err(_) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to connect to {}", socket.display()));
+            }
+        }
+    };
     let (read, mut write) = stream.into_split();
     let mut request = serde_json::to_vec(&Request::Health)?;
     request.push(b'\n');
@@ -233,7 +246,9 @@ async fn main() -> Result<()> {
             zed_server,
             state_dir,
         } => serve(socket, zed_server, state_dir).await,
-        CommandKind::Probe { socket } => probe(socket).await,
+        CommandKind::Probe { socket, wait_ms } => {
+            probe(socket, Duration::from_millis(wait_ms)).await
+        }
     }
 }
 
@@ -324,7 +339,30 @@ mod tests {
             handle(stream, Arc::default()).await.unwrap();
         });
 
-        probe(socket.clone()).await.unwrap();
+        probe(socket.clone(), Duration::ZERO).await.unwrap();
+        server.await.unwrap();
+        tokio::fs::remove_file(socket).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_waits_for_a_late_socket() {
+        let socket = std::env::temp_dir().join(format!(
+            "cowboy-zed-adapter-late-test-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let server_socket = socket.clone();
+        let server = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let listener = UnixListener::bind(&server_socket).unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            handle(stream, Arc::default()).await.unwrap();
+        });
+
+        probe(socket.clone(), Duration::from_secs(1)).await.unwrap();
         server.await.unwrap();
         tokio::fs::remove_file(socket).await.unwrap();
     }
