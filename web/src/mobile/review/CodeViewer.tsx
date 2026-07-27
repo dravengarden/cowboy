@@ -287,7 +287,22 @@ export default function CodeViewer({
   }, [revealLine, text]);
 
   return (
-    <Box sx={{ height: "100%", minHeight: 0, "& > div": { height: "100%" } }}>
+    <Box
+      sx={{
+        height: "100%",
+        minHeight: 0,
+        "& > div": { height: "100%" },
+        // `cmTheme` is shared with the Agent composer and intentionally follows
+        // the global reading scale. Code Review owns a separate code-only
+        // setting, so enforce it at this product boundary instead of changing
+        // the shared theme. `!important` is required because CodeMirror mounts
+        // theme style modules in an order that can change after a lazy grammar
+        // reconfiguration.
+        "& .cm-editor, & .cm-scroller, & .cm-content": {
+          fontSize: `${fontSize}px !important`,
+        },
+      }}
+    >
       <CodeMirror
         value={text}
         extensions={extensions}

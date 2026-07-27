@@ -1,5 +1,5 @@
 export const REVIEW_CONTEXT_LINES = [3, 6, 12, -1] as const;
-export const REVIEW_CODE_FONT_SIZES = [12, 14, 16, 18] as const;
+export const REVIEW_CODE_FONT_SIZES = [8, 10, 12, 14, 16, 18] as const;
 
 export interface ReviewSettings {
   readonly codeFontSize: number;

@@ -27,6 +27,11 @@ Deno.test("review settings retain code-review-specific choices", () => {
   );
 });
 
+Deno.test("review settings accept compact code font sizes", () => {
+  assertEquals(normalizeReviewSettings({ codeFontSize: 8 }).codeFontSize, 8);
+  assertEquals(normalizeReviewSettings({ codeFontSize: 10 }).codeFontSize, 10);
+});
+
 Deno.test("review settings reject stale or malformed values", () => {
   assertEquals(
     normalizeReviewSettings({

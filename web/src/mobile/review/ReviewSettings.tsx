@@ -84,6 +84,13 @@ export function ReviewSettings(): React.JSX.Element {
             onChange={(_, value: number | null): void => {
               if (value !== null) updateReviewSettings({ codeFontSize: value });
             }}
+            sx={{
+              "& .MuiToggleButton-root": {
+                minWidth: 44,
+                minHeight: 44,
+                px: 0.5,
+              },
+            }}
           >
             {REVIEW_CODE_FONT_SIZES.map((value) => (
               <ToggleButton key={value} value={value}>
