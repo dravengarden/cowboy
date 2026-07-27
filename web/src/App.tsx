@@ -1461,6 +1461,9 @@ export function App({
     // rather than centered dialogs.
     const prefersNavbarAtBottom = useNavbarAtBottom();
     const navbarAtBottom = mobile && prefersNavbarAtBottom;
+    const floatingPanelHeight = navbarAtBottom
+        ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
+        : "var(--composer-h, 0px)";
     // A full-screen frosted COVER sheet (compose/edit/settings) bleeds the app's
     // own frosted navbar/composer chrome through it as a bright blob (double
     // frosting). Fade that chrome out while ANY sheet is open so the cover shows
@@ -2766,15 +2769,13 @@ export function App({
                             left: 0,
                             right: 0,
                             bottom: "var(--kb-inset, 0px)",
-                            height: navbarAtBottom
-                                ? "calc(var(--composer-h, 0px) + var(--navbar-h, 0px))"
-                                : "var(--composer-h, 0px)",
+                            height: floatingPanelHeight,
                             zIndex: 1,
                             pointerEvents: "none",
                             // Hide under an open cover sheet — its own frosted surface
                             // replaces this chrome; leaving it on double-frosts.
                             opacity: anySheetOpen ? 0 : 1,
-                            transition: "opacity 200ms ease, box-shadow 200ms ease",
+                            transition: "opacity 200ms ease",
                             // Milkier than a clear pane + heavy blur + saturate → thick
                             // iOS frosted material; content scrolling under it diffuses
                             // (not shows) through the blur. Up-shadow + top hairline give
@@ -2782,16 +2783,34 @@ export function App({
                             bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.72 : 0.76),
                             backdropFilter: "blur(30px) saturate(200%)",
                             WebkitBackdropFilter: "blur(30px) saturate(200%)",
-                            borderTop: 1,
-                            borderColor: "divider",
-                            // Up-shadow ("floating above the scroll" depth) ONLY when the
-                            // transcript actually overflows under the glass. An empty/short
-                            // conversation has nothing beneath it, so the shadow would read
-                            // as a stray smudge under the header — gate it on real overflow.
-                            boxShadow: transcriptScrollable
-                                ? (t) =>
-                                    `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`
-                                : "none",
+                    }}
+                />
+                )}
+                {/* Keep the glass edge out of the backdrop-filter layer. WebKit
+                    invalidates filtered ancestors whenever its native caret
+                    blinks; painting the hairline + shadow on that same layer made
+                    the whole composer edge pulse with the caret. This independent
+                    composited strip stays rasterized while the editor repaints. */}
+                {!splitActive && (
+                <Box
+                    aria-hidden
+                    sx={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        bottom: `calc(var(--kb-inset, 0px) + ${floatingPanelHeight})`,
+                        height: "1px",
+                        zIndex: 1,
+                        pointerEvents: "none",
+                        opacity: anySheetOpen ? 0 : 1,
+                        transition: "opacity 200ms ease",
+                        bgcolor: "divider",
+                        transform: "translateZ(0)",
+                        backfaceVisibility: "hidden",
+                        boxShadow: transcriptScrollable
+                            ? (t) =>
+                                `0 -1px 24px ${t.palette.mode === "dark" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.07)"}`
+                            : "none",
                     }}
                 />
                 )}
