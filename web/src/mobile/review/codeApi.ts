@@ -76,6 +76,36 @@ export interface CodeBufferLease {
   leases: number;
 }
 
+export interface CodeLanguagePoint {
+  row: number;
+  column: number;
+}
+
+export interface CodeDiagnostic {
+  start: CodeLanguagePoint;
+  end: CodeLanguagePoint;
+  severity: number;
+  source?: string;
+  message: string;
+}
+
+export interface CodeInlayHint {
+  offset: number;
+  label: string;
+  kind?: string;
+  paddingLeft: boolean;
+  paddingRight: boolean;
+}
+
+export interface CodeLanguage {
+  apiVersion: 1;
+  path: string;
+  version: { replicaId: number; timestamp: number }[];
+  diagnostics: CodeDiagnostic[];
+  inlayHints: CodeInlayHint[];
+  semanticTokens: number[];
+}
+
 export class CodeApiError extends Error {
   constructor(public readonly status: number) {
     super(`Code API ${status}`);
@@ -140,6 +170,19 @@ export function closeCodeBuffer(
   leaseId: string,
 ): Promise<CodeBufferLease> {
   return codeBufferLease(sessionId, path, leaseId, "DELETE");
+}
+
+export function fetchCodeLanguage(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeLanguage> {
+  const query = new URLSearchParams({ path });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/language?${query}`,
+    signal,
+    "no-store",
+  );
 }
 
 export function fetchCodeDiffPage(

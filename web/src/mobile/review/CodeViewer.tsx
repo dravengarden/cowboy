@@ -20,6 +20,99 @@ import { cmTheme } from "../../cmTheme";
 import { loadCodeLanguage } from "./codeLanguage";
 import { changedWordRange } from "./diffWordModel";
 import { diffContextFolds } from "./diffContextModel";
+import type { CodeLanguage } from "./codeApi";
+
+class InlayHintWidget extends WidgetType {
+  constructor(private readonly label: string) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cowboy-inlay-hint";
+    span.textContent = this.label;
+    return span;
+  }
+}
+
+function utf8OffsetToDocumentOffset(text: string, byteOffset: number): number {
+  if (byteOffset <= 0) return 0;
+  const bytes = new TextEncoder().encode(text);
+  const end = Math.min(byteOffset, bytes.length);
+  return new TextDecoder().decode(bytes.slice(0, end)).length;
+}
+
+function languageDecorations(
+  state: EditorState,
+  language: CodeLanguage | undefined,
+  diagnostics: boolean,
+  inlayHints: boolean,
+  semanticHighlighting: boolean,
+): DecorationSet {
+  if (!language) return Decoration.none;
+  const ranges = [];
+  if (semanticHighlighting) {
+    let row = 0;
+    let column = 0;
+    for (let index = 0; index + 4 < language.semanticTokens.length; index += 5) {
+      const rowDelta = language.semanticTokens[index] ?? 0;
+      const columnDelta = language.semanticTokens[index + 1] ?? 0;
+      row += rowDelta;
+      column = rowDelta === 0 ? column + columnDelta : columnDelta;
+      if (row >= state.doc.lines) continue;
+      const line = state.doc.line(row + 1);
+      const from = Math.min(line.to, line.from + column);
+      const to = Math.min(
+        line.to,
+        from + (language.semanticTokens[index + 2] ?? 0),
+      );
+      if (to > from) {
+        ranges.push(
+          Decoration.mark({
+            class: `cowboy-semantic-token cowboy-semantic-${
+              (language.semanticTokens[index + 3] ?? 0) % 6
+            }`,
+          }).range(from, to),
+        );
+      }
+    }
+  }
+  if (diagnostics) {
+    for (const diagnostic of language.diagnostics) {
+      if (diagnostic.start.row >= state.doc.lines) continue;
+      const startLine = state.doc.line(diagnostic.start.row + 1);
+      const endLine = state.doc.line(
+        Math.min(state.doc.lines, diagnostic.end.row + 1),
+      );
+      const from = Math.min(startLine.to, startLine.from + diagnostic.start.column);
+      const to = Math.max(
+        from,
+        Math.min(endLine.to, endLine.from + diagnostic.end.column),
+      );
+      ranges.push(
+        Decoration.mark({
+          class: `cowboy-diagnostic cowboy-diagnostic-${diagnostic.severity}`,
+          attributes: { title: diagnostic.message },
+        }).range(from, Math.max(from + 1, to)),
+      );
+    }
+  }
+  if (inlayHints) {
+    for (const hint of language.inlayHints) {
+      const position = Math.min(
+        state.doc.length,
+        utf8OffsetToDocumentOffset(state.doc.toString(), hint.offset),
+      );
+      ranges.push(
+        Decoration.widget({
+          widget: new InlayHintWidget(hint.label),
+          side: 1,
+        }).range(position),
+      );
+    }
+  }
+  return Decoration.set(ranges, true);
+}
 
 function diffDecorations(view: EditorView): ReturnType<typeof Decoration.set> {
   const decorations = [];
@@ -177,6 +270,10 @@ export default function CodeViewer({
   softWrap,
   fontSize,
   revealLine,
+  languageData,
+  diagnostics,
+  inlayHints,
+  semanticHighlighting,
 }: {
   text: string;
   kind: "source" | "diff";
@@ -184,6 +281,10 @@ export default function CodeViewer({
   softWrap: boolean;
   fontSize: number;
   revealLine?: number | undefined;
+  languageData?: CodeLanguage | undefined;
+  diagnostics: boolean;
+  inlayHints: boolean;
+  semanticHighlighting: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
@@ -264,13 +365,63 @@ export default function CodeViewer({
           textAlign: "left",
           padding: "0 12px",
         },
+        ".cowboy-inlay-hint": {
+          color: theme.palette.text.secondary,
+          background: theme.palette.action.hover,
+          borderRadius: "4px",
+          fontSize: "0.82em",
+          marginLeft: "4px",
+          padding: "1px 4px",
+        },
+        ".cowboy-diagnostic": {
+          textDecorationLine: "underline",
+          textDecorationStyle: "wavy",
+          textUnderlineOffset: "3px",
+        },
+        ".cowboy-diagnostic-1": { textDecorationColor: theme.palette.error.main },
+        ".cowboy-diagnostic-2": {
+          textDecorationColor: theme.palette.warning.main,
+        },
+        ".cowboy-diagnostic-3, .cowboy-diagnostic-4": {
+          textDecorationColor: theme.palette.info.main,
+        },
+        ".cowboy-semantic-0": { color: theme.palette.primary.main },
+        ".cowboy-semantic-1": { color: theme.palette.secondary.main },
+        ".cowboy-semantic-2": { color: theme.palette.success.main },
+        ".cowboy-semantic-3": { color: theme.palette.warning.main },
+        ".cowboy-semantic-4": { color: theme.palette.info.main },
+        ".cowboy-semantic-5": { fontStyle: "italic" },
       }),
     ];
     if (softWrap) values.push(EditorView.lineWrapping);
     if (language) values.push(language);
     if (kind === "diff") values.push(diffView, contextFolding);
+    if (kind === "source" && languageData) {
+      values.push(
+        EditorView.decorations.of(
+          languageDecorations(
+            EditorState.create({ doc: text }),
+            languageData,
+            diagnostics,
+            inlayHints,
+            semanticHighlighting,
+          ),
+        ),
+      );
+    }
     return values;
-  }, [fontSize, kind, language, softWrap, theme]);
+  }, [
+    diagnostics,
+    fontSize,
+    inlayHints,
+    kind,
+    language,
+    languageData,
+    semanticHighlighting,
+    softWrap,
+    text,
+    theme,
+  ]);
 
   useEffect(() => {
     const view = editorRef.current;

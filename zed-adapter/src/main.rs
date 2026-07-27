@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
@@ -68,6 +69,10 @@ enum Request {
         #[serde(rename = "leaseId")]
         lease_id: String,
     },
+    BufferLanguage {
+        worktree: PathBuf,
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +95,17 @@ enum Response {
         worktree: PathBuf,
         path: PathBuf,
         leases: usize,
+        buffer_id: u64,
+        version: Vec<BufferVersionEntry>,
+    },
+    BufferLanguage {
+        api_version: u8,
+        worktree: PathBuf,
+        path: PathBuf,
+        version: Vec<BufferVersionEntry>,
+        diagnostics: Vec<LanguageDiagnostic>,
+        inlay_hints: Vec<LanguageInlayHint>,
+        semantic_tokens: Vec<u32>,
     },
     Error {
         api_version: u8,
@@ -116,17 +132,53 @@ type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
 struct BufferLease {
     lease_ids: HashSet<String>,
     remote_id: u64,
+    version: Vec<BufferVersionEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BufferVersionEntry {
+    replica_id: u32,
+    timestamp: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguagePoint {
+    row: u32,
+    column: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguageDiagnostic {
+    start: LanguagePoint,
+    end: LanguagePoint,
+    severity: i32,
+    source: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguageInlayHint {
+    offset: u64,
+    label: String,
+    kind: Option<String>,
+    padding_left: bool,
+    padding_right: bool,
 }
 
 type Buffers = Arc<RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>>;
-type Zed = Arc<Mutex<ZedRuntime>>;
+type Zed = Arc<ZedRuntime>;
+type PendingRequests = Arc<Mutex<HashMap<u32, oneshot::Sender<proto::Envelope>>>>;
 
 struct ZedRuntime {
-    _child: Child,
-    input: UnixStream,
-    output: UnixStream,
-    next_message_id: u32,
-    next_worktree_id: u64,
+    _child: Mutex<Child>,
+    outbound: mpsc::UnboundedSender<proto::Envelope>,
+    pending: PendingRequests,
+    events: broadcast::Sender<proto::Envelope>,
+    next_message_id: AtomicU32,
+    next_lsp_request_id: AtomicU64,
 }
 
 async fn verify_zed_server(path: &Path) -> Result<()> {
@@ -200,85 +252,80 @@ impl ZedRuntime {
             let _ = tokio::io::copy(&mut errors, &mut tokio::io::sink()).await;
         });
 
-        Ok(Self {
-            _child: child,
-            input,
+        let (outbound, outbound_rx) = mpsc::unbounded_channel();
+        let pending = PendingRequests::default();
+        let (events, _) = broadcast::channel(1_024);
+        tokio::spawn(write_messages(input, outbound_rx));
+        tokio::spawn(read_messages(
             output,
-            next_message_id: 1,
-            next_worktree_id: 1,
+            outbound.clone(),
+            Arc::clone(&pending),
+            events.clone(),
+        ));
+        outbound
+            .send(proto::Envelope {
+                id: 1,
+                payload: Some(proto::envelope::Payload::RemoteStarted(
+                    proto::RemoteStarted {},
+                )),
+                ..Default::default()
+            })
+            .map_err(|_| anyhow::anyhow!("Zed writer task stopped during handshake"))?;
+
+        Ok(Self {
+            _child: Mutex::new(child),
+            outbound,
+            pending,
+            events,
+            next_message_id: AtomicU32::new(2),
+            next_lsp_request_id: AtomicU64::new(1),
         })
     }
 
-    async fn write(&mut self, envelope: proto::Envelope) -> Result<()> {
-        let mut encoded = Vec::with_capacity(envelope.encoded_len());
-        envelope.encode(&mut encoded)?;
-        let length = u32::try_from(encoded.len()).context("Zed message is too large")?;
-        self.input.write_all(&length.to_le_bytes()).await?;
-        self.input.write_all(&encoded).await?;
-        Ok(())
-    }
-
-    async fn read(&mut self) -> Result<proto::Envelope> {
-        let length = self.output.read_u32_le().await?;
-        if length > 16 * 1024 * 1024 {
-            bail!("Zed message exceeds the 16 MiB adapter limit");
-        }
-        let mut encoded = vec![0; length as usize];
-        self.output.read_exact(&mut encoded).await?;
-        Ok(proto::Envelope::decode(encoded.as_slice())?)
-    }
-
     fn message(
-        &mut self,
+        &self,
         payload: proto::envelope::Payload,
         responding_to: Option<u32>,
     ) -> proto::Envelope {
-        let id = self.next_message_id;
-        self.next_message_id = self.next_message_id.wrapping_add(1).max(1);
+        let id = self.next_message_id.fetch_add(1, Ordering::Relaxed);
         proto::Envelope {
-            id,
+            id: id.max(1),
             responding_to,
             payload: Some(payload),
             ..Default::default()
         }
     }
 
-    async fn handle_server_request(&mut self, envelope: &proto::Envelope) -> Result<bool> {
-        if matches!(
-            envelope.payload,
-            Some(proto::envelope::Payload::AllocateWorktreeId(_))
-        ) {
-            let worktree_id = self.next_worktree_id;
-            self.next_worktree_id += 1;
-            let response = self.message(
-                proto::envelope::Payload::AllocateWorktreeIdResponse(
-                    proto::AllocateWorktreeIdResponse { worktree_id },
-                ),
-                Some(envelope.id),
-            );
-            self.write(response).await?;
-            return Ok(true);
-        }
-        Ok(false)
+    fn send(&self, envelope: proto::Envelope) -> Result<()> {
+        self.outbound
+            .send(envelope)
+            .map_err(|_| anyhow::anyhow!("Zed writer task stopped"))
     }
 
-    async fn request(&mut self, payload: proto::envelope::Payload) -> Result<proto::Envelope> {
+    async fn request(&self, payload: proto::envelope::Payload) -> Result<proto::Envelope> {
         let request = self.message(payload, None);
         let request_id = request.id;
-        self.write(request).await?;
-        loop {
-            let response = self.read().await?;
-            if response.responding_to == Some(request_id) {
-                if let Some(proto::envelope::Payload::Error(error)) = &response.payload {
-                    bail!("Zed request failed: {}", error.message);
-                }
-                return Ok(response);
-            }
-            self.handle_server_request(&response).await?;
+        let (response_tx, response_rx) = oneshot::channel();
+        self.pending.lock().await.insert(request_id, response_tx);
+        if let Err(error) = self.send(request) {
+            self.pending.lock().await.remove(&request_id);
+            return Err(error);
         }
+        let response = match tokio::time::timeout(Duration::from_secs(30), response_rx).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => bail!("Zed reader task stopped while waiting for request {request_id}"),
+            Err(_) => {
+                self.pending.lock().await.remove(&request_id);
+                bail!("Zed request {request_id} timed out");
+            }
+        };
+        if let Some(proto::envelope::Payload::Error(error)) = &response.payload {
+            bail!("Zed request failed: {}", error.message);
+        }
+        Ok(response)
     }
 
-    async fn open_worktree(&mut self, path: &Path, trusted: bool) -> Result<(u64, WorktreeState)> {
+    async fn open_worktree(&self, path: &Path, trusted: bool) -> Result<(u64, WorktreeState)> {
         let response = self
             .request(proto::envelope::Payload::AddWorktree(proto::AddWorktree {
                 path: path.to_string_lossy().into_owned(),
@@ -295,7 +342,7 @@ impl ZedRuntime {
         Ok((worktree_id, state))
     }
 
-    async fn set_trust(&mut self, worktree_id: u64, trusted: bool) -> Result<WorktreeState> {
+    async fn set_trust(&self, worktree_id: u64, trusted: bool) -> Result<WorktreeState> {
         Ok(if trusted {
             let trust = proto::TrustWorktrees {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
@@ -325,15 +372,20 @@ impl ZedRuntime {
         })
     }
 
-    async fn remove_worktree(&mut self, worktree_id: u64) -> Result<()> {
+    fn remove_worktree(&self, worktree_id: u64) -> Result<()> {
         let message = self.message(
             proto::envelope::Payload::RemoveWorktree(proto::RemoveWorktree { worktree_id }),
             None,
         );
-        self.write(message).await
+        self.send(message)
     }
 
-    async fn open_buffer(&mut self, worktree_id: u64, path: &Path) -> Result<u64> {
+    async fn open_buffer(
+        &self,
+        worktree_id: u64,
+        path: &Path,
+    ) -> Result<(u64, Vec<BufferVersionEntry>)> {
+        let mut events = self.events.subscribe();
         let response = self
             .request(proto::envelope::Payload::OpenBufferByPath(
                 proto::OpenBufferByPath {
@@ -346,10 +398,51 @@ impl ZedRuntime {
         let Some(proto::envelope::Payload::OpenBufferResponse(response)) = response.payload else {
             bail!("Zed returned the wrong OpenBufferByPath response");
         };
-        Ok(response.buffer_id)
+        let buffer_id = response.buffer_id;
+        let version = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut version = HashMap::<u32, u32>::new();
+            let mut received_state = false;
+            loop {
+                let envelope = events.recv().await?;
+                let Some(proto::envelope::Payload::CreateBufferForPeer(message)) = envelope.payload
+                else {
+                    continue;
+                };
+                match message.variant {
+                    Some(proto::create_buffer_for_peer::Variant::State(state))
+                        if state.id == buffer_id =>
+                    {
+                        received_state = true;
+                        merge_version(&mut version, state.saved_version);
+                    }
+                    Some(proto::create_buffer_for_peer::Variant::Chunk(chunk))
+                        if chunk.buffer_id == buffer_id && received_state =>
+                    {
+                        for operation in chunk.operations {
+                            merge_operation_version(&mut version, operation);
+                        }
+                        if chunk.is_last {
+                            let mut version = version
+                                .into_iter()
+                                .map(|(replica_id, timestamp)| BufferVersionEntry {
+                                    replica_id,
+                                    timestamp,
+                                })
+                                .collect::<Vec<_>>();
+                            version.sort_by_key(|entry| entry.replica_id);
+                            break anyhow::Ok(version);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .context("Zed did not publish the initial buffer state")??;
+        Ok((buffer_id, version))
     }
 
-    async fn close_buffer(&mut self, buffer_id: u64) -> Result<()> {
+    fn close_buffer(&self, buffer_id: u64) -> Result<()> {
         let message = self.message(
             proto::envelope::Payload::CloseBuffer(proto::CloseBuffer {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
@@ -357,7 +450,287 @@ impl ZedRuntime {
             }),
             None,
         );
-        self.write(message).await
+        self.send(message)
+    }
+
+    async fn language(
+        &self,
+        buffer_id: u64,
+        version: &[BufferVersionEntry],
+    ) -> Result<(Vec<LanguageDiagnostic>, Vec<LanguageInlayHint>, Vec<u32>)> {
+        let diagnostics_request = self.lsp_query(
+            proto::lsp_query::Request::GetDocumentDiagnostics(proto::GetDocumentDiagnostics {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                version: proto_version(version),
+            }),
+        );
+        let inlay_request =
+            self.lsp_query(proto::lsp_query::Request::InlayHints(proto::InlayHints {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                start: Some(proto::Anchor {
+                    replica_id: u32::MIN,
+                    timestamp: u32::MIN,
+                    offset: u64::MIN,
+                    bias: proto::Bias::Left as i32,
+                    buffer_id: Some(buffer_id),
+                }),
+                end: Some(proto::Anchor {
+                    replica_id: u16::MAX.into(),
+                    timestamp: u32::MAX,
+                    offset: u64::from(u32::MAX),
+                    bias: proto::Bias::Right as i32,
+                    buffer_id: Some(buffer_id),
+                }),
+                version: proto_version(version),
+            }));
+        let semantic_request = self.lsp_query(proto::lsp_query::Request::SemanticTokens(
+            proto::SemanticTokens {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+                for_server: None,
+                version: proto_version(version),
+            },
+        ));
+        let (diagnostics, inlay_hints, semantic_tokens) =
+            tokio::join!(diagnostics_request, inlay_request, semantic_request);
+
+        let diagnostics = diagnostics
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|response| match response.response? {
+                proto::lsp_response::Response::GetDocumentDiagnosticsResponse(value) => Some(value),
+                _ => None,
+            })
+            .flat_map(|response| response.pulled_diagnostics)
+            .flat_map(|pulled| pulled.diagnostics)
+            .filter_map(|diagnostic| {
+                Some(LanguageDiagnostic {
+                    start: language_point(&diagnostic.start?),
+                    end: language_point(&diagnostic.end?),
+                    severity: diagnostic.severity,
+                    source: diagnostic.source,
+                    message: diagnostic.message,
+                })
+            })
+            .collect();
+
+        let inlay_hints = inlay_hints
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|response| match response.response? {
+                proto::lsp_response::Response::InlayHintsResponse(value) => Some(value),
+                _ => None,
+            })
+            .flat_map(|response| response.hints)
+            .filter_map(language_inlay_hint)
+            .collect();
+
+        let semantic_tokens = semantic_tokens
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|response| match response.response? {
+                proto::lsp_response::Response::SemanticTokensResponse(value) => Some(value),
+                _ => None,
+            })
+            .flat_map(|response| response.data)
+            .collect();
+
+        Ok((diagnostics, inlay_hints, semantic_tokens))
+    }
+
+    async fn lsp_query(
+        &self,
+        request: proto::lsp_query::Request,
+    ) -> Result<Vec<proto::LspResponse>> {
+        let lsp_request_id = self.next_lsp_request_id.fetch_add(1, Ordering::Relaxed);
+        let mut events = self.events.subscribe();
+        let response = self
+            .request(proto::envelope::Payload::LspQuery(proto::LspQuery {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                lsp_request_id,
+                server_id: None,
+                request: Some(request),
+            }))
+            .await?;
+        if !matches!(response.payload, Some(proto::envelope::Payload::Ack(_))) {
+            bail!("Zed returned the wrong LspQuery acknowledgement");
+        }
+        tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let envelope = events.recv().await?;
+                if let Some(proto::envelope::Payload::LspQueryResponse(response)) = envelope.payload
+                    && response.lsp_request_id == lsp_request_id
+                {
+                    break anyhow::Ok(response.responses);
+                }
+            }
+        })
+        .await
+        .context("Zed language query timed out")?
+    }
+}
+
+fn merge_version(
+    current: &mut HashMap<u32, u32>,
+    entries: impl IntoIterator<Item = proto::VectorClockEntry>,
+) {
+    for entry in entries {
+        current
+            .entry(entry.replica_id)
+            .and_modify(|timestamp| *timestamp = (*timestamp).max(entry.timestamp))
+            .or_insert(entry.timestamp);
+    }
+}
+
+fn merge_operation_version(current: &mut HashMap<u32, u32>, operation: proto::Operation) {
+    use proto::operation::Variant;
+    match operation.variant {
+        Some(Variant::Edit(edit)) => {
+            merge_version(current, edit.version);
+            current
+                .entry(edit.replica_id)
+                .and_modify(|value| *value = (*value).max(edit.lamport_timestamp))
+                .or_insert(edit.lamport_timestamp);
+        }
+        Some(Variant::Undo(undo)) => {
+            merge_version(current, undo.version);
+            current
+                .entry(undo.replica_id)
+                .and_modify(|value| *value = (*value).max(undo.lamport_timestamp))
+                .or_insert(undo.lamport_timestamp);
+        }
+        _ => {}
+    }
+}
+
+fn proto_version(version: &[BufferVersionEntry]) -> Vec<proto::VectorClockEntry> {
+    version
+        .iter()
+        .map(|entry| proto::VectorClockEntry {
+            replica_id: entry.replica_id,
+            timestamp: entry.timestamp,
+        })
+        .collect()
+}
+
+fn language_point(point: &proto::PointUtf16) -> LanguagePoint {
+    LanguagePoint {
+        row: point.row,
+        column: point.column,
+    }
+}
+
+fn language_inlay_hint(hint: proto::InlayHint) -> Option<LanguageInlayHint> {
+    let label = match hint.label?.label? {
+        proto::inlay_hint_label::Label::Value(value) => value,
+        proto::inlay_hint_label::Label::LabelParts(parts) => parts
+            .parts
+            .into_iter()
+            .map(|part| part.value)
+            .collect::<String>(),
+    };
+    Some(LanguageInlayHint {
+        offset: hint.position?.offset,
+        label,
+        kind: hint.kind,
+        padding_left: hint.padding_left,
+        padding_right: hint.padding_right,
+    })
+}
+
+async fn write_messages(
+    mut input: UnixStream,
+    mut messages: mpsc::UnboundedReceiver<proto::Envelope>,
+) {
+    while let Some(envelope) = messages.recv().await {
+        let result = async {
+            let mut encoded = Vec::with_capacity(envelope.encoded_len());
+            envelope.encode(&mut encoded)?;
+            let length = u32::try_from(encoded.len()).context("Zed message is too large")?;
+            input.write_all(&length.to_le_bytes()).await?;
+            input.write_all(&encoded).await?;
+            anyhow::Ok(())
+        }
+        .await;
+        if result.is_err() {
+            break;
+        }
+    }
+}
+
+async fn read_messages(
+    mut output: UnixStream,
+    outbound: mpsc::UnboundedSender<proto::Envelope>,
+    pending: PendingRequests,
+    events: broadcast::Sender<proto::Envelope>,
+) {
+    let next_message_id = AtomicU32::new(1_000_000_000);
+    let next_worktree_id = AtomicU64::new(1);
+    loop {
+        let result = async {
+            let length = output.read_u32_le().await?;
+            if length > 16 * 1024 * 1024 {
+                bail!("Zed message exceeds the 16 MiB adapter limit");
+            }
+            let mut encoded = vec![0; length as usize];
+            output.read_exact(&mut encoded).await?;
+            anyhow::Ok(proto::Envelope::decode(encoded.as_slice())?)
+        }
+        .await;
+        let Ok(envelope) = result else {
+            pending.lock().await.clear();
+            break;
+        };
+        if std::env::var_os("COWBOY_ZED_TRACE").is_some() {
+            eprintln!("Zed envelope: {envelope:?}");
+        }
+
+        if let Some(request_id) = envelope.responding_to
+            && let Some(response) = pending.lock().await.remove(&request_id)
+        {
+            let _ = response.send(envelope);
+            continue;
+        }
+
+        if matches!(
+            envelope.payload,
+            Some(proto::envelope::Payload::AllocateWorktreeId(_))
+        ) {
+            let response = proto::Envelope {
+                id: next_message_id.fetch_add(1, Ordering::Relaxed),
+                responding_to: Some(envelope.id),
+                payload: Some(proto::envelope::Payload::AllocateWorktreeIdResponse(
+                    proto::AllocateWorktreeIdResponse {
+                        worktree_id: next_worktree_id.fetch_add(1, Ordering::Relaxed),
+                    },
+                )),
+                ..Default::default()
+            };
+            if outbound.send(response).is_err() {
+                break;
+            }
+            continue;
+        }
+
+        if matches!(
+            envelope.payload,
+            Some(proto::envelope::Payload::RemoteStarted(_) | proto::envelope::Payload::Ping(_))
+        ) {
+            let response = proto::Envelope {
+                id: next_message_id.fetch_add(1, Ordering::Relaxed),
+                responding_to: Some(envelope.id),
+                payload: Some(proto::envelope::Payload::Ack(proto::Ack {})),
+                ..Default::default()
+            };
+            if outbound.send(response).is_err() {
+                break;
+            }
+            continue;
+        }
+
+        let _ = events.send(envelope);
     }
 }
 
@@ -397,7 +770,7 @@ async fn respond(
             if lease.leases == 0 {
                 all.remove(&path);
                 if let Some(zed) = zed {
-                    zed.lock().await.remove_worktree(remote_id).await?;
+                    zed.remove_worktree(remote_id)?;
                 }
             }
             response
@@ -412,6 +785,39 @@ async fn respond(
             path,
             lease_id,
         } => close_buffer(worktree, path, lease_id, buffers, zed).await?,
+        Request::BufferLanguage { worktree, path } => {
+            buffer_language(worktree, path, buffers, zed).await?
+        }
+    })
+}
+
+async fn buffer_language(
+    worktree: PathBuf,
+    path: PathBuf,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let (buffer_id, version) = {
+        let all = buffers.read().await;
+        let lease = all
+            .get(&(worktree.clone(), path.clone()))
+            .context("buffer is not open")?;
+        (lease.remote_id, lease.version.clone())
+    };
+    let (diagnostics, inlay_hints, semantic_tokens) = if let Some(zed) = zed {
+        zed.language(buffer_id, &version).await?
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+    Ok(Response::BufferLanguage {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        version,
+        diagnostics,
+        inlay_hints,
+        semantic_tokens,
     })
 }
 
@@ -429,7 +835,7 @@ async fn ensure_worktree(
     let mut all = worktrees.write().await;
     if !all.contains_key(&path) {
         let (remote_id, state) = if let Some(zed) = zed {
-            zed.lock().await.open_worktree(&path, trusted).await?
+            zed.open_worktree(&path, trusted).await?
         } else {
             (
                 u64::try_from(all.len() + 1)?,
@@ -455,7 +861,7 @@ async fn ensure_worktree(
     }
     if trusted && matches!(lease.state, WorktreeState::Restricted) {
         lease.state = if let Some(zed) = zed {
-            zed.lock().await.set_trust(lease.remote_id, true).await?
+            zed.set_trust(lease.remote_id, true).await?
         } else {
             WorktreeState::Warming
         };
@@ -504,16 +910,17 @@ async fn open_buffer(
     let key = (worktree.clone(), path.clone());
     let mut all = buffers.write().await;
     if !all.contains_key(&key) {
-        let remote_id = if let Some(zed) = zed {
-            zed.lock().await.open_buffer(worktree_id, &path).await?
+        let (remote_id, version) = if let Some(zed) = zed {
+            zed.open_buffer(worktree_id, &path).await?
         } else {
-            u64::try_from(all.len() + 1)?
+            (u64::try_from(all.len() + 1)?, Vec::new())
         };
         all.insert(
             key.clone(),
             BufferLease {
                 lease_ids: HashSet::new(),
                 remote_id,
+                version,
             },
         );
     }
@@ -524,6 +931,8 @@ async fn open_buffer(
         worktree,
         path,
         leases: lease.lease_ids.len(),
+        buffer_id: lease.remote_id,
+        version: lease.version.clone(),
     })
 }
 
@@ -544,6 +953,8 @@ async fn close_buffer(
             worktree,
             path,
             leases: 0,
+            buffer_id: 0,
+            version: Vec::new(),
         });
     };
     lease.lease_ids.remove(&lease_id);
@@ -554,11 +965,13 @@ async fn close_buffer(
         worktree,
         path,
         leases,
+        buffer_id: lease.remote_id,
+        version: lease.version.clone(),
     };
     if leases == 0 {
         all.remove(&key);
         if let Some(zed) = zed {
-            zed.lock().await.close_buffer(remote_id).await?;
+            zed.close_buffer(remote_id)?;
         }
     }
     Ok(response)
@@ -611,9 +1024,7 @@ async fn serve(socket: PathBuf, zed_server: PathBuf, state_dir: PathBuf) -> Resu
     let listener = UnixListener::bind(&socket)?;
     let worktrees: Worktrees = Arc::default();
     let buffers: Buffers = Arc::default();
-    let zed = Arc::new(Mutex::new(
-        ZedRuntime::start(&zed_server, &state_dir).await?,
-    ));
+    let zed = Arc::new(ZedRuntime::start(&zed_server, &state_dir).await?);
     loop {
         tokio::select! {
             accepted = listener.accept() => {

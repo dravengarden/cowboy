@@ -42,6 +42,7 @@ import {
   fetchCodeFile,
   fetchCodeFilePage,
   fetchCodeChanges,
+  fetchCodeLanguage,
   fetchCodeManifest,
   openCodeBuffer,
 } from "./codeApi";
@@ -63,6 +64,7 @@ import {
   useReviewSettings,
 } from "./reviewSettings";
 import type { CodeDiffScope } from "./codeApi";
+import type { CodeLanguage } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
 import { groupGitChanges, reviewQueue } from "./gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
@@ -96,11 +98,13 @@ function DocumentView({
   target,
   onRevision,
   markdownPreview,
+  languageData,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
+  languageData?: CodeLanguage | undefined;
 }): React.JSX.Element {
   const settings = useReviewSettings();
   const [text, setText] = useState("");
@@ -379,6 +383,10 @@ function DocumentView({
                 softWrap={settings.softWrap}
                 fontSize={settings.codeFontSize}
                 revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}
+                languageData={target.kind === "source" ? languageData : undefined}
+                diagnostics={settings.diagnostics}
+                inlayHints={settings.inlayHints}
+                semanticHighlighting={settings.semanticHighlighting}
               />
             </Suspense>
           )}
@@ -418,6 +426,7 @@ export function ReviewApp({
   const [language, setLanguage] = useState<
     import("./codeApi").CodeLanguageCapabilities
   >();
+  const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
   const [tabsReadySession, setTabsReadySession] = useState<string>();
   const manifestRevision = useRef<string | undefined>(undefined);
@@ -435,6 +444,7 @@ export function ReviewApp({
       !workspace?.sessionId ||
       !leasedPath
     ) {
+      setLanguageData(undefined);
       return undefined;
     }
     const sessionId = workspace.sessionId;
@@ -450,12 +460,17 @@ export function ReviewApp({
     void openCodeBuffer(sessionId, path, leaseId)
       .then(() => {
         opened = true;
+        return fetchCodeLanguage(sessionId, path);
+      })
+      .then((value) => {
+        if (!released) setLanguageData(value);
         if (released) release();
       })
       // File rendering remains useful when language intelligence is unavailable.
       .catch(() => undefined);
     return () => {
       released = true;
+      setLanguageData(undefined);
       release();
     };
   }, [active, leasedPath, workspace?.sessionId]);
@@ -754,6 +769,9 @@ export function ReviewApp({
               onRevision={setCurrentRevision}
               markdownPreview={target.kind === "source" &&
                 isMarkdownReviewPath(target.path) && markdownPreview}
+              languageData={languageData?.path === target.path
+                ? languageData
+                : undefined}
             />
           )}
         <Box

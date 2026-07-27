@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   closeCodeBuffer,
   fetchCodeFilePage,
+  fetchCodeLanguage,
   fetchCodeManifest,
   fetchCodeSearch,
   fetchCodeTree,
@@ -41,6 +42,36 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
         cache: "reload",
       },
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("language intelligence stays inside the stable Code data plane", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/main.rs",
+          version: [],
+          diagnostics: [],
+          inlayHints: [],
+          semanticTokens: [],
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeLanguage("session/id", "src/main.rs");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/language?path=src%2Fmain.rs",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

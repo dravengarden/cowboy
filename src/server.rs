@@ -976,6 +976,7 @@ async fn serve_axum(
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
         .route("/api/code/sessions/{id}/file", get(api_code_file))
+        .route("/api/code/sessions/{id}/language", get(api_code_language))
         .route(
             "/api/code/sessions/{id}/buffer",
             put(api_code_buffer_open).delete(api_code_buffer_close),
@@ -1802,11 +1803,64 @@ enum ZedAdapterResponse {
         path: String,
         leases: usize,
     },
+    BufferLanguage {
+        api_version: u8,
+        path: String,
+        version: Vec<CodeBufferVersion>,
+        diagnostics: Vec<CodeDiagnostic>,
+        inlay_hints: Vec<CodeInlayHint>,
+        semantic_tokens: Vec<u32>,
+    },
     Error {
         message: String,
     },
     #[serde(other)]
     Other,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeBufferVersion {
+    replica_id: u32,
+    timestamp: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodePoint {
+    row: u32,
+    column: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeDiagnostic {
+    start: CodePoint,
+    end: CodePoint,
+    severity: i32,
+    source: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeInlayHint {
+    offset: u64,
+    label: String,
+    kind: Option<String>,
+    padding_left: bool,
+    padding_right: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeLanguageResponse {
+    api_version: u8,
+    path: String,
+    version: Vec<CodeBufferVersion>,
+    diagnostics: Vec<CodeDiagnostic>,
+    inlay_hints: Vec<CodeInlayHint>,
+    semantic_tokens: Vec<u32>,
 }
 
 async fn zed_adapter_request(
@@ -1825,16 +1879,18 @@ async fn zed_adapter_request(
     write.shutdown().await?;
     let mut line = String::new();
     tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(35),
         BufReader::new(read).read_line(&mut line),
     )
     .await
     .context("Zed adapter response timed out")??;
     match serde_json::from_str::<ZedAdapterResponse>(&line)? {
         response @ (ZedAdapterResponse::Worktree { api_version: 1, .. }
-        | ZedAdapterResponse::Buffer { api_version: 1, .. }) => Ok(response),
+        | ZedAdapterResponse::Buffer { api_version: 1, .. }
+        | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }) => Ok(response),
         ZedAdapterResponse::Worktree { api_version, .. }
-        | ZedAdapterResponse::Buffer { api_version, .. } => {
+        | ZedAdapterResponse::Buffer { api_version, .. }
+        | ZedAdapterResponse::BufferLanguage { api_version, .. } => {
             anyhow::bail!("unsupported Zed adapter API version {api_version}")
         }
         ZedAdapterResponse::Error { message } => anyhow::bail!("{message}"),
@@ -2130,9 +2186,9 @@ async fn api_code_manifest(
         language: CodeLanguageCapabilities {
             provider: if language_ready { "zed" } else { "none" },
             state: language_state,
-            diagnostics: false,
-            inlay_hints: false,
-            semantic_tokens: false,
+            diagnostics: language_ready,
+            inlay_hints: language_ready,
+            semantic_tokens: language_ready,
         },
     })
     .into_response();
@@ -2330,6 +2386,71 @@ async fn api_code_buffer_open(
     Json(request): Json<CodeBufferLeaseRequest>,
 ) -> Response {
     api_code_buffer_lease(state, session_id, request, true).await
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeLanguageQuery {
+    path: String,
+}
+
+async fn api_code_language(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeLanguageQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let Some(socket) = &state.zed_adapter_socket else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "language service unavailable",
+        )
+            .into_response();
+    };
+    if query.path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
+    }
+    match zed_adapter_request(
+        socket,
+        serde_json::json!({
+            "type": "bufferLanguage",
+            "worktree": cwd,
+            "path": query.path,
+        }),
+    )
+    .await
+    {
+        Ok(ZedAdapterResponse::BufferLanguage {
+            path,
+            version,
+            diagnostics,
+            inlay_hints,
+            semantic_tokens,
+            ..
+        }) => Json(CodeLanguageResponse {
+            api_version: 1,
+            path,
+            version,
+            diagnostics,
+            inlay_hints,
+            semantic_tokens,
+        })
+        .into_response(),
+        Ok(_) => (
+            StatusCode::BAD_GATEWAY,
+            "unexpected language service response",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(session = %session_id, %error, "Zed language query failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "language intelligence unavailable",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn api_code_buffer_close(
