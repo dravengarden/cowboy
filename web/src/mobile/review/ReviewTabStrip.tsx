@@ -61,9 +61,16 @@ export function ReviewTabStrip({
           return (
             <Box
               key={key}
-              component="button"
-              type="button"
+              role="tab"
+              tabIndex={0}
+              aria-selected={active}
               onClick={() => onActivate(tab)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onActivate(tab);
+                }
+              }}
               onPointerDown={(event) => {
                 cancelLongPress();
                 const anchor = event.currentTarget;
