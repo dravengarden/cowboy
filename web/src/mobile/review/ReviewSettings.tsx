@@ -6,8 +6,6 @@ import {
   Select,
   Stack,
   Switch,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { SettingsSheet } from "../../_shell";
@@ -74,7 +72,7 @@ export function ReviewSettings({
         <Typography variant="overline" color="text.secondary">
           Code display
         </Typography>
-        <Stack spacing={1}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
           <Box>
             <Typography variant="body2" fontWeight={650}>
               Code font size
@@ -83,28 +81,19 @@ export function ReviewSettings({
               Only code and diff text
             </Typography>
           </Box>
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
+          <Select
             size="small"
             value={settings.codeFontSize}
-            onChange={(_, value: number | null): void => {
-              if (value !== null) updateReviewSettings({ codeFontSize: value });
-            }}
-            sx={{
-              "& .MuiToggleButton-root": {
-                minWidth: 0,
-                minHeight: 44,
-                px: 0.5,
-              },
-            }}
+            onChange={(event): void =>
+              updateReviewSettings({ codeFontSize: Number(event.target.value) })}
+            sx={{ minWidth: 92 }}
           >
             {REVIEW_CODE_FONT_SIZES.map((value) => (
-              <ToggleButton key={value} value={value}>
+              <MenuItem key={value} value={value}>
                 {value}px
-              </ToggleButton>
+              </MenuItem>
             ))}
-          </ToggleButtonGroup>
+          </Select>
         </Stack>
         <SettingToggle
           label="Soft wrap"
