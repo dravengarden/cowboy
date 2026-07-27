@@ -24,7 +24,6 @@ import {
   IconButton,
   Popover,
   Stack,
-  Switch,
   Toolbar,
   Typography,
 } from "@mui/material";
@@ -1245,58 +1244,76 @@ export function ReviewApp({
               <Stack
                 direction="row"
                 alignItems="center"
-                sx={{ ml: 0.5, mr: 0.5, height: 40 }}
+                role="group"
+                aria-label="Code review source"
+                sx={{ ml: 0.25, mr: 0.25, height: 40 }}
               >
-                <FolderOutlined
-                  fontSize="small"
-                  sx={{
-                    color: mode === "files"
-                      ? "text.primary"
-                      : "text.disabled",
-                  }}
-                />
-                <Switch
-                  size="small"
-                  checked={mode === "git"}
-                  inputProps={{
-                    "aria-label": `Switch to ${
-                      mode === "git" ? "Files" : "Git review"
-                    }`,
-                  }}
-                  onChange={(_event, checked) => {
+                <IconButton
+                  aria-label="Browse files"
+                  aria-pressed={mode === "files"}
+                  onClick={() => {
+                    if (mode === "files") return;
                     navigationHaptic();
-                    setMode(checked ? "git" : "files");
+                    setMode("files");
                   }}
                   sx={{
-                    mx: 0.25,
-                    "& .MuiSwitch-switchBase.Mui-checked": {
-                      color: "text.primary",
-                    },
-                    "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": {
-                      bgcolor: "text.primary",
-                      opacity: 0.32,
-                    },
-                    "& .MuiSwitch-track": {
-                      bgcolor: "text.disabled",
-                      opacity: 0.24,
+                    position: "relative",
+                    width: 40,
+                    height: 40,
+                    color: mode === "files" ? "text.primary" : "text.disabled",
+                    "&::after": {
+                      content: '""',
+                      position: "absolute",
+                      bottom: 3,
+                      left: "50%",
+                      width: 16,
+                      height: 2,
+                      borderRadius: 999,
+                      bgcolor: mode === "files"
+                        ? "text.primary"
+                        : "transparent",
+                      transform: "translateX(-50%)",
                     },
                   }}
-                />
-                <Badge
-                  badgeContent={changeCount}
-                  max={99}
-                  color="default"
-                  invisible={changeCount === 0}
                 >
-                  <DifferenceOutlined
-                    fontSize="small"
-                    sx={{
-                      color: mode === "git"
+                  <FolderOutlined fontSize="small" />
+                </IconButton>
+                <IconButton
+                  aria-label={`Review Git changes${
+                    changeCount > 0
+                      ? `, ${changeCount} changed ${
+                        changeCount === 1 ? "file" : "files"
+                      }`
+                      : ""
+                  }`}
+                  aria-pressed={mode === "git"}
+                  onClick={() => {
+                    if (mode === "git") return;
+                    navigationHaptic();
+                    setMode("git");
+                  }}
+                  sx={{
+                    position: "relative",
+                    width: 40,
+                    height: 40,
+                    color: mode === "git" ? "text.primary" : "text.disabled",
+                    "&::after": {
+                      content: '""',
+                      position: "absolute",
+                      bottom: 3,
+                      left: "50%",
+                      width: 16,
+                      height: 2,
+                      borderRadius: 999,
+                      bgcolor: mode === "git"
                         ? "text.primary"
-                        : "text.disabled",
-                    }}
-                  />
-                </Badge>
+                        : "transparent",
+                      transform: "translateX(-50%)",
+                    },
+                  }}
+                >
+                  <DifferenceOutlined fontSize="small" />
+                </IconButton>
               </Stack>
               {mode === "files" && modeTabs.length > 0 && (
                 <IconButton
@@ -1378,7 +1395,16 @@ export function ReviewApp({
                 onClick={() => setToggleDrawerRequest((value) => value + 1)}
               >
                 {mode === "git"
-                  ? <DifferenceOutlined />
+                  ? (
+                    <Badge
+                      badgeContent={changeCount}
+                      max={99}
+                      color="default"
+                      invisible={changeCount === 0}
+                    >
+                      <DifferenceOutlined />
+                    </Badge>
+                  )
                   : <AccountTreeOutlined />}
               </IconButton>
             </Toolbar>
