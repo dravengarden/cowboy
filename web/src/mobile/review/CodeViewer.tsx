@@ -324,7 +324,10 @@ export default function CodeViewer({
   diagnostics: boolean;
   inlayHints: boolean;
   semanticHighlighting: boolean;
-  onInspect?: ((candidates: CodeInspectCandidate[]) => void) | undefined;
+  onInspect?: ((
+    candidates: CodeInspectCandidate[],
+    anchor: { top: number; left: number },
+  ) => void) | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
@@ -509,6 +512,8 @@ export default function CodeViewer({
       values.push(
         EditorView.domEventHandlers({
           click: (event, view) => {
+            const selection = globalThis.getSelection?.();
+            if (selection && !selection.isCollapsed) return false;
             const offset = view.posAtCoords({
               x: event.clientX,
               y: event.clientY,
@@ -554,7 +559,10 @@ export default function CodeViewer({
             ).slice(0, 5).map(({ candidate }) => candidate);
             if (candidates.length === 0) return false;
             event.preventDefault();
-            onInspect(candidates);
+            onInspect(candidates, {
+              top: event.clientY,
+              left: event.clientX,
+            });
             return true;
           },
         }),
@@ -604,13 +612,6 @@ export default function CodeViewer({
         "& .cm-editor, & .cm-scroller, & .cm-content": {
           fontSize: `${fontSize}px !important`,
         },
-        ...(onInspect
-          ? {
-            "& .cm-content": {
-              cursor: "crosshair",
-            },
-          }
-          : {}),
       }}
     >
       <CodeMirror

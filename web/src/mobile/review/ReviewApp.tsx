@@ -1,6 +1,5 @@
 import {
   ArrowBack,
-  CenterFocusStrong,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -22,6 +21,7 @@ import {
   Chip,
   CircularProgress,
   IconButton,
+  Popover,
   Stack,
   Toolbar,
   Typography,
@@ -42,6 +42,7 @@ import {
 import { navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
+import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import {
   CodeApiError,
   closeCodeBuffer,
@@ -113,21 +114,18 @@ function DocumentView({
   markdownPreview,
   languageData,
   onNavigate,
-  inspectMode,
-  onInspectConsumed,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
   languageData?: CodeLanguage | undefined;
-  inspectMode: boolean;
-  onInspectConsumed: () => void;
   onNavigate: (
     location: CodeLocation,
     origin: { row: number; column: number },
   ) => void;
 }): React.JSX.Element {
+  const surface = useSurfaceProfile();
   const settings = useReviewSettings();
   const [text, setText] = useState("");
   const [truncated, setTruncated] = useState(false);
@@ -152,6 +150,9 @@ function DocumentView({
   const [inspectCandidates, setInspectCandidates] = useState<
     CodeInspectCandidate[]
   >([]);
+  const [inspectAnchor, setInspectAnchor] = useState<
+    { top: number; left: number } | undefined
+  >();
   const [navigationLoading, setNavigationLoading] = useState(false);
   const hoverController = useRef<AbortController | undefined>(undefined);
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
@@ -189,8 +190,9 @@ function DocumentView({
 
   const inspectCandidatesOrPoint = useCallback((
     candidates: CodeInspectCandidate[],
+    anchor: { top: number; left: number },
   ): void => {
-    onInspectConsumed();
+    setInspectAnchor(anchor);
     navigationHaptic();
     if (candidates.length === 1) {
       inspectPoint(candidates[0]!);
@@ -202,7 +204,7 @@ function DocumentView({
     setNavigation([]);
     setInspectCandidates(candidates);
     setHoverOpen(true);
-  }, [inspectPoint, onInspectConsumed]);
+  }, [inspectPoint]);
 
   const navigate = useCallback((kind: CodeNavigationKind): void => {
     if (
@@ -380,6 +382,105 @@ function DocumentView({
       </Alert>
     );
   }
+  const symbolContent = (
+    <Stack spacing={1.5} sx={{ pb: 2 }}>
+      {inspectCandidates.length > 0
+        ? (
+          <>
+            <Typography color="text.secondary">
+              Choose the symbol you meant to inspect.
+            </Typography>
+            {inspectCandidates.map((candidate) => (
+              <Button
+                key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+                variant="outlined"
+                sx={{
+                  justifyContent: "space-between",
+                  textTransform: "none",
+                  minHeight: 48,
+                }}
+                onClick={() => inspectPoint(candidate)}
+              >
+                <span>{candidate.label}</span>
+                <Typography
+                  component="span"
+                  variant="caption"
+                  color="text.secondary"
+                >
+                  line {candidate.row + 1}
+                </Typography>
+              </Button>
+            ))}
+          </>
+        )
+        : hoverLoading
+        ? (
+          <Stack alignItems="center" sx={{ py: 4 }}>
+            <CircularProgress size={24} />
+          </Stack>
+        )
+        : hover?.contents.length
+        ? hover.contents.map((block, index) =>
+          block.markdown
+            ? <Markdown key={index} text={block.text} touchWrap />
+            : (
+              <Box
+                key={index}
+                component="pre"
+                sx={{
+                  m: 0,
+                  p: 1.5,
+                  overflowX: "auto",
+                  borderRadius: 2,
+                  bgcolor: "action.hover",
+                  fontFamily: "var(--cowboy-font-mono)",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {block.text}
+              </Box>
+            )
+        )
+        : (
+          <Typography color="text.secondary" sx={{ py: 3 }}>
+            No symbol information is available at this location.
+          </Typography>
+        )}
+      {inspectCandidates.length === 0 && !hoverLoading && (
+        <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
+          <Button size="small" onClick={() => navigate("definition")}>
+            Definition
+          </Button>
+          <Button size="small" onClick={() => navigate("declaration")}>
+            Declaration
+          </Button>
+          <Button size="small" onClick={() => navigate("typeDefinition")}>
+            Type
+          </Button>
+          <Button size="small" onClick={() => navigate("implementation")}>
+            Implementations
+          </Button>
+          <Button size="small" onClick={() => navigate("references")}>
+            References
+          </Button>
+        </Stack>
+      )}
+      {navigationLoading && <CircularProgress size={20} />}
+      {navigation.map((location) => (
+        <Button
+          key={`${location.path}:${location.start.row}:${location.start.column}`}
+          variant="outlined"
+          sx={{ justifyContent: "flex-start", textTransform: "none" }}
+          onClick={() => {
+            setHoverOpen(false);
+            if (inspectTarget) onNavigate(location, inspectTarget);
+          }}
+        >
+          {location.path}:{location.start.row + 1}
+        </Button>
+      ))}
+    </Stack>
+  );
   return (
     <Stack sx={{ flex: 1, minHeight: 0 }}>
       {(truncated || counts || nextCursor || loadMoreError) && (
@@ -509,117 +610,51 @@ function DocumentView({
                 diagnostics={settings.diagnostics}
                 inlayHints={settings.inlayHints}
                 semanticHighlighting={settings.semanticHighlighting}
-                onInspect={inspectMode && (target.kind === "source" ||
-                    (target.kind === "diff" && target.scope === "unstaged"))
+                onInspect={target.kind === "source" ||
+                    (target.kind === "diff" && target.scope === "unstaged")
                   ? inspectCandidatesOrPoint
                   : undefined}
               />
             </Suspense>
       )}
-      <Sheet
-        open={hoverOpen}
-        onClose={() => setHoverOpen(false)}
-        title="Symbol"
-        forceSheet
-      >
-        <Stack spacing={1.5} sx={{ pb: 2 }}>
-          {inspectCandidates.length > 0
-            ? (
-              <>
-                <Typography color="text.secondary">
-                  Choose the symbol you meant to inspect.
-                </Typography>
-                {inspectCandidates.map((candidate) => (
-                  <Button
-                    key={`${candidate.row}:${candidate.column}:${candidate.label}`}
-                    variant="outlined"
-                    sx={{
-                      justifyContent: "space-between",
-                      textTransform: "none",
-                      minHeight: 48,
-                    }}
-                    onClick={() => inspectPoint(candidate)}
-                  >
-                    <span>{candidate.label}</span>
-                    <Typography
-                      component="span"
-                      variant="caption"
-                      color="text.secondary"
-                    >
-                      line {candidate.row + 1}
-                    </Typography>
-                  </Button>
-                ))}
-              </>
-            )
-            : hoverLoading
-            ? (
-              <Stack alignItems="center" sx={{ py: 4 }}>
-                <CircularProgress size={24} />
-              </Stack>
-            )
-            : hover?.contents.length
-            ? hover.contents.map((block, index) =>
-              block.markdown
-                ? <Markdown key={index} text={block.text} touchWrap />
-                : (
-                  <Box
-                    key={index}
-                    component="pre"
-                    sx={{
-                      m: 0,
-                      p: 1.5,
-                      overflowX: "auto",
-                      borderRadius: 2,
-                      bgcolor: "action.hover",
-                      fontFamily: "var(--cowboy-font-mono)",
-                      whiteSpace: "pre-wrap",
-                    }}
-                  >
-                    {block.text}
-                  </Box>
-                )
-            )
-            : (
-              <Typography color="text.secondary" sx={{ py: 3 }}>
-                No symbol information is available at this location.
-              </Typography>
-            )}
-          {inspectCandidates.length === 0 && !hoverLoading && (
-            <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
-              <Button size="small" onClick={() => navigate("definition")}>
-                Definition
-              </Button>
-              <Button size="small" onClick={() => navigate("declaration")}>
-                Declaration
-              </Button>
-              <Button size="small" onClick={() => navigate("typeDefinition")}>
-                Type
-              </Button>
-              <Button size="small" onClick={() => navigate("implementation")}>
-                Implementations
-              </Button>
-              <Button size="small" onClick={() => navigate("references")}>
-                References
-              </Button>
-            </Stack>
-          )}
-          {navigationLoading && <CircularProgress size={20} />}
-          {navigation.map((location) => (
-            <Button
-              key={`${location.path}:${location.start.row}:${location.start.column}`}
-              variant="outlined"
-              sx={{ justifyContent: "flex-start", textTransform: "none" }}
-              onClick={() => {
-                setHoverOpen(false);
-                if (inspectTarget) onNavigate(location, inspectTarget);
-              }}
-            >
-              {location.path}:{location.start.row + 1}
-            </Button>
-          ))}
-        </Stack>
-      </Sheet>
+      {surface.kind === "mobile"
+        ? (
+          <Sheet
+            open={hoverOpen}
+            onClose={() => setHoverOpen(false)}
+            title="Symbol"
+            forceSheet
+          >
+            {symbolContent}
+          </Sheet>
+        )
+        : (
+          <Popover
+            open={hoverOpen}
+            onClose={() => setHoverOpen(false)}
+            anchorReference="anchorPosition"
+            anchorPosition={inspectAnchor ?? { top: 0, left: 0 }}
+            transformOrigin={{ vertical: "top", horizontal: "left" }}
+            slotProps={{
+              paper: {
+                sx: {
+                  width: "min(520px, calc(100vw - 48px))",
+                  maxHeight: "min(70vh, 680px)",
+                  p: 2,
+                  borderRadius: 3,
+                  bgcolor: "background.paper",
+                  backgroundImage: "none",
+                  boxShadow: 12,
+                },
+              },
+            }}
+          >
+            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
+              Symbol
+            </Typography>
+            {symbolContent}
+          </Popover>
+        )}
       </Box>
     </Stack>
   );
@@ -639,7 +674,6 @@ export function ReviewApp({
   const settings = useReviewSettings();
   const [mode, setMode] = useState<ReviewMode>("git");
   const [markdownPreview, setMarkdownPreview] = useState(true);
-  const [inspectMode, setInspectMode] = useState(false);
   const [sourceTarget, setSourceTarget] = useState<
     Extract<ReviewTarget, { kind: "source" }> | undefined
   >();
@@ -649,8 +683,6 @@ export function ReviewApp({
   const target: ReviewTarget = mode === "code"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
-  const canInspect = target.kind === "source" ||
-    (target.kind === "diff" && target.scope === "unstaged");
   const leasedPath = target.kind === "changes" ? undefined : target.path;
   const [closeRequest, setCloseRequest] = useState(0);
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
@@ -679,10 +711,6 @@ export function ReviewApp({
     setDrawerOpen(open);
     onDrawerOpenChange(open);
   }, [onDrawerOpenChange]);
-
-  useEffect(() => {
-    setInspectMode(false);
-  }, [mode, leasedPath]);
 
   useEffect(() => {
     if (
@@ -1100,8 +1128,6 @@ export function ReviewApp({
               languageData={languageData?.path === target.path
                 ? languageData
                 : undefined}
-              inspectMode={inspectMode}
-              onInspectConsumed={() => setInspectMode(false)}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
                 const previous: Extract<
@@ -1188,22 +1214,6 @@ export function ReviewApp({
                 onClick={() => setManagingTabs((value) => !value)}
               >
                 <TabUnselected />
-              </IconButton>
-            )}
-            {canInspect && !(
-              target.kind === "source" &&
-              isMarkdownReviewPath(target.path) &&
-              markdownPreview
-            ) && (
-              <IconButton
-                aria-label={inspectMode
-                  ? "Cancel symbol inspection"
-                  : "Inspect a symbol"}
-                aria-pressed={inspectMode}
-                color={inspectMode ? "primary" : "default"}
-                onClick={() => setInspectMode((value) => !value)}
-              >
-                <CenterFocusStrong />
               </IconButton>
             )}
             {target.kind !== "changes" && !(
