@@ -8,6 +8,7 @@ import {
   FolderOpenOutlined,
   KeyboardArrowDown,
   KeyboardArrowUp,
+  VisibilityOutlined,
   ViewSidebarOutlined,
   WrapText,
 } from "@mui/icons-material";
@@ -31,6 +32,7 @@ import {
   useState,
 } from "react";
 import { useActiveWorkspaceBinding } from "../../controlPlane";
+import { Markdown } from "../../Markdown";
 import {
   CodeApiError,
   fetchCodeDiffPage,
@@ -50,6 +52,7 @@ import { ReviewChanges } from "./ReviewChanges";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
+import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
   updateReviewSettings,
   useReviewSettings,
@@ -75,10 +78,12 @@ function DocumentView({
   sessionId,
   target,
   onRevision,
+  markdownPreview,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
+  markdownPreview: boolean;
 }): React.JSX.Element {
   const settings = useReviewSettings();
   const [text, setText] = useState("");
@@ -303,23 +308,63 @@ function DocumentView({
           )}
         </Stack>
       )}
-      <Box sx={{ flex: 1, minHeight: 0 }}>
-        <Suspense
-          fallback={
-            <Box sx={{ display: "grid", placeItems: "center", height: 1 }}>
-              <CircularProgress size={24} />
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflow: markdownPreview ? "auto" : "hidden",
+        }}
+      >
+        {markdownPreview
+          ? (
+            <Box
+              component="article"
+              data-markdown-review-preview
+              sx={{
+                width: "100%",
+                maxWidth: 880,
+                mx: "auto",
+                px: { xs: 2.25, sm: 4 },
+                py: 2.5,
+                lineHeight: 1.6,
+                overflowWrap: "anywhere",
+                "& h1": {
+                  fontSize: "1.75rem !important",
+                  pb: 0.5,
+                  borderBottom: 1,
+                  borderColor: "divider",
+                },
+                "& h2": {
+                  fontSize: "1.4rem !important",
+                  pb: 0.35,
+                  borderBottom: 1,
+                  borderColor: "divider",
+                },
+                "& h3": { fontSize: "1.18rem !important" },
+                "& hr": { border: 0, borderTop: 1, borderColor: "divider", my: 2 },
+              }}
+            >
+              <Markdown text={text} touchWrap />
             </Box>
-          }
-        >
-          <CodeViewer
-            text={text}
-            kind={target.kind}
-            path={target.path}
-            softWrap={settings.softWrap}
-            fontSize={settings.codeFontSize}
-            revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}
-          />
-        </Suspense>
+          )
+          : (
+            <Suspense
+              fallback={
+                <Box sx={{ display: "grid", placeItems: "center", height: 1 }}>
+                  <CircularProgress size={24} />
+                </Box>
+              }
+            >
+              <CodeViewer
+                text={text}
+                kind={target.kind}
+                path={target.path}
+                softWrap={settings.softWrap}
+                fontSize={settings.codeFontSize}
+                revealLine={target.kind === "diff" ? hunks[hunkIndex] : undefined}
+              />
+            </Suspense>
+          )}
       </Box>
     </Stack>
   );
@@ -335,6 +380,7 @@ export function ReviewApp({
   const workspace = useActiveWorkspaceBinding();
   const settings = useReviewSettings();
   const [mode, setMode] = useState<ReviewMode>("git");
+  const [markdownPreview, setMarkdownPreview] = useState(true);
   const [sourceTarget, setSourceTarget] = useState<
     Extract<ReviewTarget, { kind: "source" }> | undefined
   >();
@@ -401,6 +447,7 @@ export function ReviewApp({
   const openSource = (path: string): void => {
     setCurrentRevision(undefined);
     setMode("code");
+    setMarkdownPreview(isMarkdownReviewPath(path));
     setSourceTarget({ kind: "source", path });
     setCloseRequest((value) => value + 1);
   };
@@ -594,6 +641,8 @@ export function ReviewApp({
               sessionId={workspace.sessionId}
               target={target}
               onRevision={setCurrentRevision}
+              markdownPreview={target.kind === "source" &&
+                isMarkdownReviewPath(target.path) && markdownPreview}
             />
           )}
         <Box
@@ -616,7 +665,11 @@ export function ReviewApp({
             }}
             >
             <ReviewSettings />
-            {target.kind !== "changes" && (
+            {target.kind !== "changes" && !(
+              target.kind === "source" &&
+              isMarkdownReviewPath(target.path) &&
+              markdownPreview
+            ) && (
               <IconButton
                 aria-label={settings.softWrap
                   ? "Disable line wrapping"
@@ -626,6 +679,18 @@ export function ReviewApp({
                   updateReviewSettings({ softWrap: !settings.softWrap })}
               >
                 <WrapText />
+              </IconButton>
+            )}
+            {target.kind === "source" && isMarkdownReviewPath(target.path) && (
+              <IconButton
+                aria-label={markdownPreview
+                  ? "Show Markdown source"
+                  : "Preview Markdown"}
+                aria-pressed={markdownPreview}
+                color={markdownPreview ? "primary" : "default"}
+                onClick={() => setMarkdownPreview((value) => !value)}
+              >
+                <VisibilityOutlined />
               </IconButton>
             )}
             {target.kind === "diff" && (
