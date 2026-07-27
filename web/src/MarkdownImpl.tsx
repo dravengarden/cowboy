@@ -146,6 +146,56 @@ function parseImages(md: string): { src: string; alt: string }[] {
   return out;
 }
 
+// Keep these renderer component identities stable across streamed Markdown
+// updates. Defining them inside MarkdownImpl makes ReactMarkdown receive a new
+// component type for every chunk, which unmounts/remounts the horizontal
+// scroller and resets its native scrollLeft to zero on iOS.
+export function MarkdownTable({ children }: { children?: ReactNode }): React.JSX.Element {
+  return (
+    <Box
+      data-markdown-table-scroll
+      sx={{
+        overflowX: "auto",
+        maxWidth: "100%",
+        my: 1,
+        WebkitOverflowScrolling: "touch",
+        "& table": { borderCollapse: "collapse", width: "max-content" },
+      }}
+    >
+      <table>{children}</table>
+    </Box>
+  );
+}
+
+function MarkdownTableHead({ children }: { children?: ReactNode }): React.JSX.Element {
+  return (
+    <Box
+      component="th"
+      sx={{
+        border: 1,
+        borderColor: "divider",
+        px: 1,
+        py: 0.5,
+        textAlign: "left",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+function MarkdownTableCell({ children }: { children?: ReactNode }): React.JSX.Element {
+  return (
+    <Box
+      component="td"
+      sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5, whiteSpace: "nowrap" }}
+    >
+      {children}
+    </Box>
+  );
+}
+
 // A fenced code block + a top-right copy button. The button sits ABSOLUTELY in
 // the (non-scrolling) wrapper, so it stays pinned to the visible top-right even
 // as the code scrolls sideways. UX for both surfaces: a comfortable 34px hit
@@ -661,55 +711,12 @@ const MarkdownImpl = memo(function MarkdownImpl({
         </Link>
       );
     },
-    table({ children }) {
-      // Wide tables scroll horizontally inside the bubble rather than wrapping
-      // their cells into an unreadable squish or stretching the message off the
-      // viewport. The ancestor `wordBreak: break-word` would otherwise force
-      // every cell to wrap (so a table never overflows, it just crams) — the
-      // `nowrap` on th/td below is what lets the overflow-x actually engage.
-      // `maxWidth: 100%` keeps the scroll region inside the bubble; touch
-      // momentum scrolling for iOS.
-      return (
-        <Box
-          sx={{
-            overflowX: "auto",
-            maxWidth: "100%",
-            my: 1,
-            WebkitOverflowScrolling: "touch",
-            "& table": { borderCollapse: "collapse", width: "max-content" },
-          }}
-        >
-          <table>{children as ReactNode}</table>
-        </Box>
-      );
-    },
-    th({ children }) {
-      return (
-        <Box
-          component="th"
-          sx={{
-            border: 1,
-            borderColor: "divider",
-            px: 1,
-            py: 0.5,
-            textAlign: "left",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {children}
-        </Box>
-      );
-    },
-    td({ children }) {
-      return (
-        <Box
-          component="td"
-          sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5, whiteSpace: "nowrap" }}
-        >
-          {children}
-        </Box>
-      );
-    },
+    // Stable component references are required here. See MarkdownTable above:
+    // replacing these functions while a response streams resets iOS horizontal
+    // scroll even when the already-rendered table itself did not change.
+    table: MarkdownTable,
+    th: MarkdownTableHead,
+    td: MarkdownTableCell,
     // Headings were unstyled, so they fell back to the browser's `<h1>`/`<h2>`
     // defaults (2em / 1.5em + large margins) — oversized in a chat bubble and
     // especially heavy on a phone. Render them em-relative (so they still scale
