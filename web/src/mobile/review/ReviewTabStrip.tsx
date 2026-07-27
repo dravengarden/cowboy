@@ -50,7 +50,9 @@ export function ReviewTabStrip({
         direction="row"
         data-mobile-pager-ignore
         sx={{
+          height: 42,
           minHeight: 42,
+          maxHeight: 42,
           overflowX: "auto",
           scrollbarWidth: "none",
           borderBottom: 1,
@@ -101,7 +103,10 @@ export function ReviewTabStrip({
                 gap: 0.5,
                 minWidth: 92,
                 maxWidth: 190,
+                height: 42,
                 minHeight: 42,
+                maxHeight: 42,
+                boxSizing: "border-box",
                 pl: 1.5,
                 pr: 0.25,
                 border: 0,
@@ -125,9 +130,16 @@ export function ReviewTabStrip({
                     event.stopPropagation();
                     onClose(key);
                   }}
-                  sx={{ minWidth: 32, minHeight: 32 }}
+                  sx={{
+                    width: 32,
+                    height: 32,
+                    minWidth: 32,
+                    minHeight: 32,
+                    p: 0,
+                    flexShrink: 0,
+                  }}
                 >
-                  <Close sx={{ fontSize: 16 }} />
+                  <Close sx={{ fontSize: "1.1rem" }} />
                 </IconButton>
               )}
             </Box>

@@ -32,3 +32,21 @@ Deno.test("tabs can be pinned and closed", () => {
   assertEquals(pinned[0]?.pinned, true);
   assertEquals(closeReviewTab(pinned, "source:a.rs"), []);
 });
+
+Deno.test("source and diff tabs have independent capacity", () => {
+  const diff = (path: string): ReviewTab => ({
+    kind: "diff",
+    path,
+    scope: "unstaged",
+    pinned: false,
+  });
+  let tabs: ReviewTab[] = [source("keep.rs")];
+  for (let index = 0; index < 13; index += 1) {
+    tabs = openReviewTab(tabs, diff(`${index}.rs`));
+  }
+  assertEquals(
+    tabs.filter((tab) => tab.kind === "source").map(reviewTabKey),
+    ["source:keep.rs"],
+  );
+  assertEquals(tabs.filter((tab) => tab.kind === "diff").length, 12);
+});

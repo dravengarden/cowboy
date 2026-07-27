@@ -509,6 +509,10 @@ export function ReviewApp({
   }, [workspace?.sessionId]);
 
   useEffect(() => {
+    setManagingTabs(false);
+  }, [mode]);
+
+  useEffect(() => {
     if (!active || !workspace?.sessionId) return undefined;
     // ACP streams can emit many updates for one tool call. Coalesce them into
     // one filesystem revalidation after the burst instead of repeatedly
@@ -628,12 +632,18 @@ export function ReviewApp({
     : target.kind === "diff"
     ? reviewTabKey({ ...target, pinned: false })
     : undefined;
+  const modeTabs = tabs.filter((tab) =>
+    mode === "code" ? tab.kind === "source" : tab.kind === "diff"
+  );
   const closeTab = (key: string): void => {
     const next = closeReviewTab(tabs, key);
     setTabs(next);
-    if (next.length === 0) setManagingTabs(false);
+    const nextModeTabs = next.filter((tab) =>
+      mode === "code" ? tab.kind === "source" : tab.kind === "diff"
+    );
+    if (nextModeTabs.length === 0) setManagingTabs(false);
     if (activeTabKey !== key) return;
-    const fallback = next.at(-1);
+    const fallback = nextModeTabs.at(-1);
     if (fallback) void activateTab(fallback);
     else if (mode === "code") setSourceTarget(undefined);
     else setDiffTarget(undefined);
@@ -841,13 +851,26 @@ export function ReviewApp({
           }}
         >
           <ReviewTabStrip
-            tabs={tabs}
+            tabs={modeTabs}
             activeKey={activeTabKey}
             showCloseButtons={managingTabs}
             onActivate={(tab) => void activateTab(tab)}
             onClose={closeTab}
             onCloseOthers={(key) =>
-              setTabs((current) => closeOtherReviewTabs(current, key))}
+              setTabs((current) => {
+                const currentModeTabs = current.filter((tab) =>
+                  mode === "code"
+                    ? tab.kind === "source"
+                    : tab.kind === "diff"
+                );
+                const otherModeTabs = current.filter((tab) =>
+                  mode === "code" ? tab.kind === "diff" : tab.kind === "source"
+                );
+                return [
+                  ...otherModeTabs,
+                  ...closeOtherReviewTabs(currentModeTabs, key),
+                ];
+              })}
             onTogglePin={(key) =>
               setTabs((current) => toggleReviewTabPin(current, key))}
           />
@@ -868,7 +891,7 @@ export function ReviewApp({
               }}
             >
             <ReviewSettings language={language} />
-            {tabs.length > 0 && (
+            {modeTabs.length > 0 && (
               <IconButton
                 aria-label={managingTabs
                   ? "Finish managing tabs"

@@ -1,7 +1,7 @@
 import type { CodeDiffScope } from "./codeApi";
 
 const STORAGE_KEY = "cowboy:code-review-tabs:v1";
-const MAX_TABS = 12;
+const MAX_TABS_PER_MODE = 12;
 
 export type ReviewTab =
   | { kind: "source"; path: string; pinned: boolean }
@@ -28,9 +28,13 @@ export function openReviewTab(
     return [...tabs];
   }
   const opened = [...tabs, next];
-  if (opened.length <= MAX_TABS) return opened;
-  const evict = opened.findIndex((tab) => !tab.pinned);
-  if (evict < 0) return opened.slice(-MAX_TABS);
+  const sameMode = (tab: ReviewTab): boolean => tab.kind === next.kind;
+  if (opened.filter(sameMode).length <= MAX_TABS_PER_MODE) return opened;
+  const evict = opened.findIndex((tab) => sameMode(tab) && !tab.pinned);
+  if (evict < 0) {
+    const firstInMode = opened.findIndex(sameMode);
+    return opened.filter((_, index) => index !== firstInMode);
+  }
   return opened.filter((_, index) => index !== evict);
 }
 
@@ -73,7 +77,7 @@ export function loadReviewTabs(sessionId: string): ReviewTab[] {
     >;
     const value = all[sessionId];
     if (!Array.isArray(value)) return [];
-    return value.flatMap((candidate): ReviewTab[] => {
+    const tabs = value.flatMap((candidate): ReviewTab[] => {
       if (
         !candidate || typeof candidate !== "object" ||
         typeof candidate.path !== "string" ||
@@ -98,7 +102,13 @@ export function loadReviewTabs(sessionId: string): ReviewTab[] {
         }];
       }
       return [];
-    }).slice(-MAX_TABS);
+    });
+    return [
+      ...tabs.filter((tab) => tab.kind === "source").slice(
+        -MAX_TABS_PER_MODE,
+      ),
+      ...tabs.filter((tab) => tab.kind === "diff").slice(-MAX_TABS_PER_MODE),
+    ];
   } catch {
     return [];
   }
@@ -113,7 +123,16 @@ export function saveReviewTabs(sessionId: string, tabs: ReviewTab[]): void {
       ReviewTab[]
     >;
     if (tabs.length === 0) delete all[sessionId];
-    else all[sessionId] = tabs.slice(-MAX_TABS);
+    else {
+      all[sessionId] = [
+        ...tabs.filter((tab) => tab.kind === "source").slice(
+          -MAX_TABS_PER_MODE,
+        ),
+        ...tabs.filter((tab) => tab.kind === "diff").slice(
+          -MAX_TABS_PER_MODE,
+        ),
+      ];
+    }
     target.setItem(STORAGE_KEY, JSON.stringify(all));
   } catch {
     // Tab restoration is a convenience; storage denial must not break review.
