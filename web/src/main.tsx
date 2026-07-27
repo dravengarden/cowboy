@@ -8,7 +8,7 @@ import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
 import {
-  bundleEntryChanged,
+  checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
 
@@ -144,23 +144,19 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
         'script[type="module"][src]',
       )?.getAttribute("src") ?? undefined;
       const check = createServiceWorkerUpdateCheck(async () => {
-        const swUpdate = reg.update();
-        const staleBundle = bundleEntryChanged(
+        await checkForDeployedUpdate(
           loadedEntry,
+          () => reg.update(),
           () =>
             globalThis.fetch(
               `/?cowboy-bundle-probe=${Date.now()}`,
               { cache: "no-store" },
             ),
+          async () => {
+            const { conn } = await import("./store");
+            conn.updateAvailable();
+          },
         );
-        const [, bundleResult] = await Promise.allSettled([
-          swUpdate,
-          staleBundle,
-        ]);
-        if (bundleResult.status === "fulfilled" && bundleResult.value) {
-          const { conn } = await import("./store");
-          conn.updateAvailable();
-        }
       });
       const checkForUpdate = (): void => {
         // WKWebView can remain `visible` through an app background/resume, so

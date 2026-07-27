@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   bundleEntryChanged,
+  checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
   moduleEntryFromHtml,
 } from "./serviceWorkerUpdates.ts";
@@ -99,4 +100,23 @@ Deno.test("bundle entry probe detects a stale resumed page", async () => {
     ),
     false,
   );
+});
+
+Deno.test("bundle probe reports an update while service worker update remains pending", async () => {
+  const pendingWorkerUpdate = deferred();
+  let reported = 0;
+  await checkForDeployedUpdate(
+    "/assets/index-old.js",
+    () => pendingWorkerUpdate.promise,
+    () =>
+      Promise.resolve(
+        new Response(
+          `<script type="module" src="/assets/index-new.js"></script>`,
+        ),
+      ),
+    () => {
+      reported++;
+    },
+  );
+  assertEquals(reported, 1);
 });

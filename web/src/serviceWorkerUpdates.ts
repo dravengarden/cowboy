@@ -29,6 +29,23 @@ export async function bundleEntryChanged(
   return currentEntry !== undefined && currentEntry !== loadedEntry;
 }
 
+/**
+ * Probe the deployed bundle without waiting for the browser's Service Worker
+ * updater. WebKit can leave `registration.update()` pending while backgrounded;
+ * a conclusive bundle probe must still surface the update immediately.
+ */
+export async function checkForDeployedUpdate(
+  loadedEntry: string | undefined,
+  updateServiceWorker: () => Promise<unknown>,
+  fetchIndex: () => Promise<Response>,
+  onUpdate: () => void | Promise<void>,
+): Promise<void> {
+  void updateServiceWorker().catch(() => {
+    // The independent bundle probe below remains authoritative for this check.
+  });
+  if (await bundleEntryChanged(loadedEntry, fetchIndex)) await onUpdate();
+}
+
 /** Coalesce the burst of lifecycle signals emitted while a window resumes. */
 export function createServiceWorkerUpdateCheck(
   update: () => Promise<unknown>,

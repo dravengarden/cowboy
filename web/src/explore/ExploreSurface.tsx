@@ -47,6 +47,7 @@ import {
 } from "../store";
 import { setSticky } from "../stickyStore";
 import { Transcript } from "../Transcript";
+import { useReliableTouchTap } from "../useReliableTouchTap";
 import {
   beginExplorePageLoading,
   setExplorePage,
@@ -1106,6 +1107,9 @@ export function MobilePageDock({
     : undefined;
   const next = pages[currentIndex + 1];
   const knownPageIds = pages.map((page) => page.id);
+  const composeToggleTap = useReliableTouchTap<HTMLButtonElement>(() =>
+    onComposeToggle(knownPageIds)
+  );
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
@@ -1489,7 +1493,7 @@ export function MobilePageDock({
               color="primary"
               aria-label={composeOpen ? "Close question editor" : "Open question editor"}
               aria-pressed={composeOpen}
-              onClick={(): void => onComposeToggle(knownPageIds)}
+              {...composeToggleTap}
               sx={{
                 width: "max(40px, 2.5rem)",
                 height: "max(40px, 2.5rem)",
