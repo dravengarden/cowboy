@@ -81,12 +81,16 @@ export function ReviewTabStrip({
     <>
       <Stack
         direction="row"
+        data-review-tab-strip
         data-mobile-pager-ignore
         sx={{
           height: 42,
           minHeight: 42,
           maxHeight: 42,
           overflowX: "auto",
+          overflowY: "hidden",
+          touchAction: "pan-x",
+          overscrollBehaviorY: "none",
           scrollbarWidth: "none",
           borderBottom: 1,
           borderColor: "divider",
