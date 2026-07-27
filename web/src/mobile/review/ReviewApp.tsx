@@ -4,6 +4,7 @@ import {
   CheckCircleOutline,
   ChevronLeft,
   ChevronRight,
+  DifferenceOutlined,
   FolderOpenOutlined,
   KeyboardArrowDown,
   KeyboardArrowUp,
@@ -67,6 +68,8 @@ type ReviewTarget =
     queue: GitReviewEntry[];
   }
   | { kind: "source"; path: string };
+
+type ReviewMode = "code" | "git";
 
 function DocumentView({
   sessionId,
@@ -331,7 +334,16 @@ export function ReviewApp({
 }): React.JSX.Element {
   const workspace = useActiveWorkspaceBinding();
   const settings = useReviewSettings();
-  const [target, setTarget] = useState<ReviewTarget>({ kind: "changes" });
+  const [mode, setMode] = useState<ReviewMode>("git");
+  const [sourceTarget, setSourceTarget] = useState<
+    Extract<ReviewTarget, { kind: "source" }> | undefined
+  >();
+  const [diffTarget, setDiffTarget] = useState<
+    Extract<ReviewTarget, { kind: "diff" }> | undefined
+  >();
+  const target: ReviewTarget = mode === "code"
+    ? sourceTarget ?? { kind: "changes" }
+    : diffTarget ?? { kind: "changes" };
   const [closeRequest, setCloseRequest] = useState(0);
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -378,7 +390,8 @@ export function ReviewApp({
   }, [active, workspace?.sessionId]);
 
   useEffect(() => {
-    setTarget({ kind: "changes" });
+    setSourceTarget(undefined);
+    setDiffTarget(undefined);
     setCurrentRevision(undefined);
     setReviewProgress(
       workspace?.sessionId ? loadReviewProgress(workspace.sessionId) : {},
@@ -387,7 +400,8 @@ export function ReviewApp({
 
   const openSource = (path: string): void => {
     setCurrentRevision(undefined);
-    setTarget({ kind: "source", path });
+    setMode("code");
+    setSourceTarget({ kind: "source", path });
     setCloseRequest((value) => value + 1);
   };
   const openDiff = (
@@ -395,7 +409,8 @@ export function ReviewApp({
     queue: GitReviewEntry[],
   ): void => {
     setCurrentRevision(undefined);
-    setTarget({
+    setMode("git");
+    setDiffTarget({
       kind: "diff",
       path: entry.change.path,
       scope: entry.scope,
@@ -454,14 +469,29 @@ export function ReviewApp({
       closeRequest={closeRequest}
       toggleRequest={toggleDrawerRequest}
       drawer={
-        <ReviewFileTree
-          sessionId={workspace?.sessionId}
-          cwd={workspace?.cwd}
-          onOpenFile={openSource}
-          currentPath={target.kind === "changes" ? undefined : target.path}
-          onClose={() => setCloseRequest((value) => value + 1)}
-          refreshToken={dataRevision}
-        />
+        mode === "code"
+          ? (
+            <ReviewFileTree
+              sessionId={workspace?.sessionId}
+              cwd={workspace?.cwd}
+              onOpenFile={openSource}
+              currentPath={sourceTarget?.path}
+              onClose={() => setCloseRequest((value) => value + 1)}
+              refreshToken={dataRevision}
+            />
+          )
+          : (
+            <ReviewChanges
+              key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
+              sessionId={workspace?.sessionId}
+              onOpenDiff={openDiff}
+              reviewed={new Set(Object.keys(reviewProgress))}
+              onRevision={adoptManifestRevision}
+              drawer
+              onClose={() => setCloseRequest((value) => value + 1)}
+              refreshToken={dataRevision}
+            />
+          )
       }
     >
       <Stack
@@ -486,7 +516,10 @@ export function ReviewApp({
           >
             <IconButton
               aria-label="Back to changes"
-              onClick={() => setTarget({ kind: "changes" })}
+              onClick={() => {
+                if (mode === "code") setSourceTarget(undefined);
+                else setDiffTarget(undefined);
+              }}
             >
               <ArrowBack />
             </IconButton>
@@ -539,17 +572,22 @@ export function ReviewApp({
           )
           : target.kind === "changes"
           ? (
-            <ReviewChanges
-              key={`${workspace.sessionId}:${dataRevision}`}
-              sessionId={workspace.sessionId}
-              onOpenDiff={openDiff}
-              reviewed={new Set(Object.keys(reviewProgress))}
-              onRevision={adoptManifestRevision}
-              onRefresh={() => {
-                setReviewProgress({});
-                saveReviewProgress(workspace.sessionId, {});
-              }}
-            />
+            <Stack
+              component="main"
+              alignItems="center"
+              justifyContent="center"
+              spacing={1.5}
+              sx={{ flex: 1, px: 4, textAlign: "center" }}
+            >
+              {mode === "git"
+                ? <DifferenceOutlined color="disabled" />
+                : <FolderOpenOutlined color="disabled" />}
+              <Typography color="text.secondary">
+                {mode === "git"
+                  ? "Select a changed file from Git review"
+                  : "Select a file from the Worktree"}
+              </Typography>
+            </Stack>
           )
           : (
             <DocumentView
@@ -616,6 +654,25 @@ export function ReviewApp({
                 </IconButton>
               </>
             )}
+            <IconButton
+              aria-label={mode === "git"
+                ? "Switch to Code review"
+                : "Switch to Git review"}
+              color={mode === "git" ? "primary" : "default"}
+              onClick={() => {
+                setMode((current) => current === "git" ? "code" : "git");
+                if (!drawerOpen) {
+                  setToggleDrawerRequest((value) => value + 1);
+                }
+              }}
+              sx={{
+                position: "absolute",
+                left: "50%",
+                transform: "translateX(-50%)",
+              }}
+            >
+              <DifferenceOutlined />
+            </IconButton>
             <Box sx={{ flex: 1 }} />
             <IconButton
               aria-label={drawerOpen

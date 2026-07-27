@@ -21,6 +21,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MobileSheetDismiss } from "../../_shell";
 import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
 import {
   type GitReviewEntry,
@@ -28,7 +29,6 @@ import {
   limitGitSections,
   reviewQueue,
 } from "./gitReviewModel";
-import { invalidateDiffCache } from "./diffCache";
 import { reviewEntryKey } from "./diffNavigationModel";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
@@ -56,14 +56,18 @@ export function ReviewChanges({
   sessionId,
   onOpenDiff,
   reviewed,
-  onRefresh,
   onRevision,
+  drawer = false,
+  onClose,
+  refreshToken = 0,
 }: {
   sessionId: string | undefined;
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
   reviewed: ReadonlySet<string>;
-  onRefresh: () => void;
   onRevision: (revision: string) => void;
+  drawer?: boolean;
+  onClose?: () => void;
+  refreshToken?: number;
 }): React.JSX.Element {
   const [changes, setChanges] = useState<
     Awaited<
@@ -77,6 +81,7 @@ export function ReviewChanges({
   const [visibleCount, setVisibleCount] = useState(REVIEW_WINDOW_SIZE);
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
+  const previousRefreshToken = useRef(refreshToken);
   const sections = useMemo(() => groupGitChanges(changes), [changes]);
   const queue = useMemo(() => reviewQueue(sections), [sections]);
   const sectionCounts = useMemo(
@@ -119,6 +124,12 @@ export function ReviewChanges({
   }, [load]);
 
   useEffect(() => {
+    if (previousRefreshToken.current === refreshToken) return;
+    previousRefreshToken.current = refreshToken;
+    void load();
+  }, [load, refreshToken]);
+
+  useEffect(() => {
     const root = scrollRoot.current;
     const sentinel = loadMoreSentinel.current;
     if (!root || !sentinel || renderedCount >= queue.length) return undefined;
@@ -137,8 +148,18 @@ export function ReviewChanges({
   }, [queue.length, renderedCount]);
 
   return (
-    <Stack sx={{ height: "100%", minHeight: 0 }}>
-      <Stack direction="row" alignItems="center" sx={{ px: 2, py: 1 }}>
+    <Stack sx={{ position: "relative", height: "100%", minHeight: 0 }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        sx={{
+          px: 2,
+          pt: drawer
+            ? "calc(env(safe-area-inset-top, 0px) + 18px)"
+            : 1,
+          pb: 1,
+        }}
+      >
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="subtitle1" fontWeight={700}>
             Git review
@@ -155,16 +176,6 @@ export function ReviewChanges({
             ).length
           } / ${queue.length}`}
         />
-        <IconButton
-          aria-label="Refresh changes"
-          onClick={() => {
-            invalidateDiffCache(sessionId);
-            onRefresh();
-            void load();
-          }}
-        >
-          <Refresh />
-        </IconButton>
       </Stack>
       {truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
@@ -182,7 +193,22 @@ export function ReviewChanges({
             </Box>
           )
           : error
-          ? <Alert severity="error">Git changes are unavailable</Alert>
+          ? (
+            <Alert
+              severity="error"
+              action={
+                <IconButton
+                  size="small"
+                  aria-label="Retry Git changes"
+                  onClick={() => void load()}
+                >
+                  <Refresh fontSize="small" />
+                </IconButton>
+              }
+            >
+              Git changes are unavailable
+            </Alert>
+          )
           : changes.length === 0
           ? (
             <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
@@ -297,6 +323,21 @@ export function ReviewChanges({
             </Stack>
           )}
       </Box>
+      {drawer && onClose && (
+        <Box
+          sx={{
+            position: "absolute",
+            zIndex: 2,
+            left: 0,
+            right: 0,
+            bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+            px: 2,
+            pointerEvents: "none",
+          }}
+        >
+          <MobileSheetDismiss onClose={onClose} label="Close Git changes" />
+        </Box>
+      )}
     </Stack>
   );
 }
