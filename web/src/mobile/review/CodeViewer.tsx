@@ -32,7 +32,6 @@ import {
   diffSourceProjection,
 } from "./diffSourceModel";
 import type { CodeLanguage } from "./codeApi";
-import { isInspectPress } from "./codeInspectGesture";
 
 export interface CodeInspectCandidate {
   label: string;
@@ -507,60 +506,9 @@ export default function CodeViewer({
       );
     }
     if (onInspect) {
-      let press:
-        | {
-          pointerId: number;
-          startedAt: number;
-          x: number;
-          y: number;
-          moved: number;
-        }
-        | undefined;
       values.push(
         EditorView.domEventHandlers({
-          pointerdown: (event) => {
-            if (
-              !event.isPrimary ||
-              (event.pointerType !== "touch" && event.pointerType !== "pen")
-            ) return false;
-            press = {
-              pointerId: event.pointerId,
-              startedAt: event.timeStamp,
-              x: event.clientX,
-              y: event.clientY,
-              moved: 0,
-            };
-            return false;
-          },
-          pointermove: (event) => {
-            if (!press || press.pointerId !== event.pointerId) return false;
-            press.moved = Math.max(
-              press.moved,
-              Math.hypot(event.clientX - press.x, event.clientY - press.y),
-            );
-            return false;
-          },
-          pointercancel: (event) => {
-            if (press?.pointerId === event.pointerId) press = undefined;
-            return false;
-          },
-          pointerup: (event, view) => {
-            if (!press || press.pointerId !== event.pointerId) return false;
-            const completedPress = press;
-            press = undefined;
-            const finalMovement = Math.max(
-              completedPress.moved,
-              Math.hypot(
-                event.clientX - completedPress.x,
-                event.clientY - completedPress.y,
-              ),
-            );
-            if (
-              !isInspectPress({
-                durationMs: event.timeStamp - completedPress.startedAt,
-                movementPx: finalMovement,
-              })
-            ) return false;
+          click: (event, view) => {
             const offset = view.posAtCoords({
               x: event.clientX,
               y: event.clientY,
@@ -605,8 +553,9 @@ export default function CodeViewer({
               a.candidate.column - b.candidate.column
             ).slice(0, 5).map(({ candidate }) => candidate);
             if (candidates.length === 0) return false;
+            event.preventDefault();
             onInspect(candidates);
-            return false;
+            return true;
           },
         }),
       );
@@ -655,6 +604,13 @@ export default function CodeViewer({
         "& .cm-editor, & .cm-scroller, & .cm-content": {
           fontSize: `${fontSize}px !important`,
         },
+        ...(onInspect
+          ? {
+            "& .cm-content": {
+              cursor: "crosshair",
+            },
+          }
+          : {}),
       }}
     >
       <CodeMirror

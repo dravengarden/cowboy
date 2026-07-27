@@ -1,5 +1,6 @@
 import {
   ArrowBack,
+  CenterFocusStrong,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -112,12 +113,16 @@ function DocumentView({
   markdownPreview,
   languageData,
   onNavigate,
+  inspectMode,
+  onInspectConsumed,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
   onRevision: (revision: string | undefined) => void;
   markdownPreview: boolean;
   languageData?: CodeLanguage | undefined;
+  inspectMode: boolean;
+  onInspectConsumed: () => void;
   onNavigate: (
     location: CodeLocation,
     origin: { row: number; column: number },
@@ -185,6 +190,7 @@ function DocumentView({
   const inspectCandidatesOrPoint = useCallback((
     candidates: CodeInspectCandidate[],
   ): void => {
+    onInspectConsumed();
     navigationHaptic();
     if (candidates.length === 1) {
       inspectPoint(candidates[0]!);
@@ -196,7 +202,7 @@ function DocumentView({
     setNavigation([]);
     setInspectCandidates(candidates);
     setHoverOpen(true);
-  }, [inspectPoint]);
+  }, [inspectPoint, onInspectConsumed]);
 
   const navigate = useCallback((kind: CodeNavigationKind): void => {
     if (
@@ -503,8 +509,8 @@ function DocumentView({
                 diagnostics={settings.diagnostics}
                 inlayHints={settings.inlayHints}
                 semanticHighlighting={settings.semanticHighlighting}
-                onInspect={target.kind === "source" ||
-                    (target.kind === "diff" && target.scope === "unstaged")
+                onInspect={inspectMode && (target.kind === "source" ||
+                    (target.kind === "diff" && target.scope === "unstaged"))
                   ? inspectCandidatesOrPoint
                   : undefined}
               />
@@ -633,6 +639,7 @@ export function ReviewApp({
   const settings = useReviewSettings();
   const [mode, setMode] = useState<ReviewMode>("git");
   const [markdownPreview, setMarkdownPreview] = useState(true);
+  const [inspectMode, setInspectMode] = useState(false);
   const [sourceTarget, setSourceTarget] = useState<
     Extract<ReviewTarget, { kind: "source" }> | undefined
   >();
@@ -642,6 +649,8 @@ export function ReviewApp({
   const target: ReviewTarget = mode === "code"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
+  const canInspect = target.kind === "source" ||
+    (target.kind === "diff" && target.scope === "unstaged");
   const leasedPath = target.kind === "changes" ? undefined : target.path;
   const [closeRequest, setCloseRequest] = useState(0);
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
@@ -670,6 +679,10 @@ export function ReviewApp({
     setDrawerOpen(open);
     onDrawerOpenChange(open);
   }, [onDrawerOpenChange]);
+
+  useEffect(() => {
+    setInspectMode(false);
+  }, [mode, leasedPath]);
 
   useEffect(() => {
     if (
@@ -1087,6 +1100,8 @@ export function ReviewApp({
               languageData={languageData?.path === target.path
                 ? languageData
                 : undefined}
+              inspectMode={inspectMode}
+              onInspectConsumed={() => setInspectMode(false)}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
                 const previous: Extract<
@@ -1173,6 +1188,22 @@ export function ReviewApp({
                 onClick={() => setManagingTabs((value) => !value)}
               >
                 <TabUnselected />
+              </IconButton>
+            )}
+            {canInspect && !(
+              target.kind === "source" &&
+              isMarkdownReviewPath(target.path) &&
+              markdownPreview
+            ) && (
+              <IconButton
+                aria-label={inspectMode
+                  ? "Cancel symbol inspection"
+                  : "Inspect a symbol"}
+                aria-pressed={inspectMode}
+                color={inspectMode ? "primary" : "default"}
+                onClick={() => setInspectMode((value) => !value)}
+              >
+                <CenterFocusStrong />
               </IconButton>
             )}
             {target.kind !== "changes" && !(
