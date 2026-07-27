@@ -17,6 +17,7 @@ function basename(path: string): string {
 export function ReviewTabStrip({
   tabs,
   activeKey,
+  showCloseButtons,
   onActivate,
   onClose,
   onCloseOthers,
@@ -24,12 +25,14 @@ export function ReviewTabStrip({
 }: {
   tabs: ReviewTab[];
   activeKey: string | undefined;
+  showCloseButtons: boolean;
   onActivate: (tab: ReviewTab) => void;
   onClose: (key: string) => void;
   onCloseOthers: (key: string) => void;
   onTogglePin: (key: string) => void;
 }): React.JSX.Element | null {
   const timer = useRef<number | undefined>(undefined);
+  const suppressClick = useRef(false);
   const [menu, setMenu] = useState<{
     anchor: HTMLElement;
     tab: ReviewTab;
@@ -64,7 +67,13 @@ export function ReviewTabStrip({
               role="tab"
               tabIndex={0}
               aria-selected={active}
-              onClick={() => onActivate(tab)}
+              onClick={() => {
+                if (suppressClick.current) {
+                  suppressClick.current = false;
+                  return;
+                }
+                onActivate(tab);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
@@ -73,8 +82,10 @@ export function ReviewTabStrip({
               }}
               onPointerDown={(event) => {
                 cancelLongPress();
+                suppressClick.current = false;
                 const anchor = event.currentTarget;
                 timer.current = globalThis.setTimeout(() => {
+                  suppressClick.current = true;
                   setMenu({ anchor, tab });
                   timer.current = undefined;
                 }, 450);
@@ -106,17 +117,19 @@ export function ReviewTabStrip({
               <Typography variant="caption" noWrap sx={{ flex: 1 }}>
                 {basename(tab.path)}
               </Typography>
-              <IconButton
-                aria-label={`Close ${basename(tab.path)}`}
-                size="small"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onClose(key);
-                }}
-                sx={{ minWidth: 32, minHeight: 32 }}
-              >
-                <Close sx={{ fontSize: 16 }} />
-              </IconButton>
+              {showCloseButtons && (
+                <IconButton
+                  aria-label={`Close ${basename(tab.path)}`}
+                  size="small"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onClose(key);
+                  }}
+                  sx={{ minWidth: 32, minHeight: 32 }}
+                >
+                  <Close sx={{ fontSize: 16 }} />
+                </IconButton>
+              )}
             </Box>
           );
         })}

@@ -8,6 +8,7 @@ import {
   FolderOpenOutlined,
   KeyboardArrowDown,
   KeyboardArrowUp,
+  TabUnselected,
   VisibilityOutlined,
   ViewSidebarOutlined,
   WrapText,
@@ -434,6 +435,7 @@ export function ReviewApp({
   >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
+  const [managingTabs, setManagingTabs] = useState(false);
   const [tabsReadySession, setTabsReadySession] = useState<string>();
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
@@ -499,6 +501,7 @@ export function ReviewApp({
 
   useEffect(() => {
     setTabsReadySession(undefined);
+    setManagingTabs(false);
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
@@ -628,6 +631,7 @@ export function ReviewApp({
   const closeTab = (key: string): void => {
     const next = closeReviewTab(tabs, key);
     setTabs(next);
+    if (next.length === 0) setManagingTabs(false);
     if (activeTabKey !== key) return;
     const fallback = next.at(-1);
     if (fallback) void activateTab(fallback);
@@ -839,6 +843,7 @@ export function ReviewApp({
           <ReviewTabStrip
             tabs={tabs}
             activeKey={activeTabKey}
+            showCloseButtons={managingTabs}
             onActivate={(tab) => void activateTab(tab)}
             onClose={closeTab}
             onCloseOthers={(key) =>
@@ -863,6 +868,18 @@ export function ReviewApp({
               }}
             >
             <ReviewSettings language={language} />
+            {tabs.length > 0 && (
+              <IconButton
+                aria-label={managingTabs
+                  ? "Finish managing tabs"
+                  : "Manage open tabs"}
+                aria-pressed={managingTabs}
+                color={managingTabs ? "primary" : "default"}
+                onClick={() => setManagingTabs((value) => !value)}
+              >
+                <TabUnselected />
+              </IconButton>
+            )}
             {target.kind !== "changes" && !(
               target.kind === "source" &&
               isMarkdownReviewPath(target.path) &&
