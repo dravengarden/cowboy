@@ -191,10 +191,12 @@ export default function CodeViewer({
       EditorView.theme({
         "&": { height: "100%", fontSize: `${fontSize}px` },
         ".cm-scroller": {
+          fontSize: `${fontSize}px`,
           overflow: "auto",
           WebkitOverflowScrolling: "touch",
         },
         ".cm-content": {
+          fontSize: `${fontSize}px`,
           padding: "12px 0 48px",
           minWidth: "max-content",
         },
