@@ -111,70 +111,71 @@ globalThis.addEventListener("keydown", (e: KeyboardEvent): void => {
   if (e.key === "Escape" && !e.isComposing) e.preventDefault();
 });
 
-// Standalone PWA: register the service worker (offline shell + installable) AND
-// keep it fresh. An installed iOS PWA RESUMES its loaded page on reopen — it does
-// not re-navigate — so without this it runs whatever bundle it first loaded until
-// a manual reload (the recurring "redeploy doesn't show up" trap). So: re-check
-// for a new SW whenever the app returns to the foreground (the SW's VERSION bumps
-// per web deploy → a new sw.js → install → skipWaiting → activate → claim), and
-// surface an update notice when that new worker takes control. Desktop keeps its
-// short auto-update countdown; Mobile requires an explicit tap so a foreground
-// check can never replace a page while the user is reading or composing.
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  // Only auto-reload on an UPDATE (a new worker replacing one already in control),
-  // never on the first-install claim.
-  const hadController = navigator.serviceWorker.controller != null;
-  let reloading = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (reloading || !hadController) return;
-    reloading = true;
-    // App/store are already loaded by the time an update installs. Keep this a
-    // dynamic edge so main's initial shell stays lean, and route SW detection
-    // into the surface-owned visible update UI. Never reload here: Desktop owns
-    // its countdown and Mobile owns its explicit Update action.
-    void import("./store").then(({ conn }) => conn.updateAvailable()).catch(() => {
-      // If the old module graph is already unavailable, a reload is the only
-      // recovery path. Normal updates always take the countdown route above.
-      globalThis.location.reload();
-    });
-  });
+// Every production surface compares its loaded Vite entry with the deployed
+// index on foreground/resume. Native iOS WKWebView does not expose Service
+// Workers, so this network probe is the shared authority; browser/PWA surfaces
+// additionally ask their registration to update. Desktop owns its short
+// countdown and Mobile requires an explicit Update tap, so detection never
+// replaces a page while the user is reading or composing.
+if (import.meta.env.PROD) {
+  const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
+    'script[type="module"][src]',
+  )?.getAttribute("src") ?? undefined;
+  const reportUpdate = async (): Promise<void> => {
+    const { conn } = await import("./store");
+    conn.updateAvailable();
+  };
+  const installChecks = (updateServiceWorker: () => Promise<unknown>): void => {
+    const check = createServiceWorkerUpdateCheck(() =>
+      checkForDeployedUpdate(
+        loadedEntry,
+        updateServiceWorker,
+        () =>
+          globalThis.fetch(
+            `/?cowboy-bundle-probe=${Date.now()}`,
+            { cache: "no-store" },
+          ),
+        reportUpdate,
+      )
+    );
+    const checkForUpdate = (): void => {
+      // WKWebView can remain `visible` through an app background/resume, so
+      // only suppress checks when it explicitly reports `hidden`.
+      if (globalThis.document.visibilityState !== "hidden") check();
+    };
+    globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+    globalThis.addEventListener("pageshow", checkForUpdate);
+    globalThis.addEventListener("focus", checkForUpdate);
+    globalThis.addEventListener("online", checkForUpdate);
+    // The native iOS shell emits this from UIApplication.didBecomeActive. It
+    // closes the last lifecycle gap where WKWebView emits no standard event.
+    globalThis.addEventListener("cowboy:native-resume", checkForUpdate);
+    globalThis.setInterval(checkForUpdate, 60_000);
+    checkForUpdate();
+  };
+
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js").then((reg) => {
-      const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
-        'script[type="module"][src]',
-      )?.getAttribute("src") ?? undefined;
-      const check = createServiceWorkerUpdateCheck(async () => {
-        await checkForDeployedUpdate(
-          loadedEntry,
-          () => reg.update(),
-          () =>
-            globalThis.fetch(
-              `/?cowboy-bundle-probe=${Date.now()}`,
-              { cache: "no-store" },
-            ),
-          async () => {
-            const { conn } = await import("./store");
-            conn.updateAvailable();
-          },
-        );
+    if (!("serviceWorker" in navigator)) {
+      installChecks(() => Promise.resolve());
+      return;
+    }
+    // Only surface controller changes for an update, never a first install.
+    const hadController = navigator.serviceWorker.controller != null;
+    let reportedControllerUpdate = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reportedControllerUpdate || !hadController) return;
+      reportedControllerUpdate = true;
+      void reportUpdate().catch(() => {
+        // If the old module graph is already unavailable, reload is the only
+        // recovery path. Normal updates take the visible update route above.
+        globalThis.location.reload();
       });
-      const checkForUpdate = (): void => {
-        // WKWebView can remain `visible` through an app background/resume, so
-        // only suppress checks when it explicitly reports `hidden`.
-        if (globalThis.document.visibilityState !== "hidden") check();
-      };
-      // Browser/PWA lifecycle signals. iOS WKWebView does not reliably emit
-      // `visibilitychange`, so cover BFCache restores, focus, and network return.
-      globalThis.document.addEventListener("visibilitychange", checkForUpdate);
-      globalThis.addEventListener("pageshow", checkForUpdate);
-      globalThis.addEventListener("focus", checkForUpdate);
-      globalThis.addEventListener("online", checkForUpdate);
-      // The native iOS shell emits this from UIApplication.didBecomeActive. It
-      // closes the last lifecycle gap where WKWebView emits no standard event.
-      globalThis.addEventListener("cowboy:native-resume", checkForUpdate);
-      // Low-frequency safety net for a continuously visible desktop window.
-      globalThis.setInterval(checkForUpdate, 60_000);
-      checkForUpdate();
-    }).catch(() => {});
+    });
+    void navigator.serviceWorker.register("/sw.js")
+      .then((reg) => installChecks(() => reg.update()))
+      .catch(() => {
+        // Registration failure must not disable the universal bundle probe.
+        installChecks(() => Promise.resolve());
+      });
   });
 }
