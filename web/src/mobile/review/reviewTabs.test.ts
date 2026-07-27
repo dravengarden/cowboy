@@ -3,6 +3,7 @@ import {
   closeOtherReviewTabs,
   closeReviewTab,
   openReviewTab,
+  reorderReviewTabs,
   reviewTabKey,
   toggleReviewTabPin,
   type ReviewTab,
@@ -49,4 +50,12 @@ Deno.test("source and diff tabs have independent capacity", () => {
     ["source:keep.rs"],
   );
   assertEquals(tabs.filter((tab) => tab.kind === "diff").length, 12);
+});
+
+Deno.test("tabs reorder without changing their identity", () => {
+  const tabs = [source("a.rs"), source("b.rs"), source("c.rs")];
+  assertEquals(
+    reorderReviewTabs(tabs, "source:a.rs", "source:c.rs").map(reviewTabKey),
+    ["source:b.rs", "source:c.rs", "source:a.rs"],
+  );
 });

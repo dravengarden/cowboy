@@ -8,10 +8,15 @@ import {
   Typography,
 } from "@mui/material";
 import { useRef, useState } from "react";
+import { navigationHaptic } from "../../haptic";
 import { reviewTabKey, type ReviewTab } from "./reviewTabs";
 
 function basename(path: string): string {
   return path.split("/").at(-1) || path;
+}
+
+function tabLabel(tab: ReviewTab): string {
+  return tab.kind === "git-overview" ? "Git" : basename(tab.path);
 }
 
 export function ReviewTabStrip({
@@ -22,6 +27,8 @@ export function ReviewTabStrip({
   onClose,
   onCloseOthers,
   onTogglePin,
+  readOnly = false,
+  onReorder,
 }: {
   tabs: ReviewTab[];
   activeKey: string | undefined;
@@ -30,9 +37,24 @@ export function ReviewTabStrip({
   onClose: (key: string) => void;
   onCloseOthers: (key: string) => void;
   onTogglePin: (key: string) => void;
+  readOnly?: boolean;
+  onReorder?: (movingKey: string, targetKey: string) => void;
 }): React.JSX.Element | null {
   const timer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
+  const press = useRef<
+    | {
+      pointerId: number;
+      tab: ReviewTab;
+      anchor: HTMLElement;
+      x: number;
+      y: number;
+      dragging: boolean;
+      moved: boolean;
+    }
+    | undefined
+  >(undefined);
+  const [draggingKey, setDraggingKey] = useState<string>();
   const [menu, setMenu] = useState<{
     anchor: HTMLElement;
     tab: ReviewTab;
@@ -42,6 +64,17 @@ export function ReviewTabStrip({
   const cancelLongPress = (): void => {
     if (timer.current !== undefined) globalThis.clearTimeout(timer.current);
     timer.current = undefined;
+  };
+  const finishPress = (openMenu: boolean): void => {
+    const current = press.current;
+    cancelLongPress();
+    press.current = undefined;
+    setDraggingKey(undefined);
+    if (
+      openMenu && current?.dragging && !current.moved && !readOnly
+    ) {
+      setMenu({ anchor: current.anchor, tab: current.tab });
+    }
   };
 
   return (
@@ -63,9 +96,11 @@ export function ReviewTabStrip({
         {tabs.map((tab) => {
           const key = reviewTabKey(tab);
           const active = key === activeKey;
+          const overview = tab.kind === "git-overview";
           return (
             <Box
               key={key}
+              data-review-tab-key={key}
               role="tab"
               tabIndex={0}
               aria-selected={active}
@@ -83,18 +118,54 @@ export function ReviewTabStrip({
                 }
               }}
               onPointerDown={(event) => {
+                if (readOnly || overview || event.pointerType === "mouse") return;
                 cancelLongPress();
                 suppressClick.current = false;
                 const anchor = event.currentTarget;
+                anchor.setPointerCapture(event.pointerId);
+                press.current = {
+                  pointerId: event.pointerId,
+                  tab,
+                  anchor,
+                  x: event.clientX,
+                  y: event.clientY,
+                  dragging: false,
+                  moved: false,
+                };
                 timer.current = globalThis.setTimeout(() => {
+                  if (!press.current) return;
                   suppressClick.current = true;
-                  setMenu({ anchor, tab });
+                  press.current.dragging = true;
+                  setDraggingKey(key);
+                  navigationHaptic();
                   timer.current = undefined;
-                }, 450);
+                }, 380);
               }}
-              onPointerUp={cancelLongPress}
-              onPointerCancel={cancelLongPress}
-              onPointerLeave={cancelLongPress}
+              onPointerMove={(event) => {
+                const current = press.current;
+                if (!current || current.pointerId !== event.pointerId) return;
+                const distance = Math.hypot(
+                  event.clientX - current.x,
+                  event.clientY - current.y,
+                );
+                if (!current.dragging) {
+                  if (distance > 10) {
+                    cancelLongPress();
+                    press.current = undefined;
+                  }
+                  return;
+                }
+                if (distance > 8) current.moved = true;
+                const target = document
+                  .elementFromPoint(event.clientX, event.clientY)
+                  ?.closest<HTMLElement>("[data-review-tab-key]");
+                const targetKey = target?.dataset.reviewTabKey;
+                if (targetKey && targetKey !== key) {
+                  onReorder?.(key, targetKey);
+                }
+              }}
+              onPointerUp={() => finishPress(true)}
+              onPointerCancel={() => finishPress(false)}
               sx={{
                 appearance: "none",
                 flex: "0 0 auto",
@@ -116,15 +187,44 @@ export function ReviewTabStrip({
                 borderBottomColor: active ? "primary.main" : "transparent",
                 bgcolor: active ? "action.selected" : "transparent",
                 color: "text.primary",
+                opacity: draggingKey === key ? 0.68 : 1,
+                transition: "opacity 120ms ease",
               }}
             >
-              {tab.pinned && <PushPinOutlined sx={{ fontSize: 14 }} />}
-              <Typography variant="caption" noWrap sx={{ flex: 1 }}>
-                {basename(tab.path)}
-              </Typography>
-              {showCloseButtons && (
+              {tab.kind !== "git-overview" && tab.pinned && (
+                <PushPinOutlined sx={{ fontSize: 14 }} />
+              )}
+              {overview
+                ? (
+                  <Stack direction="row" alignItems="center" spacing={0.75}>
+                    <Typography variant="caption" fontWeight={700}>
+                      Git
+                    </Typography>
+                    {tab.conflictCount > 0 && (
+                      <Typography variant="caption" color="error.main">
+                        !{tab.conflictCount}
+                      </Typography>
+                    )}
+                    {tab.stagedCount > 0 && (
+                      <Typography variant="caption" color="success.main">
+                        S{tab.stagedCount}
+                      </Typography>
+                    )}
+                    {tab.unstagedCount > 0 && (
+                      <Typography variant="caption" color="warning.main">
+                        U{tab.unstagedCount}
+                      </Typography>
+                    )}
+                  </Stack>
+                )
+                : (
+                  <Typography variant="caption" noWrap sx={{ flex: 1 }}>
+                    {tabLabel(tab)}
+                  </Typography>
+                )}
+              {showCloseButtons && !readOnly && !overview && (
                 <IconButton
-                  aria-label={`Close ${basename(tab.path)}`}
+                  aria-label={`Close ${tabLabel(tab)}`}
                   size="small"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -153,7 +253,7 @@ export function ReviewTabStrip({
       </Stack>
       <Menu
         anchorEl={menu?.anchor}
-        open={menu !== undefined}
+        open={menu !== undefined && !readOnly}
         onClose={() => setMenu(undefined)}
       >
         <MenuItem
@@ -162,7 +262,9 @@ export function ReviewTabStrip({
             setMenu(undefined);
           }}
         >
-          {menu?.tab.pinned ? "Unpin" : "Pin"}
+          {menu?.tab.kind !== "git-overview" && menu?.tab.pinned
+            ? "Unpin"
+            : "Pin"}
         </MenuItem>
         <MenuItem
           onClick={() => {

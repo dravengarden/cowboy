@@ -88,6 +88,7 @@ import {
   loadReviewTabs,
   openReviewTab,
   reviewTabKey,
+  reorderReviewTabs,
   saveReviewTabs,
   toggleReviewTabPin,
   type ReviewTab,
@@ -696,7 +697,7 @@ export function ReviewApp({
   >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
-  const [staleDiffPath, setStaleDiffPath] = useState<string>();
+  const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<
     Extract<ReviewTarget, { kind: "source" }>[]
   >([]);
@@ -770,6 +771,7 @@ export function ReviewApp({
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
+    setGitQueue([]);
     setLanguage(undefined);
   }, [workspace?.sessionId]);
 
@@ -805,6 +807,10 @@ export function ReviewApp({
             invalidateDiffCache(workspace.sessionId);
             setDataRevision((value) => value + 1);
           }
+          return fetchCodeChanges(workspace.sessionId, controller?.signal);
+        })
+        .then((changes) => {
+          setGitQueue(reviewQueue(groupGitChanges(changes.changes)));
         })
         // The ordinary tree/changes error surfaces remain authoritative.
         .catch(() => undefined);
@@ -835,7 +841,13 @@ export function ReviewApp({
     setReviewProgress(
       workspace?.sessionId ? loadReviewProgress(workspace.sessionId) : {},
     );
-    setTabs(workspace?.sessionId ? loadReviewTabs(workspace.sessionId) : []);
+    setTabs(
+      workspace?.sessionId
+        ? loadReviewTabs(workspace.sessionId).filter((tab) =>
+          tab.kind === "source"
+        )
+        : [],
+    );
     setTabsReadySession(workspace?.sessionId);
   }, [workspace?.sessionId]);
 
@@ -862,7 +874,6 @@ export function ReviewApp({
     entry: GitReviewEntry,
     queue: GitReviewEntry[],
   ): void => {
-    setStaleDiffPath(undefined);
     setCurrentRevision(undefined);
     setMode("git");
     setDiffTarget({
@@ -871,52 +882,54 @@ export function ReviewApp({
       scope: entry.scope,
       queue,
     });
-    setTabs((current) =>
-      openReviewTab(current, {
-        kind: "diff",
-        path: entry.change.path,
-        scope: entry.scope,
-        pinned: false,
-      })
-    );
   };
   useEffect(() => {
     if (workspace?.sessionId === tabsReadySession && tabsReadySession) {
-      saveReviewTabs(tabsReadySession, tabs);
+      saveReviewTabs(
+        tabsReadySession,
+        tabs.filter((tab) => tab.kind === "source"),
+      );
     }
   }, [tabs, tabsReadySession, workspace?.sessionId]);
-  const activateTab = useCallback(async (tab: ReviewTab): Promise<void> => {
+  const activateTab = (tab: ReviewTab): void => {
+    if (tab.kind === "git-overview") {
+      setMode("git");
+      setDiffTarget(undefined);
+      return;
+    }
     if (tab.kind === "source") {
       openSource(tab.path);
       return;
     }
-    if (!workspace?.sessionId) return;
-    try {
-      const changes = await fetchCodeChanges(workspace.sessionId);
-      const queue = reviewQueue(groupGitChanges(changes.changes));
-      const entry = queue.find((candidate) =>
-        candidate.change.path === tab.path && candidate.scope === tab.scope
-      );
-      if (entry) openDiff(entry, queue);
-      else {
-        // Restored Git tabs can outlive the change they represented. Clicking
-        // a tab is navigation, never implicit deletion: keep it until the user
-        // deliberately closes it and explain why there is no diff to open.
-        setDiffTarget(undefined);
-        setStaleDiffPath(tab.path);
-      }
-    } catch {
-      // The existing changes surface owns retry/error presentation.
-    }
-  }, [workspace?.sessionId]);
+    const entry = gitQueue.find((candidate) =>
+      candidate.change.path === tab.path && candidate.scope === tab.scope
+    );
+    if (entry) openDiff(entry, gitQueue);
+  };
   const activeTabKey = target.kind === "source"
     ? reviewTabKey({ ...target, pinned: false })
     : target.kind === "diff"
     ? reviewTabKey({ ...target, pinned: false })
+    : mode === "git"
+    ? "git-overview"
     : undefined;
-  const modeTabs = tabs.filter((tab) =>
-    mode === "code" ? tab.kind === "source" : tab.kind === "diff"
-  );
+  const gitTabs: ReviewTab[] = [
+    {
+      kind: "git-overview",
+      conflictCount: gitQueue.filter((entry) => entry.scope === "combined").length,
+      stagedCount: gitQueue.filter((entry) => entry.scope === "staged").length,
+      unstagedCount: gitQueue.filter((entry) => entry.scope === "unstaged").length,
+    },
+    ...gitQueue.map((entry): ReviewTab => ({
+      kind: "diff",
+      path: entry.change.path,
+      scope: entry.scope,
+      pinned: false,
+    })),
+  ];
+  const modeTabs = mode === "code"
+    ? tabs.filter((tab) => tab.kind === "source")
+    : gitTabs;
   const closeTab = (key: string): void => {
     const next = closeReviewTab(tabs, key);
     setTabs(next);
@@ -926,7 +939,7 @@ export function ReviewApp({
     if (nextModeTabs.length === 0) setManagingTabs(false);
     if (activeTabKey !== key) return;
     const fallback = nextModeTabs.at(-1);
-    if (fallback) void activateTab(fallback);
+    if (fallback) activateTab(fallback);
     else if (mode === "code") setSourceTarget(undefined);
     else setDiffTarget(undefined);
   };
@@ -935,6 +948,16 @@ export function ReviewApp({
       entry.change.path === target.path && entry.scope === target.scope
     )
     : -1;
+  useEffect(() => {
+    if (target.kind !== "diff") return;
+    const stillChanged = gitQueue.some((entry) =>
+      entry.change.path === target.path && entry.scope === target.scope
+    );
+    if (!stillChanged) {
+      setDiffTarget(undefined);
+      setCurrentRevision(undefined);
+    }
+  }, [gitQueue, target]);
   const moveReview = (offset: number): void => {
     if (target.kind !== "diff") return;
     const entry = target.queue[reviewIndex + offset];
@@ -1094,29 +1117,31 @@ export function ReviewApp({
           )
           : target.kind === "changes"
           ? (
-            <Stack
-              component="main"
-              alignItems="center"
-              justifyContent="center"
-              spacing={1.5}
-              sx={{ flex: 1, px: 4, textAlign: "center" }}
-            >
-              {mode === "git"
-                ? <DifferenceOutlined color="disabled" />
-                : <FolderOpenOutlined color="disabled" />}
-              <Typography color="text.secondary">
-                {mode === "git" && staleDiffPath
-                  ? `${staleDiffPath.split("/").at(-1) ?? staleDiffPath} is no longer changed`
-                  : mode === "git"
-                  ? "Select a changed file from Git review"
-                  : "Select a file from the Worktree"}
-              </Typography>
-              {mode === "git" && staleDiffPath && (
-                <Typography variant="caption" color="text.secondary">
-                  The tab is preserved. Close it explicitly when you no longer need it.
-                </Typography>
-              )}
-            </Stack>
+            mode === "git"
+              ? (
+                <ReviewChanges
+                  key={`${workspace.sessionId}:${dataRevision}:overview`}
+                  sessionId={workspace.sessionId}
+                  onOpenDiff={openDiff}
+                  reviewed={new Set(Object.keys(reviewProgress))}
+                  onRevision={adoptManifestRevision}
+                  refreshToken={dataRevision}
+                />
+              )
+              : (
+                <Stack
+                  component="main"
+                  alignItems="center"
+                  justifyContent="center"
+                  spacing={1.5}
+                  sx={{ flex: 1, px: 4, textAlign: "center" }}
+                >
+                  <FolderOpenOutlined color="disabled" />
+                  <Typography color="text.secondary">
+                    Select a file from the Worktree
+                  </Typography>
+                </Stack>
+              )
           )
           : (
             <DocumentView
@@ -1167,7 +1192,7 @@ export function ReviewApp({
             tabs={modeTabs}
             activeKey={activeTabKey}
             showCloseButtons={managingTabs}
-            onActivate={(tab) => void activateTab(tab)}
+            onActivate={activateTab}
             onClose={closeTab}
             onCloseOthers={(key) =>
               setTabs((current) => {
@@ -1186,6 +1211,11 @@ export function ReviewApp({
               })}
             onTogglePin={(key) =>
               setTabs((current) => toggleReviewTabPin(current, key))}
+            readOnly={mode === "git"}
+            onReorder={(movingKey, targetKey) =>
+              setTabs((current) =>
+                reorderReviewTabs(current, movingKey, targetKey)
+              )}
           />
           <Box
             component="nav"
@@ -1204,7 +1234,7 @@ export function ReviewApp({
               }}
             >
             <ReviewSettings language={language} />
-            {modeTabs.length > 0 && (
+            {mode === "code" && modeTabs.length > 0 && (
               <IconButton
                 aria-label={managingTabs
                   ? "Finish managing tabs"
