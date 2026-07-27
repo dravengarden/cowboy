@@ -93,7 +93,7 @@ export function ReviewSettings({
             }}
             sx={{
               "& .MuiToggleButton-root": {
-                minWidth: 44,
+                minWidth: 0,
                 minHeight: 44,
                 px: 0.5,
               },
