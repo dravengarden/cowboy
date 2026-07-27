@@ -916,6 +916,7 @@ export function ReviewApp({
       scope: entry.scope,
       queue,
     });
+    setCloseRequest((value) => value + 1);
   };
   useEffect(() => {
     if (workspace?.sessionId === tabsReadySession && tabsReadySession) {
