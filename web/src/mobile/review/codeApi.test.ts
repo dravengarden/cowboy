@@ -1,9 +1,11 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  closeCodeBuffer,
   fetchCodeFilePage,
   fetchCodeManifest,
   fetchCodeSearch,
   fetchCodeTree,
+  openCodeBuffer,
 } from "./codeApi.ts";
 
 Deno.test("tree requests preserve paths and explicit refresh bypasses caches", async () => {
@@ -123,6 +125,46 @@ Deno.test("file continuation keeps the path and opaque cursor together", async (
       requested,
       "/api/code/sessions/session/file?path=src%2Flarge.ts&cursor=revision%3A262144",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("buffer leases use an idempotent stable Code contract", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; method?: string; body?: string }> = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      method: init?.method,
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          apiVersion: 1,
+          path: "src/main.rs",
+          leases: init?.method === "PUT" ? 1 : 0,
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+  try {
+    await openCodeBuffer("session/id", "src/main.rs", "tab-1");
+    await closeCodeBuffer("session/id", "src/main.rs", "tab-1");
+    assertEquals(requests, [
+      {
+        url: "/api/code/sessions/session%2Fid/buffer",
+        method: "PUT",
+        body: '{"path":"src/main.rs","leaseId":"tab-1"}',
+      },
+      {
+        url: "/api/code/sessions/session%2Fid/buffer",
+        method: "DELETE",
+        body: '{"path":"src/main.rs","leaseId":"tab-1"}',
+      },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

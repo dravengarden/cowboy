@@ -37,11 +37,13 @@ import { useActiveWorkspaceBinding } from "../../controlPlane";
 import { Markdown } from "../../Markdown";
 import {
   CodeApiError,
+  closeCodeBuffer,
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
   fetchCodeChanges,
   fetchCodeManifest,
+  openCodeBuffer,
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
@@ -405,6 +407,7 @@ export function ReviewApp({
   const target: ReviewTarget = mode === "code"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
+  const leasedPath = target.kind === "changes" ? undefined : target.path;
   const [closeRequest, setCloseRequest] = useState(0);
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -425,6 +428,37 @@ export function ReviewApp({
     setDrawerOpen(open);
     onDrawerOpenChange(open);
   }, [onDrawerOpenChange]);
+
+  useEffect(() => {
+    if (
+      !active ||
+      !workspace?.sessionId ||
+      !leasedPath
+    ) {
+      return undefined;
+    }
+    const sessionId = workspace.sessionId;
+    const path = leasedPath;
+    const leaseId = crypto.randomUUID();
+    let released = false;
+    let opened = false;
+    const release = (): void => {
+      if (!opened) return;
+      opened = false;
+      void closeCodeBuffer(sessionId, path, leaseId).catch(() => undefined);
+    };
+    void openCodeBuffer(sessionId, path, leaseId)
+      .then(() => {
+        opened = true;
+        if (released) release();
+      })
+      // File rendering remains useful when language intelligence is unavailable.
+      .catch(() => undefined);
+    return () => {
+      released = true;
+      release();
+    };
+  }, [active, leasedPath, workspace?.sessionId]);
 
   useEffect(() => {
     setTabsReadySession(undefined);

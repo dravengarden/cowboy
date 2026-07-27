@@ -976,6 +976,10 @@ async fn serve_axum(
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
         .route("/api/code/sessions/{id}/file", get(api_code_file))
+        .route(
+            "/api/code/sessions/{id}/buffer",
+            put(api_code_buffer_open).delete(api_code_buffer_close),
+        )
         .route("/api/sessions/{id}/info", get(api_session_info))
         .route("/api/sessions/{id}/question-pages", get(api_question_pages))
         .route(
@@ -1793,6 +1797,11 @@ enum ZedAdapterResponse {
         api_version: u8,
         state: String,
     },
+    Buffer {
+        api_version: u8,
+        path: String,
+        leases: usize,
+    },
     Error {
         message: String,
     },
@@ -1800,7 +1809,10 @@ enum ZedAdapterResponse {
     Other,
 }
 
-async fn ensure_zed_worktree(socket: &FsPath, cwd: &str) -> anyhow::Result<bool> {
+async fn zed_adapter_request(
+    socket: &FsPath,
+    request: serde_json::Value,
+) -> anyhow::Result<ZedAdapterResponse> {
     let stream = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         UnixStream::connect(socket),
@@ -1808,11 +1820,6 @@ async fn ensure_zed_worktree(socket: &FsPath, cwd: &str) -> anyhow::Result<bool>
     .await
     .context("Zed adapter connect timed out")??;
     let (read, mut write) = stream.into_split();
-    let request = serde_json::json!({
-        "type": "ensureWorktree",
-        "path": cwd,
-        "trusted": true,
-    });
     write.write_all(request.to_string().as_bytes()).await?;
     write.write_all(b"\n").await?;
     write.shutdown().await?;
@@ -1824,15 +1831,30 @@ async fn ensure_zed_worktree(socket: &FsPath, cwd: &str) -> anyhow::Result<bool>
     .await
     .context("Zed adapter response timed out")??;
     match serde_json::from_str::<ZedAdapterResponse>(&line)? {
-        ZedAdapterResponse::Worktree {
-            api_version: 1,
-            state,
-        } => Ok(state == "ready"),
-        ZedAdapterResponse::Worktree { api_version, .. } => {
+        response @ (ZedAdapterResponse::Worktree { api_version: 1, .. }
+        | ZedAdapterResponse::Buffer { api_version: 1, .. }) => Ok(response),
+        ZedAdapterResponse::Worktree { api_version, .. }
+        | ZedAdapterResponse::Buffer { api_version, .. } => {
             anyhow::bail!("unsupported Zed adapter API version {api_version}")
         }
         ZedAdapterResponse::Error { message } => anyhow::bail!("{message}"),
         ZedAdapterResponse::Other => anyhow::bail!("unexpected Zed adapter response"),
+    }
+}
+
+async fn ensure_zed_worktree(socket: &FsPath, cwd: &str) -> anyhow::Result<bool> {
+    match zed_adapter_request(
+        socket,
+        serde_json::json!({
+            "type": "ensureWorktree",
+            "path": cwd,
+            "trusted": true,
+        }),
+    )
+    .await?
+    {
+        ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
+        _ => anyhow::bail!("unexpected Zed adapter response"),
     }
 }
 
@@ -1884,6 +1906,21 @@ struct CodeDiffResponse {
 struct CodeFileQuery {
     path: String,
     cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeBufferLeaseRequest {
+    path: String,
+    lease_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeBufferLeaseResponse {
+    api_version: u8,
+    path: String,
+    leases: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -2285,6 +2322,94 @@ async fn api_code_file(
         header::HeaderValue::from_static(FILE_CACHE_CONTROL),
     );
     response
+}
+
+async fn api_code_buffer_open(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(request): Json<CodeBufferLeaseRequest>,
+) -> Response {
+    api_code_buffer_lease(state, session_id, request, true).await
+}
+
+async fn api_code_buffer_close(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(request): Json<CodeBufferLeaseRequest>,
+) -> Response {
+    api_code_buffer_lease(state, session_id, request, false).await
+}
+
+async fn api_code_buffer_lease(
+    state: Arc<AppState>,
+    session_id: String,
+    request: CodeBufferLeaseRequest,
+    open: bool,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let Some(socket) = &state.zed_adapter_socket else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "language service unavailable",
+        )
+            .into_response();
+    };
+    if request.path.is_empty()
+        || request.lease_id.is_empty()
+        || request.lease_id.len() > 128
+        || request.lease_id.chars().any(char::is_whitespace)
+    {
+        return (StatusCode::BAD_REQUEST, "invalid buffer lease").into_response();
+    }
+    if open && ensure_zed_worktree(socket, &cwd).await.is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "language service unavailable",
+        )
+            .into_response();
+    }
+    let response = zed_adapter_request(
+        socket,
+        serde_json::json!({
+            "type": if open { "openBuffer" } else { "closeBuffer" },
+            "worktree": cwd,
+            "path": request.path,
+            "leaseId": request.lease_id,
+        }),
+    )
+    .await;
+    match response {
+        Ok(ZedAdapterResponse::Buffer { path, leases, .. }) => Json(CodeBufferLeaseResponse {
+            api_version: 1,
+            path,
+            leases,
+        })
+        .into_response(),
+        Ok(_) => (
+            StatusCode::BAD_GATEWAY,
+            "unexpected language service response",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(
+                session = %session_id,
+                operation = if open { "open" } else { "close" },
+                %error,
+                "Zed buffer lease failed"
+            );
+            (
+                if open {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    StatusCode::CONFLICT
+                },
+                "buffer lease unavailable",
+            )
+                .into_response()
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -3344,16 +3469,20 @@ mod zed_adapter_tests {
     use super::*;
     use tokio::net::UnixListener;
 
-    #[tokio::test]
-    async fn ensure_worktree_uses_the_stable_adapter_contract() {
-        let socket = std::env::temp_dir().join(format!(
-            "cowboy-zed-client-test-{}-{}.sock",
+    fn test_socket(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "cowboy-zed-{label}-{}-{}.sock",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
+        ))
+    }
+
+    #[tokio::test]
+    async fn ensure_worktree_uses_the_stable_adapter_contract() {
+        let socket = test_socket("worktree-client");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -3371,6 +3500,51 @@ mod zed_adapter_tests {
         });
 
         assert!(ensure_zed_worktree(&socket, "/tmp/worktree").await.unwrap());
+        server.await.unwrap();
+        tokio::fs::remove_file(socket).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn buffer_lease_uses_the_stable_adapter_contract() {
+        let socket = test_socket("buffer-client");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut request = String::new();
+            BufReader::new(read).read_line(&mut request).await.unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["type"], "openBuffer");
+            assert_eq!(request["worktree"], "/tmp/worktree");
+            assert_eq!(request["path"], "src/main.rs");
+            assert_eq!(request["leaseId"], "browser-tab-1");
+            write
+                .write_all(
+                    b"{\"type\":\"buffer\",\"api_version\":1,\"path\":\"src/main.rs\",\"leases\":1}\n",
+                )
+                .await
+                .unwrap();
+        });
+
+        let response = zed_adapter_request(
+            &socket,
+            serde_json::json!({
+                "type": "openBuffer",
+                "worktree": "/tmp/worktree",
+                "path": "src/main.rs",
+                "leaseId": "browser-tab-1",
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            response,
+            ZedAdapterResponse::Buffer {
+                path,
+                leases: 1,
+                ..
+            } if path == "src/main.rs"
+        ));
         server.await.unwrap();
         tokio::fs::remove_file(socket).await.unwrap();
     }

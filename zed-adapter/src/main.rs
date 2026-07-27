@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -45,11 +45,27 @@ enum CommandKind {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Request {
     Health,
-    EnsureWorktree { path: PathBuf, trusted: bool },
-    OpenWorktree { path: PathBuf, trusted: bool },
-    CloseWorktree { path: PathBuf },
-    OpenBuffer { worktree: PathBuf, path: PathBuf },
-    CloseBuffer { worktree: PathBuf, path: PathBuf },
+    EnsureWorktree {
+        path: PathBuf,
+        trusted: bool,
+    },
+    OpenWorktree {
+        path: PathBuf,
+        trusted: bool,
+    },
+    CloseWorktree {
+        path: PathBuf,
+    },
+    OpenBuffer {
+        worktree: PathBuf,
+        path: PathBuf,
+        lease_id: String,
+    },
+    CloseBuffer {
+        worktree: PathBuf,
+        path: PathBuf,
+        lease_id: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -95,9 +111,8 @@ struct WorktreeLease {
 }
 
 type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
-#[derive(Clone, Copy)]
 struct BufferLease {
-    leases: usize,
+    lease_ids: HashSet<String>,
     remote_id: u64,
 }
 
@@ -385,12 +400,16 @@ async fn respond(
             }
             response
         }
-        Request::OpenBuffer { worktree, path } => {
-            open_buffer(worktree, path, worktrees, buffers, zed).await?
-        }
-        Request::CloseBuffer { worktree, path } => {
-            close_buffer(worktree, path, buffers, zed).await?
-        }
+        Request::OpenBuffer {
+            worktree,
+            path,
+            lease_id,
+        } => open_buffer(worktree, path, lease_id, worktrees, buffers, zed).await?,
+        Request::CloseBuffer {
+            worktree,
+            path,
+            lease_id,
+        } => close_buffer(worktree, path, lease_id, buffers, zed).await?,
     })
 }
 
@@ -467,10 +486,12 @@ async fn buffer_key(worktree: PathBuf, relative: PathBuf) -> Result<(PathBuf, Pa
 async fn open_buffer(
     worktree: PathBuf,
     path: PathBuf,
+    lease_id: String,
     worktrees: &Worktrees,
     buffers: &Buffers,
     zed: Option<&Zed>,
 ) -> Result<Response> {
+    validate_lease_id(&lease_id)?;
     let (worktree, path) = buffer_key(worktree, path).await?;
     let worktree_id = worktrees
         .read()
@@ -489,46 +510,63 @@ async fn open_buffer(
         all.insert(
             key.clone(),
             BufferLease {
-                leases: 0,
+                lease_ids: HashSet::new(),
                 remote_id,
             },
         );
     }
     let lease = all.get_mut(&key).expect("buffer was just inserted");
-    lease.leases += 1;
+    lease.lease_ids.insert(lease_id);
     Ok(Response::Buffer {
         api_version: ADAPTER_VERSION,
         worktree,
         path,
-        leases: lease.leases,
+        leases: lease.lease_ids.len(),
     })
 }
 
 async fn close_buffer(
     worktree: PathBuf,
     path: PathBuf,
+    lease_id: String,
     buffers: &Buffers,
     zed: Option<&Zed>,
 ) -> Result<Response> {
+    validate_lease_id(&lease_id)?;
     let (worktree, path) = buffer_key(worktree, path).await?;
     let key = (worktree.clone(), path.clone());
     let mut all = buffers.write().await;
-    let lease = all.get_mut(&key).context("buffer is not open")?;
-    lease.leases = lease.leases.saturating_sub(1);
+    let Some(lease) = all.get_mut(&key) else {
+        return Ok(Response::Buffer {
+            api_version: ADAPTER_VERSION,
+            worktree,
+            path,
+            leases: 0,
+        });
+    };
+    lease.lease_ids.remove(&lease_id);
     let remote_id = lease.remote_id;
+    let leases = lease.lease_ids.len();
     let response = Response::Buffer {
         api_version: ADAPTER_VERSION,
         worktree,
         path,
-        leases: lease.leases,
+        leases,
     };
-    if lease.leases == 0 {
+    if leases == 0 {
         all.remove(&key);
         if let Some(zed) = zed {
             zed.lock().await.close_buffer(remote_id).await?;
         }
     }
     Ok(response)
+}
+
+fn validate_lease_id(lease_id: &str) -> Result<()> {
+    if lease_id.is_empty() || lease_id.len() > 128 || lease_id.chars().any(char::is_whitespace) {
+        bail!("buffer lease ID must be 1-128 non-whitespace characters");
+    }
+    Ok(())
 }
 
 async fn handle(
@@ -760,6 +798,7 @@ mod tests {
                 Request::OpenBuffer {
                     worktree: root.clone(),
                     path: PathBuf::from("Cargo.toml"),
+                    lease_id: format!("lease-{expected}"),
                 },
                 &worktrees,
                 &buffers,
@@ -780,6 +819,7 @@ mod tests {
                 Request::CloseBuffer {
                     worktree: root.clone(),
                     path: PathBuf::from("Cargo.toml"),
+                    lease_id: format!("lease-{}", expected + 1),
                 },
                 &worktrees,
                 &buffers,
@@ -796,6 +836,52 @@ mod tests {
             ));
         }
         assert!(buffers.read().await.is_empty());
+        let response = respond(
+            Request::CloseBuffer {
+                worktree: root.clone(),
+                path: PathBuf::from("Cargo.toml"),
+                lease_id: "lease-1".to_owned(),
+            },
+            &worktrees,
+            &buffers,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(response, Response::Buffer { leases: 0, .. }));
+    }
+
+    #[tokio::test]
+    async fn buffer_lease_ids_make_retries_idempotent() {
+        let root = std::env::current_dir().unwrap();
+        let worktrees: Worktrees = Arc::default();
+        let buffers: Buffers = Arc::default();
+        respond(
+            Request::EnsureWorktree {
+                path: root.clone(),
+                trusted: true,
+            },
+            &worktrees,
+            &buffers,
+            None,
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            let response = respond(
+                Request::OpenBuffer {
+                    worktree: root.clone(),
+                    path: PathBuf::from("Cargo.toml"),
+                    lease_id: "stable-client-lease".to_owned(),
+                },
+                &worktrees,
+                &buffers,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(response, Response::Buffer { leases: 1, .. }));
+        }
     }
 
     #[tokio::test]

@@ -70,6 +70,12 @@ export interface CodeDocument {
   limited?: boolean;
 }
 
+export interface CodeBufferLease {
+  apiVersion: 1;
+  path: string;
+  leases: number;
+}
+
 export class CodeApiError extends Error {
   constructor(public readonly status: number) {
     super(`Code API ${status}`);
@@ -93,6 +99,47 @@ async function codeFetch<T>(
     throw new Error("Unsupported Code API version");
   }
   return body;
+}
+
+async function codeBufferLease(
+  sessionId: string,
+  path: string,
+  leaseId: string,
+  method: "PUT" | "DELETE",
+): Promise<CodeBufferLease> {
+  const response = await fetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/buffer`,
+    {
+      method,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, leaseId }),
+      keepalive: method === "DELETE",
+    },
+  );
+  if (!response.ok) {
+    throw new CodeApiError(response.status);
+  }
+  const body = await response.json() as CodeBufferLease;
+  if (body.apiVersion !== 1) {
+    throw new Error("Unsupported Code API version");
+  }
+  return body;
+}
+
+export function openCodeBuffer(
+  sessionId: string,
+  path: string,
+  leaseId: string,
+): Promise<CodeBufferLease> {
+  return codeBufferLease(sessionId, path, leaseId, "PUT");
+}
+
+export function closeCodeBuffer(
+  sessionId: string,
+  path: string,
+  leaseId: string,
+): Promise<CodeBufferLease> {
+  return codeBufferLease(sessionId, path, leaseId, "DELETE");
 }
 
 export function fetchCodeDiffPage(

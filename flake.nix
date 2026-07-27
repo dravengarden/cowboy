@@ -217,12 +217,12 @@
           | jq -e '.type == "worktree" and .state == "ready" and .leases == 1' \
           >/dev/null
         printf '%s\n' \
-          '{"type":"openBuffer","worktree":"${./.}","path":"Cargo.toml"}' \
+          '{"type":"openBuffer","worktree":"${./.}","path":"Cargo.toml","leaseId":"nix-integration"}' \
           | nc -N -U "$runtime/adapter.sock" \
           | jq -e '.type == "buffer" and .path == "Cargo.toml" and .leases == 1' \
           >/dev/null
         printf '%s\n' \
-          '{"type":"closeBuffer","worktree":"${./.}","path":"Cargo.toml"}' \
+          '{"type":"closeBuffer","worktree":"${./.}","path":"Cargo.toml","leaseId":"nix-integration"}' \
           | nc -N -U "$runtime/adapter.sock" \
           | jq -e '.type == "buffer" and .path == "Cargo.toml" and .leases == 0' \
           >/dev/null
