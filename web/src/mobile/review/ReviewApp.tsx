@@ -4,7 +4,6 @@ import {
   CheckCircleOutline,
   ChevronLeft,
   ChevronRight,
-  CodeOutlined,
   DifferenceOutlined,
   FolderOpenOutlined,
   KeyboardArrowDown,
@@ -655,49 +654,18 @@ export function ReviewApp({
                 </IconButton>
               </>
             )}
-            <Box
-              role="group"
-              aria-label="Review mode"
-              sx={{
-                position: "absolute",
-                left: "50%",
-                transform: "translateX(-50%)",
-                display: "flex",
-                p: "2px",
-                border: 1,
-                borderColor: "divider",
-                borderRadius: 99,
-                bgcolor: "background.paper",
-              }}
-            >
-              <IconButton
-                aria-label="Code review"
-                aria-pressed={mode === "code"}
-                color={mode === "code" ? "primary" : "default"}
-                onClick={() => setMode("code")}
-                sx={{
-                  width: 40,
-                  height: 40,
-                  bgcolor: mode === "code" ? "action.selected" : "transparent",
-                }}
-              >
-                <CodeOutlined />
-              </IconButton>
-              <IconButton
-                aria-label="Git review"
-                aria-pressed={mode === "git"}
-                color={mode === "git" ? "primary" : "default"}
-                onClick={() => setMode("git")}
-                sx={{
-                  width: 40,
-                  height: 40,
-                  bgcolor: mode === "git" ? "action.selected" : "transparent",
-                }}
-              >
-                <DifferenceOutlined />
-              </IconButton>
-            </Box>
             <Box sx={{ flex: 1 }} />
+            <IconButton
+              aria-label={mode === "git"
+                ? "Disable Git review"
+                : "Enable Git review"}
+              aria-pressed={mode === "git"}
+              color={mode === "git" ? "primary" : "default"}
+              onClick={() =>
+                setMode((current) => current === "git" ? "code" : "git")}
+            >
+              <DifferenceOutlined />
+            </IconButton>
             <IconButton
               aria-label={drawerOpen
                 ? "Close worktree sidebar"
