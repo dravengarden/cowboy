@@ -5,11 +5,18 @@ export interface HorizontalSwipe {
   distance: number;
 }
 
+// A stationary row tap must stop qualifying before the drawer can acquire the
+// same touch stream. Keeping a real dead band between these thresholds prevents
+// pointerup from selecting a session only for touchend to replace that pending
+// selection with a drawer settle.
+export const RELIABLE_TOUCH_TAP_MOVE_SLOP_PX = 10;
+export const MOBILE_DRAWER_DIRECTION_LOCK_PX = 12;
+
 /** Lock a touch gesture to the horizontal axis only after intent is clear. */
 export function horizontalSwipe(
   deltaX: number,
   deltaY: number,
-  lockDistance = 12,
+  lockDistance = MOBILE_DRAWER_DIRECTION_LOCK_PX,
   dominance = 1.35,
 ): HorizontalSwipe | null {
   const distance = Math.abs(deltaX);

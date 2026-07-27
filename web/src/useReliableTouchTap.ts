@@ -3,8 +3,8 @@ import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
+import { RELIABLE_TOUCH_TAP_MOVE_SLOP_PX } from "./touchGestures";
 
-const MOVE_SLOP_PX = 10;
 const MAX_TAP_MS = 800;
 
 interface TouchStart {
@@ -73,8 +73,8 @@ export function useReliableTouchTap<T extends HTMLElement>(onActivate: () => voi
     const start = startRef.current;
     if (!start || start.pointerId !== event.pointerId) return;
     if (
-      Math.abs(event.clientX - start.x) > MOVE_SLOP_PX ||
-      Math.abs(event.clientY - start.y) > MOVE_SLOP_PX
+      Math.abs(event.clientX - start.x) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX ||
+      Math.abs(event.clientY - start.y) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX
     ) {
       startRef.current = null;
     }

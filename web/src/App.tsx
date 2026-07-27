@@ -95,6 +95,7 @@ import {
     expandedSelection,
     hasHorizontalScroller,
     horizontalSwipe,
+    MOBILE_DRAWER_DIRECTION_LOCK_PX,
 } from "./touchGestures";
 import {
     mobileDrawerSurfaceVisual,
@@ -1871,7 +1872,12 @@ export function App({
             }
             const swipe = gesture.locked
                 ? { direction: deltaX < 0 ? "left" as const : "right" as const, distance: Math.abs(deltaX) }
-                : horizontalSwipe(deltaX, deltaY, 8, 1.15);
+                : horizontalSwipe(
+                    deltaX,
+                    deltaY,
+                    MOBILE_DRAWER_DIRECTION_LOCK_PX,
+                    1.15,
+                );
             if (
                 !swipe ||
                 (!gesture.startOpen && swipe.direction !== "right") ||
