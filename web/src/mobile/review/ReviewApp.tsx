@@ -341,6 +341,10 @@ export function ReviewApp({
   const adoptManifestRevision = useCallback((revision: string): void => {
     manifestRevision.current = revision;
   }, []);
+  const handleDrawerOpenChange = useCallback((open: boolean): void => {
+    setDrawerOpen(open);
+    onDrawerOpenChange(open);
+  }, [onDrawerOpenChange]);
 
   useEffect(() => {
     manifestRevision.current = undefined;
@@ -445,10 +449,7 @@ export function ReviewApp({
 
   return (
     <ReviewDrawerShell
-      onOpenChange={(open) => {
-        setDrawerOpen(open);
-        onDrawerOpenChange(open);
-      }}
+      onOpenChange={handleDrawerOpenChange}
       closeRequest={closeRequest}
       toggleRequest={toggleDrawerRequest}
       drawer={
