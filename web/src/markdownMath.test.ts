@@ -28,3 +28,28 @@ x = \frac{1}{2}
 Inline ` + "`\\(not_math\\)`" + String.raw` and escaped \\\[literal\\\].`;
   assertEquals(normalizeMarkdownMath(source), source);
 });
+
+Deno.test("plain-language boxed display math becomes a readable callout", () => {
+  assertEquals(
+    normalizeMarkdownMath(String.raw`\[
+\boxed{
+Hyperliquid公共L2 WS不是10ms级逐订单流；
+其快照推送节奏约500ms，加上网络与处理后通常应按数百毫秒级建模。
+}
+\]`),
+    `> **Hyperliquid公共L2 WS不是10ms级逐订单流；**
+> **其快照推送节奏约500ms，加上网络与处理后通常应按数百毫秒级建模。**`,
+  );
+});
+
+Deno.test("real TeX boxed expressions remain math", () => {
+  const source = String.raw`\[
+\boxed{\text{Order-Book Confirmed Trend Following}}
+\]`;
+  assertEquals(
+    normalizeMarkdownMath(source),
+    `$$
+\\boxed{\\text{Order-Book Confirmed Trend Following}}
+$$`,
+  );
+});

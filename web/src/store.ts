@@ -41,6 +41,7 @@ import type {
   SkillView,
   WireQueued,
 } from "./protocol";
+import { mergeCanonicalTimeline } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 
@@ -534,30 +535,7 @@ function mergeEvents(
   events: Envelope[],
 ): Map<string, Envelope[]> {
   const existing = timelines.get(sessionId) ?? [];
-  const merged: Envelope[] = [];
-  let current = 0;
-  let incoming = 0;
-  while (current < existing.length || incoming < events.length) {
-    const oldEvent = existing[current];
-    const newEvent = events[incoming];
-    if (oldEvent === undefined) {
-      if (newEvent !== undefined) merged.push(newEvent);
-      incoming += 1;
-    } else if (newEvent === undefined) {
-      merged.push(oldEvent);
-      current += 1;
-    } else if (oldEvent.seq < newEvent.seq) {
-      merged.push(oldEvent);
-      current += 1;
-    } else if (newEvent.seq < oldEvent.seq) {
-      merged.push(newEvent);
-      incoming += 1;
-    } else {
-      merged.push(oldEvent);
-      current += 1;
-      incoming += 1;
-    }
-  }
+  const merged = mergeCanonicalTimeline(existing, events);
   if (
     merged.length === existing.length &&
     merged.every((event, index) => event === existing[index])

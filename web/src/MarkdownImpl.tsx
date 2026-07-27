@@ -774,6 +774,14 @@ const MarkdownImpl = memo(function MarkdownImpl({
             my: 1,
             WebkitOverflowScrolling: "touch",
           },
+          // KaTeX deliberately emits malformed formulas as `.katex-error`.
+          // Keep the source readable and theme-aware rather than painting an
+          // entire model-generated paragraph bright red.
+          "& .katex-error": {
+            color: "inherit !important",
+            overflowWrap: "anywhere",
+            whiteSpace: "normal",
+          },
         }}
       >
         <ReactMarkdown

@@ -5,6 +5,7 @@
  * dialects share the same renderer without changing source or code examples.
  */
 export function normalizeMarkdownMath(source: string): string {
+  source = normalizePlainTextBoxes(source);
   let output = "";
   let index = 0;
   let lineStart = true;
@@ -89,6 +90,29 @@ export function normalizeMarkdownMath(source: string): string {
   }
 
   return output;
+}
+
+/**
+ * Models occasionally use `\boxed{...}` as a prose callout and put Chinese
+ * sentences directly inside it. That is not valid TeX: KaTeX renders the whole
+ * source in its red error colour, and a long sentence can overflow a phone.
+ * Preserve real TeX boxes (including `\boxed{\text{...}}`) while turning only
+ * command-free, multi-character prose boxes into a readable Markdown callout.
+ */
+function normalizePlainTextBoxes(source: string): string {
+  return source.replace(
+    /\\\[\s*\\boxed\{([\s\S]*?)\}\s*\\\]/gu,
+    (match, body: string) => {
+      const lines = body.split("\n").map((line) => line.trim()).filter(Boolean);
+      const prose = lines.join(" ");
+      if (
+        prose.length < 16 ||
+        /\\[A-Za-z]+/u.test(prose) ||
+        !/[\p{Script=Han}，。；：！？]/u.test(prose)
+      ) return match;
+      return lines.map((line) => `> **${line}**`).join("\n");
+    },
+  );
 }
 
 function hasClosingMathDelimiter(
