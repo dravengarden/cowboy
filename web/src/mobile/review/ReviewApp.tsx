@@ -6,11 +6,12 @@ import {
   ChevronRight,
   DifferenceOutlined,
   FolderOpenOutlined,
+  FolderOutlined,
   KeyboardArrowDown,
   KeyboardArrowUp,
   TabUnselected,
-  VisibilityOutlined,
   ViewSidebarOutlined,
+  VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
 import {
@@ -44,20 +45,20 @@ import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import {
-  CodeApiError,
   closeCodeBuffer,
+  CodeApiError,
+  type CodeHover,
+  type CodeLocation,
+  type CodeNavigationKind,
+  fetchCodeChanges,
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
   fetchCodeHover,
-  fetchCodeNavigation,
-  fetchCodeChanges,
   fetchCodeLanguage,
   fetchCodeManifest,
+  fetchCodeNavigation,
   openCodeBuffer,
-  type CodeHover,
-  type CodeLocation,
-  type CodeNavigationKind,
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
@@ -73,15 +74,8 @@ import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
-import {
-  loadReviewMode,
-  type ReviewMode,
-  saveReviewMode,
-} from "./reviewMode";
-import {
-  updateReviewSettings,
-  useReviewSettings,
-} from "./reviewSettings";
+import { loadReviewMode, type ReviewMode, saveReviewMode } from "./reviewMode";
+import { updateReviewSettings, useReviewSettings } from "./reviewSettings";
 import type { CodeDiffScope } from "./codeApi";
 import type { CodeLanguage } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
@@ -92,11 +86,11 @@ import {
   closeReviewTab,
   loadReviewTabs,
   openReviewTab,
-  reviewTabKey,
   reorderReviewTabs,
+  type ReviewTab,
+  reviewTabKey,
   saveReviewTabs,
   toggleReviewTabPin,
-  type ReviewTab,
 } from "./reviewTabs";
 
 const CodeViewer = lazy(() => import("./CodeViewer"));
@@ -452,16 +446,32 @@ function DocumentView({
         )}
       {inspectCandidates.length === 0 && !hoverLoading && (
         <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
-          <Button size="small" onClick={() => navigate("definition")}>
+          <Button
+            size="small"
+            onClick={() =>
+              navigate("definition")}
+          >
             Definition
           </Button>
-          <Button size="small" onClick={() => navigate("declaration")}>
+          <Button
+            size="small"
+            onClick={() =>
+              navigate("declaration")}
+          >
             Declaration
           </Button>
-          <Button size="small" onClick={() => navigate("typeDefinition")}>
+          <Button
+            size="small"
+            onClick={() =>
+              navigate("typeDefinition")}
+          >
             Type
           </Button>
-          <Button size="small" onClick={() => navigate("implementation")}>
+          <Button
+            size="small"
+            onClick={() =>
+              navigate("implementation")}
+          >
             Implementations
           </Button>
           <Button size="small" onClick={() => navigate("references")}>
@@ -538,7 +548,9 @@ function DocumentView({
               variant="outlined"
               disabled={loadingMore}
               onClick={loadMore}
-              startIcon={loadingMore ? <CircularProgress size={12} /> : undefined}
+              startIcon={loadingMore
+                ? <CircularProgress size={12} />
+                : undefined}
             >
               {loadMoreError ? "Retry" : "Load more"}
             </Button>
@@ -587,7 +599,12 @@ function DocumentView({
                   borderColor: "divider",
                 },
                 "& h3": { fontSize: "1.18rem !important" },
-                "& hr": { border: 0, borderTop: 1, borderColor: "divider", my: 2 },
+                "& hr": {
+                  border: 0,
+                  borderTop: 1,
+                  borderColor: "divider",
+                  my: 2,
+                },
               }}
             >
               <Markdown text={text} touchWrap />
@@ -610,7 +627,9 @@ function DocumentView({
                 revealLine={target.kind === "diff"
                   ? hunks[hunkIndex]
                   : target.revealLine}
-                languageData={target.kind === "source" ? languageData : undefined}
+                languageData={target.kind === "source"
+                  ? languageData
+                  : undefined}
                 diagnostics={settings.diagnostics}
                 inlayHints={settings.inlayHints}
                 semanticHighlighting={settings.semanticHighlighting}
@@ -620,45 +639,45 @@ function DocumentView({
                   : undefined}
               />
             </Suspense>
-      )}
-      {surface.kind === "mobile"
-        ? (
-          <Sheet
-            open={hoverOpen}
-            onClose={() => setHoverOpen(false)}
-            title="Symbol"
-            forceSheet
-          >
-            {symbolContent}
-          </Sheet>
-        )
-        : (
-          <Popover
-            open={hoverOpen}
-            onClose={() => setHoverOpen(false)}
-            anchorReference="anchorPosition"
-            anchorPosition={inspectAnchor ?? { top: 0, left: 0 }}
-            transformOrigin={{ vertical: "top", horizontal: "left" }}
-            slotProps={{
-              paper: {
-                sx: {
-                  width: "min(520px, calc(100vw - 48px))",
-                  maxHeight: "min(70vh, 680px)",
-                  p: 2,
-                  borderRadius: 3,
-                  bgcolor: "background.paper",
-                  backgroundImage: "none",
-                  boxShadow: 12,
+          )}
+        {surface.kind === "mobile"
+          ? (
+            <Sheet
+              open={hoverOpen}
+              onClose={() => setHoverOpen(false)}
+              title="Symbol"
+              forceSheet
+            >
+              {symbolContent}
+            </Sheet>
+          )
+          : (
+            <Popover
+              open={hoverOpen}
+              onClose={() => setHoverOpen(false)}
+              anchorReference="anchorPosition"
+              anchorPosition={inspectAnchor ?? { top: 0, left: 0 }}
+              transformOrigin={{ vertical: "top", horizontal: "left" }}
+              slotProps={{
+                paper: {
+                  sx: {
+                    width: "min(520px, calc(100vw - 48px))",
+                    maxHeight: "min(70vh, 680px)",
+                    p: 2,
+                    borderRadius: 3,
+                    bgcolor: "background.paper",
+                    backgroundImage: "none",
+                    boxShadow: 12,
+                  },
                 },
-              },
-            }}
-          >
-            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
-              Symbol
-            </Typography>
-            {symbolContent}
-          </Popover>
-        )}
+              }}
+            >
+              <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
+                Symbol
+              </Typography>
+              {symbolContent}
+            </Popover>
+          )}
       </Box>
     </Stack>
   );
@@ -684,7 +703,7 @@ export function ReviewApp({
   const [diffTarget, setDiffTarget] = useState<
     Extract<ReviewTarget, { kind: "diff" }> | undefined
   >();
-  const target: ReviewTarget = mode === "code"
+  const target: ReviewTarget = mode === "files"
     ? sourceTarget ?? { kind: "changes" }
     : diffTarget ?? { kind: "changes" };
   const leasedPath = target.kind === "changes" ? undefined : target.path;
@@ -872,7 +891,7 @@ export function ReviewApp({
     preserveNavigation = false,
   ): void => {
     setCurrentRevision(undefined);
-    setMode("code");
+    setMode("files");
     setMarkdownPreview(isMarkdownReviewPath(path));
     setSourceTarget({
       kind: "source",
@@ -907,11 +926,6 @@ export function ReviewApp({
     }
   }, [tabs, tabsReadySession, workspace?.sessionId]);
   const activateTab = (tab: ReviewTab): void => {
-    if (tab.kind === "git-overview") {
-      setMode("git");
-      setDiffTarget(undefined);
-      return;
-    }
     if (tab.kind === "source") {
       openSource(tab.path);
       return;
@@ -925,37 +939,27 @@ export function ReviewApp({
     ? reviewTabKey({ ...target, pinned: false })
     : target.kind === "diff"
     ? reviewTabKey({ ...target, pinned: false })
-    : mode === "git"
-    ? "git-overview"
     : undefined;
-  const gitTabs: ReviewTab[] = [
-    {
-      kind: "git-overview",
-      conflictCount: gitQueue.filter((entry) => entry.scope === "combined").length,
-      stagedCount: gitQueue.filter((entry) => entry.scope === "staged").length,
-      unstagedCount: gitQueue.filter((entry) => entry.scope === "unstaged").length,
-    },
-    ...gitQueue.map((entry): ReviewTab => ({
-      kind: "diff",
-      path: entry.change.path,
-      scope: entry.scope,
-      pinned: false,
-    })),
-  ];
-  const modeTabs = mode === "code"
+  const gitTabs: ReviewTab[] = gitQueue.map((entry): ReviewTab => ({
+    kind: "diff",
+    path: entry.change.path,
+    scope: entry.scope,
+    pinned: false,
+  }));
+  const modeTabs = mode === "files"
     ? tabs.filter((tab) => tab.kind === "source")
     : gitTabs;
   const closeTab = (key: string): void => {
     const next = closeReviewTab(tabs, key);
     setTabs(next);
     const nextModeTabs = next.filter((tab) =>
-      mode === "code" ? tab.kind === "source" : tab.kind === "diff"
+      mode === "files" ? tab.kind === "source" : tab.kind === "diff"
     );
     if (nextModeTabs.length === 0) setManagingTabs(false);
     if (activeTabKey !== key) return;
     const fallback = nextModeTabs.at(-1);
     if (fallback) activateTab(fallback);
-    else if (mode === "code") setSourceTarget(undefined);
+    else if (mode === "files") setSourceTarget(undefined);
     else setDiffTarget(undefined);
   };
   const reviewIndex = target.kind === "diff"
@@ -1019,31 +1023,29 @@ export function ReviewApp({
       onOpenChange={handleDrawerOpenChange}
       closeRequest={closeRequest}
       toggleRequest={toggleDrawerRequest}
-      drawer={
-        mode === "code"
-          ? (
-            <ReviewFileTree
-              sessionId={workspace?.sessionId}
-              cwd={workspace?.cwd}
-              onOpenFile={openSource}
-              currentPath={sourceTarget?.path}
-              onClose={() => setCloseRequest((value) => value + 1)}
-              refreshToken={dataRevision}
-            />
-          )
-          : (
-            <ReviewChanges
-              key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
-              sessionId={workspace?.sessionId}
-              onOpenDiff={openDiff}
-              reviewed={new Set(Object.keys(reviewProgress))}
-              onRevision={adoptManifestRevision}
-              drawer
-              onClose={() => setCloseRequest((value) => value + 1)}
-              refreshToken={dataRevision}
-            />
-          )
-      }
+      drawer={mode === "files"
+        ? (
+          <ReviewFileTree
+            sessionId={workspace?.sessionId}
+            cwd={workspace?.cwd}
+            onOpenFile={openSource}
+            currentPath={sourceTarget?.path}
+            onClose={() => setCloseRequest((value) => value + 1)}
+            refreshToken={dataRevision}
+          />
+        )
+        : (
+          <ReviewChanges
+            key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
+            sessionId={workspace?.sessionId}
+            onOpenDiff={openDiff}
+            reviewed={new Set(Object.keys(reviewProgress))}
+            onRevision={adoptManifestRevision}
+            drawer
+            onClose={() => setCloseRequest((value) => value + 1)}
+            refreshToken={dataRevision}
+          />
+        )}
     >
       <Stack
         sx={{
@@ -1066,11 +1068,11 @@ export function ReviewApp({
             }}
           >
             <IconButton
-              aria-label={mode === "code" && navigationHistory.length > 0
+              aria-label={mode === "files" && navigationHistory.length > 0
                 ? "Back to previous code location"
                 : "Back to changes"}
               onClick={() => {
-                if (mode === "code") {
+                if (mode === "files") {
                   const previous = navigationHistory.at(-1);
                   if (previous) {
                     setSourceTarget(previous);
@@ -1212,12 +1214,10 @@ export function ReviewApp({
             onCloseOthers={(key) =>
               setTabs((current) => {
                 const currentModeTabs = current.filter((tab) =>
-                  mode === "code"
-                    ? tab.kind === "source"
-                    : tab.kind === "diff"
+                  mode === "files" ? tab.kind === "source" : tab.kind === "diff"
                 );
                 const otherModeTabs = current.filter((tab) =>
-                  mode === "code" ? tab.kind === "diff" : tab.kind === "source"
+                  mode === "files" ? tab.kind === "diff" : tab.kind === "source"
                 );
                 return [
                   ...otherModeTabs,
@@ -1248,105 +1248,113 @@ export function ReviewApp({
                 "@media (min-width: 600px)": { minHeight: 44 },
               }}
             >
-            <ReviewSettings language={language} />
-            {mode === "code" && modeTabs.length > 0 && (
-              <IconButton
-                aria-label={managingTabs
-                  ? "Finish managing tabs"
-                  : "Manage open tabs"}
-                aria-pressed={managingTabs}
-                color={managingTabs ? "primary" : "default"}
-                onClick={() => setManagingTabs((value) => !value)}
-              >
-                <TabUnselected />
-              </IconButton>
-            )}
-            {target.kind !== "changes" && !(
-              target.kind === "source" &&
-              isMarkdownReviewPath(target.path) &&
-              markdownPreview
-            ) && (
-              <IconButton
-                aria-label={settings.softWrap
-                  ? "Disable line wrapping"
-                  : "Enable line wrapping"}
-                color={settings.softWrap ? "primary" : "default"}
-                onClick={() =>
-                  updateReviewSettings({ softWrap: !settings.softWrap })}
-              >
-                <WrapText />
-              </IconButton>
-            )}
-            {target.kind === "source" && isMarkdownReviewPath(target.path) && (
-              <IconButton
-                aria-label={markdownPreview
-                  ? "Show Markdown source"
-                  : "Preview Markdown"}
-                aria-pressed={markdownPreview}
-                color={markdownPreview ? "primary" : "default"}
-                onClick={() => setMarkdownPreview((value) => !value)}
-              >
-                <VisibilityOutlined />
-              </IconButton>
-            )}
-            {target.kind === "diff" && (
-              <>
-                <Box sx={{ flex: 1 }} />
+              <ReviewSettings language={language} />
+              {mode === "files" && modeTabs.length > 0 && (
                 <IconButton
-                  aria-label="Previous change"
-                  disabled={reviewIndex <= 0}
-                  onClick={() => moveReview(-1)}
+                  aria-label={managingTabs
+                    ? "Finish managing tabs"
+                    : "Manage open tabs"}
+                  aria-pressed={managingTabs}
+                  color={managingTabs ? "primary" : "default"}
+                  onClick={() => setManagingTabs((value) => !value)}
                 >
-                  <ChevronLeft />
+                  <TabUnselected />
                 </IconButton>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ minWidth: 52, textAlign: "center" }}
-                >
-                  {reviewIndex + 1} / {target.queue.length}
-                </Typography>
+              )}
+              {target.kind !== "changes" && !(
+                target.kind === "source" &&
+                isMarkdownReviewPath(target.path) &&
+                markdownPreview
+              ) && (
                 <IconButton
-                  aria-label="Next change"
-                  disabled={reviewIndex >= target.queue.length - 1}
-                  onClick={() => moveReview(1)}
+                  aria-label={settings.softWrap
+                    ? "Disable line wrapping"
+                    : "Enable line wrapping"}
+                  color={settings.softWrap ? "primary" : "default"}
+                  onClick={() =>
+                    updateReviewSettings({ softWrap: !settings.softWrap })}
                 >
-                  <ChevronRight />
+                  <WrapText />
                 </IconButton>
-              </>
-            )}
-            <Box sx={{ flex: 1 }} />
-            <IconButton
-              aria-label={`${mode === "git"
-                ? "Disable Git review"
-                : "Enable Git review"}${
-                changeCount > 0
-                  ? `, ${changeCount} changed ${changeCount === 1 ? "file" : "files"}`
-                  : ""
-              }`}
-              aria-pressed={mode === "git"}
-              color={mode === "git" ? "primary" : "default"}
-              onClick={() =>
-                setMode((current) => current === "git" ? "code" : "git")}
-            >
-              <Badge
-                badgeContent={changeCount}
-                max={99}
-                color="primary"
-                invisible={changeCount === 0}
+              )}
+              {target.kind === "source" && isMarkdownReviewPath(target.path) &&
+                (
+                  <IconButton
+                    aria-label={markdownPreview
+                      ? "Show Markdown source"
+                      : "Preview Markdown"}
+                    aria-pressed={markdownPreview}
+                    color={markdownPreview ? "primary" : "default"}
+                    onClick={() => setMarkdownPreview((value) => !value)}
+                  >
+                    <VisibilityOutlined />
+                  </IconButton>
+                )}
+              {target.kind === "diff" && (
+                <>
+                  <Box sx={{ flex: 1 }} />
+                  <IconButton
+                    aria-label="Previous change"
+                    disabled={reviewIndex <= 0}
+                    onClick={() => moveReview(-1)}
+                  >
+                    <ChevronLeft />
+                  </IconButton>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ minWidth: 52, textAlign: "center" }}
+                  >
+                    {reviewIndex + 1} / {target.queue.length}
+                  </Typography>
+                  <IconButton
+                    aria-label="Next change"
+                    disabled={reviewIndex >= target.queue.length - 1}
+                    onClick={() => moveReview(1)}
+                  >
+                    <ChevronRight />
+                  </IconButton>
+                </>
+              )}
+              <Box sx={{ flex: 1 }} />
+              <IconButton
+                aria-label="Browse files"
+                aria-pressed={mode === "files"}
+                color={mode === "files" ? "primary" : "default"}
+                onClick={() => setMode("files")}
               >
-                <DifferenceOutlined />
-              </Badge>
-            </IconButton>
-            <IconButton
-              aria-label={drawerOpen
-                ? "Close worktree sidebar"
-                : "Open worktree sidebar"}
-              color={drawerOpen ? "primary" : "default"}
-              onClick={() => setToggleDrawerRequest((value) => value + 1)}
-            >
-              <ViewSidebarOutlined />
-            </IconButton>
+                <FolderOutlined />
+              </IconButton>
+              <IconButton
+                aria-label={`Review Git changes${
+                  changeCount > 0
+                    ? `, ${changeCount} changed ${
+                      changeCount === 1 ? "file" : "files"
+                    }`
+                    : ""
+                }`}
+                aria-pressed={mode === "git"}
+                color={mode === "git" ? "primary" : "default"}
+                onClick={() => setMode("git")}
+              >
+                <Badge
+                  badgeContent={changeCount}
+                  max={99}
+                  color="primary"
+                  invisible={changeCount === 0}
+                >
+                  <DifferenceOutlined />
+                </Badge>
+              </IconButton>
+              <IconButton
+                aria-label={drawerOpen
+                  ? "Close worktree sidebar"
+                  : "Open worktree sidebar"}
+                color={drawerOpen ? "primary" : "default"}
+                onClick={() => setToggleDrawerRequest((value) => value + 1)}
+              >
+                <ViewSidebarOutlined />
+              </IconButton>
             </Toolbar>
           </Box>
         </Box>

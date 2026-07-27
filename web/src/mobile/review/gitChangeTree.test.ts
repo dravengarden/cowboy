@@ -27,3 +27,31 @@ Deno.test("git change tree contains only changed files and expands directories",
     ["file", "src/server.rs"],
   ]);
 });
+
+Deno.test("git change tree compacts directory-only path chains", () => {
+  const tree = buildGitChangeTree([
+    entry("config/data-selections/active.json"),
+    entry("crates/corsair-data/src/lib.rs"),
+  ]);
+  assertEquals(tree.map((node) => [node.name, node.path]), [
+    ["config/data-selections", "config/data-selections"],
+    ["crates/corsair-data/src", "crates/corsair-data/src"],
+  ]);
+  assertEquals(tree[0]?.children.map((node) => node.path), [
+    "config/data-selections/active.json",
+  ]);
+});
+
+Deno.test("git change tree preserves branching directories", () => {
+  const tree = buildGitChangeTree([
+    entry("src/mobile/app.ts"),
+    entry("src/server/api.ts"),
+  ]);
+  assertEquals(tree.map((node) => [node.name, node.path]), [
+    ["src", "src"],
+  ]);
+  assertEquals(tree[0]?.children.map((node) => [node.name, node.path]), [
+    ["mobile", "src/mobile"],
+    ["server", "src/server"],
+  ]);
+});

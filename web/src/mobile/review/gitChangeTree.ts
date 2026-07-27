@@ -26,16 +26,36 @@ function directory(name: string, path: string): MutableDirectory {
 function finish(node: MutableDirectory): GitChangeTreeNode[] {
   const directories = [...node.directories.values()]
     .sort((left, right) => left.name.localeCompare(right.name))
-    .map((child) => ({
-      kind: child.kind,
-      name: child.name,
-      path: child.path,
-      children: finish(child),
-    } satisfies GitChangeTreeNode));
+    .map((child) =>
+      compactDirectory({
+        kind: child.kind,
+        name: child.name,
+        path: child.path,
+        children: finish(child),
+      })
+    );
   const files = node.children.sort((left, right) =>
     left.name.localeCompare(right.name)
   );
   return [...directories, ...files];
+}
+
+function compactDirectory(node: GitChangeTreeNode): GitChangeTreeNode {
+  let compacted = node;
+  while (
+    compacted.kind === "directory" &&
+    compacted.children.length === 1 &&
+    compacted.children[0]?.kind === "directory"
+  ) {
+    const child = compacted.children[0];
+    compacted = {
+      kind: "directory",
+      name: `${compacted.name}/${child.name}`,
+      path: child.path,
+      children: child.children,
+    };
+  }
+  return compacted;
 }
 
 export function buildGitChangeTree(

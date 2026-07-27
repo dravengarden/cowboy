@@ -1,6 +1,6 @@
 const STORAGE_KEY = "cowboy:code-review-mode:v1";
 
-export type ReviewMode = "code" | "git";
+export type ReviewMode = "files" | "git";
 
 function storage(): Storage | undefined {
   try {
@@ -22,7 +22,8 @@ function allModes(): Record<string, unknown> {
 }
 
 export function normalizeReviewMode(value: unknown): ReviewMode {
-  return value === "code" || value === "git" ? value : "git";
+  if (value === "files" || value === "code") return "files";
+  return "git";
 }
 
 export function loadReviewMode(sessionId: string): ReviewMode {

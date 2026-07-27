@@ -4,12 +4,6 @@ const STORAGE_KEY = "cowboy:code-review-tabs:v1";
 const MAX_TABS_PER_MODE = 12;
 
 export type ReviewTab =
-  | {
-    kind: "git-overview";
-    conflictCount: number;
-    stagedCount: number;
-    unstagedCount: number;
-  }
   | { kind: "source"; path: string; pinned: boolean }
   | {
     kind: "diff";
@@ -19,9 +13,7 @@ export type ReviewTab =
   };
 
 export function reviewTabKey(tab: ReviewTab): string {
-  return tab.kind === "git-overview"
-    ? "git-overview"
-    : tab.kind === "source"
+  return tab.kind === "source"
     ? `source:${tab.path}`
     : `diff:${tab.scope}:${tab.path}`;
 }
@@ -54,9 +46,7 @@ export function openReviewTab(
   const opened = [...tabs, next];
   const sameMode = (tab: ReviewTab): boolean => tab.kind === next.kind;
   if (opened.filter(sameMode).length <= MAX_TABS_PER_MODE) return opened;
-  const evict = opened.findIndex((tab) =>
-    sameMode(tab) && tab.kind !== "git-overview" && !tab.pinned
-  );
+  const evict = opened.findIndex((tab) => sameMode(tab) && !tab.pinned);
   if (evict < 0) {
     const firstInMode = opened.findIndex(sameMode);
     return opened.filter((_, index) => index !== firstInMode);
@@ -75,9 +65,7 @@ export function closeOtherReviewTabs(
   tabs: readonly ReviewTab[],
   key: string,
 ): ReviewTab[] {
-  return tabs.filter((tab) =>
-    tab.kind === "git-overview" || tab.pinned || reviewTabKey(tab) === key
-  );
+  return tabs.filter((tab) => tab.pinned || reviewTabKey(tab) === key);
 }
 
 export function toggleReviewTabPin(
@@ -85,9 +73,7 @@ export function toggleReviewTabPin(
   key: string,
 ): ReviewTab[] {
   return tabs.map((tab) =>
-    reviewTabKey(tab) === key && tab.kind !== "git-overview"
-      ? { ...tab, pinned: !tab.pinned }
-      : tab
+    reviewTabKey(tab) === key ? { ...tab, pinned: !tab.pinned } : tab
   );
 }
 

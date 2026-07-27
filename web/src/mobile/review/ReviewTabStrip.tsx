@@ -9,14 +9,14 @@ import {
 } from "@mui/material";
 import { useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
-import { reviewTabKey, type ReviewTab } from "./reviewTabs";
+import { type ReviewTab, reviewTabKey } from "./reviewTabs";
 
 function basename(path: string): string {
   return path.split("/").at(-1) || path;
 }
 
 function tabLabel(tab: ReviewTab): string {
-  return tab.kind === "git-overview" ? "Git" : basename(tab.path);
+  return basename(tab.path);
 }
 
 export function ReviewTabStrip({
@@ -100,7 +100,6 @@ export function ReviewTabStrip({
         {tabs.map((tab) => {
           const key = reviewTabKey(tab);
           const active = key === activeKey;
-          const overview = tab.kind === "git-overview";
           return (
             <Box
               key={key}
@@ -136,7 +135,7 @@ export function ReviewTabStrip({
                   dragging: false,
                   moved: false,
                 };
-                if (readOnly || overview) return;
+                if (readOnly) return;
                 timer.current = globalThis.setTimeout(() => {
                   if (!press.current) return;
                   suppressClick.current = true;
@@ -206,38 +205,11 @@ export function ReviewTabStrip({
                 overscrollBehaviorY: "none",
               }}
             >
-              {tab.kind !== "git-overview" && tab.pinned && (
-                <PushPinOutlined sx={{ fontSize: 14 }} />
-              )}
-              {overview
-                ? (
-                  <Stack direction="row" alignItems="center" spacing={0.75}>
-                    <Typography variant="caption" fontWeight={700}>
-                      Git
-                    </Typography>
-                    {tab.conflictCount > 0 && (
-                      <Typography variant="caption" color="error.main">
-                        !{tab.conflictCount}
-                      </Typography>
-                    )}
-                    {tab.stagedCount > 0 && (
-                      <Typography variant="caption" color="success.main">
-                        S{tab.stagedCount}
-                      </Typography>
-                    )}
-                    {tab.unstagedCount > 0 && (
-                      <Typography variant="caption" color="warning.main">
-                        U{tab.unstagedCount}
-                      </Typography>
-                    )}
-                  </Stack>
-                )
-                : (
-                  <Typography variant="caption" noWrap sx={{ flex: 1 }}>
-                    {tabLabel(tab)}
-                  </Typography>
-                )}
-              {showCloseButtons && !readOnly && !overview && (
+              {tab.pinned && <PushPinOutlined sx={{ fontSize: 14 }} />}
+              <Typography variant="caption" noWrap sx={{ flex: 1 }}>
+                {tabLabel(tab)}
+              </Typography>
+              {showCloseButtons && !readOnly && (
                 <IconButton
                   aria-label={`Close ${tabLabel(tab)}`}
                   size="small"
@@ -277,9 +249,7 @@ export function ReviewTabStrip({
             setMenu(undefined);
           }}
         >
-          {menu?.tab.kind !== "git-overview" && menu?.tab.pinned
-            ? "Unpin"
-            : "Pin"}
+          {menu?.tab.pinned ? "Unpin" : "Pin"}
         </MenuItem>
         <MenuItem
           onClick={() => {
