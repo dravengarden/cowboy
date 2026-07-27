@@ -118,7 +118,7 @@ export function ReviewTabStrip({
                 }
               }}
               onPointerDown={(event) => {
-                if (readOnly || overview || event.pointerType === "mouse") return;
+                if (event.pointerType === "mouse") return;
                 cancelLongPress();
                 suppressClick.current = false;
                 const anchor = event.currentTarget;
@@ -132,6 +132,7 @@ export function ReviewTabStrip({
                   dragging: false,
                   moved: false,
                 };
+                if (readOnly || overview) return;
                 timer.current = globalThis.setTimeout(() => {
                   if (!press.current) return;
                   suppressClick.current = true;
@@ -144,18 +145,19 @@ export function ReviewTabStrip({
               onPointerMove={(event) => {
                 const current = press.current;
                 if (!current || current.pointerId !== event.pointerId) return;
-                const distance = Math.hypot(
-                  event.clientX - current.x,
-                  event.clientY - current.y,
-                );
+                const deltaX = event.clientX - current.x;
+                const deltaY = event.clientY - current.y;
+                const distance = Math.hypot(deltaX, deltaY);
                 if (!current.dragging) {
                   if (distance > 10) {
                     cancelLongPress();
+                    suppressClick.current = true;
                     press.current = undefined;
                   }
                   return;
                 }
                 if (distance > 8) current.moved = true;
+                if (Math.abs(deltaY) >= Math.abs(deltaX)) return;
                 const target = document
                   .elementFromPoint(event.clientX, event.clientY)
                   ?.closest<HTMLElement>("[data-review-tab-key]");
@@ -164,7 +166,14 @@ export function ReviewTabStrip({
                   onReorder?.(key, targetKey);
                 }
               }}
-              onPointerUp={() => finishPress(true)}
+              onPointerUp={() => {
+                const current = press.current;
+                if (current && !current.dragging && !current.moved) {
+                  suppressClick.current = true;
+                  onActivate(tab);
+                }
+                finishPress(true);
+              }}
               onPointerCancel={() => finishPress(false)}
               sx={{
                 appearance: "none",
@@ -189,6 +198,8 @@ export function ReviewTabStrip({
                 color: "text.primary",
                 opacity: draggingKey === key ? 0.68 : 1,
                 transition: "opacity 120ms ease",
+                touchAction: "pan-x",
+                overscrollBehaviorY: "none",
               }}
             >
               {tab.kind !== "git-overview" && tab.pinned && (
