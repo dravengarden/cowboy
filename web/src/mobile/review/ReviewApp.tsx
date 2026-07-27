@@ -1241,80 +1241,37 @@ export function ReviewApp({
               }}
             >
               <ReviewSettings language={language} />
-              <Stack
-                direction="row"
-                alignItems="center"
-                role="group"
-                aria-label="Code review source"
-                sx={{ ml: 0.25, mr: 0.25, height: 40 }}
+              <Button
+                variant="text"
+                color="inherit"
+                size="small"
+                aria-label={`Switch to ${
+                  mode === "git" ? "Files" : "Git review"
+                }`}
+                startIcon={mode === "git"
+                  ? <DifferenceOutlined fontSize="small" />
+                  : <FolderOutlined fontSize="small" />}
+                onClick={() => {
+                  navigationHaptic();
+                  setMode(mode === "git" ? "files" : "git");
+                }}
+                sx={{
+                  ml: 0.25,
+                  minWidth: 0,
+                  height: 40,
+                  px: 1,
+                  borderRadius: 2,
+                  color: "text.secondary",
+                  textTransform: "none",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  "& .MuiButton-startIcon": {
+                    mr: 0.625,
+                  },
+                }}
               >
-                <IconButton
-                  aria-label="Browse files"
-                  aria-pressed={mode === "files"}
-                  onClick={() => {
-                    if (mode === "files") return;
-                    navigationHaptic();
-                    setMode("files");
-                  }}
-                  sx={{
-                    position: "relative",
-                    width: 40,
-                    height: 40,
-                    color: mode === "files" ? "text.primary" : "text.disabled",
-                    "&::after": {
-                      content: '""',
-                      position: "absolute",
-                      bottom: 3,
-                      left: "50%",
-                      width: 16,
-                      height: 2,
-                      borderRadius: 999,
-                      bgcolor: mode === "files"
-                        ? "text.primary"
-                        : "transparent",
-                      transform: "translateX(-50%)",
-                    },
-                  }}
-                >
-                  <FolderOutlined fontSize="small" />
-                </IconButton>
-                <IconButton
-                  aria-label={`Review Git changes${
-                    changeCount > 0
-                      ? `, ${changeCount} changed ${
-                        changeCount === 1 ? "file" : "files"
-                      }`
-                      : ""
-                  }`}
-                  aria-pressed={mode === "git"}
-                  onClick={() => {
-                    if (mode === "git") return;
-                    navigationHaptic();
-                    setMode("git");
-                  }}
-                  sx={{
-                    position: "relative",
-                    width: 40,
-                    height: 40,
-                    color: mode === "git" ? "text.primary" : "text.disabled",
-                    "&::after": {
-                      content: '""',
-                      position: "absolute",
-                      bottom: 3,
-                      left: "50%",
-                      width: 16,
-                      height: 2,
-                      borderRadius: 999,
-                      bgcolor: mode === "git"
-                        ? "text.primary"
-                        : "transparent",
-                      transform: "translateX(-50%)",
-                    },
-                  }}
-                >
-                  <DifferenceOutlined fontSize="small" />
-                </IconButton>
-              </Stack>
+                {mode === "git" ? "Changes" : "Files"}
+              </Button>
               {mode === "files" && modeTabs.length > 0 && (
                 <IconButton
                   aria-label={managingTabs
