@@ -14,9 +14,9 @@ const source = (path: string, pinned = false): ReviewTab => ({
   pinned,
 });
 
-Deno.test("opening an existing tab activates it without duplicating it", () => {
+Deno.test("opening an existing tab preserves its position", () => {
   const tabs = openReviewTab([source("a.rs"), source("b.rs")], source("a.rs"));
-  assertEquals(tabs.map(reviewTabKey), ["source:b.rs", "source:a.rs"]);
+  assertEquals(tabs.map(reviewTabKey), ["source:a.rs", "source:b.rs"]);
 });
 
 Deno.test("close others preserves pinned tabs", () => {

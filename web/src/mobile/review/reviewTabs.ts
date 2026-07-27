@@ -25,7 +25,7 @@ export function openReviewTab(
   const key = reviewTabKey(next);
   const existing = tabs.find((tab) => reviewTabKey(tab) === key);
   if (existing) {
-    return [...tabs.filter((tab) => reviewTabKey(tab) !== key), existing];
+    return [...tabs];
   }
   const opened = [...tabs, next];
   if (opened.length <= MAX_TABS) return opened;
