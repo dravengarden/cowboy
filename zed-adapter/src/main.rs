@@ -723,13 +723,7 @@ impl ZedRuntime {
             .lsp_query(proto::lsp_query::Request::GetHover(proto::GetHover {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
                 buffer_id,
-                position: Some(proto::Anchor {
-                    replica_id: u32::MIN,
-                    timestamp: u32::MIN,
-                    offset,
-                    bias: proto::Bias::Left as i32,
-                    buffer_id: Some(buffer_id),
-                }),
+                position: Some(position_anchor(buffer_id, offset)),
                 version: proto_version(version),
             }))
             .await?;
@@ -857,13 +851,7 @@ fn navigation_request(
     offset: u64,
     kind: NavigationKind,
 ) -> proto::lsp_query::Request {
-    let position = Some(proto::Anchor {
-        replica_id: u32::MIN,
-        timestamp: u32::MIN,
-        offset,
-        bias: proto::Bias::Left as i32,
-        buffer_id: Some(buffer_id),
-    });
+    let position = Some(position_anchor(buffer_id, offset));
     let version = proto_version(version);
     match kind {
         NavigationKind::Definition => {
@@ -906,6 +894,19 @@ fn navigation_request(
                 version,
             })
         }
+    }
+}
+
+fn position_anchor(buffer_id: u64, offset: u64) -> proto::Anchor {
+    // Zed initializes every disk buffer's base insertion at Lamport
+    // { replica: LOCAL (0), value: 1 }. MIN/MAX are boundary sentinels and
+    // panic when paired with an interior offset.
+    proto::Anchor {
+        replica_id: 0,
+        timestamp: 1,
+        offset,
+        bias: proto::Bias::Left as i32,
+        buffer_id: Some(buffer_id),
     }
 }
 
@@ -1076,6 +1077,9 @@ async fn read_messages(
         }
         let _ = events.send(envelope);
     }
+    // The adapter cannot serve valid requests after the owned Zed protocol
+    // process or socket dies. Exit so systemd restarts the isolated pair.
+    std::process::exit(1);
 }
 
 async fn respond(
@@ -1809,6 +1813,11 @@ mod tests {
         let point = offset_to_utf16_point("zero\nα😀x\n", 11).unwrap();
         assert_eq!((point.row, point.column), (1, 3));
         assert!(offset_to_utf16_point("😀", 1).is_none());
+        let anchor = position_anchor(42, 11);
+        assert_eq!(
+            (anchor.replica_id, anchor.timestamp, anchor.offset),
+            (0, 1, 11)
+        );
     }
 
     #[test]
