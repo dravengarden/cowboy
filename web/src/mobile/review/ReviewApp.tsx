@@ -1135,31 +1135,22 @@ export function ReviewApp({
           )
           : target.kind === "changes"
           ? (
-            mode === "git"
-              ? (
-                <ReviewChanges
-                  key={`${workspace.sessionId}:${dataRevision}:overview`}
-                  sessionId={workspace.sessionId}
-                  onOpenDiff={openDiff}
-                  reviewed={new Set(Object.keys(reviewProgress))}
-                  onRevision={adoptManifestRevision}
-                  refreshToken={dataRevision}
-                />
-              )
-              : (
-                <Stack
-                  component="main"
-                  alignItems="center"
-                  justifyContent="center"
-                  spacing={1.5}
-                  sx={{ flex: 1, px: 4, textAlign: "center" }}
-                >
-                  <FolderOpenOutlined color="disabled" />
-                  <Typography color="text.secondary">
-                    Select a file from the Worktree
-                  </Typography>
-                </Stack>
-              )
+            <Stack
+              component="main"
+              alignItems="center"
+              justifyContent="center"
+              spacing={1.5}
+              sx={{ flex: 1, px: 4, textAlign: "center" }}
+            >
+              {mode === "git"
+                ? <DifferenceOutlined color="disabled" />
+                : <FolderOpenOutlined color="disabled" />}
+              <Typography color="text.secondary">
+                {mode === "git"
+                  ? "Select a changed file from Git review"
+                  : "Select a file from the Worktree"}
+              </Typography>
+            </Stack>
           )
           : (
             <DocumentView
