@@ -48,6 +48,8 @@ enum Request {
     EnsureWorktree { path: PathBuf, trusted: bool },
     OpenWorktree { path: PathBuf, trusted: bool },
     CloseWorktree { path: PathBuf },
+    OpenBuffer { worktree: PathBuf, path: PathBuf },
+    CloseBuffer { worktree: PathBuf, path: PathBuf },
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +65,12 @@ enum Response {
         api_version: u8,
         path: PathBuf,
         state: WorktreeState,
+        leases: usize,
+    },
+    Buffer {
+        api_version: u8,
+        worktree: PathBuf,
+        path: PathBuf,
         leases: usize,
     },
     Error {
@@ -87,6 +95,13 @@ struct WorktreeLease {
 }
 
 type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
+#[derive(Clone, Copy)]
+struct BufferLease {
+    leases: usize,
+    remote_id: u64,
+}
+
+type Buffers = Arc<RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>>;
 type Zed = Arc<Mutex<ZedRuntime>>;
 
 struct ZedRuntime {
@@ -300,9 +315,41 @@ impl ZedRuntime {
         );
         self.write(message).await
     }
+
+    async fn open_buffer(&mut self, worktree_id: u64, path: &Path) -> Result<u64> {
+        let response = self
+            .request(proto::envelope::Payload::OpenBufferByPath(
+                proto::OpenBufferByPath {
+                    project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                    worktree_id,
+                    path: path.to_string_lossy().into_owned(),
+                },
+            ))
+            .await?;
+        let Some(proto::envelope::Payload::OpenBufferResponse(response)) = response.payload else {
+            bail!("Zed returned the wrong OpenBufferByPath response");
+        };
+        Ok(response.buffer_id)
+    }
+
+    async fn close_buffer(&mut self, buffer_id: u64) -> Result<()> {
+        let message = self.message(
+            proto::envelope::Payload::CloseBuffer(proto::CloseBuffer {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                buffer_id,
+            }),
+            None,
+        );
+        self.write(message).await
+    }
 }
 
-async fn respond(request: Request, worktrees: &Worktrees, zed: Option<&Zed>) -> Result<Response> {
+async fn respond(
+    request: Request,
+    worktrees: &Worktrees,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
     Ok(match request {
         Request::Health => Response::Health {
             api_version: ADAPTER_VERSION,
@@ -337,6 +384,12 @@ async fn respond(request: Request, worktrees: &Worktrees, zed: Option<&Zed>) -> 
                 }
             }
             response
+        }
+        Request::OpenBuffer { worktree, path } => {
+            open_buffer(worktree, path, worktrees, buffers, zed).await?
+        }
+        Request::CloseBuffer { worktree, path } => {
+            close_buffer(worktree, path, buffers, zed).await?
         }
     })
 }
@@ -394,12 +447,101 @@ async fn ensure_worktree(
     })
 }
 
-async fn handle(stream: UnixStream, worktrees: Worktrees, zed: Option<Zed>) -> Result<()> {
+async fn buffer_key(worktree: PathBuf, relative: PathBuf) -> Result<(PathBuf, PathBuf)> {
+    let worktree = tokio::fs::canonicalize(worktree).await?;
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("buffer path must be relative to its worktree");
+    }
+    let file = tokio::fs::canonicalize(worktree.join(&relative)).await?;
+    if !file.starts_with(&worktree) || !file.is_file() {
+        bail!("buffer path is outside the worktree or is not a file");
+    }
+    let relative = file.strip_prefix(&worktree)?.to_path_buf();
+    Ok((worktree, relative))
+}
+
+async fn open_buffer(
+    worktree: PathBuf,
+    path: PathBuf,
+    worktrees: &Worktrees,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let worktree_id = worktrees
+        .read()
+        .await
+        .get(&worktree)
+        .context("worktree is not open")?
+        .remote_id;
+    let key = (worktree.clone(), path.clone());
+    let mut all = buffers.write().await;
+    if !all.contains_key(&key) {
+        let remote_id = if let Some(zed) = zed {
+            zed.lock().await.open_buffer(worktree_id, &path).await?
+        } else {
+            u64::try_from(all.len() + 1)?
+        };
+        all.insert(
+            key.clone(),
+            BufferLease {
+                leases: 0,
+                remote_id,
+            },
+        );
+    }
+    let lease = all.get_mut(&key).expect("buffer was just inserted");
+    lease.leases += 1;
+    Ok(Response::Buffer {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        leases: lease.leases,
+    })
+}
+
+async fn close_buffer(
+    worktree: PathBuf,
+    path: PathBuf,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let key = (worktree.clone(), path.clone());
+    let mut all = buffers.write().await;
+    let lease = all.get_mut(&key).context("buffer is not open")?;
+    lease.leases = lease.leases.saturating_sub(1);
+    let remote_id = lease.remote_id;
+    let response = Response::Buffer {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        leases: lease.leases,
+    };
+    if lease.leases == 0 {
+        all.remove(&key);
+        if let Some(zed) = zed {
+            zed.lock().await.close_buffer(remote_id).await?;
+        }
+    }
+    Ok(response)
+}
+
+async fn handle(
+    stream: UnixStream,
+    worktrees: Worktrees,
+    buffers: Buffers,
+    zed: Option<Zed>,
+) -> Result<()> {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     while let Some(line) = lines.next_line().await? {
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => respond(request, &worktrees, zed.as_ref())
+            Ok(request) => respond(request, &worktrees, &buffers, zed.as_ref())
                 .await
                 .unwrap_or_else(|error| Response::Error {
                     api_version: ADAPTER_VERSION,
@@ -428,6 +570,7 @@ async fn serve(socket: PathBuf, zed_server: PathBuf, state_dir: PathBuf) -> Resu
     }
     let listener = UnixListener::bind(&socket)?;
     let worktrees: Worktrees = Arc::default();
+    let buffers: Buffers = Arc::default();
     let zed = Arc::new(Mutex::new(
         ZedRuntime::start(&zed_server, &state_dir).await?,
     ));
@@ -436,9 +579,10 @@ async fn serve(socket: PathBuf, zed_server: PathBuf, state_dir: PathBuf) -> Resu
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 let worktrees = Arc::clone(&worktrees);
+                let buffers = Arc::clone(&buffers);
                 let zed = Arc::clone(&zed);
                 tokio::spawn(async move {
-                    let _ = handle(stream, worktrees, Some(zed)).await;
+                    let _ = handle(stream, worktrees, buffers, Some(zed)).await;
                 });
             }
             _ = tokio::signal::ctrl_c() => break,
@@ -504,6 +648,7 @@ mod tests {
         let root = std::env::current_dir().unwrap();
         let canonical = tokio::fs::canonicalize(&root).await.unwrap();
         let worktrees: Worktrees = Arc::default();
+        let buffers: Buffers = Arc::default();
 
         let first = respond(
             Request::OpenWorktree {
@@ -511,6 +656,7 @@ mod tests {
                 trusted: false,
             },
             &worktrees,
+            &buffers,
             None,
         )
         .await
@@ -530,6 +676,7 @@ mod tests {
                 trusted: true,
             },
             &worktrees,
+            &buffers,
             None,
         )
         .await
@@ -546,14 +693,20 @@ mod tests {
         let _ = respond(
             Request::CloseWorktree { path: root.clone() },
             &worktrees,
+            &buffers,
             None,
         )
         .await
         .unwrap();
         assert_eq!(worktrees.read().await.get(&canonical).unwrap().leases, 1);
-        let _ = respond(Request::CloseWorktree { path: root }, &worktrees, None)
-            .await
-            .unwrap();
+        let _ = respond(
+            Request::CloseWorktree { path: root },
+            &worktrees,
+            &buffers,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(worktrees.read().await.is_empty());
     }
 
@@ -561,6 +714,7 @@ mod tests {
     async fn ensure_worktree_is_idempotent_and_does_not_acquire_a_lease() {
         let root = std::env::current_dir().unwrap();
         let worktrees: Worktrees = Arc::default();
+        let buffers: Buffers = Arc::default();
         for _ in 0..2 {
             let response = respond(
                 Request::EnsureWorktree {
@@ -568,6 +722,7 @@ mod tests {
                     trusted: true,
                 },
                 &worktrees,
+                &buffers,
                 None,
             )
             .await
@@ -585,14 +740,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn buffer_leases_are_bounded_to_an_open_worktree() {
+        let root = std::env::current_dir().unwrap();
+        let worktrees: Worktrees = Arc::default();
+        let buffers: Buffers = Arc::default();
+        respond(
+            Request::EnsureWorktree {
+                path: root.clone(),
+                trusted: true,
+            },
+            &worktrees,
+            &buffers,
+            None,
+        )
+        .await
+        .unwrap();
+        for expected in [1, 2] {
+            let response = respond(
+                Request::OpenBuffer {
+                    worktree: root.clone(),
+                    path: PathBuf::from("Cargo.toml"),
+                },
+                &worktrees,
+                &buffers,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                response,
+                Response::Buffer {
+                    leases,
+                    ..
+                } if leases == expected
+            ));
+        }
+        for expected in [1, 0] {
+            let response = respond(
+                Request::CloseBuffer {
+                    worktree: root.clone(),
+                    path: PathBuf::from("Cargo.toml"),
+                },
+                &worktrees,
+                &buffers,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                response,
+                Response::Buffer {
+                    leases,
+                    ..
+                } if leases == expected
+            ));
+        }
+        assert!(buffers.read().await.is_empty());
+    }
+
+    #[tokio::test]
     async fn missing_worktree_fails_closed() {
         let worktrees: Worktrees = Arc::default();
+        let buffers: Buffers = Arc::default();
         let result = respond(
             Request::OpenWorktree {
                 path: PathBuf::from("/definitely/missing/cowboy-zed-worktree"),
                 trusted: true,
             },
             &worktrees,
+            &buffers,
             None,
         )
         .await;
@@ -613,7 +829,9 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle(stream, Arc::default(), None).await.unwrap();
+            handle(stream, Arc::default(), Arc::default(), None)
+                .await
+                .unwrap();
         });
 
         probe(socket.clone(), Duration::ZERO).await.unwrap();
@@ -636,7 +854,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let listener = UnixListener::bind(&server_socket).unwrap();
             let (stream, _) = listener.accept().await.unwrap();
-            handle(stream, Arc::default(), None).await.unwrap();
+            handle(stream, Arc::default(), Arc::default(), None)
+                .await
+                .unwrap();
         });
 
         probe(socket.clone(), Duration::from_secs(1)).await.unwrap();

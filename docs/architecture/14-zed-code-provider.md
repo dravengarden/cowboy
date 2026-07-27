@@ -72,8 +72,8 @@ language intelligence and provider-driven deltas, exposes the reason in
 capabilities, and retries with bounded backoff. A low-frequency manifest
 reconciliation remains active even after delta streaming is healthy.
 
-The first production slice implements the idempotent ensure and leased
-open/close operations against the pinned Zed server. Cowboy's manifest reports
-`provider: "zed"` and `state: "ready"` only after the ensure response succeeds;
-individual LSP capabilities remain false until their stable adapter messages
-are implemented.
+The first production slices implement idempotent worktree ensure plus leased
+worktree and read-only buffer open/close operations against the pinned Zed
+server. Cowboy's manifest reports `provider: "zed"` and `state: "ready"` only
+after the ensure response succeeds; individual LSP capabilities remain false
+until their stable adapter messages are implemented.

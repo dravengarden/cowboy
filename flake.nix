@@ -217,6 +217,16 @@
           | jq -e '.type == "worktree" and .state == "ready" and .leases == 1' \
           >/dev/null
         printf '%s\n' \
+          '{"type":"openBuffer","worktree":"${./.}","path":"Cargo.toml"}' \
+          | nc -N -U "$runtime/adapter.sock" \
+          | jq -e '.type == "buffer" and .path == "Cargo.toml" and .leases == 1' \
+          >/dev/null
+        printf '%s\n' \
+          '{"type":"closeBuffer","worktree":"${./.}","path":"Cargo.toml"}' \
+          | nc -N -U "$runtime/adapter.sock" \
+          | jq -e '.type == "buffer" and .path == "Cargo.toml" and .leases == 0' \
+          >/dev/null
+        printf '%s\n' \
           '{"type":"closeWorktree","path":"${./.}"}' \
           | nc -N -U "$runtime/adapter.sock" \
           | jq -e '.type == "worktree" and .leases == 0' >/dev/null
