@@ -14,6 +14,23 @@ export interface QuestionPageIndexEntry {
   ordinal: number;
 }
 
+/**
+ * Resolve a provisional live-tail page to its durable user-message root.
+ *
+ * A retained timeline can begin inside a streamed answer. That temporary page
+ * is useful while history is arriving, but its first chunk seq is not a valid
+ * `/question-pages/:page_id` key and must never become the persisted identity
+ * of the completed last page.
+ */
+export function authoritativeTailPageId(
+  current: Pick<QuestionPage, "id" | "questionCount"> | null,
+  atTail: boolean,
+  indexedPages: readonly QuestionPageIndexEntry[],
+): string | null {
+  if (!current || current.questionCount > 0 || !atTail) return null;
+  return indexedPages.at(-1)?.id ?? null;
+}
+
 export function indexedQuestionPagePosition(
   pages: QuestionPageIndexEntry[],
   currentId: string | undefined,

@@ -59,6 +59,7 @@ import {
   useExploreSessionState,
 } from "./exploreStore";
 import {
+  authoritativeTailPageId,
   completePageBeforeItem,
   deriveQuestionPages,
   groupQuestionPages,
@@ -716,8 +717,14 @@ export function ExploreTranscript(
     pageLoadingId,
   } = useExploreSessionState(props.sessionId);
   const [restoringPageId, setRestoringPageId] = useState<string | null>(null);
-  const retainedPageLoaded = retainedPageId === null ||
-    isQuestionPageLoaded(props.sessionId, retainedPageId);
+  const authoritativeTailId = authoritativeTailPageId(
+    current,
+    atTail,
+    pageIndex.data?.pages ?? [],
+  );
+  const restorePageId = authoritativeTailId ?? retainedPageId;
+  const restorePageLoaded = restorePageId === null ||
+    isQuestionPageLoaded(props.sessionId, restorePageId);
 
   useEffect(() => {
     if (
@@ -734,19 +741,26 @@ export function ExploreTranscript(
   ]);
 
   useEffect(() => {
-    if (retainedPageLoaded || retainedPageId === null) {
+    // The latest page is mutable only while its turn is active. Once the
+    // session returns to idle, the authoritative index can safely repair a
+    // retained projection that starts inside the completed answer.
+    if (props.status === "busy" || restorePageLoaded || restorePageId === null) {
       setRestoringPageId(null);
       return;
     }
-    if (restoringPageId === retainedPageId) return;
-    setRestoringPageId(retainedPageId);
+    if (restoringPageId === restorePageId) return;
+    setRestoringPageId(restorePageId);
     let active = true;
-    void loadQuestionPage(props.sessionId, retainedPageId).then((loaded) => {
+    void loadQuestionPage(props.sessionId, restorePageId).then((loaded) => {
       if (!active) return;
       setRestoringPageId(null);
-      // A deleted/corrupt page must not leave Page View behind an eternal
-      // skeleton. Only then adopt the newest valid loaded page.
-      if (!loaded && current) setExplorePage(props.sessionId, current.id);
+      if (loaded && restorePageId !== retainedPageId) {
+        setExplorePage(props.sessionId, restorePageId);
+      } else if (!loaded && current) {
+        // A deleted/corrupt retained page must not leave Page View behind an
+        // eternal skeleton. Adopt the newest valid loaded page only then.
+        setExplorePage(props.sessionId, current.id);
+      }
     });
     return () => {
       active = false;
@@ -754,8 +768,10 @@ export function ExploreTranscript(
   }, [
     current?.id,
     props.sessionId,
+    props.status,
     restoringPageId,
-    retainedPageLoaded,
+    restorePageId,
+    restorePageLoaded,
     retainedPageId,
   ]);
 
@@ -971,7 +987,7 @@ export function ExploreTranscript(
         </>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {unresolvedQuestionRoot || !retainedPageLoaded
+        {unresolvedQuestionRoot || !restorePageLoaded
           ? (
             <Stack
               role="status"

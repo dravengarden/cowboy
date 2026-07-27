@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import type { RenderItem } from "../derive";
 import {
+  authoritativeTailPageId,
   completePageBeforeItem,
   deriveQuestionPages,
   groupQuestionPages,
@@ -123,6 +124,30 @@ Deno.test("a partial history tail keeps leading answer rows addressable", () => 
   assertEquals(pages[0]?.title, "Earlier question");
   assertEquals(pages[0]?.itemKeys, ["answer-tail"]);
   assertEquals(pageContainingItemKey(pages, "answer-tail")?.id, "answer-tail");
+});
+
+Deno.test("a completed provisional tail hydrates from the authoritative question root", () => {
+  const provisional = deriveQuestionPages([
+    assistant("188841", "Only the retained end of a long answer"),
+  ])[0]!;
+  const index = [
+    { id: "180000", ordinal: 98 },
+    { id: "186012", ordinal: 99 },
+  ];
+
+  assertEquals(
+    authoritativeTailPageId(provisional, true, index),
+    "186012",
+  );
+  assertEquals(authoritativeTailPageId(provisional, false, index), null);
+  assertEquals(
+    authoritativeTailPageId(
+      { id: "186012", questionCount: 1 },
+      true,
+      index,
+    ),
+    null,
+  );
 });
 
 Deno.test("previous navigation waits for the real user question boundary", () => {
