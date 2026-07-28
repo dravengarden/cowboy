@@ -691,7 +691,7 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             agent_session_id,
         } => {
             store
-                .update_agent_session_id(session_id, agent_session_id)
+                .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,

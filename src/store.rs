@@ -736,7 +736,7 @@ impl Store {
     pub async fn update_agent_session_id(
         &self,
         session_id: &str,
-        agent_session_id: &str,
+        agent_session_id: Option<&str>,
     ) -> Result<()> {
         sqlx::query("UPDATE sessions SET agent_session_id = $1, updated_at = now() WHERE id = $2")
             .bind(agent_session_id)

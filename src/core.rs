@@ -62,6 +62,33 @@ fn is_user_message_chunk(envelope: &Envelope) -> bool {
     )
 }
 
+fn is_context_cleared(envelope: &Envelope) -> bool {
+    matches!(
+        &envelope.event,
+        Event::Update { update }
+            if update.get("sessionUpdate").and_then(serde_json::Value::as_str)
+                == Some("context_cleared")
+    )
+}
+
+/// Whether the current native-agent context has received a user turn.
+///
+/// Codex allocates a thread id at `session/new` but does not create a resumable
+/// rollout until the first user turn. Stop at the latest clear marker so an old
+/// conversation cannot make a newly-cleared, still-empty context look durable.
+/// If the hot tail begins after both markers, conservatively preserve the id.
+fn current_context_has_user_message(session: &Session) -> bool {
+    for envelope in session.log.iter().rev() {
+        if is_user_message_chunk(envelope) {
+            return true;
+        }
+        if is_context_cleared(envelope) {
+            return false;
+        }
+    }
+    !session.reached_start
+}
+
 fn is_human_question_chunk(envelope: &Envelope) -> bool {
     matches!(
         &envelope.event,
@@ -1013,7 +1040,7 @@ pub enum StoreWrite {
     },
     SetAgentSessionId {
         session_id: String,
-        agent_session_id: String,
+        agent_session_id: Option<String>,
     },
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -2724,25 +2751,37 @@ impl Hub {
         self.broadcast_sessions();
     }
 
-    /// Record the downstream agent's own session id for a session, persisting
-    /// it so a future revive can resume via `session/load`. Updates in-memory
-    /// metadata + write-behind store; no broadcast (the id isn't rendered, and
-    /// the status/lifecycle events already drive the UI). Unknown ids are
-    /// ignored (matches `set_status`).
+    /// Record the downstream agent's own session id for a session. Codex creates
+    /// the id before it creates the rollout, so keep it in memory until the
+    /// current context receives its first user turn; only then is it safe to
+    /// persist for a future `session/load`. Unknown ids are ignored.
     pub fn set_agent_session_id(&self, session_id: &str, agent_session_id: String) {
-        {
+        let persist = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
             s.meta.agent_session_id = Some(agent_session_id.clone());
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
+            current_context_has_user_message(s)
+        };
+        if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
                 session_id: session_id.to_owned(),
-                agent_session_id,
+                agent_session_id: Some(agent_session_id),
             });
         }
+    }
+
+    /// Return the native id only when Codex has had a user turn in the current
+    /// context generation. An id allocated by `session/new` alone has no rollout
+    /// and must not be handed to `session/load` after a restart.
+    #[must_use]
+    pub fn agent_session_id_for_resume(&self, session_id: &str) -> Option<String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(session_id)?;
+        current_context_has_user_message(session)
+            .then(|| session.meta.agent_session_id.clone())
+            .flatten()
     }
 
     /// Retarget a Cowboy session to a replacement checkout while preserving its
@@ -2778,16 +2817,21 @@ impl Hub {
     }
 
     /// Forget a session's resumable agent id so the NEXT spawn starts a fresh
-    /// `session/new` (a clean agent context) instead of `session/load`. The
-    /// "clear conversation" reset (see [`Inbound::ResetSession`]) calls this
-    /// before respawning. In-memory only: the freshly-spawned agent's own
-    /// `session/new` re-persists a new id within a second or two, so there's no
-    /// separate NULL write-behind (a daemon restart in that tiny window just
-    /// leaves the old context — rare, and re-clearable).
+    /// `session/new` (a clean agent context) instead of `session/load`. Persist
+    /// NULL immediately: the replacement id remains memory-only until its first
+    /// user turn creates a real Codex rollout.
     pub fn clear_agent_session_id(&self, session_id: &str) {
-        let mut sessions = self.inner.sessions.lock();
-        if let Some(s) = sessions.get_mut(session_id) {
-            s.meta.agent_session_id = None;
+        {
+            let mut sessions = self.inner.sessions.lock();
+            if let Some(s) = sessions.get_mut(session_id) {
+                s.meta.agent_session_id = None;
+            }
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::SetAgentSessionId {
+                session_id: session_id.to_owned(),
+                agent_session_id: None,
+            });
         }
     }
 
@@ -2911,7 +2955,7 @@ impl Hub {
     /// used to tag a dispatched prompt's user-message echo so the originating
     /// client reconciles its optimistic bubble (see Envelope::cmid).
     pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
-        let envelope = {
+        let (envelope, durable_agent_session_id) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -2930,10 +2974,19 @@ impl Hub {
                 s.log.drain(..HOT_TAIL_TRIM_BATCH);
                 s.reached_start = false;
             }
-            envelope
+            let durable_agent_session_id = is_user_message_chunk(&envelope)
+                .then(|| s.meta.agent_session_id.clone())
+                .flatten();
+            (envelope, durable_agent_session_id)
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
+            if let Some(agent_session_id) = durable_agent_session_id {
+                let _ = tx.send(StoreWrite::SetAgentSessionId {
+                    session_id: session_id.to_owned(),
+                    agent_session_id: Some(agent_session_id),
+                });
+            }
         }
         // A send error just means no clients are connected — fine.
         let _ = self.inner.tx.send(Outbound::Event { envelope });
@@ -4636,6 +4689,66 @@ mod confirm_hold_tests {
         assert_eq!(next, None);
         assert_eq!(total, 2);
         assert!(exact);
+    }
+
+    #[test]
+    fn native_thread_becomes_resumable_only_after_a_user_turn_in_current_context() {
+        let hub = hub_with_session("native-durability");
+        hub.set_agent_session_id("native-durability", "thread-empty".to_owned());
+        assert_eq!(hub.agent_session_id_for_resume("native-durability"), None);
+
+        hub.push(
+            "native-durability",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "first prompt"},
+                }),
+            },
+        );
+        assert_eq!(
+            hub.agent_session_id_for_resume("native-durability")
+                .as_deref(),
+            Some("thread-empty")
+        );
+
+        hub.mark_context_cleared("native-durability");
+        hub.set_agent_session_id("native-durability", "thread-after-clear".to_owned());
+        assert_eq!(hub.agent_session_id_for_resume("native-durability"), None);
+
+        hub.push(
+            "native-durability",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "new context prompt"},
+                }),
+            },
+        );
+        assert_eq!(
+            hub.agent_session_id_for_resume("native-durability")
+                .as_deref(),
+            Some("thread-after-clear")
+        );
+    }
+
+    #[test]
+    fn truncated_hot_tail_conservatively_preserves_native_thread() {
+        let hub = hub_with_session("truncated-native-history");
+        hub.set_agent_session_id("truncated-native-history", "thread-existing".to_owned());
+        {
+            let mut sessions = hub.inner.sessions.lock();
+            let session = sessions
+                .get_mut("truncated-native-history")
+                .expect("session");
+            session.reached_start = false;
+        }
+
+        assert_eq!(
+            hub.agent_session_id_for_resume("truncated-native-history")
+                .as_deref(),
+            Some("thread-existing")
+        );
     }
 
     #[tokio::test]

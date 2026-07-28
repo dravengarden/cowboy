@@ -379,10 +379,18 @@ impl Supervisor {
         // Reflect the reconnect immediately so the UI shows "starting" rather
         // than a stale "exited" while the agent re-handshakes (a few seconds).
         self.hub.set_status(session_id, Status::Starting, None);
-        self.spawn_agent(session_id, &spec, cwd, meta.agent_session_id.clone())?;
+        let resume = self.hub.agent_session_id_for_resume(session_id);
+        if meta.agent_session_id.is_some() && resume.is_none() {
+            tracing::warn!(
+                session = session_id,
+                native_thread = ?meta.agent_session_id,
+                "starting a fresh native thread because the current context has no user turn"
+            );
+        }
+        self.spawn_agent(session_id, &spec, cwd, resume.clone())?;
         tracing::info!(
             session = session_id,
-            resume = ?meta.agent_session_id,
+            resume = ?resume,
             "revived session (session/load when the agent's prior id is known)"
         );
         Ok(())
@@ -399,7 +407,7 @@ impl Supervisor {
             session_id: meta.id,
             provider: meta.provider,
             cwd: meta.cwd,
-            agent_session_id: meta.agent_session_id,
+            agent_session_id: self.hub.agent_session_id_for_resume(session_id),
             system: meta.system,
             generation: String::new(),
             fallback_for: None,
@@ -672,6 +680,15 @@ mod tests {
             SessionOrigin::Web,
             false,
         );
+        hub.push(
+            "s",
+            crate::core::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "durable prompt"},
+                }),
+            },
+        );
         hub.set_agent_session_id("s", "codex-thread-1".to_owned());
         hub.set_status("s", Status::Crashed, Some("deleted cwd".to_owned()));
         let runtime = RemoteRuntime::for_test(
@@ -702,6 +719,42 @@ mod tests {
         assert_eq!(meta.id, "s");
         assert_eq!(meta.agent_session_id.as_deref(), Some("codex-thread-1"));
         assert_eq!(meta.status, Status::Starting);
+    }
+
+    #[tokio::test]
+    async fn crashed_empty_context_recycles_worker_without_unresumable_native_id() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.mark_context_cleared("s");
+        hub.set_agent_session_id("s", "codex-thread-without-rollout".to_owned());
+        hub.set_status("s", Status::Crashed, Some("no rollout found".to_owned()));
+        let runtime = RemoteRuntime::for_test(
+            hub.clone(),
+            vec![worker_snapshot(cwd.to_string_lossy().as_ref())],
+        );
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        assert!(supervisor.prepare_session("s").expect("prepare"));
+
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session }
+                    if session.cwd == cwd.to_string_lossy()
+                        && session.agent_session_id.is_none()
+            )
+        }));
     }
 
     #[test]
