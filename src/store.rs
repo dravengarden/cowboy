@@ -868,6 +868,17 @@ impl Store {
         Ok(())
     }
 
+    /// Delete one session's durable transcript while preserving its metadata
+    /// and monotonic `next_seq` watermark.
+    pub async fn clear_events(&self, session_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM events WHERE session_id = $1")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("DELETE events for {session_id}"))?;
+        Ok(())
+    }
+
     pub fn artifact_path(&self, name: &str) -> Option<std::path::PathBuf> {
         self.artifacts.path(name)
     }

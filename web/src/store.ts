@@ -452,6 +452,18 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
   const existing = timelines.get(env.session_id) ?? [];
   if (containsSeq(existing, env.seq)) return timelines; // dedup
 
+  // Clear is a destructive transcript boundary, not an ordinary divider.
+  // Replace the local history immediately; the daemon deletes the same rows
+  // durably so a reload cannot restore them.
+  if (
+    env.kind === "update" &&
+    env.update.sessionUpdate === "context_cleared"
+  ) {
+    const next = new Map(timelines);
+    next.set(env.session_id, [env]);
+    return next;
+  }
+
   // These high-frequency frames are runtime telemetry, not transcript history.
   // The daemon persists their sequence watermark without storing a row; mirror
   // that canonical representation in the live client so long turns don't grow
@@ -561,6 +573,7 @@ function mergeEvents(
 export async function loadOlder(sessionId: string): Promise<void> {
   const pg = state.pagination.get(sessionId);
   if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return;
+  const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const beforeSeq = pg.beforeSeq;
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
@@ -576,6 +589,7 @@ export async function loadOlder(sessionId: string): Promise<void> {
       next_before_seq: number | null;
       reached_start: boolean;
     };
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return;
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
     // Always step to the next OLDER page (don't recompute from the oldest seq —
     // a gap at a boundary would re-request the same page forever). Page 0 was
@@ -593,6 +607,7 @@ export async function loadOlder(sessionId: string): Promise<void> {
 export async function loadPreviousQuestionPage(sessionId: string): Promise<void> {
   const pg = state.pagination.get(sessionId);
   if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return;
+  const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const beforeSeq = pg.beforeSeq;
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
@@ -608,6 +623,7 @@ export async function loadPreviousQuestionPage(sessionId: string): Promise<void>
       next_before_seq: number | null;
       reached_start: boolean;
     };
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return;
     setState({
       ...state,
       timelines: mergeEvents(state.timelines, sessionId, data.events),
@@ -626,6 +642,7 @@ export async function loadQuestionPage(
   sessionId: string,
   pageId: string,
 ): Promise<boolean> {
+  const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const rootSeq = Number(pageId);
   if (!Number.isSafeInteger(rootSeq) || rootSeq < 0) return false;
   if (completeQuestionPages.get(sessionId)?.has(pageId)) return true;
@@ -637,6 +654,7 @@ export async function loadQuestionPage(
     );
     if (!response.ok) return false;
     const data = (await response.json()) as { events: Envelope[] };
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     setState({
       ...state,
       timelines: mergeEvents(state.timelines, sessionId, data.events),
@@ -654,6 +672,7 @@ export async function loadQuestionPage(
 }
 
 const completeQuestionPages = new Map<string, Set<string>>();
+const transcriptEpoch = new Map<string, number>();
 
 export function isQuestionPageLoaded(sessionId: string, pageId: string): boolean {
   return completeQuestionPages.get(sessionId)?.has(pageId) === true;
@@ -781,6 +800,8 @@ function handle(msg: Outbound): void {
     }
     case "event": {
       const env = msg.envelope;
+      const clearsContext = env.kind === "update" &&
+        env.update.sessionUpdate === "context_cleared";
       // Attention alert — a permission request needs a DECISION. A plain `turn_end`
       // is NOT alerted here: a finished turn might be done, still-working, or a
       // force-push landing — only the confirm-detect verdict (case "judge_result")
@@ -806,9 +827,30 @@ function handle(msg: Outbound): void {
         }
         commitQueue(env.session_id);
       }
+      const pagination = clearsContext
+        ? new Map(state.pagination).set(env.session_id, {
+            reachedStart: true,
+            loadingOlder: false,
+            beforeSeq: null,
+          })
+        : state.pagination;
+      let optimisticMessages = state.optimisticMessages;
+      if (clearsContext) {
+        completeQuestionPages.delete(env.session_id);
+        transcriptEpoch.set(
+          env.session_id,
+          (transcriptEpoch.get(env.session_id) ?? 0) + 1,
+        );
+        if (optimisticMessages.has(env.session_id)) {
+          optimisticMessages = new Map(optimisticMessages);
+          optimisticMessages.delete(env.session_id);
+        }
+      }
       setState({
         ...state,
         timelines: applyEnvelope(state.timelines, env),
+        pagination,
+        optimisticMessages,
         ...(cmid !== undefined && {
           optimisticMessages: reconcileOptimistic(state.optimisticMessages, env.session_id, new Set([cmid])),
         }),
@@ -1705,10 +1747,10 @@ export function clearQueue(sessionId: string): void {
   send({ type: "clear_queue", session_id: sessionId });
 }
 
-// "Clear conversation": reset the agent's context (fresh session/new) while
-// keeping the transcript. The daemon respawns the agent + emits a
-// `context_cleared` marker the transcript renders as a divider. This is the
-// Clear composer action — NOT a slash command (no agent exposes `clear`).
+// "Clear conversation": reset the agent's context (fresh session/new) and
+// destructively remove its prior transcript. The daemon emits a fresh
+// `context_cleared` boundary after clearing memory + durable history. This is
+// the Clear composer action — NOT a slash command (no agent exposes `clear`).
 export function resetSession(sessionId: string): void {
   send({ type: "reset_session", session_id: sessionId });
 }

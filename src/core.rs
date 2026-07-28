@@ -757,8 +757,8 @@ pub enum Inbound {
     /// (only `compact`), so this can't be a slash command. The daemon tears the
     /// agent down and respawns it with a FRESH `session/new` (dropping the prior
     /// `agent_session_id` so it does NOT `session/load`), then drops a
-    /// `context_cleared` marker into the timeline for the UI's divider. The
-    /// transcript history is kept (a scroll-back record); only the agent forgets.
+    /// `context_cleared` marker into a fresh timeline. Clear is intentionally a
+    /// destructive boundary: both agent context and prior transcript are discarded.
     ResetSession { session_id: String },
 
     // --- Server-authoritative queue + drafts (synced across all terminals) ----
@@ -1041,6 +1041,9 @@ pub enum StoreWrite {
     SetAgentSessionId {
         session_id: String,
         agent_session_id: Option<String>,
+    },
+    ClearEvents {
+        session_id: String,
     },
     DeleteSession(String),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -2831,6 +2834,25 @@ impl Hub {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
                 session_id: session_id.to_owned(),
                 agent_session_id: None,
+            });
+        }
+    }
+
+    /// Destructively clear one session's transcript while keeping its sequence
+    /// watermark monotonic, so delayed clients cannot collide with old seq ids.
+    pub fn clear_transcript(&self, session_id: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(session_id) else {
+                return;
+            };
+            session.log.clear();
+            session.event_count = 0;
+            session.reached_start = true;
+        }
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::ClearEvents {
+                session_id: session_id.to_owned(),
             });
         }
     }
@@ -4729,6 +4751,34 @@ mod confirm_hold_tests {
             hub.agent_session_id_for_resume("native-durability")
                 .as_deref(),
             Some("thread-after-clear")
+        );
+    }
+
+    #[test]
+    fn clear_transcript_discards_history_before_the_new_boundary() {
+        let hub = hub_with_session("clear-history");
+        hub.push(
+            "clear-history",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "old"},
+                }),
+            },
+        );
+
+        hub.clear_transcript("clear-history");
+        hub.mark_context_cleared("clear-history");
+
+        let (events, reached_start) = hub.snapshot("clear-history").expect("snapshot");
+        assert!(reached_start);
+        assert_eq!(events.len(), 1);
+        assert!(is_context_cleared(&events[0]));
+        assert_eq!(
+            hub.session_info("clear-history")
+                .expect("session")
+                .event_count,
+            1
         );
     }
 

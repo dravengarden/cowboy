@@ -609,6 +609,11 @@ async fn apply_store_batch(
                     events.insert((reduced.session_id.clone(), reduced.seq), reduced);
                 }
             }
+            StoreWrite::ClearEvents { ref session_id } => {
+                ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
+                reducer.clear_session(session_id);
+                ok &= retry_store_write(store, &write).await;
+            }
             other => {
                 ok &= flush_event_batch(store, &mut events, &mut highwaters).await;
                 ok &= retry_store_write(store, &other).await;
@@ -694,6 +699,7 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                 .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
+        StoreWrite::ClearEvents { session_id } => store.clear_events(session_id).await,
         StoreWrite::DeleteSession(id) => store.delete_session(id).await,
         StoreWrite::UpdatePending {
             session_id,
@@ -3509,11 +3515,13 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // "Clear conversation" (see Inbound::ResetSession). Order matters:
             // 1. Forget the resumable agent id so the respawn does a FRESH
             //    session/new (clean context) instead of session/load.
-            // 2. Drop the timeline divider marker (kept history, agent forgets).
-            // 3. Atomically fence + replace the worker. This must not use the
+            // 2. Destructively clear the old in-memory + durable transcript.
+            // 3. Drop the new timeline boundary marker.
+            // 4. Atomically fence + replace the worker. This must not use the
             //    permanent delete path: agentd retains delete tombstones to
             //    reject stale launches for genuinely deleted sessions.
             state.hub.clear_agent_session_id(&session_id);
+            state.hub.clear_transcript(&session_id);
             state.hub.mark_context_cleared(&session_id);
             match state.supervisor.reset_session(&session_id) {
                 Ok(()) => Ok(()),

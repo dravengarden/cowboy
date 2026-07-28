@@ -18,6 +18,11 @@ pub(crate) struct EventReducer {
 }
 
 impl EventReducer {
+    pub(crate) fn clear_session(&mut self, session_id: &str) {
+        self.text.remove(session_id);
+        self.tools.retain(|(session, _), _| session != session_id);
+    }
+
     /// Convert the high-frequency ACP event stream into stable history rows.
     /// Live WS clients still receive every raw event; only durable history is
     /// reduced. A returned envelope may reuse an earlier seq, causing an UPSERT.
@@ -112,5 +117,37 @@ impl EventReducer {
             }
         }
         Some(env)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn update(seq: u64, kind: &str, tool_id: &str) -> Envelope {
+        Envelope {
+            session_id: "session".to_owned(),
+            seq,
+            event: Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": kind,
+                    "toolCallId": tool_id,
+                    "title": format!("event-{seq}"),
+                }),
+            },
+            cmid: None,
+        }
+    }
+
+    #[test]
+    fn clear_session_drops_reducer_state_from_the_old_transcript() {
+        let mut reducer = EventReducer::default();
+        assert!(reducer.reduce(update(1, "tool_call", "tool")).is_some());
+        reducer.clear_session("session");
+
+        let fresh = reducer
+            .reduce(update(2, "tool_call_update", "tool"))
+            .expect("fresh update");
+        assert_eq!(fresh.seq, 2);
     }
 }
