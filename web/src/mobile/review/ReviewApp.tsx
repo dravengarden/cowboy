@@ -87,6 +87,7 @@ import {
   loadReviewTabs,
   openReviewTab,
   reorderReviewTabs,
+  retainChangedDiffTabs,
   type ReviewTab,
   reviewTabKey,
   saveReviewTabs,
@@ -941,15 +942,36 @@ export function ReviewApp({
     : target.kind === "diff"
     ? reviewTabKey({ ...target, pinned: false })
     : undefined;
-  const gitTabs: ReviewTab[] = gitQueue.map((entry): ReviewTab => ({
-    kind: "diff",
-    path: entry.change.path,
-    scope: entry.scope,
-    pinned: false,
-  }));
+  const gitTabs: ReviewTab[] = gitQueue.map((entry): ReviewTab => {
+    const key = reviewTabKey({
+      kind: "diff",
+      path: entry.change.path,
+      scope: entry.scope,
+      pinned: false,
+    });
+    return {
+      kind: "diff",
+      path: entry.change.path,
+      scope: entry.scope,
+      pinned: tabs.find((tab) => reviewTabKey(tab) === key)?.pinned ?? false,
+    };
+  }).sort((left, right) => Number(right.pinned) - Number(left.pinned));
   const modeTabs = mode === "files"
     ? tabs.filter((tab) => tab.kind === "source")
     : gitTabs;
+  useEffect(() => {
+    const changedKeys = new Set(
+      gitQueue.map((entry) =>
+        reviewTabKey({
+          kind: "diff",
+          path: entry.change.path,
+          scope: entry.scope,
+          pinned: false,
+        })
+      ),
+    );
+    setTabs((current) => retainChangedDiffTabs(current, changedKeys));
+  }, [gitQueue]);
   const closeTab = (key: string): void => {
     const next = closeReviewTab(tabs, key);
     setTabs(next);
@@ -1217,8 +1239,19 @@ export function ReviewApp({
                 ];
               })}
             onTogglePin={(key) =>
-              setTabs((current) => toggleReviewTabPin(current, key))}
-            readOnly={mode === "git"}
+              setTabs((current) => {
+                if (current.some((tab) => reviewTabKey(tab) === key)) {
+                  return toggleReviewTabPin(current, key);
+                }
+                const gitTab = gitTabs.find((tab) =>
+                  reviewTabKey(tab) === key
+                );
+                return gitTab
+                  ? [...current, { ...gitTab, pinned: true }]
+                  : current;
+              })}
+            allowCloseActions={mode === "files"}
+            allowReorder={mode === "files"}
             onReorder={(movingKey, targetKey) =>
               setTabs((current) =>
                 reorderReviewTabs(current, movingKey, targetKey)

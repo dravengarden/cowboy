@@ -77,6 +77,15 @@ export function toggleReviewTabPin(
   );
 }
 
+export function retainChangedDiffTabs(
+  tabs: readonly ReviewTab[],
+  changedKeys: ReadonlySet<string>,
+): ReviewTab[] {
+  return tabs.filter((tab) =>
+    tab.kind === "source" || changedKeys.has(reviewTabKey(tab))
+  );
+}
+
 function storage(): Storage | undefined {
   try {
     return globalThis.localStorage;

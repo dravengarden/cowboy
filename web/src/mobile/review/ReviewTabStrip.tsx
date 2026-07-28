@@ -27,7 +27,8 @@ export function ReviewTabStrip({
   onClose,
   onCloseOthers,
   onTogglePin,
-  readOnly = false,
+  allowCloseActions = true,
+  allowReorder = true,
   onReorder,
 }: {
   tabs: ReviewTab[];
@@ -37,7 +38,8 @@ export function ReviewTabStrip({
   onClose: (key: string) => void;
   onCloseOthers: (key: string) => void;
   onTogglePin: (key: string) => void;
-  readOnly?: boolean;
+  allowCloseActions?: boolean;
+  allowReorder?: boolean;
   onReorder?: (movingKey: string, targetKey: string) => void;
 }): React.JSX.Element | null {
   const timer = useRef<number | undefined>(undefined);
@@ -71,7 +73,7 @@ export function ReviewTabStrip({
     press.current = undefined;
     setDraggingKey(undefined);
     if (
-      openMenu && current?.dragging && !current.moved && !readOnly
+      openMenu && current?.dragging && !current.moved
     ) {
       setMenu({ anchor: current.anchor, tab: current.tab });
     }
@@ -135,7 +137,6 @@ export function ReviewTabStrip({
                   dragging: false,
                   moved: false,
                 };
-                if (readOnly) return;
                 timer.current = globalThis.setTimeout(() => {
                   if (!press.current) return;
                   suppressClick.current = true;
@@ -160,7 +161,10 @@ export function ReviewTabStrip({
                   return;
                 }
                 if (distance > 8) current.moved = true;
-                if (Math.abs(deltaY) >= Math.abs(deltaX)) return;
+                if (
+                  !allowReorder ||
+                  Math.abs(deltaY) >= Math.abs(deltaX)
+                ) return;
                 const target = document
                   .elementFromPoint(event.clientX, event.clientY)
                   ?.closest<HTMLElement>("[data-review-tab-key]");
@@ -203,13 +207,17 @@ export function ReviewTabStrip({
                 transition: "opacity 120ms ease",
                 touchAction: "pan-x",
                 overscrollBehaviorY: "none",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+                WebkitTouchCallout: "none",
               }}
+              onContextMenu={(event) => event.preventDefault()}
             >
               {tab.pinned && <PushPinOutlined sx={{ fontSize: 14 }} />}
               <Typography variant="caption" noWrap sx={{ flex: 1 }}>
                 {tabLabel(tab)}
               </Typography>
-              {showCloseButtons && !readOnly && (
+              {showCloseButtons && allowCloseActions && (
                 <IconButton
                   aria-label={`Close ${tabLabel(tab)}`}
                   size="small"
@@ -240,7 +248,7 @@ export function ReviewTabStrip({
       </Stack>
       <Menu
         anchorEl={menu?.anchor}
-        open={menu !== undefined && !readOnly}
+        open={menu !== undefined}
         onClose={() => setMenu(undefined)}
       >
         <MenuItem
@@ -251,22 +259,26 @@ export function ReviewTabStrip({
         >
           {menu?.tab.pinned ? "Unpin" : "Pin"}
         </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (menu) onCloseOthers(reviewTabKey(menu.tab));
-            setMenu(undefined);
-          }}
-        >
-          Close others
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (menu) onClose(reviewTabKey(menu.tab));
-            setMenu(undefined);
-          }}
-        >
-          Close
-        </MenuItem>
+        {allowCloseActions && (
+          <MenuItem
+            onClick={() => {
+              if (menu) onCloseOthers(reviewTabKey(menu.tab));
+              setMenu(undefined);
+            }}
+          >
+            Close others
+          </MenuItem>
+        )}
+        {allowCloseActions && (
+          <MenuItem
+            onClick={() => {
+              if (menu) onClose(reviewTabKey(menu.tab));
+              setMenu(undefined);
+            }}
+          >
+            Close
+          </MenuItem>
+        )}
       </Menu>
     </>
   );

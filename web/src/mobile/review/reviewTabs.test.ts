@@ -4,6 +4,7 @@ import {
   closeReviewTab,
   openReviewTab,
   reorderReviewTabs,
+  retainChangedDiffTabs,
   reviewTabKey,
   toggleReviewTabPin,
   type ReviewTab,
@@ -57,5 +58,27 @@ Deno.test("tabs reorder without changing their identity", () => {
   assertEquals(
     reorderReviewTabs(tabs, "source:a.rs", "source:c.rs").map(reviewTabKey),
     ["source:b.rs", "source:c.rs", "source:a.rs"],
+  );
+});
+
+Deno.test("committed diff tabs are removed while source tabs remain", () => {
+  const changed: ReviewTab = {
+    kind: "diff",
+    path: "changed.rs",
+    scope: "unstaged",
+    pinned: true,
+  };
+  const committed: ReviewTab = {
+    kind: "diff",
+    path: "committed.rs",
+    scope: "unstaged",
+    pinned: true,
+  };
+  assertEquals(
+    retainChangedDiffTabs(
+      [source("keep.rs"), changed, committed],
+      new Set([reviewTabKey(changed)]),
+    ).map(reviewTabKey),
+    ["source:keep.rs", "diff:unstaged:changed.rs"],
   );
 });
