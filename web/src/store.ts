@@ -651,6 +651,9 @@ export async function loadQuestionPage(
       `/api/sessions/${encodeURIComponent(sessionId)}/question-pages/${encodeURIComponent(pageId)}?v=${
         encodeURIComponent(conn.version() ?? "0")
       }`,
+      // The newest page may still be growing. Never let WebKit reuse a partial
+      // response captured between the user prompt and the agent answer.
+      { cache: "no-store" },
     );
     if (!response.ok) return false;
     const data = (await response.json()) as { events: Envelope[] };

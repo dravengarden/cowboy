@@ -2928,7 +2928,12 @@ async fn api_question_page(
     };
     match result {
         Ok(Some(events)) => (
-            [(header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+            // The newest question page can still grow after its root prompt is
+            // persisted. A reader may request it while the agent is producing
+            // the answer, so treating this route as immutable can pin that
+            // partial response on one device for a year. Cursor history remains
+            // immutable; explicit question-page reads always revalidate.
+            [(header::CACHE_CONTROL, "no-store")],
             Json(HistoryResponse {
                 events,
                 next_before_seq: None,
