@@ -1,11 +1,12 @@
 import {
   AccountTreeOutlined,
   AdjustOutlined,
+  CodeOutlined,
   Clear,
   DataObjectOutlined,
-  FunctionsOutlined,
-  LabelOutlined,
+  DiamondOutlined,
   Search,
+  TableRowsOutlined,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -41,8 +42,12 @@ function categoryColor(
 ): string {
   if (category === "module") return theme.palette.info.main;
   if (category === "type") return theme.palette.secondary.main;
-  if (category === "callable") return theme.palette.success.main;
-  if (category === "member") return theme.palette.warning.main;
+  if (category === "function" || category === "method") {
+    return theme.palette.success.main;
+  }
+  if (category === "field") return theme.palette.warning.main;
+  if (category === "constant") return theme.palette.info.dark;
+  if (category === "object") return theme.palette.text.secondary;
   return theme.palette.text.secondary;
 }
 
@@ -53,8 +58,25 @@ function SymbolCategoryIcon({
 }): React.JSX.Element {
   if (category === "module") return <AccountTreeOutlined />;
   if (category === "type") return <DataObjectOutlined />;
-  if (category === "callable") return <FunctionsOutlined />;
-  if (category === "member") return <LabelOutlined />;
+  if (category === "function") {
+    return (
+      <Box
+        component="span"
+        sx={{
+          fontFamily: "var(--cowboy-font-mono)",
+          fontSize: 17,
+          fontWeight: 750,
+          lineHeight: 1,
+        }}
+      >
+        λ
+      </Box>
+    );
+  }
+  if (category === "method") return <CodeOutlined />;
+  if (category === "field") return <TableRowsOutlined />;
+  if (category === "constant") return <DiamondOutlined />;
+  if (category === "object") return <AccountTreeOutlined />;
   return <AdjustOutlined />;
 }
 

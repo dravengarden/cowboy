@@ -52,7 +52,9 @@ Deno.test("outline selects the deepest symbol containing the reading line", () =
 Deno.test("outline symbol categories provide stable visual groups", () => {
   assertEquals(outlineSymbolCategory(1), "module");
   assertEquals(outlineSymbolCategory(22), "type");
-  assertEquals(outlineSymbolCategory(11), "callable");
-  assertEquals(outlineSymbolCategory(7), "member");
-  assertEquals(outlineSymbolCategory(13), "value");
+  assertEquals(outlineSymbolCategory(11), "function");
+  assertEquals(outlineSymbolCategory(5), "method");
+  assertEquals(outlineSymbolCategory(7), "field");
+  assertEquals(outlineSymbolCategory(13), "constant");
+  assertEquals(outlineSymbolCategory(18), "object");
 });

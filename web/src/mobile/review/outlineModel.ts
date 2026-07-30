@@ -9,8 +9,11 @@ export interface OutlineRow {
 export type OutlineSymbolCategory =
   | "module"
   | "type"
-  | "callable"
-  | "member"
+  | "function"
+  | "method"
+  | "field"
+  | "constant"
+  | "object"
   | "value";
 
 export function symbolKindLabel(kind: number): string {
@@ -50,10 +53,13 @@ export function outlineSymbolCategory(kind: number): OutlineSymbolCategory {
   if (["class", "enum", "interface", "struct", "type"].includes(label)) {
     return "type";
   }
-  if (["method", "ctor", "fn", "operator"].includes(label)) return "callable";
+  if (label === "fn") return "function";
+  if (["method", "ctor", "operator"].includes(label)) return "method";
   if (["property", "field", "key", "member", "event"].includes(label)) {
-    return "member";
+    return "field";
   }
+  if (label === "const") return "constant";
+  if (label === "object") return "object";
   return "value";
 }
 
