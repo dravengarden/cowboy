@@ -104,6 +104,12 @@ type ReviewTarget =
   }
   | { kind: "source"; path: string; revealLine?: number };
 
+type SymbolPoint = { row: number; column: number };
+type CodeNavigationEntry = Extract<ReviewTarget, { kind: "source" }> & {
+  symbol?: SymbolPoint;
+};
+type SymbolRestoreRequest = SymbolPoint & { path: string; id: number };
+
 function DocumentView({
   sessionId,
   target,
@@ -111,6 +117,14 @@ function DocumentView({
   markdownPreview,
   languageData,
   onNavigate,
+  restoreSymbol,
+  onRestoreSymbolConsumed,
+  onSymbolOpenChange,
+  onVisibleSourceLine,
+  navigationBackCount,
+  navigationForwardCount,
+  onNavigationBack,
+  onNavigationForward,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
@@ -121,6 +135,14 @@ function DocumentView({
     location: CodeLocation,
     origin: { row: number; column: number },
   ) => void;
+  restoreSymbol?: SymbolRestoreRequest | undefined;
+  onRestoreSymbolConsumed: (id: number) => void;
+  onSymbolOpenChange: (point: SymbolPoint | undefined) => void;
+  onVisibleSourceLine: (line: number) => void;
+  navigationBackCount: number;
+  navigationForwardCount: number;
+  onNavigationBack: () => void;
+  onNavigationForward: () => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
@@ -135,6 +157,7 @@ function DocumentView({
   const pageController = useRef<AbortController | undefined>(undefined);
   const [counts, setCounts] = useState<{ added: number; removed: number }>();
   const [loading, setLoading] = useState(true);
+  const [loadedPath, setLoadedPath] = useState<string>();
   const [error, setError] = useState(false);
   const [hunkIndex, setHunkIndex] = useState(0);
   const [hover, setHover] = useState<CodeHover>();
@@ -158,6 +181,7 @@ function DocumentView({
 
   const persistVisibleLine = useCallback((line: number): void => {
     if (target.kind !== "source") return;
+    onVisibleSourceLine(line);
     pendingPosition.current = line;
     if (positionTimer.current !== undefined) {
       globalThis.clearTimeout(positionTimer.current);
@@ -173,7 +197,7 @@ function DocumentView({
         revision: revision ?? null,
       });
     }, 500);
-  }, [revision, sessionId, target]);
+  }, [onVisibleSourceLine, revision, sessionId, target]);
 
   useEffect(() => {
     return () => {
@@ -242,6 +266,26 @@ function DocumentView({
     setHoverOpen(true);
   }, [inspectPoint]);
 
+  useEffect(() => {
+    onSymbolOpenChange(hoverOpen ? inspectTarget : undefined);
+  }, [hoverOpen, inspectTarget, onSymbolOpenChange]);
+
+  useEffect(() => {
+    if (
+      !restoreSymbol ||
+      target.path !== restoreSymbol.path ||
+      loadedPath !== restoreSymbol.path
+    ) return;
+    inspectPoint(restoreSymbol);
+    onRestoreSymbolConsumed(restoreSymbol.id);
+  }, [
+    inspectPoint,
+    loadedPath,
+    onRestoreSymbolConsumed,
+    restoreSymbol,
+    target.path,
+  ]);
+
   const navigate = useCallback((kind: CodeNavigationKind): void => {
     if (
       !inspectTarget ||
@@ -287,6 +331,7 @@ function DocumentView({
     setLimited(false);
     setNextCursor(undefined);
     setRevision(undefined);
+    setLoadedPath(undefined);
     setLoadMoreError(false);
     setHoverOpen(false);
     hoverController.current?.abort();
@@ -303,6 +348,7 @@ function DocumentView({
       : fetchCodeFile(sessionId, target.path, controller.signal);
     void request.then((result) => {
       setText(result.text);
+      setLoadedPath(target.path);
       setTruncated(result.truncated);
       setRevision(result.revision);
       setNextCursor(result.nextCursor);
@@ -420,6 +466,48 @@ function DocumentView({
   }
   const symbolContent = (
     <Stack spacing={1.5} sx={{ pb: 2 }}>
+      {(navigationBackCount > 0 || navigationForwardCount > 0) && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          sx={{
+            mx: -0.5,
+            px: 0.5,
+            py: 0.25,
+            borderRadius: 1.5,
+            bgcolor: "action.hover",
+          }}
+        >
+          <IconButton
+            size="small"
+            aria-label="Back to previous symbol"
+            disabled={navigationBackCount === 0}
+            onClick={onNavigationBack}
+          >
+            <ArrowBack fontSize="small" />
+          </IconButton>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{
+              flex: 1,
+              textAlign: "center",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {navigationBackCount + 1} /{" "}
+            {navigationBackCount + navigationForwardCount + 1}
+          </Typography>
+          <IconButton
+            size="small"
+            aria-label="Forward to next symbol"
+            disabled={navigationForwardCount === 0}
+            onClick={onNavigationForward}
+          >
+            <ArrowForward fontSize="small" />
+          </IconButton>
+        </Stack>
+      )}
       {inspectCandidates.length > 0
         ? (
           <>
@@ -846,11 +934,15 @@ export function ReviewApp({
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
   const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<
-    Extract<ReviewTarget, { kind: "source" }>[]
+    CodeNavigationEntry[]
   >([]);
   const [navigationForwardHistory, setNavigationForwardHistory] = useState<
-    Extract<ReviewTarget, { kind: "source" }>[]
+    CodeNavigationEntry[]
   >([]);
+  const [symbolRestore, setSymbolRestore] = useState<SymbolRestoreRequest>();
+  const currentSymbol = useRef<SymbolPoint | undefined>(undefined);
+  const currentVisibleLine = useRef<number | undefined>(undefined);
+  const symbolRestoreId = useRef(0);
   const [managingTabs, setManagingTabs] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const syncedReview = useMobileReviewState(workspace?.sessionId);
@@ -996,6 +1088,9 @@ export function ReviewApp({
     setSourceTarget(undefined);
     setNavigationHistory([]);
     setNavigationForwardHistory([]);
+    setSymbolRestore(undefined);
+    currentSymbol.current = undefined;
+    currentVisibleLine.current = undefined;
     setDiffTarget(undefined);
     setCurrentRevision(undefined);
   }, [workspace?.sessionId]);
@@ -1032,6 +1127,7 @@ export function ReviewApp({
     revealLine?: number,
     preserveNavigation = false,
   ): void => {
+    currentVisibleLine.current = revealLine;
     setCurrentRevision(undefined);
     setMode("files");
     if (workspace?.sessionId) {
@@ -1049,8 +1145,61 @@ export function ReviewApp({
     if (!preserveNavigation) {
       setNavigationHistory([]);
       setNavigationForwardHistory([]);
+      setSymbolRestore(undefined);
+      currentSymbol.current = undefined;
     }
     setCloseRequest((value) => value + 1);
+  };
+  const restoreNavigationEntry = (entry: CodeNavigationEntry): void => {
+    currentSymbol.current = undefined;
+    currentVisibleLine.current = entry.revealLine;
+    if (entry.symbol) {
+      setSymbolRestore({
+        path: entry.path,
+        ...entry.symbol,
+        id: ++symbolRestoreId.current,
+      });
+    } else {
+      setSymbolRestore(undefined);
+    }
+    openSource(entry.path, entry.revealLine, true);
+  };
+  const currentNavigationEntry = (): CodeNavigationEntry | undefined => {
+    if (target.kind !== "source") return undefined;
+    return {
+      kind: "source",
+      path: target.path,
+      ...(currentVisibleLine.current === undefined
+        ? target.revealLine === undefined
+          ? {}
+          : { revealLine: target.revealLine }
+        : { revealLine: currentVisibleLine.current }),
+      ...(currentSymbol.current ? { symbol: currentSymbol.current } : {}),
+    };
+  };
+  const navigateBack = (): void => {
+    const previous = navigationHistory.at(-1);
+    if (!previous) return;
+    navigationHaptic();
+    const current = currentNavigationEntry();
+    if (current) {
+      setNavigationForwardHistory((history) =>
+        [...history, current].slice(-32)
+      );
+    }
+    setNavigationHistory((history) => history.slice(0, -1));
+    restoreNavigationEntry(previous);
+  };
+  const navigateForward = (): void => {
+    const next = navigationForwardHistory.at(-1);
+    if (!next) return;
+    navigationHaptic();
+    const current = currentNavigationEntry();
+    if (current) {
+      setNavigationHistory((history) => [...history, current].slice(-32));
+    }
+    setNavigationForwardHistory((history) => history.slice(0, -1));
+    restoreNavigationEntry(next);
   };
   const openDiff = (
     entry: GitReviewEntry,
@@ -1248,21 +1397,8 @@ export function ReviewApp({
                 : "Back to changes"}
               onClick={() => {
                 if (mode === "files") {
-                  const previous = navigationHistory.at(-1);
-                  if (previous) {
-                    navigationHaptic();
-                    if (target.kind === "source") {
-                      setNavigationForwardHistory((history) =>
-                        [...history, target].slice(-32)
-                      );
-                    }
-                    setNavigationHistory((history) => history.slice(0, -1));
-                    openSource(
-                      previous.path,
-                      previous.revealLine,
-                      true,
-                    );
-                  } else {
+                  if (navigationHistory.length > 0) navigateBack();
+                  else {
                     setSourceTarget(undefined);
                   }
                 } else setDiffTarget(undefined);
@@ -1307,19 +1443,7 @@ export function ReviewApp({
             {mode === "files" && navigationForwardHistory.length > 0 && (
               <IconButton
                 aria-label="Forward to next code location"
-                onClick={() => {
-                  if (target.kind !== "source") return;
-                  const next = navigationForwardHistory.at(-1);
-                  if (!next) return;
-                  navigationHaptic();
-                  setNavigationHistory((history) =>
-                    [...history, target].slice(-32)
-                  );
-                  setNavigationForwardHistory((history) =>
-                    history.slice(0, -1)
-                  );
-                  openSource(next.path, next.revealLine, true);
-                }}
+                onClick={navigateForward}
               >
                 <ArrowForward />
               </IconButton>
@@ -1382,20 +1506,36 @@ export function ReviewApp({
               languageData={languageData?.path === target.path
                 ? languageData
                 : undefined}
+              restoreSymbol={symbolRestore}
+              onRestoreSymbolConsumed={(id) => {
+                setSymbolRestore((request) =>
+                  request?.id === id ? undefined : request
+                );
+              }}
+              onSymbolOpenChange={(point) => {
+                currentSymbol.current = point;
+              }}
+              onVisibleSourceLine={(line) => {
+                currentVisibleLine.current = line;
+              }}
+              navigationBackCount={navigationHistory.length}
+              navigationForwardCount={navigationForwardHistory.length}
+              onNavigationBack={navigateBack}
+              onNavigationForward={navigateForward}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
-                const previous: Extract<
-                  ReviewTarget,
-                  { kind: "source" }
-                > = {
+                const previous: CodeNavigationEntry = {
                   kind: "source",
                   path: target.path,
-                  revealLine: origin.row + 1,
+                  revealLine: currentVisibleLine.current ?? origin.row + 1,
+                  symbol: origin,
                 };
                 setNavigationHistory((history) =>
                   [...history, previous].slice(-32)
                 );
                 setNavigationForwardHistory([]);
+                setSymbolRestore(undefined);
+                currentSymbol.current = undefined;
                 openSource(location.path, location.start.row + 1, true);
               }}
             />
