@@ -7,7 +7,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
 import { type ReviewTab, reviewTabKey } from "./reviewTabs";
 
@@ -40,6 +40,7 @@ export function ReviewTabStrip({
   allowReorder?: boolean;
   onReorder?: (movingKey: string, targetKey: string) => void;
 }): React.JSX.Element | null {
+  const strip = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
   const press = useRef<
@@ -59,6 +60,31 @@ export function ReviewTabStrip({
     anchor: HTMLElement;
     tab: ReviewTab;
   }>();
+  const tabOrder = tabs.map(reviewTabKey).join("\0");
+  useEffect(() => {
+    const viewport = strip.current;
+    if (!viewport || !activeKey) return;
+    const active = [...viewport.querySelectorAll<HTMLElement>(
+      "[data-review-tab-key]",
+    )].find((tab) => tab.dataset.reviewTabKey === activeKey);
+    if (!active) return;
+    const padding = 8;
+    const left = active.offsetLeft;
+    const right = left + active.offsetWidth;
+    const visibleLeft = viewport.scrollLeft;
+    const visibleRight = visibleLeft + viewport.clientWidth;
+    if (left < visibleLeft + padding) {
+      viewport.scrollTo({
+        left: Math.max(0, left - padding),
+        behavior: "smooth",
+      });
+    } else if (right > visibleRight - padding) {
+      viewport.scrollTo({
+        left: right - viewport.clientWidth + padding,
+        behavior: "smooth",
+      });
+    }
+  }, [activeKey, tabOrder]);
   if (tabs.length === 0) return null;
 
   const cancelLongPress = (): void => {
@@ -80,6 +106,7 @@ export function ReviewTabStrip({
   return (
     <>
       <Stack
+        ref={strip}
         direction="row"
         data-review-tab-strip
         data-mobile-pager-ignore
