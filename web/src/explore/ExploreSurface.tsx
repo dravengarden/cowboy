@@ -67,7 +67,10 @@ import {
   pageContainingItemKey,
   type QuestionPage,
 } from "./questionPages";
-import { shouldAdoptLoadedPage } from "./retainedPage";
+import {
+  pageStartHandshakeIdentity,
+  shouldAdoptLoadedPage,
+} from "./retainedPage";
 
 const EMPTY_TIMELINE: Envelope[] = [];
 
@@ -804,8 +807,14 @@ export function ExploreTranscript(
     return () => setExploreAtTail(props.sessionId, false);
   }, [atTail, props.sessionId]);
 
+  const pageStartCurrentId = current?.id ?? null;
+  const pageStartFirstKey = current?.itemKeys[0] ?? null;
+  const pageStartIdentity = pageStartHandshakeIdentity(
+    pageStartCurrentId,
+    current?.itemKeys ?? [],
+  );
   useLayoutEffect(() => {
-    if (!current || pageStartId !== current.id) return;
+    if (pageStartCurrentId === null || pageStartId !== pageStartCurrentId) return;
     // Page navigation is a reading action. Detach before positioning so a live
     // final page cannot have Transcript's streaming follow loop race this
     // page-start handshake back to the newest answer token. The shared navbar
@@ -839,10 +848,9 @@ export function ExploreTranscript(
     };
     const positionAtStart = (): void => {
       if (userInteracted) return;
-      const firstKey = current.itemKeys[0];
-      const row = firstKey
+      const row = pageStartFirstKey
         ? rootRef.current?.querySelector<HTMLElement>(
-          `[data-key="${CSS.escape(firstKey)}"]`,
+          `[data-key="${CSS.escape(pageStartFirstKey)}"]`,
         )
         : null;
       const scroller = row?.parentElement;
@@ -882,7 +890,11 @@ export function ExploreTranscript(
       observedScroller?.removeEventListener("touchstart", relinquish);
       observedScroller?.removeEventListener("wheel", relinquish);
     };
-  }, [current, pageStartId, props.sessionId]);
+    // A live page object is recreated for every streamed answer chunk. Key the
+    // handshake only to its immutable root so streaming cannot repeatedly
+    // restart the stable-paint counter and leave the loading veil visible
+    // until the agent finishes.
+  }, [pageStartIdentity, pageStartFirstKey, pageStartId, props.sessionId]);
 
   useEffect(() => {
     if (!props.desktop) return undefined;
