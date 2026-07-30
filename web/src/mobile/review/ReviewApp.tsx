@@ -1508,7 +1508,7 @@ export function ReviewApp({
             sx={{
               pb: "max(calc(env(safe-area-inset-bottom) - 18px), 12px)",
               pl: "env(safe-area-inset-left, 0px)",
-              pr: "env(safe-area-inset-right, 0px)",
+              pr: "max(env(safe-area-inset-right, 0px), 10px)",
             }}
           >
             <Toolbar
@@ -1655,10 +1655,23 @@ export function ReviewApp({
                 {mode === "git"
                   ? (
                     <Badge
-                      badgeContent={changeCount}
-                      max={99}
-                      color="default"
+                      variant="dot"
+                      color="primary"
                       invisible={changeCount === 0}
+                      slotProps={{
+                        badge: {
+                          "aria-label": `${changeCount} changed files`,
+                        },
+                      }}
+                      sx={{
+                        "& .MuiBadge-badge": {
+                          top: 3,
+                          right: 2,
+                          minWidth: 7,
+                          width: 7,
+                          height: 7,
+                        },
+                      }}
                     >
                       <DifferenceOutlined />
                     </Badge>
