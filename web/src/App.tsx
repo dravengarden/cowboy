@@ -459,6 +459,16 @@ function SessionList({
         row: SessionMeta;
         el: HTMLElement;
     } | null>(null);
+    const menuProjection = useExploreSessionState(
+        menuAnchor?.row.id ?? "__session-menu-none__",
+    ).projection;
+    const setMenuProjection = (projection: "history" | "explore"): void => {
+        if (!menuAnchor) return;
+        const sessionId = menuAnchor.row.id;
+        const anchor = captureTranscriptViewportAnchor(sessionId);
+        setTranscriptProjection(sessionId, projection, anchor);
+        setMenuAnchor(null);
+    };
     // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
     const byId = new Map(sessions.map((s) => [s.id, s]));
     const displayedSessions = mobileDrawer ? [...sessions].reverse() : sessions;
@@ -981,6 +991,30 @@ function SessionList({
                 </MenuItem>
                 <Divider />
                 <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
+                    View mode
+                </ListSubheader>
+                {(
+                    [
+                        { v: "history", label: "Conversation" },
+                        { v: "explore", label: "Page view" },
+                    ] as const
+                ).map((opt) => {
+                    const current = menuProjection === opt.v;
+                    return (
+                        <MenuItem
+                            key={opt.v}
+                            selected={current}
+                            onClick={(): void => setMenuProjection(opt.v)}
+                        >
+                            <ListItemIcon>
+                                {current ? <CheckIcon fontSize="medium" /> : null}
+                            </ListItemIcon>
+                            <ListItemText primary={opt.label} />
+                        </MenuItem>
+                    );
+                })}
+                <Divider />
+                <ListSubheader sx={{ lineHeight: "32px", bgcolor: "transparent" }}>
                     Auto-resume
                 </ListSubheader>
                 {(
@@ -1076,6 +1110,18 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
                                 <Kbd keys="R" />
                             </Button>
+                            <Divider sx={{ my: 0.5 }} />
+                            <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>View mode</Typography>
+                            {([
+                                { v: "history", label: "Conversation", shortcut: "C" },
+                                { v: "explore", label: "Page view", shortcut: "P" },
+                            ] as const).map((opt) => {
+                                const current = menuProjection === opt.v;
+                                return <Button data-session-shortcut={opt.shortcut.toLowerCase()} key={opt.v} fullWidth startIcon={current ? <CheckIcon /> : <Box sx={{ width: 24 }} />} onClick={(): void => setMenuProjection(opt.v)} sx={{ justifyContent: "flex-start" }}>
+                                    <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{opt.label}</Box>
+                                    <Kbd keys={opt.shortcut} />
+                                </Button>;
+                            })}
                             <Divider sx={{ my: 0.5 }} />
                             <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Auto-resume</Typography>
                             {([ { v: null, label: `Default (${autoResumeDefault ? "on" : "off"})`, shortcut: "D" }, { v: true, label: "On", shortcut: "O" }, { v: false, label: "Off", shortcut: "F" } ] as const).map((opt) => {
