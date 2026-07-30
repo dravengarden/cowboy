@@ -1500,7 +1500,7 @@ export function ReviewApp({
                   <TabUnselected />
                 </IconButton>
               )}
-              {target.kind === "source" && language?.outline && (
+              {target.kind === "source" && (
                 <IconButton
                   aria-label="Open file outline"
                   aria-pressed={outlineOpen}
