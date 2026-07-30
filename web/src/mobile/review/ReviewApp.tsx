@@ -582,9 +582,12 @@ function DocumentView({
         useFlexGap
         gap={0.5}
         sx={{
+          flex: "1 1 0",
           minWidth: 0,
-          maxWidth: "min(58vw, 430px)",
+          maxWidth: "100%",
           overflowX: "auto",
+          overscrollBehaviorX: "contain",
+          touchAction: "pan-x",
           scrollbarWidth: "none",
           "&::-webkit-scrollbar": { display: "none" },
         }}
@@ -929,11 +932,15 @@ function DocumentView({
                   component="span"
                   direction="row"
                   alignItems="center"
-                  justifyContent="space-between"
                   gap={1}
                   sx={{ width: "100%", minWidth: 0 }}
                 >
-                  <span>Symbol</span>
+                  <Box
+                    component="span"
+                    sx={{ flex: "0 0 auto", fontWeight: 750 }}
+                  >
+                    Symbol
+                  </Box>
                   {candidateSwitcher}
                 </Stack>
               }
