@@ -715,7 +715,7 @@ export default function CodeViewer({
     view.dispatch({
       effects,
     });
-  }, [revealLine, revealRange, text]);
+  }, [extensions, revealLine, revealRange, text]);
 
   return (
     <Box
