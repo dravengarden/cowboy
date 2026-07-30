@@ -941,10 +941,8 @@ function DocumentView({
                   alignItems="center"
                   gap={1}
                   sx={{
-                    width: "calc(100vw - 32px)",
-                    maxWidth: "100%",
+                    width: "100%",
                     minWidth: 0,
-                    overflow: "hidden",
                   }}
                 >
                   <Box
