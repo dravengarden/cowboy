@@ -20,6 +20,7 @@ const ZED_REVISION: &str = "aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45";
 const MAX_DIAGNOSTICS: usize = 1_000;
 const MAX_INLAY_HINTS: usize = 2_000;
 const MAX_SEMANTIC_TOKEN_WORDS: usize = 50_000;
+const MAX_DOCUMENT_SYMBOLS: usize = 2_000;
 
 #[derive(Parser)]
 struct Cli {
@@ -89,6 +90,10 @@ enum Request {
         column: u32,
         kind: NavigationKind,
     },
+    BufferSymbols {
+        worktree: PathBuf,
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +139,12 @@ enum Response {
         worktree: PathBuf,
         path: PathBuf,
         locations: Vec<LanguageLocation>,
+    },
+    BufferSymbols {
+        api_version: u8,
+        worktree: PathBuf,
+        path: PathBuf,
+        symbols: Vec<LanguageDocumentSymbol>,
     },
     Error {
         api_version: u8,
@@ -221,6 +232,18 @@ struct LanguageLocation {
     path: PathBuf,
     start: LanguagePoint,
     end: LanguagePoint,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanguageDocumentSymbol {
+    name: String,
+    kind: i32,
+    start: LanguagePoint,
+    end: LanguagePoint,
+    selection_start: LanguagePoint,
+    selection_end: LanguagePoint,
+    children: Vec<LanguageDocumentSymbol>,
 }
 
 type Buffers = Arc<RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>>;
@@ -813,6 +836,32 @@ impl ZedRuntime {
         Ok(result)
     }
 
+    async fn document_symbols(
+        &self,
+        buffer_id: u64,
+        version: &[BufferVersionEntry],
+    ) -> Result<Vec<LanguageDocumentSymbol>> {
+        let responses = self
+            .lsp_query(proto::lsp_query::Request::GetDocumentSymbols(
+                proto::GetDocumentSymbols {
+                    project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                    buffer_id,
+                    version: proto_version(version),
+                },
+            ))
+            .await?;
+        let mut remaining = MAX_DOCUMENT_SYMBOLS;
+        Ok(responses
+            .into_iter()
+            .filter_map(|response| match response.response? {
+                proto::lsp_response::Response::GetDocumentSymbolsResponse(value) => Some(value),
+                _ => None,
+            })
+            .flat_map(|response| response.symbols)
+            .filter_map(|symbol| document_symbol(symbol, &mut remaining))
+            .collect())
+    }
+
     async fn lsp_query(
         &self,
         request: proto::lsp_query::Request,
@@ -958,6 +1007,29 @@ fn language_point(point: &proto::PointUtf16) -> LanguagePoint {
         row: point.row,
         column: point.column,
     }
+}
+
+fn document_symbol(
+    symbol: proto::DocumentSymbol,
+    remaining: &mut usize,
+) -> Option<LanguageDocumentSymbol> {
+    if *remaining == 0 {
+        return None;
+    }
+    *remaining -= 1;
+    Some(LanguageDocumentSymbol {
+        name: symbol.name,
+        kind: symbol.kind,
+        start: language_point(&symbol.start?),
+        end: language_point(&symbol.end?),
+        selection_start: language_point(&symbol.selection_start?),
+        selection_end: language_point(&symbol.selection_end?),
+        children: symbol
+            .children
+            .into_iter()
+            .filter_map(|child| document_symbol(child, remaining))
+            .collect(),
+    })
 }
 
 fn language_inlay_hint(hint: proto::InlayHint) -> Option<LanguageInlayHint> {
@@ -1149,6 +1221,9 @@ async fn respond(
             column,
             kind,
         } => buffer_navigate(worktree, path, row, column, kind, buffers, zed).await?,
+        Request::BufferSymbols { worktree, path } => {
+            buffer_symbols(worktree, path, buffers, zed).await?
+        }
     })
 }
 
@@ -1289,6 +1364,33 @@ async fn buffer_navigate(
         worktree,
         path,
         locations,
+    })
+}
+
+async fn buffer_symbols(
+    worktree: PathBuf,
+    path: PathBuf,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let (worktree, path) = buffer_key(worktree, path).await?;
+    let (buffer_id, version) = {
+        let all = buffers.read().await;
+        let lease = all
+            .get(&(worktree.clone(), path.clone()))
+            .context("buffer is not open")?;
+        (lease.remote_id, lease.version.clone())
+    };
+    let symbols = if let Some(zed) = zed {
+        zed.document_symbols(buffer_id, &version).await?
+    } else {
+        Vec::new()
+    };
+    Ok(Response::BufferSymbols {
+        api_version: ADAPTER_VERSION,
+        worktree,
+        path,
+        symbols,
     })
 }
 

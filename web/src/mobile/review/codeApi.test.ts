@@ -5,6 +5,7 @@ import {
   fetchCodeLanguage,
   fetchCodeManifest,
   fetchCodeNavigation,
+  fetchCodeOutline,
   fetchCodeSearch,
   fetchCodeTree,
   openCodeBuffer,
@@ -33,18 +34,40 @@ Deno.test("tree requests preserve paths and explicit refresh bypasses caches", a
     await fetchCodeTree("session/id", "src/mobile", undefined, true);
     assertEquals(requests, [
       {
-        url:
-          "/api/code/sessions/session%2Fid/tree?path=src%2Fmobile",
+        url: "/api/code/sessions/session%2Fid/tree?path=src%2Fmobile",
         cache: "default",
       },
       {
-        url:
-          "/api/code/sessions/session%2Fid/tree?path=src%2Fmobile",
+        url: "/api/code/sessions/session%2Fid/tree?path=src%2Fmobile",
         cache: "reload",
       },
     ]);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("outline stays inside the stable Code data plane", async () => {
+  const original = globalThis.fetch;
+  let requested = "";
+  globalThis.fetch = ((input: string | URL | Request) => {
+    requested = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({
+        apiVersion: 1,
+        path: "src/main.rs",
+        symbols: [],
+      })),
+    );
+  }) as typeof fetch;
+  try {
+    await fetchCodeOutline("session/id", "src/main.rs");
+    assertEquals(
+      requested,
+      "/api/code/sessions/session%2Fid/intelligence/outline?path=src%2Fmain.rs",
+    );
+  } finally {
+    globalThis.fetch = original;
   }
 });
 

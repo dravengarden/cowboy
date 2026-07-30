@@ -996,6 +996,10 @@ async fn serve_axum(
             get(api_code_navigation),
         )
         .route(
+            "/api/code/sessions/{id}/intelligence/outline",
+            get(api_code_outline),
+        )
+        .route(
             "/api/code/sessions/{id}/buffer",
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
@@ -1809,6 +1813,7 @@ struct CodeLanguageCapabilities {
     semantic_tokens: bool,
     hover: bool,
     navigation: bool,
+    outline: bool,
 }
 
 #[derive(Deserialize)]
@@ -1840,6 +1845,11 @@ enum ZedAdapterResponse {
         api_version: u8,
         path: String,
         locations: Vec<CodeLocation>,
+    },
+    BufferSymbols {
+        api_version: u8,
+        path: String,
+        symbols: Vec<CodeDocumentSymbol>,
     },
     Error {
         message: String,
@@ -1925,6 +1935,26 @@ struct CodeNavigationResponse {
     locations: Vec<CodeLocation>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeDocumentSymbol {
+    name: String,
+    kind: i32,
+    start: CodePoint,
+    end: CodePoint,
+    selection_start: CodePoint,
+    selection_end: CodePoint,
+    children: Vec<CodeDocumentSymbol>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeOutlineResponse {
+    api_version: u8,
+    path: String,
+    symbols: Vec<CodeDocumentSymbol>,
+}
+
 async fn zed_adapter_request(
     socket: &FsPath,
     request: serde_json::Value,
@@ -1951,12 +1981,14 @@ async fn zed_adapter_request(
         | ZedAdapterResponse::Buffer { api_version: 1, .. }
         | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }
         | ZedAdapterResponse::BufferHover { api_version: 1, .. }
-        | ZedAdapterResponse::BufferNavigation { api_version: 1, .. }) => Ok(response),
+        | ZedAdapterResponse::BufferNavigation { api_version: 1, .. }
+        | ZedAdapterResponse::BufferSymbols { api_version: 1, .. }) => Ok(response),
         ZedAdapterResponse::Worktree { api_version, .. }
         | ZedAdapterResponse::Buffer { api_version, .. }
         | ZedAdapterResponse::BufferLanguage { api_version, .. }
         | ZedAdapterResponse::BufferHover { api_version, .. }
-        | ZedAdapterResponse::BufferNavigation { api_version, .. } => {
+        | ZedAdapterResponse::BufferNavigation { api_version, .. }
+        | ZedAdapterResponse::BufferSymbols { api_version, .. } => {
             anyhow::bail!("unsupported Zed adapter API version {api_version}")
         }
         ZedAdapterResponse::Error { message } => anyhow::bail!("{message}"),
@@ -2257,6 +2289,7 @@ async fn api_code_manifest(
             semantic_tokens: language_ready,
             hover: language_ready,
             navigation: language_ready,
+            outline: language_ready,
         },
     })
     .into_response();
@@ -2647,6 +2680,56 @@ async fn api_code_navigation(
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "symbol navigation unavailable",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn api_code_outline(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeLanguageQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let Some(socket) = &state.zed_adapter_socket else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "language service unavailable",
+        )
+            .into_response();
+    };
+    if query.path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
+    }
+    match zed_adapter_request(
+        socket,
+        serde_json::json!({
+            "type": "bufferSymbols",
+            "worktree": cwd,
+            "path": query.path,
+        }),
+    )
+    .await
+    {
+        Ok(ZedAdapterResponse::BufferSymbols { path, symbols, .. }) => Json(CodeOutlineResponse {
+            api_version: 1,
+            path,
+            symbols,
+        })
+        .into_response(),
+        Ok(_) => (
+            StatusCode::BAD_GATEWAY,
+            "unexpected language service response",
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::debug!(session = %session_id, %error, "Zed outline query failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "document outline unavailable",
             )
                 .into_response()
         }

@@ -8,6 +8,7 @@ import {
   DifferenceOutlined,
   FolderOpenOutlined,
   FolderOutlined,
+  FormatListBulleted,
   KeyboardArrowDown,
   KeyboardArrowUp,
   TabUnselected,
@@ -43,10 +44,7 @@ import {
 import { navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
-import {
-  mutateMobileReview,
-  useMobileReviewState,
-} from "../../store";
+import { mutateMobileReview, useMobileReviewState } from "../../store";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import {
   closeCodeBuffer,
@@ -71,6 +69,7 @@ import { ReviewChanges } from "./ReviewChanges";
 import type { CodeInspectCandidate } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
+import { ReviewOutline } from "./ReviewOutline";
 import { ReviewSettings } from "./ReviewSettings";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import type { ReviewMode } from "./reviewMode";
@@ -785,7 +784,14 @@ function DocumentView({
                   {target.path}
                 </Typography>
               </Box>
-              <Box sx={{ px: 2.5, pt: 2, overflowY: "auto", maxHeight: "calc(min(78vh, 760px) - 74px)" }}>
+              <Box
+                sx={{
+                  px: 2.5,
+                  pt: 2,
+                  overflowY: "auto",
+                  maxHeight: "calc(min(78vh, 760px) - 74px)",
+                }}
+              >
                 {symbolContent}
               </Box>
             </Popover>
@@ -836,6 +842,7 @@ export function ReviewApp({
     Extract<ReviewTarget, { kind: "source" }>[]
   >([]);
   const [managingTabs, setManagingTabs] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const syncedReview = useMobileReviewState(workspace?.sessionId);
   const syncedReviewRef = useRef(syncedReview);
   syncedReviewRef.current = syncedReview;
@@ -1325,6 +1332,23 @@ export function ReviewApp({
               }}
             />
           )}
+        {workspace && target.kind === "source" && (
+          <ReviewOutline
+            open={outlineOpen}
+            onClose={() => setOutlineOpen(false)}
+            sessionId={workspace.sessionId}
+            path={target.path}
+            currentLine={syncedReview.positions?.[target.path]?.line}
+            onSelect={(line) => {
+              setMarkdownPreview(false);
+              setSourceTarget({
+                kind: "source",
+                path: target.path,
+                revealLine: line,
+              });
+            }}
+          />
+        )}
         <Box
           sx={{
             flexShrink: 0,
@@ -1390,9 +1414,7 @@ export function ReviewApp({
                 if (current.some((tab) => reviewTabKey(tab) === key)) {
                   return toggleReviewTabPin(current, key);
                 }
-                const gitTab = gitTabs.find((tab) =>
-                  reviewTabKey(tab) === key
-                );
+                const gitTab = gitTabs.find((tab) => reviewTabKey(tab) === key);
                 return gitTab
                   ? [...current, { ...gitTab, pinned: true }]
                   : current;
@@ -1478,6 +1500,19 @@ export function ReviewApp({
                   <TabUnselected />
                 </IconButton>
               )}
+              {target.kind === "source" && language?.outline && (
+                <IconButton
+                  aria-label="Open file outline"
+                  aria-pressed={outlineOpen}
+                  color={outlineOpen ? "primary" : "default"}
+                  onClick={() => {
+                    navigationHaptic();
+                    setOutlineOpen(true);
+                  }}
+                >
+                  <FormatListBulleted />
+                </IconButton>
+              )}
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
                 isMarkdownReviewPath(target.path) &&
@@ -1536,8 +1571,12 @@ export function ReviewApp({
               <Box sx={{ flex: 1 }} />
               <IconButton
                 aria-label={drawerOpen
-                  ? `Close ${mode === "git" ? "Git changes" : "file tree"} sidebar`
-                  : `Open ${mode === "git" ? "Git changes" : "file tree"} sidebar`}
+                  ? `Close ${
+                    mode === "git" ? "Git changes" : "file tree"
+                  } sidebar`
+                  : `Open ${
+                    mode === "git" ? "Git changes" : "file tree"
+                  } sidebar`}
                 aria-pressed={drawerOpen}
                 sx={{
                   color: "text.primary",

@@ -55,6 +55,7 @@ export interface CodeLanguageCapabilities {
   semanticTokens: boolean;
   hover: boolean;
   navigation: boolean;
+  outline: boolean;
 }
 
 export interface CodeSearchResults {
@@ -137,6 +138,22 @@ export interface CodeNavigation {
   apiVersion: 1;
   path: string;
   locations: CodeLocation[];
+}
+
+export interface CodeDocumentSymbol {
+  name: string;
+  kind: number;
+  start: CodeLanguagePoint;
+  end: CodeLanguagePoint;
+  selectionStart: CodeLanguagePoint;
+  selectionEnd: CodeLanguagePoint;
+  children: CodeDocumentSymbol[];
+}
+
+export interface CodeOutline {
+  apiVersion: 1;
+  path: string;
+  symbols: CodeDocumentSymbol[];
 }
 
 export class CodeApiError extends Error {
@@ -231,7 +248,9 @@ export function fetchCodeHover(
     column: String(column),
   });
   return codeFetch(
-    `/api/code/sessions/${encodeURIComponent(sessionId)}/intelligence/hover?${query}`,
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/intelligence/hover?${query}`,
     signal,
     "no-store",
   );
@@ -255,6 +274,21 @@ export function fetchCodeNavigation(
     `/api/code/sessions/${
       encodeURIComponent(sessionId)
     }/intelligence/navigation?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchCodeOutline(
+  sessionId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeOutline> {
+  const query = new URLSearchParams({ path });
+  return codeFetch(
+    `/api/code/sessions/${
+      encodeURIComponent(sessionId)
+    }/intelligence/outline?${query}`,
     signal,
     "no-store",
   );
