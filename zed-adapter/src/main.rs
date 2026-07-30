@@ -562,60 +562,85 @@ impl ZedRuntime {
         worktree_id: u64,
         path: &Path,
     ) -> Result<(u64, Vec<BufferVersionEntry>)> {
-        let mut events = self.events.subscribe();
-        let response = self
-            .request(proto::envelope::Payload::OpenBufferByPath(
-                proto::OpenBufferByPath {
-                    project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                    worktree_id,
-                    path: path.to_string_lossy().into_owned(),
-                },
-            ))
-            .await?;
-        let Some(proto::envelope::Payload::OpenBufferResponse(response)) = response.payload else {
-            bail!("Zed returned the wrong OpenBufferByPath response");
-        };
-        let buffer_id = response.buffer_id;
-        let version = tokio::time::timeout(Duration::from_secs(5), async {
-            let mut version = HashMap::<u32, u32>::new();
-            let mut received_state = false;
-            loop {
-                let envelope = events.recv().await?;
-                let Some(proto::envelope::Payload::CreateBufferForPeer(message)) = envelope.payload
-                else {
-                    continue;
-                };
-                match message.variant {
-                    Some(proto::create_buffer_for_peer::Variant::State(state))
-                        if state.id == buffer_id =>
-                    {
-                        received_state = true;
-                        merge_version(&mut version, state.saved_version);
-                    }
-                    Some(proto::create_buffer_for_peer::Variant::Chunk(chunk))
-                        if chunk.buffer_id == buffer_id && received_state =>
-                    {
-                        for operation in chunk.operations {
-                            merge_operation_version(&mut version, operation);
+        let mut opened = None;
+        for attempt in 0..2 {
+            let mut events = self.events.subscribe();
+            let response = self
+                .request(proto::envelope::Payload::OpenBufferByPath(
+                    proto::OpenBufferByPath {
+                        project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                        worktree_id,
+                        path: path.to_string_lossy().into_owned(),
+                    },
+                ))
+                .await?;
+            let Some(proto::envelope::Payload::OpenBufferResponse(response)) = response.payload
+            else {
+                bail!("Zed returned the wrong OpenBufferByPath response");
+            };
+            let buffer_id = response.buffer_id;
+            let version = tokio::time::timeout(Duration::from_secs(5), async {
+                let mut version = HashMap::<u32, u32>::new();
+                let mut received_state = false;
+                loop {
+                    let envelope = events.recv().await?;
+                    let Some(proto::envelope::Payload::CreateBufferForPeer(message)) =
+                        envelope.payload
+                    else {
+                        continue;
+                    };
+                    match message.variant {
+                        Some(proto::create_buffer_for_peer::Variant::State(state))
+                            if state.id == buffer_id =>
+                        {
+                            received_state = true;
+                            merge_version(&mut version, state.saved_version);
                         }
-                        if chunk.is_last {
-                            let mut version = version
-                                .into_iter()
-                                .map(|(replica_id, timestamp)| BufferVersionEntry {
-                                    replica_id,
-                                    timestamp,
-                                })
-                                .collect::<Vec<_>>();
-                            version.sort_by_key(|entry| entry.replica_id);
-                            break anyhow::Ok(version);
+                        Some(proto::create_buffer_for_peer::Variant::Chunk(chunk))
+                            if chunk.buffer_id == buffer_id && received_state =>
+                        {
+                            for operation in chunk.operations {
+                                merge_operation_version(&mut version, operation);
+                            }
+                            if chunk.is_last {
+                                let mut version = version
+                                    .into_iter()
+                                    .map(|(replica_id, timestamp)| BufferVersionEntry {
+                                        replica_id,
+                                        timestamp,
+                                    })
+                                    .collect::<Vec<_>>();
+                                version.sort_by_key(|entry| entry.replica_id);
+                                break anyhow::Ok(version);
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                }
+            })
+            .await;
+            match version {
+                Ok(Ok(version)) => {
+                    opened = Some((buffer_id, version));
+                    break;
+                }
+                Ok(Err(error)) if attempt == 1 => {
+                    return Err(error).context("Zed did not publish the initial buffer state");
+                }
+                Err(error) if attempt == 1 => {
+                    return Err(error).context("Zed did not publish the initial buffer state");
+                }
+                Ok(Err(_)) | Err(_) => {
+                    // CloseBuffer is foreground work while OpenBufferByPath is
+                    // background work in Zed's protocol. Sending the close
+                    // before retrying therefore clears a stale shared-buffer
+                    // registration before the second open is handled.
+                    self.close_buffer(buffer_id)?;
                 }
             }
-        })
-        .await
-        .context("Zed did not publish the initial buffer state")??;
+        }
+        let (buffer_id, version) =
+            opened.context("Zed did not publish the initial buffer state")?;
         // Opening shares the buffer contents but, like Zed's own remote client,
         // the peer must explicitly register that buffer with the headless
         // project's language servers. Without this request every later LSP

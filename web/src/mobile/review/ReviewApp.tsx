@@ -131,6 +131,7 @@ function DocumentView({
   onRestoreSymbolConsumed,
   onSymbolOpenChange,
   onVisibleSourceLine,
+  onBufferUnavailable,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
@@ -146,6 +147,7 @@ function DocumentView({
   onRestoreSymbolConsumed: (id: number) => void;
   onSymbolOpenChange: (point: SymbolPoint | undefined) => void;
   onVisibleSourceLine: (line: number) => void;
+  onBufferUnavailable: () => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
@@ -166,6 +168,7 @@ function DocumentView({
   const [hover, setHover] = useState<CodeHover>();
   const [hoverOpen, setHoverOpen] = useState(false);
   const [hoverLoading, setHoverLoading] = useState(false);
+  const [hoverError, setHoverError] = useState(false);
   const [inspectTarget, setInspectTarget] = useState<
     { row: number; column: number } | undefined
   >();
@@ -240,6 +243,7 @@ function DocumentView({
     const controller = new AbortController();
     hoverController.current = controller;
     setHover(undefined);
+    setHoverError(false);
     setHoverLoading(true);
     setHoverOpen(true);
     const ordered = [
@@ -263,17 +267,20 @@ function DocumentView({
         if (value.contents.length > 0 || index === ordered.length - 1) {
           setInspectTarget(candidate);
           setHover(value);
+          setHoverError(false);
           return;
         }
       }
     })().catch(() => {
       if (!controller.signal.aborted) {
         setHover({ apiVersion: 1, path: target.path, contents: [] });
+        setHoverError(true);
+        onBufferUnavailable();
       }
     }).finally(() => {
       if (!controller.signal.aborted) setHoverLoading(false);
     });
-  }, [sessionId, target]);
+  }, [onBufferUnavailable, sessionId, target]);
 
   const inspectCandidatesOrPoint = useCallback((
     candidates: CodeInspectCandidate[],
@@ -290,6 +297,7 @@ function DocumentView({
 
   useEffect(() => {
     setHoverOpen(false);
+    setHoverError(false);
     hoverController.current?.abort();
   }, [closeSymbolRequest]);
 
@@ -617,6 +625,25 @@ function DocumentView({
             <CircularProgress size={24} />
           </Stack>
         )
+        : hoverError
+        ? (
+          <Stack spacing={1.5} alignItems="flex-start" sx={{ py: 2 }}>
+            <Typography color="text.secondary">
+              Symbol information is temporarily unavailable.
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                if (inspectTarget) {
+                  inspectPoint(inspectTarget, inspectCandidates, false);
+                }
+              }}
+            >
+              Retry
+            </Button>
+          </Stack>
+        )
         : hover?.contents.length
         ? hover.contents.map((rawBlock, index) => {
           const block = presentHoverBlock(rawBlock);
@@ -686,7 +713,7 @@ function DocumentView({
             No symbol information is available at this location.
           </Typography>
         )}
-      {!hoverLoading && (
+      {!hoverLoading && !hoverError && (
         <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
           <Button
             size="small"
@@ -1050,6 +1077,10 @@ export function ReviewApp({
   const syncedReviewRef = useRef(syncedReview);
   syncedReviewRef.current = syncedReview;
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
+  const [bufferRecoveryRequest, setBufferRecoveryRequest] = useState(0);
+  const requestBufferRecovery = useCallback((): void => {
+    setBufferRecoveryRequest((request) => request + 1);
+  }, []);
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
     manifestRevision.current = revision;
@@ -1073,6 +1104,7 @@ export function ReviewApp({
     const leaseId = crypto.randomUUID();
     let released = false;
     let opened = false;
+    let openAttempt = 0;
     const retryTimers: number[] = [];
     const release = (): void => {
       if (!opened) return;
@@ -1088,28 +1120,42 @@ export function ReviewApp({
         // unavailable.
         .catch(() => undefined);
     };
-    void openCodeBuffer(sessionId, path, leaseId)
-      .then(() => {
-        opened = true;
-        if (released) {
-          release();
-          return;
-        }
-        loadLanguage();
-        // Zed starts an LSP only after the first buffer registration. Keep the
-        // source visible immediately, then revalidate after typical warm and
-        // cold language-server startup windows.
-        retryTimers.push(globalThis.setTimeout(loadLanguage, 8_000));
-        retryTimers.push(globalThis.setTimeout(loadLanguage, 30_000));
-      })
-      .catch(() => undefined);
+    const acquire = (): void => {
+      const attempt = openAttempt++;
+      void openCodeBuffer(sessionId, path, leaseId)
+        .then(() => {
+          opened = true;
+          if (released) {
+            release();
+            return;
+          }
+          loadLanguage();
+          // Zed starts an LSP only after the first buffer registration. Keep
+          // the source visible immediately, then revalidate after typical warm
+          // and cold language-server startup windows.
+          retryTimers.push(globalThis.setTimeout(loadLanguage, 8_000));
+          retryTimers.push(globalThis.setTimeout(loadLanguage, 30_000));
+        })
+        .catch(() => {
+          if (released || attempt >= 3) return;
+          const delay = [1_000, 4_000, 12_000][attempt] ?? 12_000;
+          retryTimers.push(globalThis.setTimeout(acquire, delay));
+        });
+    };
+    acquire();
     return () => {
       released = true;
       retryTimers.forEach((timer) => globalThis.clearTimeout(timer));
       setLanguageData(undefined);
       release();
     };
-  }, [active, dataRevision, leasedPath, workspace?.sessionId]);
+  }, [
+    active,
+    bufferRecoveryRequest,
+    dataRevision,
+    leasedPath,
+    workspace?.sessionId,
+  ]);
 
   useEffect(() => {
     setManagingTabs(false);
@@ -1662,6 +1708,7 @@ export function ReviewApp({
                   };
                 }
               }}
+              onBufferUnavailable={requestBufferRecovery}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
                 const previous: CodeNavigationEntry = {
