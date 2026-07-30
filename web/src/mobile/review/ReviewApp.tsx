@@ -115,6 +115,7 @@ type ReviewTarget =
 type SymbolPoint = { row: number; column: number };
 type CodeNavigationEntry = Extract<ReviewTarget, { kind: "source" }> & {
   symbol?: SymbolPoint;
+  navigationRange?: Omit<CodeRevealRange, "id">;
 };
 type SymbolRestoreRequest = SymbolPoint & { path: string; id: number };
 
@@ -1276,12 +1277,17 @@ export function ReviewApp({
       setSymbolRestore(undefined);
     }
     const row = Math.max(0, (entry.revealLine ?? 1) - 1);
-    openSource(entry.path, entry.revealLine, true, {
-      start: entry.symbol ?? { row, column: 0 },
-      end: entry.symbol
-        ? { row: entry.symbol.row, column: entry.symbol.column + 1 }
-        : { row, column: Number.MAX_SAFE_INTEGER },
-    });
+    openSource(
+      entry.path,
+      entry.revealLine,
+      true,
+      entry.navigationRange ?? {
+        start: entry.symbol ?? { row, column: 0 },
+        end: entry.symbol
+          ? { row: entry.symbol.row, column: entry.symbol.column + 1 }
+          : { row, column: Number.MAX_SAFE_INTEGER },
+      },
+    );
   };
   const currentNavigationEntry = (): CodeNavigationEntry | undefined => {
     if (target.kind !== "source") return undefined;
@@ -1671,6 +1677,10 @@ export function ReviewApp({
                   kind: "source",
                   path: location.path,
                   revealLine: location.start.row + 1,
+                  navigationRange: {
+                    start: location.start,
+                    end: location.end,
+                  },
                 };
                 openSource(location.path, location.start.row + 1, true, {
                   start: location.start,
