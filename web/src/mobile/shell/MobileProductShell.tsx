@@ -14,6 +14,7 @@ import {
   swipeCommits,
 } from "../../touchGestures";
 import type { Mode as ThemeMode } from "../../theme";
+import { holdStorePresentation } from "../../store";
 import { AgentApp } from "../agent/AgentApp";
 import {
   nextMobileProduct,
@@ -21,6 +22,7 @@ import {
   type PagerGesture,
   pagerOffset,
   pagerTargetOffset,
+  predictPagerOffset,
   shouldReservePagerStart,
   type MobileProduct,
 } from "../appPagerMotion";
@@ -60,58 +62,20 @@ export function MobileProductShell({
   onSetThemeMode: (mode: ThemeMode) => void;
 }): React.JSX.Element {
   const [product, setProduct] = useState<MobileProduct>(restoredProduct);
-  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
-  const [reviewDrawerOpen, setReviewDrawerOpen] = useState(false);
   const productRef = useRef(product);
+  const agentDrawerOpenRef = useRef(false);
+  const reviewDrawerOpenRef = useRef(false);
   const shellRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
   const agentPageRef = useRef<HTMLDivElement>(null);
   const reviewPageRef = useRef<HTMLDivElement>(null);
-  const settleTimerRef = useRef<number | undefined>(undefined);
   const workspace = useActiveWorkspaceBinding();
-
-  const selectProduct = useCallback((next: MobileProduct): void => {
-    const shell = shellRef.current;
-    productRef.current = next;
-    globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
-    if (!shell) {
-      setProduct(next);
-      return;
-    }
-    if (settleTimerRef.current !== undefined) {
-      globalThis.clearTimeout(settleTimerRef.current);
-    }
-    const pages = [agentPageRef.current, reviewPageRef.current];
-    for (const page of pages) {
-      if (!page) continue;
-      page.style.transition = "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)";
-    }
-    const offset = pagerTargetOffset(next, shell.clientWidth);
-    if (agentPageRef.current) {
-      agentPageRef.current.style.transform =
-        `translate3d(${String(offset)}px, 0, 0)`;
-    }
-    if (reviewPageRef.current) {
-      reviewPageRef.current.style.transform =
-        `translate3d(${String(shell.clientWidth + offset)}px, 0, 0)`;
-    }
-    settleTimerRef.current = globalThis.setTimeout(() => {
-      for (const page of pages) page?.style.removeProperty("transition");
-      settleTimerRef.current = undefined;
-      // Keep the settle animation compositor-only. Updating `product` changes
-      // inert/aria state and starts or pauses Review data work, so committing
-      // it on the first animation frame makes iPad WebKit repaint both large
-      // application surfaces while they are moving.
-      setProduct(next);
-    }, 240);
+  const onAgentDrawerOpenChange = useCallback((open: boolean): void => {
+    agentDrawerOpenRef.current = open;
   }, []);
-
-  useEffect(() =>
-    () => {
-      if (settleTimerRef.current !== undefined) {
-        globalThis.clearTimeout(settleTimerRef.current);
-      }
-    }, []);
+  const onReviewDrawerOpenChange = useCallback((open: boolean): void => {
+    reviewDrawerOpenRef.current = open;
+  }, []);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -122,42 +86,124 @@ export function MobileProductShell({
 
     let gesture: PagerGesture | null = null;
     let frame = 0;
-    let pendingOffset = pagerTargetOffset(productRef.current, shell.clientWidth);
+    let settleTimer = 0;
+    let releaseFrame = 0;
+    let releaseIdle: number | undefined;
+    let releasePresentation: (() => void) | undefined;
+    let directManipulationActive = false;
+    let presentationWidth = shell.clientWidth;
+    let currentOffset = pagerTargetOffset(productRef.current, presentationWidth);
+    let pendingOffset = currentOffset;
+    let pendingSampleAt = 0;
+    let pendingVelocity = 0;
 
-    const render = (offset: number): void => {
+    const render = (offset: number, width: number): void => {
+      currentOffset = offset;
       agentPage.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
       reviewPage.style.transform =
-        `translate3d(${String(shell.clientWidth + offset)}px, 0, 0)`;
+        `translate3d(${String(width + offset)}px, 0, 0)`;
     };
-    const scheduleRender = (offset: number): void => {
+    const scheduleRender = (
+      offset: number,
+      sampleAt: number,
+      velocity: number,
+    ): void => {
       pendingOffset = offset;
+      pendingSampleAt = sampleAt;
+      pendingVelocity = velocity;
       if (frame !== 0) return;
-      frame = globalThis.requestAnimationFrame(() => {
+      frame = globalThis.requestAnimationFrame((frameAt) => {
         frame = 0;
-        render(pendingOffset);
+        render(
+          predictPagerOffset(
+            pendingOffset,
+            pendingVelocity,
+            frameAt - pendingSampleAt,
+            presentationWidth,
+          ),
+          presentationWidth,
+        );
       });
     };
-    const settle = (next: MobileProduct): void => {
+    const releaseDirectManipulation = (): void => {
+      const finish = (): void => {
+        releaseIdle = undefined;
+        directManipulationActive = false;
+        shell.removeAttribute("data-mobile-product-moving");
+        releasePresentation?.();
+        releasePresentation = undefined;
+        globalThis.dispatchEvent(
+          new CustomEvent("cowboy:transcript-direct-manipulation-end"),
+        );
+      };
+      releaseFrame = globalThis.requestAnimationFrame(() => {
+        releaseFrame = 0;
+        if (typeof globalThis.requestIdleCallback === "function") {
+          releaseIdle = globalThis.requestIdleCallback(finish, { timeout: 180 });
+        } else {
+          releaseIdle = globalThis.setTimeout(finish, 32);
+        }
+      });
+    };
+    const settle = (
+      next: MobileProduct,
+      releaseVelocity = 0,
+      cachedWidth?: number,
+    ): void => {
+      globalThis.clearTimeout(settleTimer);
+      const releaseOffset = frame !== 0 ? pendingOffset : currentOffset;
       if (frame !== 0) globalThis.cancelAnimationFrame(frame);
       frame = 0;
+      // Complete geometry reads before transition/style writes. Both pages are
+      // large application surfaces, so a forced layout here is expensive.
+      const width = cachedWidth ?? shell.clientWidth;
+      presentationWidth = width;
+      const targetOffset = pagerTargetOffset(next, width);
+      const remaining = Math.min(
+        1,
+        Math.abs(targetOffset - releaseOffset) / width,
+      );
+      const duration = Math.max(
+        150,
+        Math.min(
+          260,
+          160 + remaining * 100 -
+            Math.min(70, Math.abs(releaseVelocity) * 45),
+        ),
+      );
+      const transition =
+        `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+      agentPage.style.transition = transition;
+      reviewPage.style.transition = transition;
+      render(targetOffset, width);
       const changed = next !== productRef.current;
-      selectProduct(next);
+      productRef.current = next;
+      globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
       if (changed) navigationHaptic();
+      settleTimer = globalThis.setTimeout(() => {
+        agentPage.style.removeProperty("transition");
+        reviewPage.style.removeProperty("transition");
+        setProduct(next);
+        if (directManipulationActive) releaseDirectManipulation();
+      }, duration + 20);
     };
     const onTouchStart = (event: TouchEvent): void => {
       const touch = event.touches[0];
       if (!touch) return;
       const ignored = ignoredGestureTarget(event.target, shell);
       const overlayOwnsGesture =
-        (productRef.current === "agent" && agentDrawerOpen) ||
-        (productRef.current === "review" && reviewDrawerOpen);
+        (productRef.current === "agent" && agentDrawerOpenRef.current) ||
+        (productRef.current === "review" && reviewDrawerOpenRef.current);
       if (!shouldReservePagerStart(ignored, overlayOwnsGesture)) {
         gesture = null;
         return;
       }
       const now = performance.now();
+      const width = shell.clientWidth;
+      presentationWidth = width;
       gesture = {
         product: productRef.current,
+        width,
         startX: touch.clientX,
         startY: touch.clientY,
         lastX: touch.clientX,
@@ -171,6 +217,7 @@ export function MobileProductShell({
       const touch = event.touches[0];
       if (!gesture || !touch) return;
       if (expandedSelection(globalThis.getSelection?.() ?? null)) {
+        if (gesture.locked) settle(gesture.product, 0, gesture.width);
         gesture = null;
         return;
       }
@@ -191,7 +238,22 @@ export function MobileProductShell({
         : horizontalSwipe(deltaX, deltaY, 8, 1.15);
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
       if (!gesture.locked) {
+        if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
+        if (releaseIdle !== undefined) {
+          if (typeof globalThis.cancelIdleCallback === "function") {
+            globalThis.cancelIdleCallback(releaseIdle);
+          } else {
+            globalThis.clearTimeout(releaseIdle);
+          }
+          releaseIdle = undefined;
+        }
         gesture.locked = true;
+        releasePresentation ??= holdStorePresentation();
+        directManipulationActive = true;
+        shell.setAttribute("data-mobile-product-moving", "true");
+        globalThis.dispatchEvent(
+          new CustomEvent("cowboy:transcript-direct-manipulation-start"),
+        );
         agentPage.style.transition = "none";
         reviewPage.style.transition = "none";
         agentPage.style.willChange = "transform";
@@ -205,7 +267,11 @@ export function MobileProductShell({
       gesture.velocity = gesture.velocity * 0.65 + velocity * 0.35;
       gesture.lastX = touch.clientX;
       gesture.lastAt = now;
-      scheduleRender(pagerOffset(gesture.product, deltaX, shell.clientWidth));
+      scheduleRender(
+        pagerOffset(gesture.product, deltaX, gesture.width),
+        now,
+        gesture.velocity,
+      );
     };
     const onTouchEnd = (): void => {
       if (!gesture) return;
@@ -217,22 +283,27 @@ export function MobileProductShell({
       const velocityCommits = gesture.product === "agent"
         ? gesture.velocity <= -VELOCITY_COMMIT_PX_PER_MS
         : gesture.velocity >= VELOCITY_COMMIT_PX_PER_MS;
-      const next = velocityCommits || swipeCommits(distance, shell.clientWidth)
+      const next = velocityCommits || swipeCommits(distance, gesture.width)
         ? nextMobileProduct(gesture.product)
         : gesture.product;
+      const velocity = gesture.velocity;
+      const width = gesture.width;
       gesture = null;
-      settle(next);
+      settle(next, velocity, width);
     };
     const onTouchCancel = (): void => {
       const current = gesture?.product ?? productRef.current;
+      const width = gesture?.width;
       gesture = null;
-      settle(current);
+      settle(current, 0, width);
     };
-    const onResize = (): void => render(
-      pagerTargetOffset(productRef.current, shell.clientWidth),
-    );
+    const onResize = (): void => {
+      const width = shell.clientWidth;
+      presentationWidth = width;
+      render(pagerTargetOffset(productRef.current, width), width);
+    };
 
-    render(pagerTargetOffset(productRef.current, shell.clientWidth));
+    render(currentOffset, presentationWidth);
     shell.addEventListener("touchstart", onTouchStart, {
       capture: true,
       passive: true,
@@ -256,9 +327,25 @@ export function MobileProductShell({
       shell.removeEventListener("touchend", onTouchEnd, true);
       shell.removeEventListener("touchcancel", onTouchCancel, true);
       globalThis.removeEventListener("resize", onResize);
+      globalThis.clearTimeout(settleTimer);
       if (frame !== 0) globalThis.cancelAnimationFrame(frame);
+      if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
+      if (releaseIdle !== undefined) {
+        if (typeof globalThis.cancelIdleCallback === "function") {
+          globalThis.cancelIdleCallback(releaseIdle);
+        } else {
+          globalThis.clearTimeout(releaseIdle);
+        }
+      }
+      releasePresentation?.();
+      shell.removeAttribute("data-mobile-product-moving");
+      if (directManipulationActive) {
+        globalThis.dispatchEvent(
+          new CustomEvent("cowboy:transcript-direct-manipulation-end"),
+        );
+      }
     };
-  }, [agentDrawerOpen, reviewDrawerOpen, selectProduct]);
+  }, []);
 
   return (
     <Box
@@ -270,6 +357,9 @@ export function MobileProductShell({
         overflow: "hidden",
         position: "relative",
         bgcolor: "background.default",
+        "&[data-mobile-product-moving='true'] *": {
+          animationPlayState: "paused !important",
+        },
       }}
     >
       <MobileConnectionBanner store={controlPlaneConnection} />
@@ -312,7 +402,7 @@ export function MobileProductShell({
           <AgentApp
             themeMode={themeMode}
             onSetThemeMode={onSetThemeMode}
-            onDrawerOpenChange={setAgentDrawerOpen}
+            onDrawerOpenChange={onAgentDrawerOpenChange}
           />
         </Box>
         <Box
@@ -338,7 +428,7 @@ export function MobileProductShell({
         >
           <ReviewApp
             active={product === "review"}
-            onDrawerOpenChange={setReviewDrawerOpen}
+            onDrawerOpenChange={onReviewDrawerOpenChange}
           />
         </Box>
       </Box>

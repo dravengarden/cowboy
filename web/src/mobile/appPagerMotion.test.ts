@@ -4,8 +4,15 @@ import {
   pagerDirectionAllowed,
   pagerOffset,
   pagerTargetOffset,
+  predictPagerOffset,
   shouldReservePagerStart,
 } from "./appPagerMotion.ts";
+
+Deno.test("pager prediction removes one-frame lag without escaping the rail", () => {
+  assertEquals(predictPagerOffset(-120, -0.5, 16, 390), -128);
+  assertEquals(predictPagerOffset(-380, -2, 24, 390), -390);
+  assertEquals(predictPagerOffset(-8, 2, 24, 390), 0);
+});
 
 Deno.test("Agent left swipe and Review right swipe are the only app transitions", () => {
   assertEquals(pagerDirectionAllowed("agent", -40), true);

@@ -2,12 +2,24 @@ export type MobileProduct = "agent" | "review";
 
 export interface PagerGesture {
   product: MobileProduct;
+  width: number;
   startX: number;
   startY: number;
   lastX: number;
   lastAt: number;
   velocity: number;
   locked: boolean;
+}
+
+export function predictPagerOffset(
+  offset: number,
+  velocityPxPerMs: number,
+  frameAgeMs: number,
+  viewportWidth: number,
+): number {
+  const width = Math.max(1, viewportWidth);
+  const horizon = Math.max(0, Math.min(24, frameAgeMs));
+  return Math.max(-width, Math.min(0, offset + velocityPxPerMs * horizon));
 }
 
 export function pagerDirectionAllowed(
