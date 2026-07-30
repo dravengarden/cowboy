@@ -110,6 +110,7 @@ type ReviewTarget =
     path: string;
     revealLine?: number;
     revealRange?: CodeRevealRange;
+    revealRequestId?: number;
   };
 
 type SymbolPoint = { row: number; column: number };
@@ -899,6 +900,9 @@ function DocumentView({
                 revealRange={target.kind === "source"
                   ? target.revealRange
                   : undefined}
+                revealRequestId={target.kind === "source"
+                  ? target.revealRequestId
+                  : undefined}
                 languageData={target.kind === "source"
                   ? languageData
                   : undefined}
@@ -1268,7 +1272,12 @@ export function ReviewApp({
         : {
           kind: "source",
           path,
-          ...(line === undefined ? {} : { revealLine: line }),
+          ...(line === undefined
+            ? {}
+            : {
+              revealLine: line,
+              revealRequestId: ++revealRangeId.current,
+            }),
         }
     );
   }, [syncedReview.active, workspace?.sessionId]);
@@ -1279,6 +1288,9 @@ export function ReviewApp({
     preserveNavigation = false,
     revealRange?: Omit<CodeRevealRange, "id">,
   ): void => {
+    const revealRequestId = revealLine !== undefined || revealRange
+      ? ++revealRangeId.current
+      : undefined;
     currentVisibleLine.current = revealLine;
     if (!preserveNavigation) {
       currentNavigationFrame.current = {
@@ -1297,8 +1309,9 @@ export function ReviewApp({
       kind: "source",
       path,
       ...(revealLine === undefined ? {} : { revealLine }),
+      ...(revealRequestId === undefined ? {} : { revealRequestId }),
       ...(revealRange
-        ? { revealRange: { ...revealRange, id: ++revealRangeId.current } }
+        ? { revealRange: { ...revealRange, id: revealRequestId! } }
         : {}),
     });
     setTabs((current) =>
@@ -1753,6 +1766,7 @@ export function ReviewApp({
                 kind: "source",
                 path: target.path,
                 revealLine: line,
+                revealRequestId: ++revealRangeId.current,
               });
             }}
           />

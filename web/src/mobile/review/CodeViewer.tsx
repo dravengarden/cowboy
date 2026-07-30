@@ -342,6 +342,7 @@ export default function CodeViewer({
   fontSize,
   revealLine,
   revealRange,
+  revealRequestId,
   languageData,
   diagnostics,
   inlayHints,
@@ -356,6 +357,7 @@ export default function CodeViewer({
   fontSize: number;
   revealLine?: number | undefined;
   revealRange?: CodeRevealRange | undefined;
+  revealRequestId?: number | undefined;
   languageData?: CodeLanguage | undefined;
   diagnostics: boolean;
   inlayHints: boolean;
@@ -368,6 +370,7 @@ export default function CodeViewer({
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
+  const appliedRevealRequest = useRef<number | undefined>(undefined);
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
 
   useEffect(() => {
@@ -727,7 +730,12 @@ export default function CodeViewer({
 
   useEffect(() => {
     const view = editorRef.current;
-    if (!view || (revealLine === undefined && revealRange === undefined)) {
+    if (
+      !view ||
+      revealRequestId === undefined ||
+      appliedRevealRequest.current === revealRequestId ||
+      (revealLine === undefined && revealRange === undefined)
+    ) {
       return;
     }
     const targetLine = revealRange
@@ -736,42 +744,50 @@ export default function CodeViewer({
     const line = view.state.doc.line(
       Math.max(1, Math.min(targetLine, view.state.doc.lines)),
     );
-    const effects: StateEffect<unknown>[] = [
-      EditorView.scrollIntoView(line.from, {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(line.from, {
         y: revealRange ? "center" : "start",
         yMargin: revealRange ? 48 : 12,
       }),
-    ];
-    if (revealRange) {
-      const endLine = view.state.doc.line(
-        Math.max(
-          1,
-          Math.min(revealRange.end.row + 1, view.state.doc.lines),
-        ),
-      );
-      const from = Math.min(
-        Math.max(0, view.state.doc.length - 1),
-        Math.min(line.to, line.from + revealRange.start.column),
-      );
-      const to = Math.min(
-        view.state.doc.length,
-        Math.max(
-          from + 1,
-          Math.min(endLine.to, endLine.from + revealRange.end.column),
-        ),
-      );
-      if (to > from) {
-        effects.push(revealNavigationTarget.of({
-          from,
-          to,
-          id: revealRange.id,
-        }));
-      }
-    }
-    view.dispatch({
-      effects,
     });
-  }, [extensions, revealLine, revealRange, text]);
+    appliedRevealRequest.current = revealRequestId;
+  }, [revealLine, revealRange, revealRequestId, text]);
+
+  useEffect(() => {
+    const view = editorRef.current;
+    if (!view || !revealRange || view.state.doc.length === 0) return;
+    const line = view.state.doc.line(
+      Math.max(
+        1,
+        Math.min(revealRange.start.row + 1, view.state.doc.lines),
+      ),
+    );
+    const endLine = view.state.doc.line(
+      Math.max(
+        1,
+        Math.min(revealRange.end.row + 1, view.state.doc.lines),
+      ),
+    );
+    const from = Math.min(
+      Math.max(0, view.state.doc.length - 1),
+      Math.min(line.to, line.from + revealRange.start.column),
+    );
+    const to = Math.min(
+      view.state.doc.length,
+      Math.max(
+        from + 1,
+        Math.min(endLine.to, endLine.from + revealRange.end.column),
+      ),
+    );
+    if (to <= from) return;
+    view.dispatch({
+      effects: revealNavigationTarget.of({
+        from,
+        to,
+        id: revealRange.id,
+      }),
+    });
+  }, [extensions, revealRange, text]);
 
   return (
     <Box
