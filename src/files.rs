@@ -92,6 +92,9 @@ pub fn directory(
         let Ok(file_type) = dirent.file_type() else {
             continue;
         };
+        if file_type.is_symlink() && (name == "result" || name.starts_with("result-")) {
+            continue;
+        }
         let path = relative.join(&name);
         entries.push(DirectoryEntry {
             name,
@@ -299,6 +302,22 @@ mod tests {
         assert!(!truncated);
         let (standalone, _) = directory(&dir, "projects/standalone", 20).unwrap();
         assert!(standalone.iter().any(|entry| entry.name == "src"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_skips_nix_result_links_without_hiding_source() {
+        use std::os::unix::fs::symlink;
+
+        let dir = scratch("nix-results");
+        symlink(dir.join("src"), dir.join("result")).unwrap();
+        symlink(dir.join("src"), dir.join("result-web")).unwrap();
+
+        let (entries, _) = directory(&dir, "", 20).unwrap();
+        assert!(entries.iter().any(|entry| entry.name == "src"));
+        assert!(!entries.iter().any(|entry| entry.name == "result"));
+        assert!(!entries.iter().any(|entry| entry.name == "result-web"));
         fs::remove_dir_all(&dir).unwrap();
     }
 }
