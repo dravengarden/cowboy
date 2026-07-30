@@ -126,6 +126,7 @@ function DocumentView({
   languageData,
   onNavigate,
   restoreSymbol,
+  closeSymbolRequest,
   onRestoreSymbolConsumed,
   onSymbolOpenChange,
   onVisibleSourceLine,
@@ -140,6 +141,7 @@ function DocumentView({
     origin: { row: number; column: number },
   ) => void;
   restoreSymbol?: SymbolRestoreRequest | undefined;
+  closeSymbolRequest: number;
   onRestoreSymbolConsumed: (id: number) => void;
   onSymbolOpenChange: (point: SymbolPoint | undefined) => void;
   onVisibleSourceLine: (line: number) => void;
@@ -284,6 +286,11 @@ function DocumentView({
   useEffect(() => {
     onSymbolOpenChange(hoverOpen ? inspectTarget : undefined);
   }, [hoverOpen, inspectTarget, onSymbolOpenChange]);
+
+  useEffect(() => {
+    setHoverOpen(false);
+    hoverController.current?.abort();
+  }, [closeSymbolRequest]);
 
   useEffect(() => {
     if (
@@ -1028,8 +1035,12 @@ export function ReviewApp({
     CodeNavigationEntry[]
   >([]);
   const [symbolRestore, setSymbolRestore] = useState<SymbolRestoreRequest>();
+  const [closeSymbolRequest, setCloseSymbolRequest] = useState(0);
   const currentSymbol = useRef<SymbolPoint | undefined>(undefined);
   const currentVisibleLine = useRef<number | undefined>(undefined);
+  const currentNavigationFrame = useRef<CodeNavigationEntry | undefined>(
+    undefined,
+  );
   const symbolRestoreId = useRef(0);
   const revealRangeId = useRef(0);
   const [managingTabs, setManagingTabs] = useState(false);
@@ -1218,6 +1229,13 @@ export function ReviewApp({
     revealRange?: Omit<CodeRevealRange, "id">,
   ): void => {
     currentVisibleLine.current = revealLine;
+    if (!preserveNavigation) {
+      currentNavigationFrame.current = {
+        kind: "source",
+        path,
+        ...(revealLine === undefined ? {} : { revealLine }),
+      };
+    }
     setCurrentRevision(undefined);
     setMode("files");
     if (workspace?.sessionId) {
@@ -1244,8 +1262,10 @@ export function ReviewApp({
     setCloseRequest((value) => value + 1);
   };
   const restoreNavigationEntry = (entry: CodeNavigationEntry): void => {
+    currentNavigationFrame.current = entry;
     currentSymbol.current = undefined;
     currentVisibleLine.current = entry.revealLine;
+    setCloseSymbolRequest((value) => value + 1);
     if (entry.symbol) {
       setSymbolRestore({
         path: entry.path,
@@ -1265,15 +1285,14 @@ export function ReviewApp({
   };
   const currentNavigationEntry = (): CodeNavigationEntry | undefined => {
     if (target.kind !== "source") return undefined;
+    const frame = currentNavigationFrame.current;
+    if (frame?.path === target.path) return frame;
     return {
       kind: "source",
       path: target.path,
       ...(currentVisibleLine.current === undefined
-        ? target.revealLine === undefined
-          ? {}
-          : { revealLine: target.revealLine }
+        ? {}
         : { revealLine: currentVisibleLine.current }),
-      ...(currentSymbol.current ? { symbol: currentSymbol.current } : {}),
     };
   };
   const navigateBack = (): void => {
@@ -1606,6 +1625,7 @@ export function ReviewApp({
                 ? languageData
                 : undefined}
               restoreSymbol={symbolRestore}
+              closeSymbolRequest={closeSymbolRequest}
               onRestoreSymbolConsumed={(id) => {
                 setSymbolRestore((request) =>
                   request?.id === id ? undefined : request
@@ -1613,9 +1633,24 @@ export function ReviewApp({
               }}
               onSymbolOpenChange={(point) => {
                 currentSymbol.current = point;
+                const frame = currentNavigationFrame.current;
+                if (frame && frame.path === target.path) {
+                  const { symbol: _symbol, ...frameWithoutSymbol } = frame;
+                  currentNavigationFrame.current = {
+                    ...frameWithoutSymbol,
+                    ...(point ? { symbol: point } : {}),
+                  };
+                }
               }}
               onVisibleSourceLine={(line) => {
                 currentVisibleLine.current = line;
+                const frame = currentNavigationFrame.current;
+                if (frame && frame.path === target.path) {
+                  currentNavigationFrame.current = {
+                    ...frame,
+                    revealLine: line,
+                  };
+                }
               }}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
@@ -1630,7 +1665,13 @@ export function ReviewApp({
                 );
                 setNavigationForwardHistory([]);
                 setSymbolRestore(undefined);
+                setCloseSymbolRequest((value) => value + 1);
                 currentSymbol.current = undefined;
+                currentNavigationFrame.current = {
+                  kind: "source",
+                  path: location.path,
+                  revealLine: location.start.row + 1,
+                };
                 openSource(location.path, location.start.row + 1, true, {
                   start: location.start,
                   end: location.end,
