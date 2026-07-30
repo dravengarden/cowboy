@@ -475,48 +475,52 @@ function DocumentView({
       </Alert>
     );
   }
+  const candidateSwitcher = inspectCandidates.length > 1
+    ? (
+      <Stack
+        component="span"
+        direction="row"
+        useFlexGap
+        gap={0.5}
+        sx={{
+          minWidth: 0,
+          maxWidth: "min(58vw, 430px)",
+          overflowX: "auto",
+          scrollbarWidth: "none",
+          "&::-webkit-scrollbar": { display: "none" },
+        }}
+      >
+        {inspectCandidates.map((candidate) => {
+          const selected = candidate.row === inspectTarget?.row &&
+            candidate.column === inspectTarget.column;
+          return (
+            <Chip
+              key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+              label={candidate.label}
+              size="small"
+              color={selected ? "primary" : "default"}
+              variant={selected ? "filled" : "outlined"}
+              clickable={!selected}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={selected ? undefined : () => {
+                navigationHaptic();
+                inspectPoint(candidate, inspectCandidates, false);
+              }}
+              sx={{
+                flex: "0 0 auto",
+                height: 32,
+                borderRadius: 1.75,
+                fontFamily: "var(--cowboy-font-mono)",
+                fontWeight: selected ? 700 : 500,
+              }}
+            />
+          );
+        })}
+      </Stack>
+    )
+    : null;
   const symbolContent = (
     <Stack spacing={1.5} sx={{ pb: 2 }}>
-      {inspectCandidates.length > 1 && (
-        <Stack
-          direction="row"
-          useFlexGap
-          gap={0.75}
-          sx={{
-            mx: -0.25,
-            px: 0.25,
-            pb: 0.25,
-            overflowX: "auto",
-            scrollbarWidth: "none",
-            "&::-webkit-scrollbar": { display: "none" },
-          }}
-        >
-          {inspectCandidates.map((candidate) => {
-            const selected = candidate.row === inspectTarget?.row &&
-              candidate.column === inspectTarget.column;
-            return (
-              <Chip
-                key={`${candidate.row}:${candidate.column}:${candidate.label}`}
-                label={candidate.label}
-                color={selected ? "primary" : "default"}
-                variant={selected ? "filled" : "outlined"}
-                clickable={!selected}
-                onClick={selected ? undefined : () => {
-                  navigationHaptic();
-                  inspectPoint(candidate, inspectCandidates, false);
-                }}
-                sx={{
-                  flex: "0 0 auto",
-                  minHeight: 36,
-                  borderRadius: 2,
-                  fontFamily: "var(--cowboy-font-mono)",
-                  fontWeight: selected ? 700 : 500,
-                }}
-              />
-            );
-          })}
-        </Stack>
-      )}
       {(navigationBackCount > 0 || navigationForwardCount > 0) && (
         <Stack
           direction="row"
@@ -838,7 +842,19 @@ function DocumentView({
             <Sheet
               open={hoverOpen}
               onClose={() => setHoverOpen(false)}
-              title="Symbol"
+              title={
+                <Stack
+                  component="span"
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  gap={1}
+                  sx={{ width: "100%", minWidth: 0 }}
+                >
+                  <span>Symbol</span>
+                  {candidateSwitcher}
+                </Stack>
+              }
               forceSheet
             >
               {symbolContent}
@@ -870,6 +886,10 @@ function DocumentView({
             >
               <Box
                 sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 2,
                   px: 2.5,
                   py: 1.75,
                   borderBottom: 1,
@@ -877,23 +897,26 @@ function DocumentView({
                   bgcolor: "background.paper",
                 }}
               >
-                <Typography variant="subtitle1" fontWeight={750}>
-                  Symbol
-                </Typography>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{
-                    display: "block",
-                    mt: 0.25,
-                    fontFamily: "var(--cowboy-font-mono)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {target.path}
-                </Typography>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="subtitle1" fontWeight={750}>
+                    Symbol
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{
+                      display: "block",
+                      mt: 0.25,
+                      fontFamily: "var(--cowboy-font-mono)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {target.path}
+                  </Typography>
+                </Box>
+                {candidateSwitcher}
               </Box>
               <Box
                 sx={{
