@@ -927,7 +927,14 @@ function TranscriptImage(
         {...openTap}
         sx={{
           maxWidth: "min(360px, 100%)",
-          maxHeight: "min(55vh, 480px)",
+          // A portrait screenshot must remain a preview, not become a second
+          // full-height viewport inside the conversation. The shared lightbox
+          // owns full-resolution reading after a tap.
+          maxHeight: {
+            xs: "min(38dvh, 320px)",
+            sm: "min(48dvh, 420px)",
+            md: "min(55vh, 480px)",
+          },
           objectFit: "contain",
           display: "block",
           borderRadius: 1,

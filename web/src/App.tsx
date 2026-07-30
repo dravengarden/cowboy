@@ -2787,9 +2787,19 @@ export function App({
                             // iOS frosted material; content scrolling under it diffuses
                             // (not shows) through the blur. Up-shadow + top hairline give
                             // the "floating above the scroll" depth, now on the slab.
-                            bgcolor: (t) => alpha(t.palette.background.default, t.palette.mode === "dark" ? 0.72 : 0.76),
-                            backdropFilter: "blur(30px) saturate(200%)",
-                            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+                            // Saturated image bubbles remain visually loud through
+                            // a thin, highly saturated glass layer and can look as
+                            // if they paint above the composer. Keep the transcript
+                            // physically underneath, but make this interaction
+                            // surface materially opaque and reduce colour lift.
+                            bgcolor: (t) =>
+                                alpha(
+                                    t.palette.background.default,
+                                    t.palette.mode === "dark" ? 0.86 : 0.92,
+                                ),
+                            backdropFilter: "blur(36px) saturate(125%)",
+                            WebkitBackdropFilter:
+                                "blur(36px) saturate(125%)",
                     }}
                 />
                 )}
