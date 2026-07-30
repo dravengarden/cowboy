@@ -640,6 +640,39 @@ func TestExtractsPsqlCommandFromCombinedShortOptions(t *testing.T) {
 	t.Fatalf("expected combined -Atc to produce a SQL frame: %#v", display.Frames)
 }
 
+func TestExtractsDuckDBCommandAsSQLFrame(t *testing.T) {
+	source := `duckdb -c "WITH active(dex, coin, maker_fee_bp) AS (VALUES ('hyena', 'BTC', 3.3333), ('hyena', 'ETH', 3.3333)) SELECT dex, avg(maker_fee_bp) FROM active GROUP BY dex ORDER BY dex"`
+	display, err := formatShellDisplay(source, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range display.Frames {
+		if frame.Language != "sql" {
+			continue
+		}
+		if frame.Dialect != "sql" || frame.Launcher != "duckdb -c" {
+			t.Fatalf("expected DuckDB SQL metadata: %#v", frame)
+		}
+		if !strings.Contains(frame.Text, "WITH active") || !strings.Contains(frame.Text, "'hyena'") {
+			t.Fatalf("DuckDB SQL payload was not decoded intact: %q", frame.Text)
+		}
+		return
+	}
+	t.Fatalf("expected duckdb -c to produce a SQL frame: %#v", display.Frames)
+}
+
+func TestLeavesDynamicDuckDBPayloadInShellFrame(t *testing.T) {
+	display, err := formatShellDisplay(`duckdb -c "$QUERY"`, 46)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range display.Frames {
+		if frame.Language == "sql" {
+			t.Fatalf("dynamic DuckDB SQL cannot be safely extracted: %#v", display.Frames)
+		}
+	}
+}
+
 func TestRejectsValueTakingPsqlOptionAsCommandCluster(t *testing.T) {
 	display, err := formatShellDisplay(`psql database -fc 'select id from sessions where active'`, 46)
 	if err != nil {

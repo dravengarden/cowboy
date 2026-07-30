@@ -645,19 +645,21 @@ func jqNeedsFrame(source string) bool {
 	return operators >= 2 || maxDepth >= 2
 }
 
-// sqlClientPayload extracts decoded SQL from PostgreSQL's client. staticWord
-// is the authority for shell quote removal; dynamic payloads stay as Bash.
+// sqlClientPayload extracts decoded SQL from supported command-line clients.
+// staticWord is the authority for shell quote removal; dynamic payloads stay
+// as Bash.
 func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 	if len(args) < 3 {
 		return nestedPayload{}, false
 	}
 	command, static := staticWord(args[0])
-	if !static || filepath.Base(command) != "psql" {
+	if !static {
 		return nestedPayload{}, false
 	}
+	client := filepath.Base(command)
 	for index := 1; index+1 < len(args); index++ {
 		option, ok := staticWord(args[index])
-		if !ok || !psqlCommandOption(option) {
+		if !ok || !sqlCommandOption(client, option) {
 			continue
 		}
 		value, ok := staticWord(args[index+1])
@@ -670,12 +672,27 @@ func sqlClientPayload(args []*syntax.Word) (nestedPayload, bool) {
 		if !sqlNeedsFrame(value) {
 			return nestedPayload{}, false
 		}
+		dialect := "sql"
+		if client == "psql" {
+			dialect = "postgresql"
+		}
 		return nestedPayload{
 			start: int(args[index+1].Pos().Offset()), end: int(args[index+1].End().Offset()),
-			launcher: "psql " + option, payload: value, language: "sql", label: "SQL", dialect: "postgresql",
+			launcher: client + " " + option, payload: value, language: "sql", label: "SQL", dialect: dialect,
 		}, true
 	}
 	return nestedPayload{}, false
+}
+
+func sqlCommandOption(client, option string) bool {
+	switch client {
+	case "psql":
+		return psqlCommandOption(option)
+	case "duckdb":
+		return option == "-c"
+	default:
+		return false
+	}
 }
 
 // psql accepts its argument-free short options as a cluster, so the command
