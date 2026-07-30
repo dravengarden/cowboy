@@ -217,13 +217,17 @@ function DocumentView({
     };
   }, [revision, sessionId, target]);
 
-  const inspectPoint = useCallback((point: {
-    row: number;
-    column: number;
-  }): void => {
+  const inspectPoint = useCallback((
+    point: {
+      row: number;
+      column: number;
+    },
+    candidates: CodeInspectCandidate[] = [],
+    autoFallback = true,
+  ): void => {
     if (target.kind === "diff" && target.scope !== "unstaged") return;
     setInspectTarget(point);
-    setInspectCandidates([]);
+    setInspectCandidates(candidates);
     setNavigation([]);
     hoverController.current?.abort();
     const controller = new AbortController();
@@ -231,15 +235,31 @@ function DocumentView({
     setHover(undefined);
     setHoverLoading(true);
     setHoverOpen(true);
-    void fetchCodeHover(
-      sessionId,
-      target.path,
-      point.row,
-      point.column,
-      controller.signal,
-    ).then((value) => {
-      if (!controller.signal.aborted) setHover(value);
-    }).catch(() => {
+    const ordered = [
+      point,
+      ...(autoFallback
+        ? candidates.filter((candidate) =>
+          candidate.row !== point.row || candidate.column !== point.column
+        )
+        : []),
+    ];
+    void (async () => {
+      for (const [index, candidate] of ordered.entries()) {
+        const value = await fetchCodeHover(
+          sessionId,
+          target.path,
+          candidate.row,
+          candidate.column,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        if (value.contents.length > 0 || index === ordered.length - 1) {
+          setInspectTarget(candidate);
+          setHover(value);
+          return;
+        }
+      }
+    })().catch(() => {
       if (!controller.signal.aborted) {
         setHover({ apiVersion: 1, path: target.path, contents: [] });
       }
@@ -254,16 +274,7 @@ function DocumentView({
   ): void => {
     setInspectAnchor(anchor);
     navigationHaptic();
-    if (candidates.length === 1) {
-      inspectPoint(candidates[0]!);
-      return;
-    }
-    hoverController.current?.abort();
-    setHover(undefined);
-    setHoverLoading(false);
-    setNavigation([]);
-    setInspectCandidates(candidates);
-    setHoverOpen(true);
+    inspectPoint(candidates[0]!, candidates);
   }, [inspectPoint]);
 
   useEffect(() => {
@@ -466,6 +477,46 @@ function DocumentView({
   }
   const symbolContent = (
     <Stack spacing={1.5} sx={{ pb: 2 }}>
+      {inspectCandidates.length > 1 && (
+        <Stack
+          direction="row"
+          useFlexGap
+          gap={0.75}
+          sx={{
+            mx: -0.25,
+            px: 0.25,
+            pb: 0.25,
+            overflowX: "auto",
+            scrollbarWidth: "none",
+            "&::-webkit-scrollbar": { display: "none" },
+          }}
+        >
+          {inspectCandidates.map((candidate) => {
+            const selected = candidate.row === inspectTarget?.row &&
+              candidate.column === inspectTarget.column;
+            return (
+              <Chip
+                key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+                label={candidate.label}
+                color={selected ? "primary" : "default"}
+                variant={selected ? "filled" : "outlined"}
+                clickable={!selected}
+                onClick={selected ? undefined : () => {
+                  navigationHaptic();
+                  inspectPoint(candidate, inspectCandidates, false);
+                }}
+                sx={{
+                  flex: "0 0 auto",
+                  minHeight: 36,
+                  borderRadius: 2,
+                  fontFamily: "var(--cowboy-font-mono)",
+                  fontWeight: selected ? 700 : 500,
+                }}
+              />
+            );
+          })}
+        </Stack>
+      )}
       {(navigationBackCount > 0 || navigationForwardCount > 0) && (
         <Stack
           direction="row"
@@ -508,36 +559,7 @@ function DocumentView({
           </IconButton>
         </Stack>
       )}
-      {inspectCandidates.length > 0
-        ? (
-          <>
-            <Typography color="text.secondary">
-              Choose the symbol you meant to inspect.
-            </Typography>
-            {inspectCandidates.map((candidate) => (
-              <Button
-                key={`${candidate.row}:${candidate.column}:${candidate.label}`}
-                variant="outlined"
-                sx={{
-                  justifyContent: "space-between",
-                  textTransform: "none",
-                  minHeight: 48,
-                }}
-                onClick={() => inspectPoint(candidate)}
-              >
-                <span>{candidate.label}</span>
-                <Typography
-                  component="span"
-                  variant="caption"
-                  color="text.secondary"
-                >
-                  line {candidate.row + 1}
-                </Typography>
-              </Button>
-            ))}
-          </>
-        )
-        : hoverLoading
+      {hoverLoading
         ? (
           <Stack alignItems="center" sx={{ py: 4 }}>
             <CircularProgress size={24} />
@@ -612,7 +634,7 @@ function DocumentView({
             No symbol information is available at this location.
           </Typography>
         )}
-      {inspectCandidates.length === 0 && !hoverLoading && (
+      {!hoverLoading && (
         <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
           <Button
             size="small"
