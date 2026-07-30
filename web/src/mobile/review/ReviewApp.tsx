@@ -1113,7 +1113,6 @@ export function ReviewApp({
 
   useEffect(() => {
     if (
-      !active ||
       !workspace?.sessionId ||
       !leasedPath
     ) {
@@ -1171,7 +1170,6 @@ export function ReviewApp({
       release();
     };
   }, [
-    active,
     bufferRecoveryRequest,
     dataRevision,
     leasedPath,
