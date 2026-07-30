@@ -5,8 +5,8 @@ import {
   Clear,
   DataObjectOutlined,
   DiamondOutlined,
+  KeyOutlined,
   Search,
-  TableRowsOutlined,
 } from "@mui/icons-material";
 import {
   Alert,
@@ -74,7 +74,7 @@ function SymbolCategoryIcon({
     );
   }
   if (category === "method") return <CodeOutlined />;
-  if (category === "field") return <TableRowsOutlined />;
+  if (category === "field") return <KeyOutlined />;
   if (category === "constant") return <DiamondOutlined />;
   if (category === "object") return <AccountTreeOutlined />;
   return <AdjustOutlined />;
