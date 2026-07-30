@@ -2259,7 +2259,13 @@ async fn api_code_manifest(
     } else {
         "unavailable"
     };
-    let etag = format!("\"{}-{language_state}\"", manifest.revision);
+    // Capability fields are part of this cached representation. Bump the
+    // contract tag whenever that shape grows so installed Mobile clients do
+    // not retain an older 304-backed manifest after a deploy.
+    let etag = format!(
+        "\"code-manifest-v2-{}-{language_state}\"",
+        manifest.revision
+    );
     const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
     if headers
         .get(header::IF_NONE_MATCH)
