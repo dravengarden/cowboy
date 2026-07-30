@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   adjacentReviewTabAfterClose,
+  closeAllReviewTabs,
   closeOtherReviewTabs,
   closeReviewTab,
   openReviewTab,
@@ -28,6 +29,20 @@ Deno.test("close others preserves pinned tabs", () => {
     "source:b.rs",
   );
   assertEquals(tabs.map(reviewTabKey), ["source:a.rs", "source:b.rs"]);
+});
+
+Deno.test("close all affects only the selected review mode", () => {
+  const diff: ReviewTab = {
+    kind: "diff",
+    path: "change.rs",
+    scope: "unstaged",
+    pinned: false,
+  };
+  assertEquals(
+    closeAllReviewTabs([source("a.rs", true), source("b.rs"), diff], "source")
+      .map(reviewTabKey),
+    ["diff:unstaged:change.rs"],
+  );
 });
 
 Deno.test("tabs can be pinned and closed", () => {

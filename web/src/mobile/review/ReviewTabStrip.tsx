@@ -25,6 +25,7 @@ export function ReviewTabStrip({
   onActivate,
   onClose,
   onCloseOthers,
+  onCloseAll,
   onTogglePin,
   allowCloseActions = true,
   allowReorder = true,
@@ -33,8 +34,9 @@ export function ReviewTabStrip({
   tabs: ReviewTab[];
   activeKey: string | undefined;
   onActivate: (tab: ReviewTab) => void;
-  onClose: (key: string) => void;
-  onCloseOthers: (key: string) => void;
+  onClose: (key: string, anchor: HTMLElement) => void;
+  onCloseOthers: (key: string, anchor: HTMLElement) => void;
+  onCloseAll: (anchor: HTMLElement) => void;
   onTogglePin: (key: string) => void;
   allowCloseActions?: boolean;
   allowReorder?: boolean;
@@ -248,7 +250,7 @@ export function ReviewTabStrip({
                   size="small"
                   onClick={(event) => {
                     event.stopPropagation();
-                    onClose(key);
+                    onClose(key, event.currentTarget);
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
                   sx={{
@@ -288,7 +290,21 @@ export function ReviewTabStrip({
         {allowCloseActions && (
           <MenuItem
             onClick={() => {
-              if (menu) onCloseOthers(reviewTabKey(menu.tab));
+              if (menu) onClose(reviewTabKey(menu.tab), menu.anchor);
+              setMenu(undefined);
+            }}
+          >
+            Close
+          </MenuItem>
+        )}
+        {allowCloseActions && (
+          <MenuItem
+            disabled={menu !== undefined &&
+              tabs.every((tab) =>
+                reviewTabKey(tab) === reviewTabKey(menu.tab) || tab.pinned
+              )}
+            onClick={() => {
+              if (menu) onCloseOthers(reviewTabKey(menu.tab), menu.anchor);
               setMenu(undefined);
             }}
           >
@@ -298,11 +314,11 @@ export function ReviewTabStrip({
         {allowCloseActions && (
           <MenuItem
             onClick={() => {
-              if (menu) onClose(reviewTabKey(menu.tab));
+              if (menu) onCloseAll(menu.anchor);
               setMenu(undefined);
             }}
           >
-            Close
+            Close all
           </MenuItem>
         )}
       </Menu>

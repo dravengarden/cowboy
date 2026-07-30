@@ -81,6 +81,13 @@ export function closeOtherReviewTabs(
   return tabs.filter((tab) => tab.pinned || reviewTabKey(tab) === key);
 }
 
+export function closeAllReviewTabs(
+  tabs: readonly ReviewTab[],
+  kind: ReviewTab["kind"],
+): ReviewTab[] {
+  return tabs.filter((tab) => tab.kind !== kind);
+}
+
 export function toggleReviewTabPin(
   tabs: readonly ReviewTab[],
   key: string,

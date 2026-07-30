@@ -6,6 +6,7 @@ import {
   CheckCircleOutline,
   ChevronLeft,
   ChevronRight,
+  Close,
   DifferenceOutlined,
   FolderOpenOutlined,
   FolderOutlined,
@@ -22,11 +23,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   IconButton,
   Popover,
   Stack,
@@ -46,7 +42,7 @@ import {
   useActiveWorkspaceBinding,
   useControlPlaneSessionActivity,
 } from "../../controlPlane";
-import { navigationHaptic } from "../../haptic";
+import { importantHaptic, navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
 import { mutateMobileReview, useMobileReviewState } from "../../store";
@@ -90,6 +86,7 @@ import { groupGitChanges, reviewQueue } from "./gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
   adjacentReviewTabAfterClose,
+  closeAllReviewTabs,
   closeOtherReviewTabs,
   closeReviewTab,
   openReviewTab,
@@ -124,6 +121,10 @@ type CodeNavigationEntry = Extract<ReviewTarget, { kind: "source" }> & {
   navigationRange?: Omit<CodeRevealRange, "id">;
 };
 type SymbolRestoreRequest = SymbolPoint & { path: string; id: number };
+type TabCloseRequest =
+  | { kind: "one"; key: string; anchor: HTMLElement }
+  | { kind: "others"; key: string; anchor: HTMLElement }
+  | { kind: "all"; anchor: HTMLElement };
 
 function DocumentView({
   sessionId,
@@ -1077,7 +1078,7 @@ export function ReviewApp({
   >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
-  const [pendingCloseKey, setPendingCloseKey] = useState<string>();
+  const [tabCloseRequest, setTabCloseRequest] = useState<TabCloseRequest>();
   const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<
     CodeNavigationEntry[]
@@ -1180,7 +1181,7 @@ export function ReviewApp({
   ]);
 
   useEffect(() => {
-    setPendingCloseKey(undefined);
+    setTabCloseRequest(undefined);
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
@@ -1477,19 +1478,87 @@ export function ReviewApp({
     else if (mode === "files") setSourceTarget(undefined);
     else setDiffTarget(undefined);
   };
-  const pendingCloseTab = tabs.find((tab) =>
-    reviewTabKey(tab) === pendingCloseKey
-  );
-  const requestCloseTab = (key: string): void => {
+  const closeOtherTabs = (key: string): void => {
+    if (workspace?.sessionId) {
+      for (const tab of modeTabs) {
+        if (
+          tab.kind === "source" &&
+          reviewTabKey(tab) !== key &&
+          !tab.pinned
+        ) {
+          mutateMobileReview(workspace.sessionId, "close", { path: tab.path });
+        }
+      }
+    }
+    const keep = modeTabs.find((tab) => reviewTabKey(tab) === key);
+    setTabs((current) => {
+      const currentModeTabs = current.filter((tab) => tab.kind === "source");
+      const otherModeTabs = current.filter((tab) => tab.kind !== "source");
+      return [
+        ...otherModeTabs,
+        ...closeOtherReviewTabs(currentModeTabs, key),
+      ];
+    });
+    if (keep) activateTab(keep);
+  };
+  const closeAllTabs = (): void => {
+    if (workspace?.sessionId) {
+      for (const tab of modeTabs) {
+        if (tab.kind === "source") {
+          mutateMobileReview(workspace.sessionId, "close", { path: tab.path });
+        }
+      }
+    }
+    setTabs((current) => closeAllReviewTabs(current, "source"));
+    setSourceTarget(undefined);
+    setNavigationHistory([]);
+    setNavigationForwardHistory([]);
+    setSymbolRestore(undefined);
+    currentSymbol.current = undefined;
+  };
+  const requestCloseTab = (
+    key: string,
+    anchor: HTMLElement,
+  ): void => {
     navigationHaptic();
-    setPendingCloseKey(key);
+    setTabCloseRequest({ kind: "one", key, anchor });
   };
-  const confirmCloseTab = (): void => {
-    const key = pendingCloseKey;
-    if (!key) return;
-    setPendingCloseKey(undefined);
-    closeTab(key);
+  const confirmTabCloseRequest = (): void => {
+    const request = tabCloseRequest;
+    if (!request) return;
+    setTabCloseRequest(undefined);
+    importantHaptic();
+    if (request.kind === "one") closeTab(request.key);
+    else if (request.kind === "others") closeOtherTabs(request.key);
+    else closeAllTabs();
   };
+  const requestedTab = tabCloseRequest?.kind === "one"
+    ? tabs.find((tab) => reviewTabKey(tab) === tabCloseRequest.key)
+    : undefined;
+  const tabCloseCount = tabCloseRequest?.kind === "others"
+    ? modeTabs.filter((tab) =>
+      reviewTabKey(tab) !== tabCloseRequest.key && !tab.pinned
+    ).length
+    : tabCloseRequest?.kind === "all"
+    ? modeTabs.length
+    : 1;
+  const tabCloseTitle = tabCloseRequest?.kind === "one"
+    ? `Close ${requestedTab?.path.split("/").at(-1) ?? "this tab"}?`
+    : tabCloseRequest?.kind === "others"
+    ? `Close ${tabCloseCount} other ${
+      tabCloseCount === 1 ? "tab" : "tabs"
+    }?`
+    : `Close all ${tabCloseCount} tabs?`;
+  const tabCloseDetail = tabCloseRequest?.kind === "others"
+    ? "Other unpinned tabs will close. Pinned tabs stay open."
+    : tabCloseRequest?.kind === "all"
+    ? "Every open file tab will close."
+    : "This tab will close.";
+  const tabCloseAction = tabCloseRequest?.kind === "others"
+    ? "Close others"
+    : tabCloseRequest?.kind === "all"
+    ? "Close all"
+    : "Close tab";
   const reviewIndex = target.kind === "diff"
     ? target.queue.findIndex((entry) =>
       entry.change.path === target.path && entry.scope === target.scope
@@ -1828,32 +1897,13 @@ export function ReviewApp({
             activeKey={activeTabKey}
             onActivate={activateTab}
             onClose={requestCloseTab}
-            onCloseOthers={(key) => {
-              if (mode === "files" && workspace?.sessionId) {
-                for (const tab of tabs) {
-                  if (
-                    tab.kind === "source" &&
-                    reviewTabKey(tab) !== key &&
-                    !tab.pinned
-                  ) {
-                    mutateMobileReview(workspace.sessionId, "close", {
-                      path: tab.path,
-                    });
-                  }
-                }
-              }
-              setTabs((current) => {
-                const currentModeTabs = current.filter((tab) =>
-                  mode === "files" ? tab.kind === "source" : tab.kind === "diff"
-                );
-                const otherModeTabs = current.filter((tab) =>
-                  mode === "files" ? tab.kind === "diff" : tab.kind === "source"
-                );
-                return [
-                  ...otherModeTabs,
-                  ...closeOtherReviewTabs(currentModeTabs, key),
-                ];
-              });
+            onCloseOthers={(key, anchor) => {
+              navigationHaptic();
+              setTabCloseRequest({ kind: "others", key, anchor });
+            }}
+            onCloseAll={(anchor) => {
+              navigationHaptic();
+              setTabCloseRequest({ kind: "all", anchor });
             }}
             onTogglePin={(key) => {
               const source = tabs.find((tab) =>
@@ -2056,35 +2106,59 @@ export function ReviewApp({
             </Toolbar>
           </Box>
         </Box>
-        <Dialog
-          open={pendingCloseKey !== undefined}
-          onClose={() => setPendingCloseKey(undefined)}
-          fullWidth
-          maxWidth="xs"
-          aria-labelledby="review-close-tab-title"
+        <Popover
+          open={tabCloseRequest !== undefined}
+          anchorEl={tabCloseRequest?.anchor}
+          onClose={() => setTabCloseRequest(undefined)}
+          anchorOrigin={{ vertical: "top", horizontal: "right" }}
+          transformOrigin={{ vertical: "bottom", horizontal: "right" }}
+          slotProps={{
+            paper: {
+              sx: {
+                width: "min(300px, calc(100vw - 32px))",
+                borderRadius: 2.5,
+              },
+            },
+          }}
         >
-          <DialogTitle id="review-close-tab-title">
-            Close {pendingCloseTab?.path.split("/").at(-1) ?? "this tab"}?
-          </DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              This removes it from the open tabs. The file and its contents are
-              not deleted.
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button
-              autoFocus
-              color="inherit"
-              onClick={() => setPendingCloseKey(undefined)}
+          <Box data-review-tab-close-confirm sx={{ p: 1.5 }}>
+            <Typography variant="body2" fontWeight={700}>
+              {tabCloseTitle}
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mt: 0.5 }}
             >
-              Keep open
-            </Button>
-            <Button color="error" onClick={confirmCloseTab}>
-              Close tab
-            </Button>
-          </DialogActions>
-        </Dialog>
+              {tabCloseDetail} Files and their contents are not deleted.
+            </Typography>
+            <Stack
+              direction="row"
+              spacing={1}
+              justifyContent="flex-end"
+              sx={{ mt: 1.5 }}
+            >
+              <Button
+                size="small"
+                color="inherit"
+                onClick={() => setTabCloseRequest(undefined)}
+                sx={{ textTransform: "none" }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="small"
+                color="error"
+                variant="contained"
+                startIcon={<Close />}
+                onClick={confirmTabCloseRequest}
+                sx={{ textTransform: "none" }}
+              >
+                {tabCloseAction}
+              </Button>
+            </Stack>
+          </Box>
+        </Popover>
       </Stack>
     </ReviewDrawerShell>
   );
