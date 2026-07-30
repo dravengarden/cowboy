@@ -1558,8 +1558,10 @@ export function ComposerWorkspace({
           <PlatformComposerEditor
             ref={editorRef}
             autoFocus={autoFocus}
-            // Stable seed only (uncontrolled — see initialDraftText). NOT `text`.
-            value={initialDraftText.current}
+            // CM6 is seeded once and owns its document. The compact touch path
+            // is a controlled native textarea so UIKit can own long-press Paste;
+            // keep that value synchronized with the composer state.
+            value={touchInput ? text : initialDraftText.current}
             onChange={setText}
             onSubmit={submitAndNotify}
             onSaveDraft={saveDraft}

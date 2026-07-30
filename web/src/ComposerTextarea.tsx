@@ -120,6 +120,7 @@ export const ComposerTextarea = forwardRef<
     commands: () => AvailableCommand[];
     placeholder?: string;
     disabled?: boolean;
+    autoFocus?: boolean;
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
     /// Right padding (px) reserved on the text so it never runs under the action
@@ -143,6 +144,7 @@ export const ComposerTextarea = forwardRef<
     commands,
     placeholder,
     disabled,
+    autoFocus = false,
     onEscape,
     onPasteFiles,
     endInset = 0,
@@ -412,6 +414,7 @@ export const ComposerTextarea = forwardRef<
         }}
         placeholder={placeholder}
         disabled={disabled}
+        autoFocus={autoFocus}
         multiline
         minRows={expanded ? 10 : 1}
         maxRows={expanded ? 30 : 10}
