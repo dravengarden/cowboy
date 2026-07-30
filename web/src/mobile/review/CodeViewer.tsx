@@ -15,6 +15,7 @@ import {
 } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { Box, useTheme } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   HighlightStyle,
@@ -39,6 +40,36 @@ export interface CodeInspectCandidate {
   row: number;
   column: number;
 }
+
+export interface CodeRevealRange {
+  start: { row: number; column: number };
+  end: { row: number; column: number };
+  id: number;
+}
+
+const revealNavigationTarget = StateEffect.define<{
+  from: number;
+  to: number;
+  id: number;
+}>();
+
+const navigationTargetField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    let next = value.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (!effect.is(revealNavigationTarget)) continue;
+      next = Decoration.set([
+        Decoration.mark({
+          class: "cowboy-navigation-target",
+          attributes: { "data-navigation-pulse": String(effect.value.id) },
+        }).range(effect.value.from, effect.value.to),
+      ]);
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 class InlayHintWidget extends WidgetType {
   constructor(private readonly label: string) {
@@ -309,6 +340,7 @@ export default function CodeViewer({
   softWrap,
   fontSize,
   revealLine,
+  revealRange,
   languageData,
   diagnostics,
   inlayHints,
@@ -322,6 +354,7 @@ export default function CodeViewer({
   softWrap: boolean;
   fontSize: number;
   revealLine?: number | undefined;
+  revealRange?: CodeRevealRange | undefined;
   languageData?: CodeLanguage | undefined;
   diagnostics: boolean;
   inlayHints: boolean;
@@ -398,6 +431,7 @@ export default function CodeViewer({
     const values: Extension[] = [
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
+      navigationTargetField,
       cmTheme(theme, true),
       syntaxHighlighting(highlightStyle),
       EditorView.theme({
@@ -485,6 +519,37 @@ export default function CodeViewer({
         ".cowboy-semantic-5": {
           color: syntax.property,
           fontStyle: "italic",
+        },
+        "@keyframes cowboy-navigation-pulse": {
+          "0%": {
+            backgroundColor: alpha(theme.palette.primary.main, 0.34),
+            boxShadow: `0 0 0 3px ${
+              alpha(theme.palette.primary.main, 0.18)
+            }`,
+          },
+          "38%": {
+            backgroundColor: alpha(theme.palette.primary.main, 0.24),
+            boxShadow: `0 0 0 6px ${
+              alpha(theme.palette.primary.main, 0.08)
+            }`,
+          },
+          "100%": {
+            backgroundColor: alpha(theme.palette.primary.main, 0),
+            boxShadow: `0 0 0 0 ${
+              alpha(theme.palette.primary.main, 0)
+            }`,
+          },
+        },
+        ".cowboy-navigation-target": {
+          borderRadius: "3px",
+          animation:
+            "cowboy-navigation-pulse 1.8s cubic-bezier(0.22, 1, 0.36, 1) both",
+        },
+        "@media (prefers-reduced-motion: reduce)": {
+          ".cowboy-navigation-target": {
+            animationDuration: "0.01ms",
+            backgroundColor: alpha(theme.palette.primary.main, 0.18),
+          },
         },
       }),
     ];
@@ -606,17 +671,51 @@ export default function CodeViewer({
 
   useEffect(() => {
     const view = editorRef.current;
-    if (!view || revealLine === undefined) return;
+    if (!view || (revealLine === undefined && revealRange === undefined)) {
+      return;
+    }
+    const targetLine = revealRange
+      ? revealRange.start.row + 1
+      : revealLine!;
     const line = view.state.doc.line(
-      Math.max(1, Math.min(revealLine, view.state.doc.lines)),
+      Math.max(1, Math.min(targetLine, view.state.doc.lines)),
     );
-    view.dispatch({
-      effects: EditorView.scrollIntoView(line.from, {
-        y: "start",
-        yMargin: 12,
+    const effects: StateEffect<unknown>[] = [
+      EditorView.scrollIntoView(line.from, {
+        y: revealRange ? "center" : "start",
+        yMargin: revealRange ? 48 : 12,
       }),
+    ];
+    if (revealRange) {
+      const endLine = view.state.doc.line(
+        Math.max(
+          1,
+          Math.min(revealRange.end.row + 1, view.state.doc.lines),
+        ),
+      );
+      const from = Math.min(
+        Math.max(0, view.state.doc.length - 1),
+        Math.min(line.to, line.from + revealRange.start.column),
+      );
+      const to = Math.min(
+        view.state.doc.length,
+        Math.max(
+          from + 1,
+          Math.min(endLine.to, endLine.from + revealRange.end.column),
+        ),
+      );
+      if (to > from) {
+        effects.push(revealNavigationTarget.of({
+          from,
+          to,
+          id: revealRange.id,
+        }));
+      }
+    }
+    view.dispatch({
+      effects,
     });
-  }, [revealLine, text]);
+  }, [revealLine, revealRange, text]);
 
   return (
     <Box

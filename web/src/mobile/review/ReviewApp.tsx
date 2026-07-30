@@ -67,7 +67,10 @@ import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { type ReviewProgress, revisionMatches } from "./reviewProgress";
 import { ReviewChanges } from "./ReviewChanges";
-import type { CodeInspectCandidate } from "./CodeViewer";
+import type {
+  CodeInspectCandidate,
+  CodeRevealRange,
+} from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
@@ -102,7 +105,12 @@ type ReviewTarget =
     scope: CodeDiffScope;
     queue: GitReviewEntry[];
   }
-  | { kind: "source"; path: string; revealLine?: number };
+  | {
+    kind: "source";
+    path: string;
+    revealLine?: number;
+    revealRange?: CodeRevealRange;
+  };
 
 type SymbolPoint = { row: number; column: number };
 type CodeNavigationEntry = Extract<ReviewTarget, { kind: "source" }> & {
@@ -121,10 +129,6 @@ function DocumentView({
   onRestoreSymbolConsumed,
   onSymbolOpenChange,
   onVisibleSourceLine,
-  navigationBackCount,
-  navigationForwardCount,
-  onNavigationBack,
-  onNavigationForward,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
@@ -139,10 +143,6 @@ function DocumentView({
   onRestoreSymbolConsumed: (id: number) => void;
   onSymbolOpenChange: (point: SymbolPoint | undefined) => void;
   onVisibleSourceLine: (line: number) => void;
-  navigationBackCount: number;
-  navigationForwardCount: number;
-  onNavigationBack: () => void;
-  onNavigationForward: () => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
@@ -603,48 +603,6 @@ function DocumentView({
     : null;
   const symbolContent = (
     <Stack spacing={1.5} sx={{ pb: 2 }}>
-      {(navigationBackCount > 0 || navigationForwardCount > 0) && (
-        <Stack
-          direction="row"
-          alignItems="center"
-          sx={{
-            mx: -0.5,
-            px: 0.5,
-            py: 0.25,
-            borderRadius: 1.5,
-            bgcolor: "action.hover",
-          }}
-        >
-          <IconButton
-            size="small"
-            aria-label="Back to previous symbol"
-            disabled={navigationBackCount === 0}
-            onClick={onNavigationBack}
-          >
-            <ArrowBack fontSize="small" />
-          </IconButton>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{
-              flex: 1,
-              textAlign: "center",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {navigationBackCount + 1} /{" "}
-            {navigationBackCount + navigationForwardCount + 1}
-          </Typography>
-          <IconButton
-            size="small"
-            aria-label="Forward to next symbol"
-            disabled={navigationForwardCount === 0}
-            onClick={onNavigationForward}
-          >
-            <ArrowForward fontSize="small" />
-          </IconButton>
-        </Stack>
-      )}
       {hoverLoading
         ? (
           <Stack alignItems="center" sx={{ py: 4 }}>
@@ -903,6 +861,9 @@ function DocumentView({
                 revealLine={target.kind === "diff"
                   ? hunks[hunkIndex]
                   : target.revealLine}
+                revealRange={target.kind === "source"
+                  ? target.revealRange
+                  : undefined}
                 languageData={target.kind === "source"
                   ? languageData
                   : undefined}
@@ -1070,6 +1031,7 @@ export function ReviewApp({
   const currentSymbol = useRef<SymbolPoint | undefined>(undefined);
   const currentVisibleLine = useRef<number | undefined>(undefined);
   const symbolRestoreId = useRef(0);
+  const revealRangeId = useRef(0);
   const [managingTabs, setManagingTabs] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const syncedReview = useMobileReviewState(workspace?.sessionId);
@@ -1253,6 +1215,7 @@ export function ReviewApp({
     path: string,
     revealLine?: number,
     preserveNavigation = false,
+    revealRange?: Omit<CodeRevealRange, "id">,
   ): void => {
     currentVisibleLine.current = revealLine;
     setCurrentRevision(undefined);
@@ -1265,6 +1228,9 @@ export function ReviewApp({
       kind: "source",
       path,
       ...(revealLine === undefined ? {} : { revealLine }),
+      ...(revealRange
+        ? { revealRange: { ...revealRange, id: ++revealRangeId.current } }
+        : {}),
     });
     setTabs((current) =>
       openReviewTab(current, { kind: "source", path, pinned: false })
@@ -1289,7 +1255,13 @@ export function ReviewApp({
     } else {
       setSymbolRestore(undefined);
     }
-    openSource(entry.path, entry.revealLine, true);
+    const row = Math.max(0, (entry.revealLine ?? 1) - 1);
+    openSource(entry.path, entry.revealLine, true, {
+      start: entry.symbol ?? { row, column: 0 },
+      end: entry.symbol
+        ? { row: entry.symbol.row, column: entry.symbol.column + 1 }
+        : { row, column: Number.MAX_SAFE_INTEGER },
+    });
   };
   const currentNavigationEntry = (): CodeNavigationEntry | undefined => {
     if (target.kind !== "source") return undefined;
@@ -1645,10 +1617,6 @@ export function ReviewApp({
               onVisibleSourceLine={(line) => {
                 currentVisibleLine.current = line;
               }}
-              navigationBackCount={navigationHistory.length}
-              navigationForwardCount={navigationForwardHistory.length}
-              onNavigationBack={navigateBack}
-              onNavigationForward={navigateForward}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
                 const previous: CodeNavigationEntry = {
@@ -1663,7 +1631,10 @@ export function ReviewApp({
                 setNavigationForwardHistory([]);
                 setSymbolRestore(undefined);
                 currentSymbol.current = undefined;
-                openSource(location.path, location.start.row + 1, true);
+                openSource(location.path, location.start.row + 1, true, {
+                  start: location.start,
+                  end: location.end,
+                });
               }}
             />
           )}
@@ -1891,6 +1862,39 @@ export function ReviewApp({
                 </>
               )}
               <Box sx={{ flex: 1 }} />
+              {target.kind === "source" &&
+                (navigationHistory.length > 0 ||
+                  navigationForwardHistory.length > 0) && (
+                  <>
+                    <IconButton
+                      aria-label="Back to previous code location"
+                      disabled={navigationHistory.length === 0}
+                      onClick={navigateBack}
+                    >
+                      <ArrowBack />
+                    </IconButton>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{
+                        minWidth: 34,
+                        textAlign: "center",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {navigationHistory.length + 1}/
+                      {navigationHistory.length +
+                        navigationForwardHistory.length + 1}
+                    </Typography>
+                    <IconButton
+                      aria-label="Forward to next code location"
+                      disabled={navigationForwardHistory.length === 0}
+                      onClick={navigateForward}
+                    >
+                      <ArrowForward />
+                    </IconButton>
+                  </>
+                )}
               {target.kind === "source" && (
                 <IconButton
                   aria-label="Open file outline"
