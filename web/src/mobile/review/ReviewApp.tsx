@@ -1548,6 +1548,8 @@ export function ReviewApp({
     ? `Close ${tabCloseCount} other ${
       tabCloseCount === 1 ? "tab" : "tabs"
     }?`
+    : tabCloseCount === 1
+    ? "Close the only open tab?"
     : `Close all ${tabCloseCount} tabs?`;
   const tabCloseDetail = tabCloseRequest?.kind === "others"
     ? "Other unpinned tabs will close. Pinned tabs stay open."
