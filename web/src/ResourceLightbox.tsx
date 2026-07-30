@@ -73,6 +73,7 @@ export function ResourceLightbox(): React.JSX.Element | null {
       onIndex={setIndex}
       onClose={close}
       plate={false}
+      controlsBottom="max(calc(env(safe-area-inset-bottom, 0px) + 56px), 72px)"
     />
   );
 }
