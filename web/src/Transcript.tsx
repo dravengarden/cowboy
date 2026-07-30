@@ -302,6 +302,8 @@ function TranscriptLoadingFill({
       aria-label={label}
       sx={{
         pointerEvents: "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
         position: "relative",
         minHeight: 0,
         overflow: "hidden",
@@ -4140,7 +4142,13 @@ export function Transcript({
                 <Box
                   aria-hidden
                   data-transcript-page-spacer
-                  sx={{ flex: "1 1 0 !important", minHeight: 0 }}
+                  sx={{
+                    flex: "1 1 0 !important",
+                    minHeight: 0,
+                    pointerEvents: "none",
+                    userSelect: "none",
+                    WebkitUserSelect: "none",
+                  }}
                 />
               )}
               {
