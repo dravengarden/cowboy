@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   HighlightStyle,
   type LanguageSupport,
+  syntaxTree,
   syntaxHighlighting,
 } from "@codemirror/language";
 import { highlightTree, tags } from "@lezer/highlight";
@@ -607,6 +608,11 @@ export default function CodeViewer({
                   const end = start + match[0].length;
                   const from = candidateLine.from + start;
                   const to = candidateLine.from + end;
+                  const syntaxNode = syntaxTree(view.state).resolveInner(
+                    from,
+                    1,
+                  );
+                  if (/comment|string/i.test(syntaxNode.name)) return [];
                   const fromCoords = view.coordsAtPos(from);
                   const toCoords = view.coordsAtPos(to);
                   if (!fromCoords || !toCoords) return [];
