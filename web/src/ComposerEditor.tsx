@@ -808,17 +808,25 @@ export const ComposerEditor = forwardRef<
         // the inner CodeMirror own the scroll. `minHeight: 0` lets it shrink
         // below content inside the flex column so the scroller, not the page, grows.
         ...(fill && { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }),
-        // OutlinedInput small content padding.
-        px: "14px",
-        py: "8.5px",
-        // Clear the overlaid send/kebab buttons at the bottom-right (base 14 + inset).
-        ...(endInset > 0 && { pr: `${String(14 + endInset)}px` }),
-        ...(flushRightScrollbar && {
-          pr: 0,
-          "& .cm-content": {
-            paddingRight: `${String(14 + endInset)}px`,
-          },
-        }),
+        // Put the visual input padding ON the editable element. Keeping it on
+        // this non-editable wrapper made the compact composer look like one
+        // large text field while iOS could only long-press the 14px-high glyph
+        // line; a hold in the surrounding blank area was treated as an outside
+        // touch, dismissing the keyboard without showing Paste. With content
+        // padding, the entire visible writing surface is a native selection
+        // target and WebKit owns the long-press menu end to end.
+        "& .cm-content": {
+          boxSizing: "border-box",
+          minHeight: "24px",
+          paddingTop: "8.5px",
+          paddingBottom: "8.5px",
+          paddingLeft: "14px",
+          // Clear the overlaid expand/action controls at the right edge.
+          paddingRight: `${String(14 + endInset)}px`,
+        },
+        // In the split Desktop composer the scrollbar remains flush-right;
+        // padding belongs to content, so no wrapper compensation is needed.
+        ...(flushRightScrollbar && { pr: 0 }),
         cursor: "text",
         "&:hover .composer-notch": disabled || borderless
           ? {}
