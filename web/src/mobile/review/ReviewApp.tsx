@@ -43,6 +43,10 @@ import {
 import { navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
+import {
+  mutateMobileReview,
+  useMobileReviewState,
+} from "../../store";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import {
   closeCodeBuffer,
@@ -62,19 +66,14 @@ import {
 } from "./codeApi";
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
-import {
-  loadReviewProgress,
-  type ReviewProgress,
-  revisionMatches,
-  saveReviewProgress,
-} from "./reviewProgress";
+import { type ReviewProgress, revisionMatches } from "./reviewProgress";
 import { ReviewChanges } from "./ReviewChanges";
 import type { CodeInspectCandidate } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSettings } from "./ReviewSettings";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
-import { loadReviewMode, type ReviewMode, saveReviewMode } from "./reviewMode";
+import type { ReviewMode } from "./reviewMode";
 import { updateReviewSettings, useReviewSettings } from "./reviewSettings";
 import type { CodeDiffScope } from "./codeApi";
 import type { CodeLanguage } from "./codeApi";
@@ -84,13 +83,11 @@ import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
   closeOtherReviewTabs,
   closeReviewTab,
-  loadReviewTabs,
   openReviewTab,
   reorderReviewTabs,
   retainChangedDiffTabs,
   type ReviewTab,
   reviewTabKey,
-  saveReviewTabs,
   toggleReviewTabPin,
 } from "./reviewTabs";
 
@@ -725,8 +722,7 @@ export function ReviewApp({
     Extract<ReviewTarget, { kind: "source" }>[]
   >([]);
   const [managingTabs, setManagingTabs] = useState(false);
-  const [tabsReadySession, setTabsReadySession] = useState<string>();
-  const [modeReadySession, setModeReadySession] = useState<string>();
+  const syncedReview = useMobileReviewState(workspace?.sessionId);
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
@@ -790,7 +786,6 @@ export function ReviewApp({
   }, [active, dataRevision, leasedPath, workspace?.sessionId]);
 
   useEffect(() => {
-    setTabsReadySession(undefined);
     setManagingTabs(false);
     manifestRevision.current = undefined;
     setDataRevision(0);
@@ -858,33 +853,33 @@ export function ReviewApp({
   }, [active, manifestRefreshRequest, workspace?.sessionId]);
 
   useEffect(() => {
-    setMode(workspace?.sessionId ? loadReviewMode(workspace.sessionId) : "git");
-    setModeReadySession(workspace?.sessionId);
     setSourceTarget(undefined);
     setNavigationHistory([]);
     setDiffTarget(undefined);
     setCurrentRevision(undefined);
-    setReviewProgress(
-      workspace?.sessionId ? loadReviewProgress(workspace.sessionId) : {},
-    );
-    setTabs(
-      workspace?.sessionId
-        ? loadReviewTabs(workspace.sessionId).filter((tab) =>
-          tab.kind === "source"
-        )
-        : [],
-    );
-    setTabsReadySession(workspace?.sessionId);
   }, [workspace?.sessionId]);
 
   useEffect(() => {
-    if (
-      workspace?.sessionId === modeReadySession &&
-      modeReadySession
-    ) {
-      saveReviewMode(modeReadySession, mode);
+    setMode(syncedReview.mode);
+  }, [syncedReview.mode, workspace?.sessionId]);
+
+  useEffect(() => {
+    setTabs(syncedReview.tabs.map((tab) => ({ kind: "source", ...tab })));
+  }, [syncedReview.tabs, workspace?.sessionId]);
+
+  useEffect(() => {
+    setReviewProgress({ ...syncedReview.progress });
+  }, [syncedReview.progress, workspace?.sessionId]);
+
+  useEffect(() => {
+    const path = syncedReview.active;
+    if (!path) {
+      setSourceTarget(undefined);
+      return;
     }
-  }, [mode, modeReadySession, workspace?.sessionId]);
+    setMarkdownPreview(isMarkdownReviewPath(path));
+    setSourceTarget({ kind: "source", path });
+  }, [syncedReview.active, workspace?.sessionId]);
 
   const openSource = (
     path: string,
@@ -893,6 +888,9 @@ export function ReviewApp({
   ): void => {
     setCurrentRevision(undefined);
     setMode("files");
+    if (workspace?.sessionId) {
+      mutateMobileReview(workspace.sessionId, "open", { path });
+    }
     setMarkdownPreview(isMarkdownReviewPath(path));
     setSourceTarget({
       kind: "source",
@@ -911,6 +909,9 @@ export function ReviewApp({
   ): void => {
     setCurrentRevision(undefined);
     setMode("git");
+    if (workspace?.sessionId) {
+      mutateMobileReview(workspace.sessionId, "setMode", { mode: "git" });
+    }
     setDiffTarget({
       kind: "diff",
       path: entry.change.path,
@@ -919,14 +920,6 @@ export function ReviewApp({
     });
     setCloseRequest((value) => value + 1);
   };
-  useEffect(() => {
-    if (workspace?.sessionId === tabsReadySession && tabsReadySession) {
-      saveReviewTabs(
-        tabsReadySession,
-        tabs.filter((tab) => tab.kind === "source"),
-      );
-    }
-  }, [tabs, tabsReadySession, workspace?.sessionId]);
   const activateTab = (tab: ReviewTab): void => {
     if (tab.kind === "source") {
       openSource(tab.path);
@@ -973,6 +966,10 @@ export function ReviewApp({
     setTabs((current) => retainChangedDiffTabs(current, changedKeys));
   }, [gitQueue]);
   const closeTab = (key: string): void => {
+    const closing = tabs.find((tab) => reviewTabKey(tab) === key);
+    if (closing?.kind === "source" && workspace?.sessionId) {
+      mutateMobileReview(workspace.sessionId, "close", { path: closing.path });
+    }
     const next = closeReviewTab(tabs, key);
     setTabs(next);
     const nextModeTabs = next.filter((tab) =>
@@ -1024,7 +1021,10 @@ export function ReviewApp({
     const next = { ...reviewProgress };
     delete next[targetReviewKey];
     setReviewProgress(next);
-    saveReviewProgress(workspace.sessionId, next);
+    mutateMobileReview(workspace.sessionId, "markReviewed", {
+      key: targetReviewKey,
+      revision: null,
+    });
   }, [
     currentRevision,
     reviewProgress,
@@ -1038,7 +1038,10 @@ export function ReviewApp({
     if (targetIsReviewed) delete next[targetReviewKey];
     else next[targetReviewKey] = currentRevision;
     setReviewProgress(next);
-    saveReviewProgress(workspace.sessionId, next);
+    mutateMobileReview(workspace.sessionId, "markReviewed", {
+      key: targetReviewKey,
+      revision: targetIsReviewed ? null : currentRevision,
+    });
   };
 
   return (
@@ -1225,7 +1228,20 @@ export function ReviewApp({
             showCloseButtons={managingTabs}
             onActivate={activateTab}
             onClose={closeTab}
-            onCloseOthers={(key) =>
+            onCloseOthers={(key) => {
+              if (mode === "files" && workspace?.sessionId) {
+                for (const tab of tabs) {
+                  if (
+                    tab.kind === "source" &&
+                    reviewTabKey(tab) !== key &&
+                    !tab.pinned
+                  ) {
+                    mutateMobileReview(workspace.sessionId, "close", {
+                      path: tab.path,
+                    });
+                  }
+                }
+              }
               setTabs((current) => {
                 const currentModeTabs = current.filter((tab) =>
                   mode === "files" ? tab.kind === "source" : tab.kind === "diff"
@@ -1237,8 +1253,18 @@ export function ReviewApp({
                   ...otherModeTabs,
                   ...closeOtherReviewTabs(currentModeTabs, key),
                 ];
-              })}
-            onTogglePin={(key) =>
+              });
+            }}
+            onTogglePin={(key) => {
+              const source = tabs.find((tab) =>
+                tab.kind === "source" && reviewTabKey(tab) === key
+              );
+              if (source?.kind === "source" && workspace?.sessionId) {
+                mutateMobileReview(workspace.sessionId, "setPinned", {
+                  path: source.path,
+                  pinned: !source.pinned,
+                });
+              }
               setTabs((current) => {
                 if (current.some((tab) => reviewTabKey(tab) === key)) {
                   return toggleReviewTabPin(current, key);
@@ -1249,13 +1275,21 @@ export function ReviewApp({
                 return gitTab
                   ? [...current, { ...gitTab, pinned: true }]
                   : current;
-              })}
+              });
+            }}
             allowCloseActions={mode === "files"}
             allowReorder={mode === "files"}
-            onReorder={(movingKey, targetKey) =>
-              setTabs((current) =>
-                reorderReviewTabs(current, movingKey, targetKey)
-              )}
+            onReorder={(movingKey, targetKey) => {
+              const next = reorderReviewTabs(tabs, movingKey, targetKey);
+              setTabs(next);
+              if (workspace?.sessionId) {
+                mutateMobileReview(workspace.sessionId, "reorder", {
+                  paths: next.flatMap((tab) =>
+                    tab.kind === "source" ? [tab.path] : []
+                  ),
+                });
+              }
+            }}
           />
           <Box
             component="nav"
@@ -1286,7 +1320,13 @@ export function ReviewApp({
                   : <FolderOutlined fontSize="small" />}
                 onClick={() => {
                   navigationHaptic();
-                  setMode(mode === "git" ? "files" : "git");
+                  const nextMode = mode === "git" ? "files" : "git";
+                  setMode(nextMode);
+                  if (workspace?.sessionId) {
+                    mutateMobileReview(workspace.sessionId, "setMode", {
+                      mode: nextMode,
+                    });
+                  }
                 }}
                 sx={{
                   ml: 0.25,

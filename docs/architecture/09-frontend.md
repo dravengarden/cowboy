@@ -34,14 +34,16 @@ flowchart TB
 Two vendored copies of the shared `@shared-utils` engines back all state:
 
 - **`_store`** (`persisted()` + `useStore()`) — per-device reactive state that
-  reads/writes `localStorage`. Drafts, sticky per-session UI state (scroll,
-  selected tabs), and settings live here.
+  reads/writes `localStorage`. Sticky viewport state such as transcript scroll
+  and Mobile drawer/navigation details live here.
 - **`_sync`** — a client-local optimistic-mutation engine (a Replicache-shaped
   model): apply a mutation locally for instant UI, send it to the daemon arbiter,
   then rebase on the broadcast `SyncPatch`. The **arbiter lives in Rust** (the
   Hub's per-state sync arbiter), so the client never resolves conflicts itself —
   it just mirrors. Session list, ordering, queue, and drafts all flow through
-  this as sync states (e.g. `queue:<sid>`).
+  this as sync states (e.g. `queue:<sid>`). Mobile Code Review additionally uses
+  `mobile-review:<sid>` for its tabs, active source, mode, and review progress;
+  Desktop deliberately does not consume that state.
 
 `web/src/protocol.ts` mirrors the Rust `Inbound`/`Outbound`/`Envelope`/`SessionMeta`
 types so the wire contract is checked at both ends.

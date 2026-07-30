@@ -93,6 +93,8 @@ pub struct LoadedSession {
     pub drafts: Vec<QueuedMessage>,
     /// Persisted confirm-detect judge-run history (newest first), capped.
     pub judge_runs: Vec<JudgeRun>,
+    /// Mobile-only code-review workspace state, shared across iPhone/iPad clients.
+    pub mobile_review_state: serde_json::Value,
 }
 
 #[derive(Clone)]
@@ -316,7 +318,8 @@ impl Store {
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
             "SELECT id, provider, cwd, title, origin, status, agent_session_id, auto_resume, \
-             awaiting_user, done, system, next_seq, queue, drafts, judge_runs, created_at \
+             awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
+             mobile_review_state, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -380,6 +383,7 @@ impl Store {
                 serde_json::from_value(row.drafts.clone()).unwrap_or_default();
             let judge_runs: Vec<JudgeRun> =
                 serde_json::from_value(row.judge_runs.clone()).unwrap_or_default();
+            let mobile_review_state = row.mobile_review_state.clone();
             out.push(LoadedSession {
                 meta: row.into_meta(),
                 events,
@@ -389,6 +393,7 @@ impl Store {
                 queue,
                 drafts,
                 judge_runs,
+                mobile_review_state,
             });
         }
         Ok(out)
@@ -826,6 +831,28 @@ impl Store {
         Ok(())
     }
 
+    /// Persist the Mobile-only code-review workspace state for one session.
+    ///
+    /// # Errors
+    /// If the UPDATE fails.
+    pub async fn update_mobile_review_state(
+        &self,
+        session_id: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        let mut value = value.clone();
+        strip_nul(&mut value);
+        sqlx::query(
+            "UPDATE sessions SET mobile_review_state = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(&value)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE mobile review state {session_id}"))?;
+        Ok(())
+    }
+
     /// Insert or replace a reduced batch of canonical events and advance every
     /// touched session's sequence watermark in one transaction. Replacing an
     /// existing `(session_id, seq)` is how the writer coalesces streaming text
@@ -1115,6 +1142,7 @@ struct SessionRow {
     queue: serde_json::Value,
     drafts: serde_json::Value,
     judge_runs: serde_json::Value,
+    mobile_review_state: serde_json::Value,
     #[allow(dead_code)]
     created_at: DateTime<Utc>,
 }

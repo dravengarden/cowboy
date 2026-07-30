@@ -147,6 +147,9 @@ export interface State {
   // turn-status pill). Keyed by session id; populated by the `judge_history`
   // broadcast (connect seed + every add/delete/clear).
   judgeRuns: Record<string, JudgeRun[]>;
+  // Mobile-only code-review workspace state. The daemon persists and syncs it
+  // across Mobile clients; Desktop UI never reads or writes this field.
+  mobileReviewStates: Record<string, MobileReviewState>;
 }
 
 let errorSeq = 0;
@@ -168,6 +171,7 @@ let state: State = {
   skills: [],
   judgeResults: {},
   judgeRuns: {},
+  mobileReviewStates: {},
 };
 // React reads only this published snapshot. `state` above remains canonical and
 // can advance at websocket speed; notification pacing and gesture holds publish
@@ -875,6 +879,9 @@ function handle(msg: Outbound): void {
       if (msg.state.startsWith("queue:")) {
         applyQueuePatch(msg.state.slice("queue:".length), msg.version, msg.value, msg.confirmed, resync);
       } else {
+        if (msg.state.startsWith("mobile-review:")) {
+          mobileReviewClient(msg.state.slice("mobile-review:".length));
+        }
         syncClients.get(msg.state)?.applyPatch(msg.version, msg.value, msg.confirmed, resync);
       }
       break;
@@ -1194,6 +1201,7 @@ function registerSync<T, M extends Mutators<T>>(
   syncState: string,
   mutators: M,
   initial: T,
+  onChange: () => void = commitSessions,
 ): { view: () => T; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
   const store = replicatedStore<T, M>({
     clientId: `${syncBase}:${syncState}`,
@@ -1202,7 +1210,7 @@ function registerSync<T, M extends Mutators<T>>(
     send: (m): void => {
       send({ type: "sync", state: syncState, id: m.id, name: m.name, args: m.args });
     },
-    onChange: commitSessions,
+    onChange,
     // Instant-load + durable outbox: cache {base, pending} to IndexedDB. On
     // reload we hydrate this BEFORE the socket opens (see connect()), so the
     // last-known title/order paint immediately; the first server patch arrives
@@ -1231,6 +1239,134 @@ function registerSync<T, M extends Mutators<T>>(
 
 const titleSync = registerSync<TitleMap, typeof titleMutators>("title", titleMutators, {});
 const orderSync = registerSync<OrderList, typeof orderMutators>("order", orderMutators, []);
+
+export interface MobileReviewTabState {
+  readonly path: string;
+  readonly pinned: boolean;
+}
+
+export interface MobileReviewState {
+  readonly mode: "files" | "git";
+  readonly tabs: readonly MobileReviewTabState[];
+  readonly active?: string;
+  readonly progress: Readonly<Record<string, string>>;
+}
+
+const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
+  mode: "git",
+  tabs: [],
+  progress: {},
+};
+
+const mobileReviewMutators = {
+  open: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
+    const existing = value.tabs.find((tab) => tab.path === args.path);
+    let tabs = existing ? [...value.tabs] : [...value.tabs, { path: args.path, pinned: false }];
+    if (tabs.length > 12) {
+      const evict = tabs.findIndex((tab) => !tab.pinned);
+      tabs = tabs.filter((_, index) => index !== (evict < 0 ? 0 : evict));
+    }
+    return { ...value, mode: "files", tabs, active: args.path };
+  },
+  close: (value: MobileReviewState, args: { path: string }): MobileReviewState => {
+    const tabs = value.tabs.filter((tab) => tab.path !== args.path);
+    const active = value.active === args.path ? tabs.at(-1)?.path : value.active;
+    return {
+      mode: value.mode,
+      tabs,
+      progress: value.progress,
+      ...(active === undefined ? {} : { active }),
+    };
+  },
+  reorder: (value: MobileReviewState, args: { paths: readonly string[] }): MobileReviewState => {
+    const position = new Map(args.paths.map((path, index) => [path, index]));
+    return {
+      ...value,
+      tabs: [...value.tabs].sort((left, right) =>
+        (position.get(left.path) ?? Number.MAX_SAFE_INTEGER) -
+        (position.get(right.path) ?? Number.MAX_SAFE_INTEGER)
+      ),
+    };
+  },
+  setPinned: (
+    value: MobileReviewState,
+    args: { path: string; pinned: boolean },
+  ): MobileReviewState => ({
+    ...value,
+    tabs: value.tabs.map((tab) =>
+      tab.path === args.path ? { ...tab, pinned: args.pinned } : tab
+    ),
+  }),
+  activate: (
+    value: MobileReviewState,
+    args: { path: string | null },
+  ): MobileReviewState => ({
+    mode: value.mode,
+    tabs: value.tabs,
+    progress: value.progress,
+    ...(args.path && value.tabs.some((tab) => tab.path === args.path)
+      ? { active: args.path }
+      : {}),
+  }),
+  setMode: (
+    value: MobileReviewState,
+    args: { mode: "files" | "git" },
+  ): MobileReviewState => ({ ...value, mode: args.mode }),
+  markReviewed: (
+    value: MobileReviewState,
+    args: { key: string; revision: string | null },
+  ): MobileReviewState => {
+    const progress = { ...value.progress };
+    if (args.revision === null) delete progress[args.key];
+    else progress[args.key] = args.revision;
+    return { ...value, progress };
+  },
+} satisfies Mutators<MobileReviewState>;
+
+type MobileReviewMutation = keyof typeof mobileReviewMutators & string;
+const mobileReviewClients = new Map<
+  string,
+  ReturnType<typeof registerSync<MobileReviewState, typeof mobileReviewMutators>>
+>();
+
+function mobileReviewClient(sessionId: string) {
+  let client = mobileReviewClients.get(sessionId);
+  if (!client) {
+    client = registerSync(
+      `mobile-review:${sessionId}`,
+      mobileReviewMutators,
+      EMPTY_MOBILE_REVIEW_STATE,
+      () => commitMobileReview(sessionId),
+    );
+    mobileReviewClients.set(sessionId, client);
+  }
+  return client;
+}
+
+function commitMobileReview(sessionId: string): void {
+  const value = mobileReviewClient(sessionId).view();
+  setState({
+    ...state,
+    mobileReviewStates: { ...state.mobileReviewStates, [sessionId]: value },
+  });
+}
+
+export function useMobileReviewState(sessionId: string | undefined): MobileReviewState {
+  return useStoreSelector((snapshot) =>
+    sessionId
+      ? snapshot.mobileReviewStates[sessionId] ?? EMPTY_MOBILE_REVIEW_STATE
+      : EMPTY_MOBILE_REVIEW_STATE
+  );
+}
+
+export function mutateMobileReview<K extends MobileReviewMutation>(
+  sessionId: string,
+  name: K,
+  args: ArgsOf<MobileReviewState, typeof mobileReviewMutators, K>,
+): void {
+  mobileReviewClient(sessionId).mutate(name, args);
+  commitMobileReview(sessionId);
+}
 
 /** Apply the title + order overlays to the raw session list (title override
  *  wins; then a stable sort by the synced order — ids not in `order` keep their

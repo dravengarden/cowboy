@@ -50,6 +50,7 @@ Built incrementally by the `migrations/*.sql` files (sqlx applies them on boot):
 | `0011_scheduled_wakeups` | persisted agent wakeups |
 | `0012_compact_event_log` | drops the duplicate event index, removes transient telemetry, folds legacy tool updates into their initial row |
 | `0013_drop_inference` | drops obsolete external-provider config and API-secret tables |
+| `0016_mobile_review_state` | Mobile-only tabs, active source, review mode, and reviewed revisions per session |
 
 The writer UPSERTs consecutive message/thought chunks into their first sequence
 row, folds tool updates into the initial call, and stores only the sequence

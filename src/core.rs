@@ -541,6 +541,7 @@ pub struct RestoredSession {
     pub drafts: Vec<QueuedMessage>,
     /// Persisted confirm-detect judge-run history (newest first), capped.
     pub judge_runs: Vec<JudgeRun>,
+    pub mobile_review_state: serde_json::Value,
 }
 
 /// One persisted confirm-detect judge run — the verdict PLUS the raw LLM I/O,
@@ -640,6 +641,101 @@ struct Session {
     /// [`JUDGE_HISTORY_CAP`]. Server-authoritative + persisted (migration 0009);
     /// backs the inspector widget. Broadcast as [`Outbound::JudgeHistory`].
     judge_runs: Vec<JudgeRun>,
+    /// Mobile-only code-review workspace state. Desktop never consumes it.
+    mobile_review: MobileReviewState,
+}
+
+const MOBILE_REVIEW_TAB_CAP: usize = 12;
+const MOBILE_REVIEW_PROGRESS_CAP: usize = 512;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MobileReviewTab {
+    path: String,
+    #[serde(default)]
+    pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MobileReviewState {
+    #[serde(default = "default_mobile_review_mode")]
+    mode: String,
+    #[serde(default)]
+    tabs: Vec<MobileReviewTab>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active: Option<String>,
+    #[serde(default)]
+    progress: std::collections::BTreeMap<String, String>,
+}
+
+fn default_mobile_review_mode() -> String {
+    "git".to_owned()
+}
+
+impl Default for MobileReviewState {
+    fn default() -> Self {
+        Self {
+            mode: default_mobile_review_mode(),
+            tabs: Vec::new(),
+            active: None,
+            progress: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+impl MobileReviewState {
+    fn from_stored(value: serde_json::Value) -> Self {
+        let mut state = serde_json::from_value::<Self>(value).unwrap_or_default();
+        if !matches!(state.mode.as_str(), "files" | "git") {
+            state.mode = default_mobile_review_mode();
+        }
+        state.tabs.retain(|tab| valid_mobile_review_path(&tab.path));
+        let mut seen = HashSet::new();
+        state.tabs.retain(|tab| seen.insert(tab.path.clone()));
+        if state.tabs.len() > MOBILE_REVIEW_TAB_CAP {
+            state.tabs = state
+                .tabs
+                .split_off(state.tabs.len() - MOBILE_REVIEW_TAB_CAP);
+        }
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|path| !state.tabs.iter().any(|tab| &tab.path == path))
+        {
+            state.active = None;
+        }
+        state.progress.retain(|key, revision| {
+            !key.is_empty() && key.len() <= 2048 && !revision.is_empty() && revision.len() <= 512
+        });
+        while state.progress.len() > MOBILE_REVIEW_PROGRESS_CAP {
+            if let Some(key) = state.progress.keys().next().cloned() {
+                state.progress.remove(&key);
+            }
+        }
+        state
+    }
+}
+
+fn valid_mobile_review_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 4096
+        && !path.starts_with('/')
+        && !path.split('/').any(|part| matches!(part, "" | "." | ".."))
+        && !path.contains('\0')
+}
+
+fn mobile_review_string_arg(
+    args: &serde_json::Value,
+    name: &str,
+    max_len: usize,
+) -> Result<String, String> {
+    let value = args
+        .get(name)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("missing {name}"))?;
+    if value.is_empty() || value.len() > max_len || value.contains('\0') {
+        return Err(format!("invalid {name}"));
+    }
+    Ok(value.to_owned())
 }
 
 /// A command sent by a client (Web UI, native shell, API / test harnesses)
@@ -1074,6 +1170,11 @@ pub enum StoreWrite {
     /// Upsert one global setting (auto-resume default flag / continuation template).
     PutSetting {
         key: String,
+        value: serde_json::Value,
+    },
+    /// Persist one session's Mobile-only code-review workspace state.
+    UpdateMobileReviewState {
+        session_id: String,
         value: serde_json::Value,
     },
     /// Upsert a session's pending `ScheduleWakeup` (migration 0011) so an armed
@@ -1513,6 +1614,7 @@ impl Hub {
                     mut queue,
                     mut drafts,
                     judge_runs,
+                    mobile_review_state,
                 } = r;
                 let mut healed = false;
                 for m in queue.iter_mut().chain(drafts.iter_mut()) {
@@ -1575,6 +1677,7 @@ impl Hub {
                         lifecycle_epoch: 0,
                         judge_seq: 0,
                         judge_runs,
+                        mobile_review: MobileReviewState::from_stored(mobile_review_state),
                     },
                 );
                 order.push(id);
@@ -1889,6 +1992,7 @@ impl Hub {
                     lifecycle_epoch: 0,
                     judge_seq: 0,
                     judge_runs: Vec::new(),
+                    mobile_review: MobileReviewState::default(),
                 },
             );
             order.push(id);
@@ -2528,6 +2632,113 @@ impl Hub {
         }
     }
 
+    fn apply_mobile_review(
+        &self,
+        session_id: &str,
+        mutation: &str,
+        args: &serde_json::Value,
+    ) -> Result<(), String> {
+        let persisted = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| "unknown mobile review session".to_owned())?;
+            let state = &mut session.mobile_review;
+            match mutation {
+                "open" => {
+                    let path = mobile_review_string_arg(args, "path", 4096)?;
+                    if !valid_mobile_review_path(&path) {
+                        return Err("invalid mobile review path".to_owned());
+                    }
+                    if !state.tabs.iter().any(|tab| tab.path == path) {
+                        if state.tabs.len() >= MOBILE_REVIEW_TAB_CAP {
+                            let evict = state.tabs.iter().position(|tab| !tab.pinned).unwrap_or(0);
+                            let removed = state.tabs.remove(evict);
+                            if state.active.as_deref() == Some(&removed.path) {
+                                state.active = None;
+                            }
+                        }
+                        state.tabs.push(MobileReviewTab {
+                            path: path.clone(),
+                            pinned: false,
+                        });
+                    }
+                    state.active = Some(path);
+                    state.mode = "files".to_owned();
+                }
+                "close" => {
+                    let path = mobile_review_string_arg(args, "path", 4096)?;
+                    state.tabs.retain(|tab| tab.path != path);
+                    if state.active.as_deref() == Some(&path) {
+                        state.active = state.tabs.last().map(|tab| tab.path.clone());
+                    }
+                }
+                "reorder" => {
+                    let order = args
+                        .get("paths")
+                        .and_then(serde_json::Value::as_array)
+                        .ok_or("reorder: missing paths")?
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .filter(|path| valid_mobile_review_path(path))
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>();
+                    sort_by_id_order(&mut state.tabs, &order, |tab| &tab.path);
+                }
+                "setPinned" => {
+                    let path = mobile_review_string_arg(args, "path", 4096)?;
+                    let pinned = args
+                        .get("pinned")
+                        .and_then(serde_json::Value::as_bool)
+                        .ok_or("setPinned: missing pinned")?;
+                    if let Some(tab) = state.tabs.iter_mut().find(|tab| tab.path == path) {
+                        tab.pinned = pinned;
+                    }
+                }
+                "activate" => {
+                    let path = args.get("path").and_then(serde_json::Value::as_str);
+                    state.active = path
+                        .filter(|path| state.tabs.iter().any(|tab| tab.path == *path))
+                        .map(str::to_owned);
+                }
+                "setMode" => {
+                    let mode = mobile_review_string_arg(args, "mode", 16)?;
+                    if !matches!(mode.as_str(), "files" | "git") {
+                        return Err("invalid mobile review mode".to_owned());
+                    }
+                    state.mode = mode;
+                }
+                "markReviewed" => {
+                    let key = mobile_review_string_arg(args, "key", 2048)?;
+                    match args.get("revision").and_then(serde_json::Value::as_str) {
+                        Some(revision) if !revision.is_empty() && revision.len() <= 512 => {
+                            if state.progress.len() >= MOBILE_REVIEW_PROGRESS_CAP
+                                && !state.progress.contains_key(&key)
+                                && let Some(oldest) = state.progress.keys().next().cloned()
+                            {
+                                state.progress.remove(&oldest);
+                            }
+                            state.progress.insert(key, revision.to_owned());
+                        }
+                        None => {
+                            state.progress.remove(&key);
+                        }
+                        _ => return Err("invalid review revision".to_owned()),
+                    }
+                }
+                _ => return Err(format!("unknown mobile review mutation {mutation}")),
+            }
+            serde_json::to_value(state).map_err(|error| error.to_string())?
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateMobileReviewState {
+                session_id: session_id.to_owned(),
+                value: persisted,
+            });
+        }
+        Ok(())
+    }
+
     /// The derived JSON value of one synced state — what a `SyncPatch` carries and
     /// the client folds. Always read live from the typed truth (so it's durable by
     /// derivation, no shadow copy to drift).
@@ -2553,6 +2764,14 @@ impl Hub {
                         .map(|id| serde_json::Value::String(id.clone()))
                         .collect(),
                 )
+            }
+            _ if state.starts_with("mobile-review:") => {
+                let session_id = &state["mobile-review:".len()..];
+                let sessions = self.inner.sessions.lock();
+                sessions
+                    .get(session_id)
+                    .and_then(|session| serde_json::to_value(&session.mobile_review).ok())
+                    .unwrap_or(serde_json::Value::Null)
             }
             _ => serde_json::Value::Null,
         }
@@ -2618,8 +2837,18 @@ impl Hub {
         args: &serde_json::Value,
     ) -> Result<(), String> {
         enum Op {
-            Rename { session_id: String, title: String },
-            Reorder { order: Vec<String> },
+            Rename {
+                session_id: String,
+                title: String,
+            },
+            Reorder {
+                order: Vec<String>,
+            },
+            MobileReview {
+                session_id: String,
+                mutation: String,
+                args: serde_json::Value,
+            },
         }
         let op = match (state, name) {
             ("title", "rename") => {
@@ -2649,6 +2878,29 @@ impl Hub {
                     .collect();
                 Op::Reorder { order }
             }
+            (state, name) if state.starts_with("mobile-review:") => {
+                let session_id = state["mobile-review:".len()..].to_owned();
+                if session_id.is_empty() || !self.inner.sessions.lock().contains_key(&session_id) {
+                    return Err("unknown mobile review session".to_owned());
+                }
+                if !matches!(
+                    name,
+                    "open"
+                        | "close"
+                        | "reorder"
+                        | "setPinned"
+                        | "activate"
+                        | "setMode"
+                        | "markReviewed"
+                ) {
+                    return Err(format!("unknown mobile review mutation {name}"));
+                }
+                Op::MobileReview {
+                    session_id,
+                    mutation: name.to_owned(),
+                    args: args.clone(),
+                }
+            }
             _ => return Err(format!("unknown sync mutation {state}/{name}")),
         };
         if !self.sync_first_seen(state, &id) {
@@ -2657,6 +2909,11 @@ impl Hub {
         match op {
             Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
             Op::Reorder { order } => self.apply_reorder(&order),
+            Op::MobileReview {
+                session_id,
+                mutation,
+                args,
+            } => self.apply_mobile_review(&session_id, &mutation, &args)?,
         }
         // Op-log: the client INTENT behind a state change (who/what), paired with
         // the `op=change` line sync_emit writes for the authoritative version bump.
@@ -2679,7 +2936,7 @@ impl Hub {
             let reg = self.inner.sync.lock();
             let mut out: Vec<(String, u64, Vec<String>)> = reg
                 .iter()
-                .filter(|(s, _)| !s.starts_with("queue:"))
+                .filter(|(s, _)| !s.starts_with("queue:") && !s.starts_with("mobile-review:"))
                 .map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect()))
                 .collect();
             // Guarantee title + order are present even when untouched this lifetime.
@@ -2687,6 +2944,13 @@ impl Hub {
                 if !out.iter().any(|(s, _, _)| s == state) {
                     let version = reg.get(state).map_or(0, |e| e.version);
                     out.push((state.to_owned(), version, Vec::new()));
+                }
+            }
+            for session_id in self.inner.sessions.lock().keys() {
+                let state = format!("mobile-review:{session_id}");
+                if !out.iter().any(|(existing, _, _)| existing == &state) {
+                    let version = reg.get(&state).map_or(0, |entry| entry.version);
+                    out.push((state, version, Vec::new()));
                 }
             }
             out
@@ -4279,6 +4543,60 @@ mod confirm_hold_tests {
             false,
         );
         hub
+    }
+
+    #[test]
+    fn mobile_review_sync_is_session_scoped_and_idempotent() {
+        let hub = hub_with_session("mobile");
+        hub.sync_apply(
+            "mobile-review:mobile",
+            "m1".to_owned(),
+            "open",
+            &serde_json::json!({"path": "strategies/README.md"}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            "mobile-review:mobile",
+            "m1".to_owned(),
+            "open",
+            &serde_json::json!({"path": "ignored/by-retry.rs"}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            "mobile-review:mobile",
+            "m2".to_owned(),
+            "setPinned",
+            &serde_json::json!({"path": "strategies/README.md", "pinned": true}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            "mobile-review:mobile",
+            "m3".to_owned(),
+            "markReviewed",
+            &serde_json::json!({"key": "combined:strategies/README.md", "revision": "abc123"}),
+        )
+        .unwrap();
+
+        let value = hub.sync_value("mobile-review:mobile");
+        assert_eq!(value["mode"], "files");
+        assert_eq!(value["active"], "strategies/README.md");
+        assert_eq!(value["tabs"].as_array().unwrap().len(), 1);
+        assert_eq!(value["tabs"][0]["pinned"], true);
+        assert_eq!(value["progress"]["combined:strategies/README.md"], "abc123");
+    }
+
+    #[test]
+    fn mobile_review_sync_rejects_escaping_paths() {
+        let hub = hub_with_session("mobile-invalid");
+        let error = hub
+            .sync_apply(
+                "mobile-review:mobile-invalid",
+                "m1".to_owned(),
+                "open",
+                &serde_json::json!({"path": "../secret"}),
+            )
+            .unwrap_err();
+        assert_eq!(error, "invalid mobile review path");
     }
 
     #[test]

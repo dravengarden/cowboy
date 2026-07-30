@@ -160,6 +160,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     queue: ls.queue,
                     drafts: ls.drafts,
                     judge_runs: ls.judge_runs,
+                    mobile_review_state: ls.mobile_review_state,
                 })
                 .collect();
             let restored_count = restored.len();
@@ -714,6 +715,9 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             store.update_auto_resume(session_id, *value).await
         }
         StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
+        StoreWrite::UpdateMobileReviewState { session_id, value } => {
+            store.update_mobile_review_state(session_id, value).await
+        }
         StoreWrite::UpsertWakeup {
             session_id,
             fire_at_ms,
