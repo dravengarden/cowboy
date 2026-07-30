@@ -22,6 +22,11 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   IconButton,
   Popover,
   Stack,
@@ -1072,6 +1077,7 @@ export function ReviewApp({
   >();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
+  const [pendingCloseKey, setPendingCloseKey] = useState<string>();
   const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<
     CodeNavigationEntry[]
@@ -1174,6 +1180,7 @@ export function ReviewApp({
   ]);
 
   useEffect(() => {
+    setPendingCloseKey(undefined);
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
@@ -1469,6 +1476,19 @@ export function ReviewApp({
     if (fallback) activateTab(fallback);
     else if (mode === "files") setSourceTarget(undefined);
     else setDiffTarget(undefined);
+  };
+  const pendingCloseTab = tabs.find((tab) =>
+    reviewTabKey(tab) === pendingCloseKey
+  );
+  const requestCloseTab = (key: string): void => {
+    navigationHaptic();
+    setPendingCloseKey(key);
+  };
+  const confirmCloseTab = (): void => {
+    const key = pendingCloseKey;
+    if (!key) return;
+    setPendingCloseKey(undefined);
+    closeTab(key);
   };
   const reviewIndex = target.kind === "diff"
     ? target.queue.findIndex((entry) =>
@@ -1807,7 +1827,7 @@ export function ReviewApp({
             tabs={modeTabs}
             activeKey={activeTabKey}
             onActivate={activateTab}
-            onClose={closeTab}
+            onClose={requestCloseTab}
             onCloseOthers={(key) => {
               if (mode === "files" && workspace?.sessionId) {
                 for (const tab of tabs) {
@@ -2036,6 +2056,35 @@ export function ReviewApp({
             </Toolbar>
           </Box>
         </Box>
+        <Dialog
+          open={pendingCloseKey !== undefined}
+          onClose={() => setPendingCloseKey(undefined)}
+          fullWidth
+          maxWidth="xs"
+          aria-labelledby="review-close-tab-title"
+        >
+          <DialogTitle id="review-close-tab-title">
+            Close {pendingCloseTab?.path.split("/").at(-1) ?? "this tab"}?
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              This removes it from the open tabs. The file and its contents are
+              not deleted.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button
+              autoFocus
+              color="inherit"
+              onClick={() => setPendingCloseKey(undefined)}
+            >
+              Keep open
+            </Button>
+            <Button color="error" onClick={confirmCloseTab}>
+              Close tab
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Stack>
     </ReviewDrawerShell>
   );
