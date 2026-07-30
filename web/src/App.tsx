@@ -91,16 +91,7 @@ import {
 } from "./store";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
-import {
-    expandedSelection,
-    hasHorizontalScroller,
-    horizontalSwipe,
-    MOBILE_DRAWER_DIRECTION_LOCK_PX,
-} from "./touchGestures";
-import {
-    mobileDrawerSurfaceVisual,
-    predictDrawerOffset,
-} from "./mobileDrawerMotion";
+import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -154,7 +145,6 @@ import { ResourceLightbox } from "./ResourceLightbox";
 import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
-import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
@@ -1666,11 +1656,10 @@ export function App({
         knownPageIds: string[];
     } | null>(null);
 
-    // Mobile Sessions is a spatial layer underneath the whole conversation.
-    // The foreground follows a horizontal finger drag continuously, then settles
-    // from its exact release position. This intentionally does not use a sheet:
-    // replacing the drag with a second component after touchend caused the old
-    // 46px teaser + delayed-sheet discontinuity.
+    // Mobile Sessions and Code Review use the same spatial-drawer controller.
+    // Product code supplies only the side and presentation-freeze hook; sampling,
+    // prediction, magnetic thresholds, haptics, rubber-band, depth, settle timing,
+    // and idle release stay identical on both surfaces.
     useEffect(() => {
         if (!mobile || anySheetOpen) return undefined;
         const surface = columnRef.current;
@@ -1678,377 +1667,24 @@ export function App({
         const drawer = mobileDrawerRef.current;
         const drawerMask = mobileDrawerMaskRef.current;
         if (!surface || !gestureTarget || !drawer || !drawerMask) return undefined;
-        let gesture: {
-            x: number;
-            y: number;
-            lastX: number;
-            lastAt: number;
-            velocity: number;
-            locked: boolean;
-            startOffset: number;
-            startOpen: boolean;
-            width: number;
-            thresholdHaptic: boolean;
-        } | null = null;
-        let settleTimer = 0;
-        let renderFrame = 0;
-        let pendingOffset = 0;
-        let pendingSampleAt = 0;
-        let pendingVelocity = 0;
-        let pendingThresholdHaptic = false;
-        let currentOffset = 0;
-        let commit = false;
-        let directManipulationActive = false;
-        let releaseFrame = 0;
-        let releaseIdle: number | undefined;
-        let releaseStorePresentation: (() => void) | undefined;
-        let presentationWidth = 1;
-        const reducedMotion = globalThis.matchMedia?.(
-            "(prefers-reduced-motion: reduce)",
-        ).matches ?? false;
-        const drawerWidth = (): number => {
-            const width = surface.clientWidth;
-            return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
-        };
-        const cornerRadius = (): string => `${String(phone ? 36 : 30)}px`;
-        const applyOpenDepth = (): void => {
-            // Radius and shadow are discrete drawer-surface properties, not
-            // per-frame motion. Keeping them identical from direction-lock
-            // through the fully-open state avoids both visual shape-shifting
-            // and expensive re-rasterization of the transcript layer.
-            const radius = cornerRadius();
-            surface.style.borderRadius = radius;
-            surface.style.boxShadow = "-18px 0 42px rgba(0,0,0,0.16)";
-        };
-        const render = (offset: number): void => {
-            // The complete frozen workspace (transcript, composer, navbar, and
-            // bottom corners) is one GPU layer. Translation keeps its leading
-            // edge under the finger; scale and the delayed opacity curve make
-            // that whole page recede like DeepSeek. These are compositor-only
-            // writes: no transcript layout or paint occurs.
-            currentOffset = offset;
-            const visual = mobileDrawerSurfaceVisual(
-                offset,
-                presentationWidth,
-                phone,
-                reducedMotion,
-            );
-            const progress = Math.max(0, Math.min(1, offset / presentationWidth));
-            // The underlay travels a meaningful fraction of its own width.
-            // A former fixed 28px offset technically moved but looked static on
-            // a phone; DeepSeek keeps the drawer visibly offstage at mid-swipe.
-            const drawerParallax = presentationWidth * (phone ? 0.28 : 0.22) *
-                (1 - progress);
-            const drawerOpacity = 0.72 + progress * 0.28;
-            surface.style.transform =
-                `translate3d(${String(offset)}px, 0, 0) scale(${String(visual.scale)})`;
-            surface.style.opacity = String(visual.opacity);
-            // DeepSeek's drawer is not a stationary wallpaper revealed by the
-            // foreground. Its complete underlay, including the empty bottom
-            // region, enters from the left with a restrained parallax while the
-            // foreground moves under the finger.
-            drawer.style.transform =
-                `translate3d(-${String(drawerParallax)}px, 0, 0)`;
-            drawer.style.opacity = String(drawerOpacity);
-            // The foreground recedes translucently, but the session list must
-            // remain visible only in the strip that has physically been
-            // revealed. Move an opaque app-background mask with the foreground
-            // edge so drawer labels never ghost through the page underneath.
-            // This stays on the compositor alongside the foreground transform.
-            drawerMask.style.transform = `translate3d(${String(offset)}px, 0, 0)`;
-        };
-        const scheduleRender = (
-            offset: number,
-            sampleAt: number,
-            velocity: number,
-        ): void => {
-            pendingOffset = offset;
-            pendingSampleAt = sampleAt;
-            pendingVelocity = velocity;
-            if (renderFrame !== 0) return;
-            renderFrame = requestAnimationFrame((frameAt) => {
-                renderFrame = 0;
-                render(predictDrawerOffset(
-                    pendingOffset,
-                    pendingVelocity,
-                    frameAt - pendingSampleAt,
-                ));
-                // Keep native bridge IPC outside the raw touchmove hot path.
-                // The haptic remains aligned with the committed visual frame.
-                if (pendingThresholdHaptic) {
-                    pendingThresholdHaptic = false;
-                    navigationHaptic();
-                }
-            });
-        };
-        const clearTransitions = (): void => {
-            surface.style.removeProperty("transition");
-            surface.style.removeProperty("will-change");
-            drawer.style.removeProperty("transition");
-            drawer.style.removeProperty("will-change");
-            drawerMask.style.removeProperty("transition");
-            drawerMask.style.removeProperty("will-change");
-        };
-        const releaseDirectManipulation = (): void => {
-            const finish = (): void => {
-                releaseIdle = undefined;
-                directManipulationActive = false;
-                gestureTarget.removeAttribute("data-mobile-drawer-moving");
-                releaseStorePresentation?.();
-                releaseStorePresentation = undefined;
-                globalThis.dispatchEvent(
-                    new CustomEvent("cowboy:transcript-direct-manipulation-end"),
-                );
-            };
-            // First let WebKit present the final transform frame, then flush the
-            // accumulated transcript in a real idle window. Doing both in the
-            // settle timer's task caused the visible post-swipe flash.
-            releaseFrame = requestAnimationFrame(() => {
-                releaseFrame = 0;
-                if (typeof globalThis.requestIdleCallback === "function") {
-                    releaseIdle = globalThis.requestIdleCallback(finish, { timeout: 180 });
-                } else {
-                    releaseIdle = globalThis.setTimeout(finish, 32);
-                }
-            });
-        };
-        const settle = (
-            open: boolean,
-            releaseVelocity = 0,
-            onSettled?: () => void,
-            cachedWidth?: number,
-        ): void => {
-            globalThis.clearTimeout(settleTimer);
-            const releaseOffset = renderFrame !== 0 ? pendingOffset : currentOffset;
-            if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
-            renderFrame = 0;
-            applyOpenDepth();
-            const width = cachedWidth ?? drawerWidth();
-            presentationWidth = width;
-            const targetOffset = open ? width : 0;
-            const remaining = Math.min(1, Math.abs(targetOffset - releaseOffset) / width);
-            // Distance + release velocity determine the snap duration. A quick
-            // flick completes promptly; a deliberate partial drag gets enough
-            // easing to remain legible. Fixed-duration snaps felt sluggish near
-            // an endpoint and abrupt after a short fast flick.
-            const duration = Math.max(
-                150,
-                Math.min(260, 160 + remaining * 100 - Math.min(70, Math.abs(releaseVelocity) * 45)),
-            );
-            surface.style.transition =
-                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
-                `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
-            drawerMask.style.transition =
-                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
-            drawer.style.transition =
-                `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
-                `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
-            render(targetOffset);
-            if (pendingThresholdHaptic) {
-                pendingThresholdHaptic = false;
-                requestAnimationFrame(() => navigationHaptic());
-            }
-            // Mount the foreground hit layer at open-start. During close, keep
-            // the open state through the last animation frame so the radius and
-            // clipping cannot disappear early when React rebinds this effect.
-            if (open) {
-                drawerOpenRef.current = true;
-                setDrawerOpen(true);
-            }
-            settleTimer = globalThis.setTimeout(() => {
-                clearTransitions();
-                if (!open) {
-                    drawerOpenRef.current = false;
-                    setDrawerOpen(false);
-                }
-                onSettled?.();
-            }, duration + 20);
-        };
-        settleMobileDrawerRef.current = settle;
-        const onTouchStart = (event: TouchEvent): void => {
-            const touch = event.touches[0];
-            const target = event.target instanceof HTMLElement ? event.target : null;
-            if (
-                !touch ||
-                expandedSelection(globalThis.getSelection?.() ?? null) ||
-                target?.closest("input, textarea, [contenteditable='true'], [data-mobile-drawer-ignore]") ||
-                hasHorizontalScroller(event.target, gestureTarget)
-            ) {
-                gesture = null;
-                return;
-            }
-            const now = performance.now();
-            const startOpen = drawerOpenRef.current;
-            const width = drawerWidth();
-            presentationWidth = width;
-            // Give the persistent native selection generator a real warm-up
-            // window before this drag can cross its magnetic commit threshold.
-            prepareNavigationHaptic();
-            gesture = {
-                x: touch.clientX,
-                y: touch.clientY,
-                lastX: touch.clientX,
-                lastAt: now,
-                velocity: 0,
-                locked: false,
-                startOffset: startOpen ? width : 0,
-                startOpen,
-                width,
-                thresholdHaptic: false,
-            };
-            commit = startOpen;
-        };
-        const onTouchMove = (event: TouchEvent): void => {
-            const touch = event.touches[0];
-            if (!gesture || !touch) return;
-            // iOS selection handles emit ordinary document-level touchmove
-            // events. Once WebKit owns an expanded range, the drawer must stop
-            // competing for that stream; preventDefault here would move the
-            // foreground instead of extending the highlighted text.
-            if (expandedSelection(globalThis.getSelection?.() ?? null)) {
-                gesture = null;
-                commit = false;
-                return;
-            }
-            const deltaX = touch.clientX - gesture.x;
-            const deltaY = touch.clientY - gesture.y;
-            if (!gesture.locked && Math.abs(deltaY) >= 10 && Math.abs(deltaY) > Math.abs(deltaX) * 1.15) {
-                gesture = null;
-                return;
-            }
-            const swipe = gesture.locked
-                ? { direction: deltaX < 0 ? "left" as const : "right" as const, distance: Math.abs(deltaX) }
-                : horizontalSwipe(
-                    deltaX,
-                    deltaY,
-                    MOBILE_DRAWER_DIRECTION_LOCK_PX,
-                    1.15,
-                );
-            if (
-                !swipe ||
-                (!gesture.startOpen && swipe.direction !== "right") ||
-                (gesture.startOpen && swipe.direction !== "left")
-            ) {
-                return;
-            }
-            if (!gesture.locked) {
-                if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
-                if (releaseIdle !== undefined) {
-                    if (typeof globalThis.cancelIdleCallback === "function") {
-                        globalThis.cancelIdleCallback(releaseIdle);
-                    } else {
-                        globalThis.clearTimeout(releaseIdle);
-                    }
-                    releaseIdle = undefined;
-                }
-                globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-start"));
-                releaseStorePresentation ??= holdStorePresentation();
-                directManipulationActive = true;
-                gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
-                applyOpenDepth();
-                surface.style.transition = "none";
-                surface.style.willChange = "transform, opacity";
-                drawer.style.transition = "none";
-                drawer.style.willChange = "transform, opacity";
-                drawerMask.style.transition = "none";
-                drawerMask.style.willChange = "transform";
-            }
-            gesture.locked = true;
-            event.preventDefault();
-            const now = performance.now();
-            const elapsed = Math.max(1, now - gesture.lastAt);
-            const instantaneousVelocity = (touch.clientX - gesture.lastX) / elapsed;
-            gesture.velocity = gesture.velocity * 0.65 + instantaneousVelocity * 0.35;
-            gesture.lastX = touch.clientX;
-            gesture.lastAt = now;
-            const width = gesture.width;
-            let offset = gesture.startOffset + deltaX;
-            // A little rubber-band resistance at both ends makes the limits feel
-            // physical instead of abruptly clipped.
-            if (offset < 0) offset *= 0.18;
-            if (offset > width) offset = width + (offset - width) * 0.18;
-            // iOS can deliver touchmove faster than the display refresh rate.
-            // Coalesce those samples into one visual update per frame while
-            // keeping velocity and the magnetic threshold on every raw sample.
-            scheduleRender(offset, now, gesture.velocity);
-            const progress = Math.max(0, Math.min(1, offset / width));
-            const nextCommit = gesture.startOpen ? progress > 0.66 : progress >= 0.34;
-            if (nextCommit !== commit && !gesture.thresholdHaptic) {
-                pendingThresholdHaptic = true;
-                gesture.thresholdHaptic = true;
-            }
-            commit = nextCommit;
-        };
-        const onTouchEnd = (): void => {
-            if (!gesture) return;
-            // A plain tap belongs to the row/button beneath us. In particular,
-            // a session row tap starts its own close; the old no-op "settle to
-            // current state" here ran later in bubbling order and reopened the
-            // drawer over that close.
-            if (!gesture.locked) {
-                gesture = null;
-                commit = false;
-                return;
-            }
-            const startOpen = gesture.startOpen;
-            const width = gesture.width;
-            const velocityCommit = startOpen
-                ? gesture.velocity > -0.45
-                : gesture.velocity > 0.45;
-            const releaseVelocity = gesture.velocity;
-            const shouldOpen = gesture.locked
-                ? (Math.abs(gesture.velocity) >= 0.45 ? velocityCommit : commit)
-                : startOpen;
-            if (gesture.locked && shouldOpen !== commit && !gesture.thresholdHaptic) {
-                navigationHaptic();
-            }
-            gesture = null;
-            commit = false;
-            settle(shouldOpen, releaseVelocity, releaseDirectManipulation, width);
-        };
-        const onTouchCancel = (): void => {
-            const wasLocked = gesture?.locked === true;
-            const startOpen = gesture?.startOpen ?? drawerOpenRef.current;
-            const width = gesture?.width;
-            gesture = null;
-            commit = false;
-            if (wasLocked) {
-                settle(startOpen, 0, releaseDirectManipulation, width);
-            }
-        };
-        // Keep the mobile workspace on one stable composited shape even while
-        // closed. At x=0 the shadow lies outside the viewport and the matching
-        // app background fills the device corners, so no visual depth leaks;
-        // avoiding layer promotion/demotion removes the post-settle flash.
-        applyOpenDepth();
-        presentationWidth = drawerWidth();
-        render(drawerOpenRef.current ? presentationWidth : 0);
-        gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
-        gestureTarget.addEventListener("touchmove", onTouchMove, { passive: false });
-        gestureTarget.addEventListener("touchend", onTouchEnd, { passive: true });
-        gestureTarget.addEventListener("touchcancel", onTouchCancel, { passive: true });
+        const binding = bindMobileSpatialDrawer({
+            gestureTarget,
+            surface,
+            drawer,
+            drawerMask,
+            side: "left",
+            phone,
+            getOpen: () => drawerOpenRef.current,
+            setOpen: (open) => {
+                drawerOpenRef.current = open;
+                setDrawerOpen(open);
+            },
+            holdPresentation: holdStorePresentation,
+        });
+        settleMobileDrawerRef.current = binding.settle;
         return () => {
-            if (gesture?.locked || directManipulationActive) {
-                globalThis.dispatchEvent(new CustomEvent("cowboy:transcript-direct-manipulation-end"));
-            }
-            releaseStorePresentation?.();
-            releaseStorePresentation = undefined;
-            gestureTarget.removeEventListener("touchstart", onTouchStart);
-            gestureTarget.removeEventListener("touchmove", onTouchMove);
-            gestureTarget.removeEventListener("touchend", onTouchEnd);
-            gestureTarget.removeEventListener("touchcancel", onTouchCancel);
             settleMobileDrawerRef.current = null;
-            globalThis.clearTimeout(settleTimer);
-            if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
-            gestureTarget.removeAttribute("data-mobile-drawer-moving");
-            if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
-            if (releaseIdle !== undefined) {
-                if (typeof globalThis.cancelIdleCallback === "function") {
-                    globalThis.cancelIdleCallback(releaseIdle);
-                } else {
-                    globalThis.clearTimeout(releaseIdle);
-                }
-            }
+            binding.dispose();
         };
     }, [anySheetOpen, mobile, phone]);
 
