@@ -3,9 +3,9 @@ import {
   AdjustOutlined,
   CodeOutlined,
   Clear,
+  DataArrayOutlined,
   DataObjectOutlined,
   DiamondOutlined,
-  KeyOutlined,
   Search,
 } from "@mui/icons-material";
 import {
@@ -74,7 +74,7 @@ function SymbolCategoryIcon({
     );
   }
   if (category === "method") return <CodeOutlined />;
-  if (category === "field") return <KeyOutlined />;
+  if (category === "field") return <DataArrayOutlined />;
   if (category === "constant") return <DiamondOutlined />;
   if (category === "object") return <AccountTreeOutlined />;
   return <AdjustOutlined />;
