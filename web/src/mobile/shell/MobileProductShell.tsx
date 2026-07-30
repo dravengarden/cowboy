@@ -6,6 +6,7 @@ import {
   useActiveWorkspaceBinding,
 } from "../../controlPlane";
 import { NativeReleaseUpdatePrompt } from "../../_shell";
+import { isAnyDetentSheetOpen } from "../../_shell/detent-sheet-open";
 import { MobileConnectionBanner } from "../MobileConnectionBanner";
 import {
   expandedSelection,
@@ -30,6 +31,14 @@ import { ReviewApp } from "../review/ReviewApp";
 
 const PRODUCT_STORAGE_KEY = "cowboy:mobile-product";
 const VELOCITY_COMMIT_PX_PER_MS = 0.45;
+const MODAL_OVERLAY_SELECTOR = [
+  ".MuiModal-root",
+  ".MuiPopover-root",
+  ".MuiDialog-root",
+  ".MuiDrawer-root",
+  "[role='dialog'][aria-modal='true']",
+  "[data-mobile-pager-modal='true']",
+].join(",");
 
 function restoredProduct(): MobileProduct {
   return globalThis.localStorage?.getItem(PRODUCT_STORAGE_KEY) === "review"
@@ -52,6 +61,11 @@ function ignoredGestureTarget(
         ) != null ||
         hasHorizontalScroller(target, boundary)))
   );
+}
+
+function modalOwnsGesture(): boolean {
+  return isAnyDetentSheetOpen() ||
+    globalThis.document?.querySelector(MODAL_OVERLAY_SELECTOR) != null;
 }
 
 export function MobileProductShell({
@@ -192,6 +206,7 @@ export function MobileProductShell({
       if (!touch) return;
       const ignored = ignoredGestureTarget(event.target, shell);
       const overlayOwnsGesture =
+        modalOwnsGesture() ||
         (productRef.current === "agent" && agentDrawerOpenRef.current) ||
         (productRef.current === "review" && reviewDrawerOpenRef.current);
       if (!shouldReservePagerStart(ignored, overlayOwnsGesture)) {
@@ -216,7 +231,10 @@ export function MobileProductShell({
     const onTouchMove = (event: TouchEvent): void => {
       const touch = event.touches[0];
       if (!gesture || !touch) return;
-      if (expandedSelection(globalThis.getSelection?.() ?? null)) {
+      if (
+        expandedSelection(globalThis.getSelection?.() ?? null) ||
+        modalOwnsGesture()
+      ) {
         if (gesture.locked) settle(gesture.product, 0, gesture.width);
         gesture = null;
         return;

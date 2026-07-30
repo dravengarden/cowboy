@@ -163,6 +163,10 @@ export function FullscreenComposer({
   // inline fixed child). A portal escapes them so the overlay truly covers the app.
   return createPortal(
     <Box
+      role="dialog"
+      aria-modal="true"
+      aria-label="Fullscreen message editor"
+      data-mobile-pager-modal="true"
       sx={{
         // `position: absolute` (not fixed): the native shell resizes the WebView for
         // the keyboard, so `body` is normal-flow at viewport height and `absolute
