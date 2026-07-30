@@ -647,12 +647,20 @@ struct Session {
 
 const MOBILE_REVIEW_TAB_CAP: usize = 12;
 const MOBILE_REVIEW_PROGRESS_CAP: usize = 512;
+const MOBILE_REVIEW_POSITION_CAP: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MobileReviewTab {
     path: String,
     #[serde(default)]
     pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MobileReviewPosition {
+    line: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -665,6 +673,8 @@ struct MobileReviewState {
     active: Option<String>,
     #[serde(default)]
     progress: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    positions: std::collections::BTreeMap<String, MobileReviewPosition>,
 }
 
 fn default_mobile_review_mode() -> String {
@@ -678,6 +688,7 @@ impl Default for MobileReviewState {
             tabs: Vec::new(),
             active: None,
             progress: std::collections::BTreeMap::new(),
+            positions: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -709,6 +720,19 @@ impl MobileReviewState {
         while state.progress.len() > MOBILE_REVIEW_PROGRESS_CAP {
             if let Some(key) = state.progress.keys().next().cloned() {
                 state.progress.remove(&key);
+            }
+        }
+        state.positions.retain(|path, position| {
+            valid_mobile_review_path(path)
+                && position.line > 0
+                && position
+                    .revision
+                    .as_ref()
+                    .is_none_or(|revision| !revision.is_empty() && revision.len() <= 512)
+        });
+        while state.positions.len() > MOBILE_REVIEW_POSITION_CAP {
+            if let Some(path) = state.positions.keys().next().cloned() {
+                state.positions.remove(&path);
             }
         }
         state
@@ -2726,6 +2750,37 @@ impl Hub {
                         _ => return Err("invalid review revision".to_owned()),
                     }
                 }
+                "setPosition" => {
+                    let path = mobile_review_string_arg(args, "path", 4096)?;
+                    if !valid_mobile_review_path(&path) {
+                        return Err("invalid mobile review path".to_owned());
+                    }
+                    let line = args
+                        .get("line")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|line| u32::try_from(line).ok())
+                        .filter(|line| *line > 0)
+                        .ok_or("setPosition: invalid line")?;
+                    let revision = match args.get("revision") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(value) => Some(
+                            value
+                                .as_str()
+                                .filter(|revision| !revision.is_empty() && revision.len() <= 512)
+                                .map(str::to_owned)
+                                .ok_or("setPosition: invalid revision")?,
+                        ),
+                    };
+                    if state.positions.len() >= MOBILE_REVIEW_POSITION_CAP
+                        && !state.positions.contains_key(&path)
+                        && let Some(oldest) = state.positions.keys().next().cloned()
+                    {
+                        state.positions.remove(&oldest);
+                    }
+                    state
+                        .positions
+                        .insert(path, MobileReviewPosition { line, revision });
+                }
                 _ => return Err(format!("unknown mobile review mutation {mutation}")),
             }
             serde_json::to_value(state).map_err(|error| error.to_string())?
@@ -2892,6 +2947,7 @@ impl Hub {
                         | "activate"
                         | "setMode"
                         | "markReviewed"
+                        | "setPosition"
                 ) {
                     return Err(format!("unknown mobile review mutation {name}"));
                 }
@@ -4576,6 +4632,17 @@ mod confirm_hold_tests {
             &serde_json::json!({"key": "combined:strategies/README.md", "revision": "abc123"}),
         )
         .unwrap();
+        hub.sync_apply(
+            "mobile-review:mobile",
+            "m4".to_owned(),
+            "setPosition",
+            &serde_json::json!({
+                "path": "strategies/README.md",
+                "line": 47,
+                "revision": "abc123"
+            }),
+        )
+        .unwrap();
 
         let value = hub.sync_value("mobile-review:mobile");
         assert_eq!(value["mode"], "files");
@@ -4583,6 +4650,11 @@ mod confirm_hold_tests {
         assert_eq!(value["tabs"].as_array().unwrap().len(), 1);
         assert_eq!(value["tabs"][0]["pinned"], true);
         assert_eq!(value["progress"]["combined:strategies/README.md"], "abc123");
+        assert_eq!(value["positions"]["strategies/README.md"]["line"], 47);
+        assert_eq!(
+            value["positions"]["strategies/README.md"]["revision"],
+            "abc123"
+        );
     }
 
     #[test]

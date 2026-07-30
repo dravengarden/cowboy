@@ -1250,12 +1250,16 @@ export interface MobileReviewState {
   readonly tabs: readonly MobileReviewTabState[];
   readonly active?: string;
   readonly progress: Readonly<Record<string, string>>;
+  readonly positions: Readonly<
+    Record<string, { readonly line: number; readonly revision?: string }>
+  >;
 }
 
 const EMPTY_MOBILE_REVIEW_STATE: MobileReviewState = {
   mode: "git",
   tabs: [],
   progress: {},
+  positions: {},
 };
 
 const mobileReviewMutators = {
@@ -1275,6 +1279,7 @@ const mobileReviewMutators = {
       mode: value.mode,
       tabs,
       progress: value.progress,
+      positions: value.positions,
       ...(active === undefined ? {} : { active }),
     };
   },
@@ -1304,6 +1309,7 @@ const mobileReviewMutators = {
     mode: value.mode,
     tabs: value.tabs,
     progress: value.progress,
+    positions: value.positions,
     ...(args.path && value.tabs.some((tab) => tab.path === args.path)
       ? { active: args.path }
       : {}),
@@ -1321,6 +1327,19 @@ const mobileReviewMutators = {
     else progress[args.key] = args.revision;
     return { ...value, progress };
   },
+  setPosition: (
+    value: MobileReviewState,
+    args: { path: string; line: number; revision: string | null },
+  ): MobileReviewState => ({
+    ...value,
+    positions: {
+      ...value.positions,
+      [args.path]: {
+        line: Math.max(1, Math.trunc(args.line)),
+        ...(args.revision === null ? {} : { revision: args.revision }),
+      },
+    },
+  }),
 } satisfies Mutators<MobileReviewState>;
 
 type MobileReviewMutation = keyof typeof mobileReviewMutators & string;
@@ -1344,7 +1363,13 @@ function mobileReviewClient(sessionId: string) {
 }
 
 function commitMobileReview(sessionId: string): void {
-  const value = mobileReviewClient(sessionId).view();
+  const current = mobileReviewClient(sessionId).view();
+  // Older IndexedDB snapshots predate per-file positions. Normalize at the
+  // boundary so an offline Mobile client can upgrade without clearing state.
+  const value: MobileReviewState = {
+    ...current,
+    positions: current.positions ?? {},
+  };
   setState({
     ...state,
     mobileReviewStates: { ...state.mobileReviewStates, [sessionId]: value },

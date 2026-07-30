@@ -313,6 +313,7 @@ export default function CodeViewer({
   inlayHints,
   semanticHighlighting,
   onInspect,
+  onVisibleLine,
 }: {
   text: string;
   kind: "source" | "diff";
@@ -328,6 +329,7 @@ export default function CodeViewer({
     candidates: CodeInspectCandidate[],
     anchor: { top: number; left: number },
   ) => void) | undefined;
+  onVisibleLine?: ((line: number) => void) | undefined;
 }): React.JSX.Element {
   const theme = useTheme();
   const editorRef = useRef<EditorView | null>(null);
@@ -568,6 +570,18 @@ export default function CodeViewer({
         }),
       );
     }
+    if (onVisibleLine) {
+      values.push(
+        EditorView.updateListener.of((update) => {
+          if (!update.viewportChanged) return;
+          const top = update.view.lineBlockAtHeight(
+            update.view.scrollDOM.getBoundingClientRect().top -
+              update.view.documentTop,
+          );
+          onVisibleLine(update.view.state.doc.lineAt(top.from).number);
+        }),
+      );
+    }
     return values;
   }, [
     diagnostics,
@@ -577,6 +591,7 @@ export default function CodeViewer({
     language,
     languageData,
     onInspect,
+    onVisibleLine,
     semanticHighlighting,
     softWrap,
     text,

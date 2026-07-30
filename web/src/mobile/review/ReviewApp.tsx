@@ -152,7 +152,46 @@ function DocumentView({
   >();
   const [navigationLoading, setNavigationLoading] = useState(false);
   const hoverController = useRef<AbortController | undefined>(undefined);
+  const positionTimer = useRef<number | undefined>(undefined);
+  const pendingPosition = useRef<number | undefined>(undefined);
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
+
+  const persistVisibleLine = useCallback((line: number): void => {
+    if (target.kind !== "source") return;
+    pendingPosition.current = line;
+    if (positionTimer.current !== undefined) {
+      globalThis.clearTimeout(positionTimer.current);
+    }
+    positionTimer.current = globalThis.setTimeout(() => {
+      const pendingLine = pendingPosition.current;
+      positionTimer.current = undefined;
+      pendingPosition.current = undefined;
+      if (pendingLine === undefined) return;
+      mutateMobileReview(sessionId, "setPosition", {
+        path: target.path,
+        line: pendingLine,
+        revision: revision ?? null,
+      });
+    }, 500);
+  }, [revision, sessionId, target]);
+
+  useEffect(() => {
+    return () => {
+      if (positionTimer.current !== undefined) {
+        globalThis.clearTimeout(positionTimer.current);
+        positionTimer.current = undefined;
+      }
+      const line = pendingPosition.current;
+      pendingPosition.current = undefined;
+      if (target.kind === "source" && line !== undefined) {
+        mutateMobileReview(sessionId, "setPosition", {
+          path: target.path,
+          line,
+          revision: revision ?? null,
+        });
+      }
+    };
+  }, [revision, sessionId, target]);
 
   const inspectPoint = useCallback((point: {
     row: number;
@@ -668,6 +707,9 @@ function DocumentView({
                     (target.kind === "diff" && target.scope === "unstaged")
                   ? inspectCandidatesOrPoint
                   : undefined}
+                onVisibleLine={target.kind === "source"
+                  ? persistVisibleLine
+                  : undefined}
               />
             </Suspense>
           )}
@@ -785,6 +827,8 @@ export function ReviewApp({
   >([]);
   const [managingTabs, setManagingTabs] = useState(false);
   const syncedReview = useMobileReviewState(workspace?.sessionId);
+  const syncedReviewRef = useRef(syncedReview);
+  syncedReviewRef.current = syncedReview;
   const [manifestRefreshRequest, setManifestRefreshRequest] = useState(0);
   const manifestRevision = useRef<string | undefined>(undefined);
   const adoptManifestRevision = useCallback((revision: string): void => {
@@ -940,7 +984,12 @@ export function ReviewApp({
       return;
     }
     setMarkdownPreview(isMarkdownReviewPath(path));
-    setSourceTarget({ kind: "source", path });
+    const line = syncedReviewRef.current.positions?.[path]?.line;
+    setSourceTarget({
+      kind: "source",
+      path,
+      ...(line === undefined ? {} : { revealLine: line }),
+    });
   }, [syncedReview.active, workspace?.sessionId]);
 
   const openSource = (
