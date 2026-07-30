@@ -662,16 +662,20 @@ export async function loadQuestionPage(
     if (!response.ok) return false;
     const data = (await response.json()) as { events: Envelope[] };
     if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
-    setState({
-      ...state,
-      timelines: mergeEvents(state.timelines, sessionId, data.events),
-    });
     const complete = data.events.some((event) => event.seq === rootSeq);
     if (complete) {
       const pages = completeQuestionPages.get(sessionId) ?? new Set<string>();
       pages.add(pageId);
       completeQuestionPages.set(sessionId, pages);
     }
+    // Publish completeness before notifying store subscribers. Page View reads
+    // this side cache during the render caused by setState; doing it afterwards
+    // left the completed response behind an eternal skeleton until some
+    // unrelated state change (most visibly switching sessions) rendered again.
+    setState({
+      ...state,
+      timelines: mergeEvents(state.timelines, sessionId, data.events),
+    });
     return complete;
   } catch {
     return false;

@@ -719,7 +719,7 @@ export function ExploreTranscript(
     pageStartId,
     pageLoadingId,
   } = useExploreSessionState(props.sessionId);
-  const [restoringPageId, setRestoringPageId] = useState<string | null>(null);
+  const restoringPageRef = useRef<string | null>(null);
   const authoritativeTailId = authoritativeTailPageId(
     current,
     atTail,
@@ -744,19 +744,25 @@ export function ExploreTranscript(
   ]);
 
   useEffect(() => {
+    if (props.status === "busy" || restorePageId === null) {
+      restoringPageRef.current = null;
+      return;
+    }
+    if (restorePageLoaded) return;
     // The latest page is mutable only while its turn is active. Once the
     // session returns to idle, the authoritative index can safely repair a
     // retained projection that starts inside the completed answer.
-    if (props.status === "busy" || restorePageLoaded || restorePageId === null) {
-      setRestoringPageId(null);
-      return;
-    }
-    if (restoringPageId === restorePageId) return;
-    setRestoringPageId(restorePageId);
-    let active = true;
+    //
+    // This request identity deliberately lives in a ref. Keeping it in state
+    // made the effect cancel its own callback on the render caused by setting
+    // "restoring", leaving the loaded page in cache behind an eternal skeleton
+    // until the session was switched away and back.
+    const requestKey = `${props.sessionId}:${restorePageId}`;
+    if (restoringPageRef.current === requestKey) return;
+    restoringPageRef.current = requestKey;
     void loadQuestionPage(props.sessionId, restorePageId).then((loaded) => {
-      if (!active) return;
-      setRestoringPageId(null);
+      if (restoringPageRef.current !== requestKey) return;
+      restoringPageRef.current = null;
       if (loaded && restorePageId !== retainedPageId) {
         setExplorePage(props.sessionId, restorePageId);
       } else if (!loaded && current) {
@@ -765,18 +771,18 @@ export function ExploreTranscript(
         setExplorePage(props.sessionId, current.id);
       }
     });
-    return () => {
-      active = false;
-    };
   }, [
     current?.id,
     props.sessionId,
     props.status,
-    restoringPageId,
     restorePageId,
     restorePageLoaded,
     retainedPageId,
   ]);
+
+  useEffect(() => () => {
+    restoringPageRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!unresolvedQuestionRoot) {
