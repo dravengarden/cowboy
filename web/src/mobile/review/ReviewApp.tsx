@@ -581,6 +581,7 @@ function DocumentView({
         direction="row"
         useFlexGap
         gap={0.5}
+        onPointerDown={(event) => event.stopPropagation()}
         sx={{
           flex: "1 1 0",
           minWidth: 0,
@@ -933,7 +934,12 @@ function DocumentView({
                   direction="row"
                   alignItems="center"
                   gap={1}
-                  sx={{ width: "100%", minWidth: 0 }}
+                  sx={{
+                    width: "calc(100vw - 32px)",
+                    maxWidth: "100%",
+                    minWidth: 0,
+                    overflow: "hidden",
+                  }}
                 >
                   <Box
                     component="span"
