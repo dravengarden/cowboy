@@ -26,8 +26,8 @@ const symbol = (
 
 Deno.test("outline preserves hierarchy and supports contextual search", () => {
   const rows = flattenOutline([
-    symbol("Judge", 23, 0, 20, [symbol("complete", 6, 5, 10)]),
-    symbol("output_schema", 12, 22, 30),
+    symbol("Judge", 22, 0, 20, [symbol("complete", 5, 5, 10)]),
+    symbol("output_schema", 11, 22, 30),
   ]);
   assertEquals(rows.map(({ symbol, depth }) => [symbol.name, depth]), [
     ["Judge", 0],
@@ -38,12 +38,12 @@ Deno.test("outline preserves hierarchy and supports contextual search", () => {
     filterOutline(rows, "judge complete").map((row) => row.symbol.name),
     ["complete"],
   );
-  assertEquals(symbolKindLabel(12), "fn");
+  assertEquals(symbolKindLabel(11), "fn");
 });
 
 Deno.test("outline selects the deepest symbol containing the reading line", () => {
   const rows = flattenOutline([
-    symbol("Judge", 23, 0, 20, [symbol("complete", 6, 5, 10)]),
+    symbol("Judge", 22, 0, 20, [symbol("complete", 5, 5, 10)]),
   ]);
   assertEquals(activeOutlineRow(rows, 8)?.symbol.name, "complete");
 });

@@ -8,7 +8,6 @@ export interface OutlineRow {
 
 export function symbolKindLabel(kind: number): string {
   return [
-    "",
     "file",
     "mod",
     "namespace",
