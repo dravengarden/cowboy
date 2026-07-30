@@ -6,6 +6,13 @@ export interface OutlineRow {
   context: string;
 }
 
+export type OutlineSymbolCategory =
+  | "module"
+  | "type"
+  | "callable"
+  | "member"
+  | "value";
+
 export function symbolKindLabel(kind: number): string {
   return [
     "file",
@@ -35,6 +42,19 @@ export function symbolKindLabel(kind: number): string {
     "operator",
     "type",
   ][kind] ?? "symbol";
+}
+
+export function outlineSymbolCategory(kind: number): OutlineSymbolCategory {
+  const label = symbolKindLabel(kind);
+  if (["file", "mod", "namespace", "package"].includes(label)) return "module";
+  if (["class", "enum", "interface", "struct", "type"].includes(label)) {
+    return "type";
+  }
+  if (["method", "ctor", "fn", "operator"].includes(label)) return "callable";
+  if (["property", "field", "key", "member", "event"].includes(label)) {
+    return "member";
+  }
+  return "value";
 }
 
 export function flattenOutline(

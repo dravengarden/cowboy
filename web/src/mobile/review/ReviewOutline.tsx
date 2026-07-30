@@ -1,4 +1,12 @@
-import { Clear, Search } from "@mui/icons-material";
+import {
+  AccountTreeOutlined,
+  AdjustOutlined,
+  Clear,
+  DataObjectOutlined,
+  FunctionsOutlined,
+  LabelOutlined,
+  Search,
+} from "@mui/icons-material";
 import {
   Alert,
   Box,
@@ -11,6 +19,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import { alpha, type Theme } from "@mui/material/styles";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
 import { Sheet } from "../../Sheet";
@@ -19,10 +28,74 @@ import {
   activeOutlineRow,
   filterOutline,
   flattenOutline,
+  type OutlineSymbolCategory,
+  outlineSymbolCategory,
   symbolKindLabel,
 } from "./outlineModel";
 
 const VISIBLE_SYMBOL_CAP = 800;
+
+function categoryColor(
+  theme: Theme,
+  category: OutlineSymbolCategory,
+): string {
+  if (category === "module") return theme.palette.info.main;
+  if (category === "type") return theme.palette.secondary.main;
+  if (category === "callable") return theme.palette.success.main;
+  if (category === "member") return theme.palette.warning.main;
+  return theme.palette.text.secondary;
+}
+
+function SymbolCategoryIcon({
+  category,
+}: {
+  category: OutlineSymbolCategory;
+}): React.JSX.Element {
+  if (category === "module") return <AccountTreeOutlined />;
+  if (category === "type") return <DataObjectOutlined />;
+  if (category === "callable") return <FunctionsOutlined />;
+  if (category === "member") return <LabelOutlined />;
+  return <AdjustOutlined />;
+}
+
+function HighlightedSymbolName({
+  name,
+  query,
+}: {
+  name: string;
+  query: string;
+}): React.JSX.Element {
+  const terms = query.trim().split(/\s+/u).filter(Boolean);
+  if (terms.length === 0) return <>{name}</>;
+  const escaped = terms.map((term) =>
+    term.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+  );
+  const pattern = new RegExp(`(${escaped.join("|")})`, "giu");
+  const normalized = new Set(terms.map((term) => term.toLocaleLowerCase()));
+  return (
+    <>
+      {name.split(pattern).map((part, index) =>
+        normalized.has(part.toLocaleLowerCase())
+          ? (
+            <Box
+              // The same fragment may occur more than once in one symbol.
+              key={`${part}:${index}`}
+              component="mark"
+              sx={{
+                color: "inherit",
+                bgcolor: (theme) => alpha(theme.palette.warning.main, 0.24),
+                borderRadius: 0.5,
+                px: 0.125,
+              }}
+            >
+              {part}
+            </Box>
+          )
+          : part
+      )}
+    </>
+  );
+}
 
 export function ReviewOutline({
   open,
@@ -159,34 +232,81 @@ export function ReviewOutline({
               <List disablePadding>
                 {visible.map((row, index) => {
                   const selected = !query && row === active;
+                  const category = outlineSymbolCategory(row.symbol.kind);
                   return (
                     <ListItemButton
                       key={`${row.symbol.selectionStart.row}:${row.symbol.selectionStart.column}:${row.symbol.name}:${index}`}
                       ref={selected ? activeRef : undefined}
                       selected={selected}
+                      aria-current={selected ? "location" : undefined}
                       onClick={() => {
                         navigationHaptic();
                         onSelect(row.symbol.selectionStart.row + 1);
                         onClose();
                       }}
                       sx={{
-                        minHeight: 48,
-                        pl: 1 + Math.min(row.depth, 4) * 2,
+                        position: "relative",
+                        minHeight: row.depth === 0 ? 48 : 44,
+                        py: 0.625,
+                        pl: 0.75 + Math.min(row.depth, 4) * 1.75,
                         pr: 1,
                         borderRadius: 1.5,
                         mb: 0.25,
+                        mt: row.depth === 0 && index > 0 ? 0.5 : 0,
                         scrollMarginTop: 64,
+                        bgcolor: selected
+                          ? (theme) => alpha(theme.palette.primary.main, 0.1)
+                          : "transparent",
+                        "&.Mui-selected": {
+                          bgcolor: (theme) =>
+                            alpha(theme.palette.primary.main, 0.1),
+                        },
+                        "&.Mui-selected:hover": {
+                          bgcolor: (theme) =>
+                            alpha(theme.palette.primary.main, 0.14),
+                        },
                         "&::before": row.depth
                           ? {
                             content: '""',
                             alignSelf: "stretch",
                             borderLeft: 1,
-                            borderColor: "divider",
-                            mr: 1.25,
+                            borderColor: (theme) =>
+                              alpha(theme.palette.text.secondary, 0.18),
+                            mr: 0.75,
+                          }
+                          : undefined,
+                        "&::after": selected
+                          ? {
+                            content: '""',
+                            position: "absolute",
+                            left: 0,
+                            top: 7,
+                            bottom: 7,
+                            width: 3,
+                            borderRadius: "0 3px 3px 0",
+                            bgcolor: "primary.main",
                           }
                           : undefined,
                       }}
                     >
+                      <Box
+                        aria-hidden
+                        sx={{
+                          width: 26,
+                          height: 26,
+                          mr: 1,
+                          flexShrink: 0,
+                          display: "grid",
+                          placeItems: "center",
+                          borderRadius: 1,
+                          color: (theme) => categoryColor(theme, category),
+                          bgcolor: (theme) =>
+                            alpha(categoryColor(theme, category), 0.12),
+                          "& svg": { fontSize: 16 },
+                        }}
+                      >
+                        <SymbolCategoryIcon category={category} />
+                      </Box>
                       <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Typography
                           variant="body2"
@@ -194,12 +314,33 @@ export function ReviewOutline({
                           noWrap
                           fontWeight={selected ? 700 : 500}
                         >
-                          {row.symbol.name}
+                          <HighlightedSymbolName
+                            name={row.symbol.name}
+                            query={query}
+                          />
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {symbolKindLabel(row.symbol.kind)} · line{" "}
-                          {row.symbol.selectionStart.row + 1}
-                        </Typography>
+                        <Stack
+                          direction="row"
+                          alignItems="baseline"
+                          spacing={0.75}
+                        >
+                          <Typography
+                            variant="caption"
+                            fontWeight={700}
+                            sx={{
+                              color: (theme) =>
+                                categoryColor(theme, category),
+                            }}
+                          >
+                            {symbolKindLabel(row.symbol.kind)}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                          >
+                            line {row.symbol.selectionStart.row + 1}
+                          </Typography>
+                        </Stack>
                       </Box>
                     </ListItemButton>
                   );

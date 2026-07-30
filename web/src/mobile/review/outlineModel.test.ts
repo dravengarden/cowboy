@@ -4,6 +4,7 @@ import {
   activeOutlineRow,
   filterOutline,
   flattenOutline,
+  outlineSymbolCategory,
   symbolKindLabel,
 } from "./outlineModel.ts";
 
@@ -46,4 +47,12 @@ Deno.test("outline selects the deepest symbol containing the reading line", () =
     symbol("Judge", 22, 0, 20, [symbol("complete", 5, 5, 10)]),
   ]);
   assertEquals(activeOutlineRow(rows, 8)?.symbol.name, "complete");
+});
+
+Deno.test("outline symbol categories provide stable visual groups", () => {
+  assertEquals(outlineSymbolCategory(1), "module");
+  assertEquals(outlineSymbolCategory(22), "type");
+  assertEquals(outlineSymbolCategory(11), "callable");
+  assertEquals(outlineSymbolCategory(7), "member");
+  assertEquals(outlineSymbolCategory(13), "value");
 });
