@@ -1216,11 +1216,15 @@ export function ReviewApp({
     }
     setMarkdownPreview(isMarkdownReviewPath(path));
     const line = syncedReviewRef.current.positions?.[path]?.line;
-    setSourceTarget({
-      kind: "source",
-      path,
-      ...(line === undefined ? {} : { revealLine: line }),
-    });
+    setSourceTarget((current) =>
+      current?.path === path
+        ? current
+        : {
+          kind: "source",
+          path,
+          ...(line === undefined ? {} : { revealLine: line }),
+        }
+    );
   }, [syncedReview.active, workspace?.sessionId]);
 
   const openSource = (
