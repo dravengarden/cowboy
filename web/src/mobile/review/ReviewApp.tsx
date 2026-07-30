@@ -490,6 +490,12 @@ function DocumentView({
                   "& .cowboy-copy-btn": {
                     borderRadius: 1,
                   },
+                  "& hr": {
+                    border: 0,
+                    borderTop: 1,
+                    borderColor: "divider",
+                    my: 1.5,
+                  },
                 }}
               >
                 <Markdown text={block.text} touchWrap />
