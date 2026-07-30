@@ -43,6 +43,9 @@ export interface CodeManifest {
   provider: string;
   revision: string;
   head?: string;
+  project: string;
+  branch?: string;
+  worktree?: string;
   changeCount: number;
   language: CodeLanguageCapabilities;
 }

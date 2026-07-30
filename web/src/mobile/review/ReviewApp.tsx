@@ -833,6 +833,12 @@ export function ReviewApp({
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
   const [changeCount, setChangeCount] = useState(0);
+  const [repositoryContext, setRepositoryContext] = useState<{
+    project: string;
+    branch: string | undefined;
+    worktree: string | undefined;
+    head: string | undefined;
+  }>();
   const [language, setLanguage] = useState<
     import("./codeApi").CodeLanguageCapabilities
   >();
@@ -917,6 +923,7 @@ export function ReviewApp({
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
+    setRepositoryContext(undefined);
     setGitQueue([]);
     setLanguage(undefined);
   }, [workspace?.sessionId]);
@@ -946,6 +953,12 @@ export function ReviewApp({
       void fetchCodeManifest(workspace.sessionId, controller.signal)
         .then((manifest) => {
           setChangeCount(manifest.changeCount);
+          setRepositoryContext({
+            project: manifest.project,
+            branch: manifest.branch,
+            worktree: manifest.worktree,
+            head: manifest.head,
+          });
           setLanguage(manifest.language);
           const previous = manifestRevision.current;
           manifestRevision.current = manifest.revision;
@@ -1265,14 +1278,30 @@ export function ReviewApp({
               >
                 {target.path}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                sx={{ display: "block" }}
+              >
                 {target.kind === "diff"
                   ? target.scope === "staged"
                     ? "Staged changes"
                     : target.scope === "unstaged"
                     ? "Unstaged changes"
                     : "Conflict review"
-                : "Read-only file"}
+                  : repositoryContext
+                  ? [
+                    repositoryContext.project,
+                    repositoryContext.branch ??
+                      (repositoryContext.head
+                        ? `detached@${repositoryContext.head}`
+                        : "no branch"),
+                    repositoryContext.worktree
+                      ? `worktree ${repositoryContext.worktree}`
+                      : undefined,
+                  ].filter(Boolean).join(" · ")
+                  : "Loading repository…"}
               </Typography>
             </Box>
             {mode === "files" && navigationForwardHistory.length > 0 && (

@@ -1799,6 +1799,9 @@ struct CodeManifestResponse {
     provider: &'static str,
     revision: String,
     head: Option<String>,
+    project: String,
+    branch: Option<String>,
+    worktree: Option<String>,
     change_count: usize,
     language: CodeLanguageCapabilities,
 }
@@ -2263,7 +2266,7 @@ async fn api_code_manifest(
     // contract tag whenever that shape grows so installed Mobile clients do
     // not retain an older 304-backed manifest after a deploy.
     let etag = format!(
-        "\"code-manifest-v2-{}-{language_state}\"",
+        "\"code-manifest-v3-{}-{language_state}\"",
         manifest.revision
     );
     const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
@@ -2286,6 +2289,9 @@ async fn api_code_manifest(
         provider: manifest.provider,
         revision: manifest.revision,
         head: manifest.head,
+        project: manifest.project,
+        branch: manifest.branch,
+        worktree: manifest.worktree,
         change_count: manifest.change_count,
         language: CodeLanguageCapabilities {
             provider: if language_ready { "zed" } else { "none" },

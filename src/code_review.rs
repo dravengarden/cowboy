@@ -76,6 +76,9 @@ pub struct WorktreeManifest {
     pub provider: &'static str,
     pub revision: String,
     pub head: Option<String>,
+    pub project: String,
+    pub branch: Option<String>,
+    pub worktree: Option<String>,
     pub change_count: usize,
 }
 
@@ -127,6 +130,55 @@ impl LocalCodeProvider {
             .filter(|value| !value.is_empty())
     }
 
+    fn branch(&self) -> Option<String> {
+        git_output(
+            &self.root,
+            &["symbolic-ref", "--quiet", "--short", "HEAD"],
+            1024,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    }
+
+    fn repository_identity(&self) -> (String, Option<String>) {
+        let top_level = git_output(
+            &self.root,
+            &["rev-parse", "--path-format=absolute", "--show-toplevel"],
+            4096,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|value| PathBuf::from(value.trim()));
+        let common_dir = git_output(
+            &self.root,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            4096,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|value| PathBuf::from(value.trim()));
+        let repository_root = common_dir
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|path| path.file_name().is_some())
+            .or(top_level.as_deref())
+            .unwrap_or(&self.root);
+        let project = repository_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("worktree")
+            .to_owned();
+        let worktree = top_level
+            .as_deref()
+            .filter(|path| *path != repository_root)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+        (project, worktree)
+    }
+
     fn worktree_revision(head: Option<&str>, status: &[u8]) -> String {
         let mut digest = sha2::Sha256::new();
         if let Some(head) = head {
@@ -172,10 +224,14 @@ impl CodeProvider for LocalCodeProvider {
             4 * 1024 * 1024,
         )?;
         let head = self.head();
+        let (project, worktree) = self.repository_identity();
         Ok(WorktreeManifest {
             provider: "local",
             revision: Self::worktree_revision(head.as_deref(), &status),
             head,
+            project,
+            branch: self.branch(),
+            worktree,
             change_count: Self::status_change_count(&status),
         })
     }
@@ -609,6 +665,9 @@ mod tests {
         let clean = provider.manifest().unwrap();
         assert_eq!(clean.provider, "local");
         assert!(clean.head.is_some());
+        assert_eq!(clean.project, "cowboy-code-manifest");
+        assert!(clean.branch.is_some());
+        assert_eq!(clean.worktree, None);
         assert_eq!(clean.change_count, 0);
         fs::write(dir.join("tracked.rs"), "fn changed() {}\n").unwrap();
         let changed = provider.manifest().unwrap();
