@@ -1,6 +1,7 @@
 import {
   AccountTreeOutlined,
   ArrowBack,
+  ArrowForward,
   CheckCircle,
   CheckCircleOutline,
   ChevronLeft,
@@ -841,6 +842,9 @@ export function ReviewApp({
   const [navigationHistory, setNavigationHistory] = useState<
     Extract<ReviewTarget, { kind: "source" }>[]
   >([]);
+  const [navigationForwardHistory, setNavigationForwardHistory] = useState<
+    Extract<ReviewTarget, { kind: "source" }>[]
+  >([]);
   const [managingTabs, setManagingTabs] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const syncedReview = useMobileReviewState(workspace?.sessionId);
@@ -978,6 +982,7 @@ export function ReviewApp({
   useEffect(() => {
     setSourceTarget(undefined);
     setNavigationHistory([]);
+    setNavigationForwardHistory([]);
     setDiffTarget(undefined);
     setCurrentRevision(undefined);
   }, [workspace?.sessionId]);
@@ -1028,7 +1033,10 @@ export function ReviewApp({
     setTabs((current) =>
       openReviewTab(current, { kind: "source", path, pinned: false })
     );
-    if (!preserveNavigation) setNavigationHistory([]);
+    if (!preserveNavigation) {
+      setNavigationHistory([]);
+      setNavigationForwardHistory([]);
+    }
     setCloseRequest((value) => value + 1);
   };
   const openDiff = (
@@ -1229,8 +1237,18 @@ export function ReviewApp({
                 if (mode === "files") {
                   const previous = navigationHistory.at(-1);
                   if (previous) {
-                    setSourceTarget(previous);
+                    navigationHaptic();
+                    if (target.kind === "source") {
+                      setNavigationForwardHistory((history) =>
+                        [...history, target].slice(-32)
+                      );
+                    }
                     setNavigationHistory((history) => history.slice(0, -1));
+                    openSource(
+                      previous.path,
+                      previous.revealLine,
+                      true,
+                    );
                   } else {
                     setSourceTarget(undefined);
                   }
@@ -1254,9 +1272,29 @@ export function ReviewApp({
                     : target.scope === "unstaged"
                     ? "Unstaged changes"
                     : "Conflict review"
-                  : "Read-only file"}
+                : "Read-only file"}
               </Typography>
             </Box>
+            {mode === "files" && navigationForwardHistory.length > 0 && (
+              <IconButton
+                aria-label="Forward to next code location"
+                onClick={() => {
+                  if (target.kind !== "source") return;
+                  const next = navigationForwardHistory.at(-1);
+                  if (!next) return;
+                  navigationHaptic();
+                  setNavigationHistory((history) =>
+                    [...history, target].slice(-32)
+                  );
+                  setNavigationForwardHistory((history) =>
+                    history.slice(0, -1)
+                  );
+                  openSource(next.path, next.revealLine, true);
+                }}
+              >
+                <ArrowForward />
+              </IconButton>
+            )}
             {target.kind === "diff" && (
               <IconButton
                 aria-label={targetIsReviewed
@@ -1328,6 +1366,7 @@ export function ReviewApp({
                 setNavigationHistory((history) =>
                   [...history, previous].slice(-32)
                 );
+                setNavigationForwardHistory([]);
                 openSource(location.path, location.start.row + 1, true);
               }}
             />
