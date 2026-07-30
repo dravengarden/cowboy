@@ -168,8 +168,11 @@ export function bindMobileSpatialDrawer({
     const releaseOffset = renderFrame !== 0 ? pendingOffset : currentOffset;
     if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
     renderFrame = 0;
-    applyOpenDepth();
     const width = cachedWidth ?? drawerWidth();
+    // Read geometry before invalidating styles. CodeMirror makes a forced
+    // layout here particularly expensive on Review, and Agent benefits from
+    // keeping the same read-then-write phase ordering.
+    applyOpenDepth();
     presentationWidth = width;
     const targetOffset = open ? width : 0;
     const remaining = Math.min(
