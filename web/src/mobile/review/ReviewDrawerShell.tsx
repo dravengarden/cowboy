@@ -76,10 +76,12 @@ export function ReviewDrawerShell({
       const visual = mobileDrawerSurfaceVisual(clamped, drawerWidth, phone);
       const parallax = drawerWidth * (phone ? 0.28 : 0.22) *
         (1 - visual.progress);
-      surface.style.transform = `translate3d(-${
-        String(clamped)
-      }px, 0, 0) scale(${String(visual.scale)})`;
-      surface.style.opacity = String(visual.opacity);
+      // Code Review can place a large, syntax-decorated CodeMirror viewport in
+      // this layer. Scaling and fading that texture while it translates makes
+      // iPad WebKit repeatedly blend/raster the entire editor. Keep the heavy
+      // foreground on a compositor-only translation; the lighter drawer still
+      // supplies depth through parallax and opacity.
+      surface.style.transform = `translate3d(-${String(clamped)}px, 0, 0)`;
       drawerElement.style.transform = `translate3d(${
         String(parallax)
       }px, 0, 0)`;
@@ -192,7 +194,6 @@ export function ReviewDrawerShell({
         surface.style.boxShadow = "18px 0 42px rgba(0,0,0,0.16)";
         for (const element of [surface, drawerElement, mask]) {
           element.style.transition = "none";
-          element.style.willChange = "transform, opacity";
         }
       }
       event.preventDefault();
@@ -257,6 +258,7 @@ export function ReviewDrawerShell({
           pl: "calc(100% - min(84%, 360px))",
           bgcolor: "background.default",
           backfaceVisibility: "hidden",
+          willChange: "transform, opacity",
           "@media (min-width: 768px)": {
             pl: "calc(100% - min(52%, 440px))",
           },
@@ -274,6 +276,7 @@ export function ReviewDrawerShell({
           bgcolor: "background.default",
           pointerEvents: "none",
           backfaceVisibility: "hidden",
+          willChange: "transform",
         }}
       />
       <Box
@@ -286,6 +289,7 @@ export function ReviewDrawerShell({
           bgcolor: "background.default",
           backfaceVisibility: "hidden",
           transformOrigin: "left center",
+          willChange: "transform",
         }}
       >
         {open && (
