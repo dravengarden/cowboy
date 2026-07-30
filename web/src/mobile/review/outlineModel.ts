@@ -28,7 +28,7 @@ export function symbolKindLabel(kind: number): string {
     "array",
     "object",
     "key",
-    "null",
+    "symbol",
     "member",
     "struct",
     "event",

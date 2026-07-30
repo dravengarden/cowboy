@@ -75,7 +75,7 @@ export function ReviewOutline({
 
   useEffect(() => {
     if (!open || loading || query || !activeRef.current) return;
-    activeRef.current.scrollIntoView({ block: "center" });
+    activeRef.current.scrollIntoView({ block: "nearest" });
   }, [active, loading, open, query]);
 
   const fileName = path.split("/").at(-1) ?? path;
@@ -116,7 +116,13 @@ export function ReviewOutline({
                 : undefined,
             },
           }}
-          sx={{ position: "sticky", top: 0, zIndex: 1 }}
+          sx={{
+            position: "sticky",
+            top: 0,
+            zIndex: 2,
+            bgcolor: "background.paper",
+            borderRadius: 1,
+          }}
         />
         {loading
           ? (
@@ -169,6 +175,7 @@ export function ReviewOutline({
                         pr: 1,
                         borderRadius: 1.5,
                         mb: 0.25,
+                        scrollMarginTop: 64,
                         "&::before": row.depth
                           ? {
                             content: '""',

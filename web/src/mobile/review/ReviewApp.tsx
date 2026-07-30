@@ -1500,19 +1500,6 @@ export function ReviewApp({
                   <TabUnselected />
                 </IconButton>
               )}
-              {target.kind === "source" && (
-                <IconButton
-                  aria-label="Open file outline"
-                  aria-pressed={outlineOpen}
-                  color={outlineOpen ? "primary" : "default"}
-                  onClick={() => {
-                    navigationHaptic();
-                    setOutlineOpen(true);
-                  }}
-                >
-                  <FormatListBulleted />
-                </IconButton>
-              )}
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
                 isMarkdownReviewPath(target.path) &&
@@ -1569,6 +1556,19 @@ export function ReviewApp({
                 </>
               )}
               <Box sx={{ flex: 1 }} />
+              {target.kind === "source" && (
+                <IconButton
+                  aria-label="Open file outline"
+                  aria-pressed={outlineOpen}
+                  color={outlineOpen ? "primary" : "default"}
+                  onClick={() => {
+                    navigationHaptic();
+                    setOutlineOpen(true);
+                  }}
+                >
+                  <FormatListBulleted />
+                </IconButton>
+              )}
               <IconButton
                 aria-label={drawerOpen
                   ? `Close ${
