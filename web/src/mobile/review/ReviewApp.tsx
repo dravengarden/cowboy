@@ -7,8 +7,6 @@ import {
   ChevronLeft,
   ChevronRight,
   DifferenceOutlined,
-  Done,
-  EditOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   FormatListBulleted,
@@ -86,6 +84,7 @@ import type { GitReviewEntry } from "./gitReviewModel";
 import { groupGitChanges, reviewQueue } from "./gitReviewModel";
 import { ReviewTabStrip } from "./ReviewTabStrip";
 import {
+  adjacentReviewTabAfterClose,
   closeOtherReviewTabs,
   closeReviewTab,
   openReviewTab,
@@ -1089,7 +1088,6 @@ export function ReviewApp({
   );
   const symbolRestoreId = useRef(0);
   const revealRangeId = useRef(0);
-  const [managingTabs, setManagingTabs] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const syncedReview = useMobileReviewState(workspace?.sessionId);
   const syncedReviewRef = useRef(syncedReview);
@@ -1176,7 +1174,6 @@ export function ReviewApp({
   ]);
 
   useEffect(() => {
-    setManagingTabs(false);
     manifestRevision.current = undefined;
     setDataRevision(0);
     setChangeCount(0);
@@ -1184,10 +1181,6 @@ export function ReviewApp({
     setGitQueue([]);
     setLanguage(undefined);
   }, [workspace?.sessionId]);
-
-  useEffect(() => {
-    setManagingTabs(false);
-  }, [mode]);
 
   useEffect(() => {
     if (!active || !workspace?.sessionId) return undefined;
@@ -1466,17 +1459,13 @@ export function ReviewApp({
   }, [gitQueue]);
   const closeTab = (key: string): void => {
     const closing = tabs.find((tab) => reviewTabKey(tab) === key);
+    const fallback = adjacentReviewTabAfterClose(tabs, key);
     if (closing?.kind === "source" && workspace?.sessionId) {
       mutateMobileReview(workspace.sessionId, "close", { path: closing.path });
     }
     const next = closeReviewTab(tabs, key);
     setTabs(next);
-    const nextModeTabs = next.filter((tab) =>
-      mode === "files" ? tab.kind === "source" : tab.kind === "diff"
-    );
-    if (nextModeTabs.length === 0) setManagingTabs(false);
     if (activeTabKey !== key) return;
-    const fallback = nextModeTabs.at(-1);
     if (fallback) activateTab(fallback);
     else if (mode === "files") setSourceTarget(undefined);
     else setDiffTarget(undefined);
@@ -1593,15 +1582,10 @@ export function ReviewApp({
             }}
           >
             <IconButton
-              aria-label={mode === "files" && navigationHistory.length > 0
-                ? "Back to previous code location"
-                : "Back to changes"}
+              aria-label={mode === "files" ? "Back to files" : "Back to changes"}
               onClick={() => {
                 if (mode === "files") {
-                  if (navigationHistory.length > 0) navigateBack();
-                  else {
-                    setSourceTarget(undefined);
-                  }
+                  setSourceTarget(undefined);
                 } else setDiffTarget(undefined);
               }}
             >
@@ -1641,13 +1625,29 @@ export function ReviewApp({
                   : "Loading repository…"}
               </Typography>
             </Box>
-            {mode === "files" && navigationForwardHistory.length > 0 && (
-              <IconButton
-                aria-label="Forward to next code location"
-                onClick={navigateForward}
-              >
-                <ArrowForward />
-              </IconButton>
+            {mode === "files" &&
+              (navigationHistory.length > 0 ||
+                navigationForwardHistory.length > 0) && (
+                <Stack
+                  direction="row"
+                  role="group"
+                  aria-label="Code navigation history"
+                >
+                  <IconButton
+                    aria-label="Back to previous code location"
+                    disabled={navigationHistory.length === 0}
+                    onClick={navigateBack}
+                  >
+                    <ArrowBack />
+                  </IconButton>
+                  <IconButton
+                    aria-label="Forward to next code location"
+                    disabled={navigationForwardHistory.length === 0}
+                    onClick={navigateForward}
+                  >
+                    <ArrowForward />
+                  </IconButton>
+                </Stack>
             )}
             {target.kind === "diff" && (
               <IconButton
@@ -1806,7 +1806,6 @@ export function ReviewApp({
           <ReviewTabStrip
             tabs={modeTabs}
             activeKey={activeTabKey}
-            showCloseButtons={managingTabs}
             onActivate={activateTab}
             onClose={closeTab}
             onCloseOthers={(key) => {
@@ -1924,21 +1923,6 @@ export function ReviewApp({
               >
                 {mode === "git" ? "Changes" : "Files"}
               </Button>
-              {mode === "files" && modeTabs.length > 0 && (
-                <IconButton
-                  aria-label={managingTabs
-                    ? "Finish managing tabs"
-                    : "Manage open tabs"}
-                  aria-pressed={managingTabs}
-                  color={managingTabs ? "primary" : "default"}
-                  onClick={() => {
-                    navigationHaptic();
-                    setManagingTabs((value) => !value);
-                  }}
-                >
-                  {managingTabs ? <Done /> : <EditOutlined />}
-                </IconButton>
-              )}
               {target.kind !== "changes" && !(
                 target.kind === "source" &&
                 isMarkdownReviewPath(target.path) &&
@@ -1995,39 +1979,6 @@ export function ReviewApp({
                 </>
               )}
               <Box sx={{ flex: 1 }} />
-              {target.kind === "source" &&
-                (navigationHistory.length > 0 ||
-                  navigationForwardHistory.length > 0) && (
-                  <>
-                    <IconButton
-                      aria-label="Back to previous code location"
-                      disabled={navigationHistory.length === 0}
-                      onClick={navigateBack}
-                    >
-                      <ArrowBack />
-                    </IconButton>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{
-                        minWidth: 34,
-                        textAlign: "center",
-                        fontVariantNumeric: "tabular-nums",
-                      }}
-                    >
-                      {navigationHistory.length + 1}/
-                      {navigationHistory.length +
-                        navigationForwardHistory.length + 1}
-                    </Typography>
-                    <IconButton
-                      aria-label="Forward to next code location"
-                      disabled={navigationForwardHistory.length === 0}
-                      onClick={navigateForward}
-                    >
-                      <ArrowForward />
-                    </IconButton>
-                  </>
-                )}
               {target.kind === "source" && (
                 <IconButton
                   aria-label="Open file outline"

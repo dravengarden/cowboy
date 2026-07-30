@@ -61,6 +61,19 @@ export function closeReviewTab(
   return tabs.filter((tab) => reviewTabKey(tab) !== key);
 }
 
+export function adjacentReviewTabAfterClose(
+  tabs: readonly ReviewTab[],
+  key: string,
+): ReviewTab | undefined {
+  const closingIndex = tabs.findIndex((tab) => reviewTabKey(tab) === key);
+  if (closingIndex < 0) return undefined;
+  const closing = tabs[closingIndex];
+  if (!closing) return undefined;
+  const sameMode = tabs.filter((tab) => tab.kind === closing.kind);
+  const modeIndex = sameMode.findIndex((tab) => reviewTabKey(tab) === key);
+  return sameMode[modeIndex - 1] ?? sameMode[modeIndex + 1];
+}
+
 export function closeOtherReviewTabs(
   tabs: readonly ReviewTab[],
   key: string,

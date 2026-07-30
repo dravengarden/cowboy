@@ -22,7 +22,6 @@ function tabLabel(tab: ReviewTab): string {
 export function ReviewTabStrip({
   tabs,
   activeKey,
-  showCloseButtons,
   onActivate,
   onClose,
   onCloseOthers,
@@ -33,7 +32,6 @@ export function ReviewTabStrip({
 }: {
   tabs: ReviewTab[];
   activeKey: string | undefined;
-  showCloseButtons: boolean;
   onActivate: (tab: ReviewTab) => void;
   onClose: (key: string) => void;
   onCloseOthers: (key: string) => void;
@@ -217,7 +215,7 @@ export function ReviewTabStrip({
               <Typography variant="caption" noWrap sx={{ flex: 1 }}>
                 {tabLabel(tab)}
               </Typography>
-              {showCloseButtons && allowCloseActions && (
+              {active && allowCloseActions && (
                 <IconButton
                   aria-label={`Close ${tabLabel(tab)}`}
                   size="small"
@@ -225,6 +223,7 @@ export function ReviewTabStrip({
                     event.stopPropagation();
                     onClose(key);
                   }}
+                  onPointerDown={(event) => event.stopPropagation()}
                   sx={{
                     width: 32,
                     height: 32,

@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  adjacentReviewTabAfterClose,
   closeOtherReviewTabs,
   closeReviewTab,
   openReviewTab,
@@ -33,6 +34,35 @@ Deno.test("tabs can be pinned and closed", () => {
   const pinned = toggleReviewTabPin([source("a.rs")], "source:a.rs");
   assertEquals(pinned[0]?.pinned, true);
   assertEquals(closeReviewTab(pinned, "source:a.rs"), []);
+});
+
+Deno.test("closing the active tab prefers its left neighbour", () => {
+  const tabs = [source("a.rs"), source("b.rs"), source("c.rs")];
+  assertEquals(
+    reviewTabKey(
+      adjacentReviewTabAfterClose(tabs, "source:b.rs")!,
+    ),
+    "source:a.rs",
+  );
+  assertEquals(
+    reviewTabKey(
+      adjacentReviewTabAfterClose(tabs, "source:a.rs")!,
+    ),
+    "source:b.rs",
+  );
+});
+
+Deno.test("closing a tab never falls through to the other review mode", () => {
+  const diff: ReviewTab = {
+    kind: "diff",
+    path: "change.rs",
+    scope: "unstaged",
+    pinned: false,
+  };
+  assertEquals(
+    adjacentReviewTabAfterClose([diff, source("only.rs")], "source:only.rs"),
+    undefined,
+  );
 });
 
 Deno.test("source and diff tabs have independent capacity", () => {
