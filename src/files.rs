@@ -62,10 +62,13 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<String> {
     }
 }
 
-/// Return one stable, sorted directory page for a lazy tree UI.
+/// Return one stable, sorted filesystem directory page for a lazy tree UI.
 ///
 /// The boolean is true when more matching entries existed than the requested
-/// limit. The path is canonicalized before scanning to contain symlink escapes.
+/// limit. Unlike file-reference search, the tree does not apply gitignore:
+/// ignored children can be independent repositories that remain valid reading
+/// targets. The path is canonicalized before scanning to contain symlink
+/// escapes; hidden entries and known heavyweight build directories stay out.
 pub fn directory(
     root: &Path,
     relative: &str,
@@ -80,21 +83,18 @@ pub fn directory(
     }
 
     let mut entries = Vec::new();
-    let walk = WalkBuilder::new(&canonical_target)
-        .parents(true)
-        .max_depth(Some(1))
-        .build();
-    for dirent in walk.flatten().skip(1) {
-        let name = dirent.file_name().to_string_lossy();
-        if DEFAULT_TREE_EXCLUSIONS.contains(&name.as_ref()) {
+    let children = std::fs::read_dir(canonical_target).map_err(|_| "directory unavailable")?;
+    for dirent in children.flatten() {
+        let name = dirent.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || DEFAULT_TREE_EXCLUSIONS.contains(&name.as_str()) {
             continue;
         }
-        let Some(file_type) = dirent.file_type() else {
+        let Ok(file_type) = dirent.file_type() else {
             continue;
         };
-        let path = relative.join(dirent.file_name());
+        let path = relative.join(&name);
         entries.push(DirectoryEntry {
-            name: name.into_owned(),
+            name,
             path: path.to_string_lossy().replace('\\', "/"),
             is_directory: file_type.is_dir(),
         });
@@ -274,6 +274,31 @@ mod tests {
         let (out, _) = directory(&dir, "", 20).unwrap();
         assert!(!out.iter().any(|entry| entry.name == "node_modules"));
         assert_eq!(directory(&dir, "../", 20), Err("invalid directory"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn directory_keeps_gitignored_child_worktrees_visible() {
+        let dir = scratch("ignored-worktrees");
+        fs::create_dir_all(dir.join("projects/standalone/src")).unwrap();
+        fs::write(dir.join(".gitignore"), "/projects/*\n").unwrap();
+        fs::write(
+            dir.join("projects/standalone/src/lib.rs"),
+            "pub fn visible() {}\n",
+        )
+        .unwrap();
+
+        let (projects, truncated) = directory(&dir, "projects", 20).unwrap();
+        assert_eq!(
+            projects
+                .iter()
+                .map(|entry| (entry.name.as_str(), entry.is_directory))
+                .collect::<Vec<_>>(),
+            vec![("standalone", true)],
+        );
+        assert!(!truncated);
+        let (standalone, _) = directory(&dir, "projects/standalone", 20).unwrap();
+        assert!(standalone.iter().any(|entry| entry.name == "src"));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -2143,10 +2143,12 @@ async fn api_code_search(
     .into_response()
 }
 
-/// Return one gitignore-aware directory page for the mobile review tree.
+/// Return one filesystem directory page for the mobile review tree.
 ///
-/// Like file search, the root is resolved from the session rather than a
-/// client-provided root. Relative paths are validated and cannot escape it.
+/// The root is resolved from the session rather than a client-provided root.
+/// Relative paths are validated and cannot escape it. Gitignored children are
+/// intentionally visible here because they may be independent repositories;
+/// Git Changes remains scoped to the owning repository.
 async fn api_file_tree(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
