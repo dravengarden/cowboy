@@ -484,7 +484,11 @@ function DocumentView({
                   "& pre": {
                     border: 1,
                     borderColor: "divider",
+                    borderRadius: 1,
                     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+                  },
+                  "& .cowboy-copy-btn": {
+                    borderRadius: 1,
                   },
                 }}
               >
@@ -499,7 +503,7 @@ function DocumentView({
                   m: 0,
                   p: 1.5,
                   overflowX: "auto",
-                  borderRadius: 2,
+                  borderRadius: 1,
                   bgcolor: "action.hover",
                   fontFamily: "var(--cowboy-font-mono)",
                   whiteSpace: "pre-wrap",
@@ -738,12 +742,12 @@ function DocumentView({
                     maxHeight: "min(78vh, 760px)",
                     p: 0,
                     overflow: "hidden",
-                    borderRadius: 4,
+                    borderRadius: 2,
                     bgcolor: "background.paper",
                     backgroundImage: "none",
                     border: 1,
                     borderColor: "divider",
-                    boxShadow: 16,
+                    boxShadow: 12,
                   },
                 },
               }}
