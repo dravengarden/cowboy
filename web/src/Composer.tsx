@@ -79,6 +79,7 @@ import {
   type ComposerEditorHandle,
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
+import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import { createPortal, flushSync } from "react-dom";
@@ -771,6 +772,7 @@ export function ComposerWorkspace({
     sendable,
     addFiles,
     removeAttachment,
+    demoteInlineImages,
     submit,
     force: forceCurrentPrompt,
     jumpToFront: jumpCurrentPromptToFront,
@@ -1041,6 +1043,23 @@ export function ComposerWorkspace({
   // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
   // completion). See ComposerTextarea for the why.
   const touchInput = useTouchComposer();
+  useEffect(() => {
+    if (touchInput) demoteInlineImages();
+  }, [demoteInlineImages, sessionId, touchInput]);
+  // A native textarea cannot host CM6's inline-image decorations. Keep those
+  // staged images visible and removable in the compact Mobile attachment tray.
+  // When the user expands into CM6, only images that still lack an inline token
+  // remain in that tray, so an image is never rendered twice.
+  const compactTrayAttachments = attachmentTrayForSurface(
+    attachments,
+    text,
+    touchInput ? "native-compact" : "cm-compact",
+  );
+  const fullscreenTrayAttachments = attachmentTrayForSurface(
+    attachments,
+    text,
+    "cm-fullscreen",
+  );
 
   // --- Long-press → force-push ------------------------------------------------
   const LP_MS = 450;
@@ -1405,13 +1424,11 @@ export function ComposerWorkspace({
           )}
         </Box>
       )}
-      {
-        /* Staged NON-image files sit above the editor ("what will be sent"). Images
-          are not here — they render inline in the editor (Obsidian-style). */
-      }
-      {attachments.some((a) => !a.isImage) && (
+      {/* The native Mobile textarea cannot host inline decorations, so its tray
+          shows every staged image/file. CM6 keeps token-backed images inline. */}
+      {compactTrayAttachments.length > 0 && (
         <AttachmentPreviews
-          attachments={attachments.filter((a) => !a.isImage)}
+          attachments={compactTrayAttachments}
           onRemove={removeAttachment}
         />
       )}
@@ -2363,7 +2380,9 @@ export function ComposerWorkspace({
             // current text first, else closing reverts to the pre-expand text
             // ("展开/收缩 state 不同步"). Can't feed `text` as the inline value: it'd
             // re-apply on every keystroke and bounce the iOS caret (see line ~500).
-            initialDraftText.current = text;
+            initialDraftText.current = touchInput
+              ? demoteInlineImages()
+              : text;
             setComposeFs(false);
           }}
           onAttach={(): void => fileInputRef.current?.click()}
@@ -2372,10 +2391,10 @@ export function ComposerWorkspace({
           commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
           sendable={sendable}
-          attachmentsSlot={attachments.some((a) => !a.isImage)
+          attachmentsSlot={fullscreenTrayAttachments.length > 0
             ? (
               <AttachmentPreviews
-                attachments={attachments.filter((a) => !a.isImage)}
+                attachments={fullscreenTrayAttachments}
                 onRemove={removeAttachment}
               />
             )
