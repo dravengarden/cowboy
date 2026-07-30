@@ -7,13 +7,14 @@ import {
   ChevronLeft,
   ChevronRight,
   DifferenceOutlined,
+  Done,
+  EditOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   FormatListBulleted,
   KeyboardArrowDown,
   KeyboardArrowUp,
   Refresh,
-  TabUnselected,
   VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
@@ -1930,9 +1931,12 @@ export function ReviewApp({
                     : "Manage open tabs"}
                   aria-pressed={managingTabs}
                   color={managingTabs ? "primary" : "default"}
-                  onClick={() => setManagingTabs((value) => !value)}
+                  onClick={() => {
+                    navigationHaptic();
+                    setManagingTabs((value) => !value);
+                  }}
                 >
-                  <TabUnselected />
+                  {managingTabs ? <Done /> : <EditOutlined />}
                 </IconButton>
               )}
               {target.kind !== "changes" && !(
