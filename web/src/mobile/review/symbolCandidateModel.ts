@@ -1,9 +1,17 @@
 export interface InspectCandidateScore {
   label: string;
   containsTap: boolean;
-  distance: number;
+  horizontalDistance: number;
+  verticalDistance: number;
+  rowDistance: number;
+  row: number;
   column: number;
 }
+
+const KEYWORD_PENALTY = 60;
+const CONTAINS_TAP_BONUS = 42;
+const SAME_LINE_BONUS = 10;
+const VERTICAL_DISTANCE_WEIGHT = 1.35;
 
 const LANGUAGE_KEYWORDS = new Set([
   "abstract",
@@ -74,12 +82,39 @@ export function isLanguageKeyword(label: string): boolean {
 export function rankInspectCandidates<T extends InspectCandidateScore>(
   candidates: readonly T[],
 ): T[] {
+  const score = (candidate: T): number =>
+    Math.hypot(
+      candidate.horizontalDistance,
+      candidate.verticalDistance * VERTICAL_DISTANCE_WEIGHT,
+    ) +
+    (isLanguageKeyword(candidate.label) ? KEYWORD_PENALTY : 0) -
+    (candidate.containsTap ? CONTAINS_TAP_BONUS : 0) -
+    (candidate.rowDistance === 0 ? SAME_LINE_BONUS : 0);
   return [...candidates].sort((a, b) => {
     const aKeyword = isLanguageKeyword(a.label);
     const bKeyword = isLanguageKeyword(b.label);
-    return Number(aKeyword) - Number(bKeyword) ||
-      Number(b.containsTap) - Number(a.containsTap) ||
-      a.distance - b.distance ||
+    return score(a) - score(b) ||
+      Number(aKeyword) - Number(bKeyword) ||
+      a.rowDistance - b.rowDistance ||
+      a.horizontalDistance - b.horizontalDistance ||
+      a.row - b.row ||
       a.column - b.column;
   });
+}
+
+export function rankAndDedupeInspectCandidates<
+  T extends InspectCandidateScore,
+>(
+  candidates: readonly T[],
+  limit: number,
+): T[] {
+  const seen = new Set<string>();
+  const ranked: T[] = [];
+  for (const candidate of rankInspectCandidates(candidates)) {
+    if (seen.has(candidate.label)) continue;
+    seen.add(candidate.label);
+    ranked.push(candidate);
+    if (ranked.length >= limit) break;
+  }
+  return ranked;
 }

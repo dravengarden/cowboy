@@ -32,7 +32,7 @@ import {
   diffPointToNewFile,
   diffSourceProjection,
 } from "./diffSourceModel";
-import { rankInspectCandidates } from "./symbolCandidateModel";
+import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
 import type { CodeLanguage } from "./codeApi";
 
 export interface CodeInspectCandidate {
@@ -589,46 +589,96 @@ export default function CodeViewer({
             if (offset === null) return false;
             const line = view.state.doc.lineAt(offset);
             const column = offset - line.from;
-            const candidates = rankInspectCandidates(
-              Array.from(
-                line.text.matchAll(/[\p{L}\p{N}_$]+/gu),
-              ).flatMap((match) => {
-                const start = match.index;
-                const end = start + match[0].length;
-                const from = line.from + start;
-                const to = line.from + end;
-                const fromCoords = view.coordsAtPos(from);
-                const toCoords = view.coordsAtPos(to);
-                if (!fromCoords || !toCoords) return [];
-                const left = Math.min(fromCoords.left, toCoords.left);
-                const right = Math.max(fromCoords.right, toCoords.right);
-                const distance = event.clientX < left
-                  ? left - event.clientX
-                  : event.clientX > right
-                  ? event.clientX - right
-                  : 0;
-                if (distance > 36) return [];
-                const sourcePoint = kind === "diff"
-                  ? diffPointToNewFile(text, line.number - 1, start)
-                  : { row: line.number - 1, column: start };
-                return sourcePoint
-                  ? [{
-                    candidate: {
-                      label: match[0],
-                      ...sourcePoint,
-                    },
-                    distance,
-                    contains: column >= start && column <= end,
-                  }]
-                  : [];
-              }).map(({ candidate, contains, distance }) => ({
+            const firstLine = Math.max(1, line.number - 5);
+            const lastLine = Math.min(
+              view.state.doc.lines,
+              line.number + 5,
+            );
+            const nearbyLines = Array.from(
+              { length: lastLine - firstLine + 1 },
+              (_, index) => view.state.doc.line(firstLine + index),
+            );
+            const candidates = rankAndDedupeInspectCandidates(
+              nearbyLines.flatMap((candidateLine) =>
+                Array.from(
+                  candidateLine.text.matchAll(/[\p{L}\p{N}_$]+/gu),
+                ).flatMap((match) => {
+                  const start = match.index;
+                  const end = start + match[0].length;
+                  const from = candidateLine.from + start;
+                  const to = candidateLine.from + end;
+                  const fromCoords = view.coordsAtPos(from);
+                  const toCoords = view.coordsAtPos(to);
+                  if (!fromCoords || !toCoords) return [];
+                  const left = Math.min(fromCoords.left, toCoords.left);
+                  const right = Math.max(fromCoords.right, toCoords.right);
+                  const top = Math.min(fromCoords.top, toCoords.top);
+                  const bottom = Math.max(
+                    fromCoords.bottom,
+                    toCoords.bottom,
+                  );
+                  const horizontalDistance = event.clientX < left
+                    ? left - event.clientX
+                    : event.clientX > right
+                    ? event.clientX - right
+                    : 0;
+                  const verticalDistance = event.clientY < top
+                    ? top - event.clientY
+                    : event.clientY > bottom
+                    ? event.clientY - bottom
+                    : 0;
+                  if (
+                    Math.hypot(horizontalDistance, verticalDistance) > 120
+                  ) {
+                    return [];
+                  }
+                  const sourcePoint = kind === "diff"
+                    ? diffPointToNewFile(
+                      text,
+                      candidateLine.number - 1,
+                      start,
+                    )
+                    : { row: candidateLine.number - 1, column: start };
+                  return sourcePoint
+                    ? [{
+                      candidate: {
+                        label: match[0],
+                        ...sourcePoint,
+                      },
+                      horizontalDistance,
+                      verticalDistance,
+                      rowDistance: Math.abs(
+                        candidateLine.number - line.number,
+                      ),
+                      contains: candidateLine.number === line.number &&
+                        column >= start && column <= end,
+                    }]
+                    : [];
+                })
+              ).map(({
+                candidate,
+                contains,
+                horizontalDistance,
+                verticalDistance,
+                rowDistance,
+              }) => ({
                 ...candidate,
                 containsTap: contains,
-                distance,
+                horizontalDistance,
+                verticalDistance,
+                rowDistance,
+                row: candidate.row,
                 column: candidate.column,
               })),
-            ).slice(0, 5).map((
-              { containsTap: _, distance: __, ...candidate },
+              12,
+            ).map((
+              {
+                containsTap: _,
+                horizontalDistance: __,
+                verticalDistance: ___,
+                rowDistance: ____,
+                ...candidate
+              },
             ) => candidate);
             if (candidates.length === 0) return false;
             event.preventDefault();
