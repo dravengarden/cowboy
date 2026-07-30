@@ -75,6 +75,7 @@ import { ReviewSettings } from "./ReviewSettings";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import type { ReviewMode } from "./reviewMode";
 import { updateReviewSettings, useReviewSettings } from "./reviewSettings";
+import { presentHoverBlock } from "./symbolPresentation";
 import type { CodeDiffScope } from "./codeApi";
 import type { CodeLanguage } from "./codeApi";
 import type { GitReviewEntry } from "./gitReviewModel";
@@ -416,9 +417,41 @@ function DocumentView({
           </Stack>
         )
         : hover?.contents.length
-        ? hover.contents.map((block, index) =>
-          block.markdown
-            ? <Markdown key={index} text={block.text} touchWrap />
+        ? hover.contents.map((rawBlock, index) => {
+          const block = presentHoverBlock(rawBlock);
+          return block.markdown
+            ? (
+              <Box
+                key={index}
+                sx={{
+                  minWidth: 0,
+                  fontSize: "0.9375rem",
+                  lineHeight: 1.65,
+                  "& > :first-child": { mt: 0 },
+                  "& > :last-child": { mb: 0 },
+                  "& p": { my: 1.25 },
+                  "& h1, & h2, & h3, & h4": {
+                    mt: 2.5,
+                    mb: 1,
+                    fontSize: "1rem",
+                    lineHeight: 1.35,
+                    letterSpacing: "-0.01em",
+                  },
+                  "& img": {
+                    maxHeight: 28,
+                    width: "auto",
+                    borderRadius: 1,
+                  },
+                  "& pre": {
+                    border: 1,
+                    borderColor: "divider",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+                  },
+                }}
+              >
+                <Markdown text={block.text} touchWrap />
+              </Box>
+            )
             : (
               <Box
                 key={index}
@@ -435,8 +468,8 @@ function DocumentView({
               >
                 {block.text}
               </Box>
-            )
-        )
+            );
+        })
         : (
           <Typography color="text.secondary" sx={{ py: 3 }}>
             No symbol information is available at this location.
@@ -659,21 +692,50 @@ function DocumentView({
               slotProps={{
                 paper: {
                   sx: {
-                    width: "min(520px, calc(100vw - 48px))",
-                    maxHeight: "min(70vh, 680px)",
-                    p: 2,
-                    borderRadius: 3,
+                    width: "min(680px, calc(100vw - 40px))",
+                    maxHeight: "min(78vh, 760px)",
+                    p: 0,
+                    overflow: "hidden",
+                    borderRadius: 4,
                     bgcolor: "background.paper",
                     backgroundImage: "none",
-                    boxShadow: 12,
+                    border: 1,
+                    borderColor: "divider",
+                    boxShadow: 16,
                   },
                 },
               }}
             >
-              <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
-                Symbol
-              </Typography>
-              {symbolContent}
+              <Box
+                sx={{
+                  px: 2.5,
+                  py: 1.75,
+                  borderBottom: 1,
+                  borderColor: "divider",
+                  bgcolor: "background.paper",
+                }}
+              >
+                <Typography variant="subtitle1" fontWeight={750}>
+                  Symbol
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    display: "block",
+                    mt: 0.25,
+                    fontFamily: "var(--cowboy-font-mono)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {target.path}
+                </Typography>
+              </Box>
+              <Box sx={{ px: 2.5, pt: 2, overflowY: "auto", maxHeight: "calc(min(78vh, 760px) - 74px)" }}>
+                {symbolContent}
+              </Box>
             </Popover>
           )}
       </Box>
