@@ -386,6 +386,7 @@ export function fetchCodeFile(
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
     signal,
+    "no-store",
   );
 }
 
@@ -399,5 +400,6 @@ export function fetchCodeFilePage(
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
     signal,
+    "no-store",
   );
 }

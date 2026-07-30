@@ -12,12 +12,12 @@ import {
   FormatListBulleted,
   KeyboardArrowDown,
   KeyboardArrowUp,
+  Refresh,
   TabUnselected,
   VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -158,7 +158,7 @@ function DocumentView({
   const [counts, setCounts] = useState<{ added: number; removed: number }>();
   const [loading, setLoading] = useState(true);
   const [loadedPath, setLoadedPath] = useState<string>();
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<number | "network">();
   const [hunkIndex, setHunkIndex] = useState(0);
   const [hover, setHover] = useState<CodeHover>();
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -175,6 +175,10 @@ function DocumentView({
   >();
   const [navigationLoading, setNavigationLoading] = useState(false);
   const hoverController = useRef<AbortController | undefined>(undefined);
+  const fileRetry = useRef<{ key: string; count: number }>({
+    key: "",
+    count: 0,
+  });
   const positionTimer = useRef<number | undefined>(undefined);
   const pendingPosition = useRef<number | undefined>(undefined);
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
@@ -336,7 +340,7 @@ function DocumentView({
     const controller = new AbortController();
     const diffTarget = target.kind === "diff" ? target : undefined;
     setLoading(true);
-    setError(false);
+    setError(undefined);
     setText("");
     setCounts(undefined);
     setLimited(false);
@@ -358,6 +362,10 @@ function DocumentView({
       )
       : fetchCodeFile(sessionId, target.path, controller.signal);
     void request.then((result) => {
+      fileRetry.current = {
+        key: `${sessionId}:${target.kind}:${target.path}`,
+        count: 0,
+      };
       setText(result.text);
       setLoadedPath(target.path);
       setTruncated(result.truncated);
@@ -391,9 +399,32 @@ function DocumentView({
         }
       }
     }).catch((reason) => {
-      if (!(reason instanceof DOMException && reason.name === "AbortError")) {
-        setError(true);
+      if (reason instanceof DOMException && reason.name === "AbortError") {
+        return;
       }
+      const requestKey = `${sessionId}:${target.kind}:${target.path}`;
+      if (fileRetry.current.key !== requestKey) {
+        fileRetry.current = { key: requestKey, count: 0 };
+      }
+      const status = reason instanceof CodeApiError ? reason.status : undefined;
+      const transient = status === undefined ||
+        status === 304 ||
+        status === 409 ||
+        status === 410 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
+      if (transient && fileRetry.current.count < 2) {
+        const delay = fileRetry.current.count === 0 ? 400 : 1_200;
+        fileRetry.current.count += 1;
+        globalThis.setTimeout(() => {
+          if (!controller.signal.aborted) {
+            setReloadKey((value) => value + 1);
+          }
+        }, delay);
+        return;
+      }
+      setError(status ?? "network");
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
     });
@@ -467,12 +498,63 @@ function DocumentView({
     );
   }
   if (error) {
+    const missing = error === 404;
     return (
-      <Alert severity="error" sx={{ m: 2 }}>
-        {target.kind === "diff"
-          ? "This diff could not be loaded"
-          : "This file could not be loaded"}
-      </Alert>
+      <Box
+        role="alert"
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: "grid",
+          placeItems: "center",
+          px: 3,
+          py: 6,
+        }}
+      >
+        <Stack
+          alignItems="center"
+          spacing={1.25}
+          sx={{ width: "min(100%, 420px)", textAlign: "center" }}
+        >
+          <Box
+            sx={{
+              width: 48,
+              height: 48,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "50%",
+              color: "error.main",
+              bgcolor: (theme) => alpha(theme.palette.error.main, 0.1),
+            }}
+          >
+            <Refresh />
+          </Box>
+          <Typography variant="subtitle1" fontWeight={750}>
+            {missing
+              ? "This file is no longer available"
+              : target.kind === "diff"
+              ? "Couldn’t load this diff"
+              : "Couldn’t load this file"}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {missing
+              ? "It may have been moved or deleted in the worktree."
+              : "The connection may have been interrupted. Your tabs and reading position are preserved."}
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<Refresh />}
+            onClick={() => {
+              fileRetry.current.count = 0;
+              setError(undefined);
+              setReloadKey((value) => value + 1);
+            }}
+            sx={{ mt: 0.75, textTransform: "none", borderRadius: 2 }}
+          >
+            Try again
+          </Button>
+        </Stack>
+      </Box>
     );
   }
   const candidateSwitcher = inspectCandidates.length > 1
