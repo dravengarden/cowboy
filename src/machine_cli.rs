@@ -236,10 +236,13 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
 fn managed_provider_environment(
     components: &ComponentStore,
 ) -> anyhow::Result<BTreeMap<String, String>> {
+    let disabled = disabled_provider_slots();
     let active = components.active()?;
     let has = |kind, slots: &[&str]| {
         active.iter().any(|(component, _)| {
-            component.id.kind == kind && slots.contains(&component.id.slot.as_str())
+            component.id.kind == kind
+                && slots.contains(&component.id.slot.as_str())
+                && !disabled.iter().any(|slot| slot == &component.id.slot)
         })
     };
     let mut environment = BTreeMap::new();
@@ -249,6 +252,14 @@ fn managed_provider_environment(
         "COWBOY_ACP_GEMINI_CMD",
         "COWBOY_ACP_GEMINI_ARGS",
     ] {
+        let slot = match key {
+            "COWBOY_ACP_CLAUDE_CODE_CMD" => "claude",
+            "COWBOY_ACP_GEMINI_CMD" | "COWBOY_ACP_GEMINI_ARGS" => "gemini",
+            _ => "codex",
+        };
+        if disabled.iter().any(|disabled| disabled == slot) {
+            continue;
+        }
         if let Ok(value) = std::env::var(key)
             && !value.trim().is_empty()
         {
@@ -278,6 +289,24 @@ fn managed_provider_environment(
         environment.insert("COWBOY_ACP_GEMINI_ARGS".to_owned(), "--acp".to_owned());
     }
     Ok(environment)
+}
+
+fn disabled_provider_slots() -> Vec<String> {
+    disabled_provider_slots_from(
+        &std::env::var("COWBOY_MACHINE_DISABLED_PROVIDERS").unwrap_or_default(),
+    )
+}
+
+fn disabled_provider_slots_from(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|slot| !slot.is_empty())
+        .map(|slot| match slot {
+            "claude-code" => "claude".to_owned(),
+            other => other.to_owned(),
+        })
+        .collect()
 }
 
 async fn supervise_zed_adapter(
@@ -590,6 +619,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
 }
 
 async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
+    let disabled = disabled_provider_slots();
     let mut inventory = vec![ComponentInventory {
         id: ComponentId {
             kind: ComponentKind::MachineHost,
@@ -604,7 +634,13 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
         auth: None,
         detail: None,
     }];
-    let managed = store.active().unwrap_or_default();
+    let mut managed = store.active().unwrap_or_default();
+    managed.retain(|(component, _)| {
+        !matches!(
+            component.id.kind,
+            ComponentKind::ProviderAdapter | ComponentKind::ProviderCli
+        ) || !disabled.contains(&component.id.slot)
+    });
     let has_managed_acp = managed
         .iter()
         .any(|(component, _)| component.id.kind == ComponentKind::AcpRuntime);
@@ -644,6 +680,9 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
         ("gemini", "gemini", &["--version"][..]),
         ("zed", "zed", &["--version"][..]),
     ] {
+        if disabled.iter().any(|disabled| disabled == slot) {
+            continue;
+        }
         let output = tokio::time::timeout(
             Duration::from_secs(3),
             tokio::process::Command::new(command)
@@ -713,6 +752,9 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
         });
     }
     for (slot, command) in [("codex", "codex-acp"), ("claude", "claude-agent-acp")] {
+        if disabled.iter().any(|disabled| disabled == slot) {
+            continue;
+        }
         if inventory.iter().any(|component| {
             component.id.kind == ComponentKind::ProviderAdapter && component.id.slot == slot
         }) {
@@ -1304,8 +1346,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        gemini_auth_from_metadata, managed_provider_environment, parse_workspaces,
-        reject_untrusted_workspace, selected_zed_pair, validate_controller_url,
+        disabled_provider_slots_from, gemini_auth_from_metadata, managed_provider_environment,
+        parse_workspaces, reject_untrusted_workspace, selected_zed_pair, validate_controller_url,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
@@ -1340,6 +1382,14 @@ mod tests {
         assert_eq!(
             gemini_auth_from_metadata(None, false, false, false, false),
             crate::machine_protocol::AuthState::SignedOut
+        );
+    }
+
+    #[test]
+    fn disabled_provider_aliases_are_normalized() {
+        assert_eq!(
+            disabled_provider_slots_from("claude-code, gemini"),
+            ["claude", "gemini"]
         );
     }
 
