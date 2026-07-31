@@ -128,14 +128,9 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = [ "--bin" "cowboy" "--bin" "cowboy-acp-worker" ];
-        nativeBuildInputs = [ pkgs.makeWrapper ];
         nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh ];
         preCheck = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
-        '';
-        postInstall = ''
-          wrapProgram $out/bin/cowboy \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
         '';
         passthru.workerGeneration = worker-generation;
         meta = {
