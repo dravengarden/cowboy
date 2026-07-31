@@ -106,6 +106,12 @@ the small stable host process to be relaunched by launchd/systemd so its worker
 launch environment is rebuilt atomically. Detached worker services and their
 session generations remain alive and are adopted by the new broker.
 
+Codex device login and Claude browser login can be initiated from Machines.
+Gemini does not expose a stable login/status command, so complete its official
+CLI setup once on the execution Machine and press Refresh. Cowboy recognizes
+OAuth credential presence or configured API-key/Vertex metadata without
+reading, storing, or transmitting secret contents.
+
 ## Ownership
 
 Cowboy-managed Zed payloads and state live under the Machine root. Native Zed

@@ -673,7 +673,7 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
         let auth = match slot {
             "codex" => probe_exit_auth("codex", &["login", "status"]).await,
             "claude" => probe_exit_auth("claude", &["auth", "status", "--json"]).await,
-            "gemini" => AuthState::Unsupported,
+            "gemini" => probe_gemini_auth(),
             _ => AuthState::Unsupported,
         };
         if let Some(existing) = inventory
@@ -717,6 +717,62 @@ async fn probe_exit_auth(command: &str, args: &[&str]) -> AuthState {
     }
 }
 
+fn probe_gemini_auth() -> AuthState {
+    let api_key = std::env::var("GEMINI_API_KEY")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let vertex = std::env::var("GOOGLE_GENAI_USE_VERTEXAI")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        && std::env::var("GOOGLE_CLOUD_PROJECT")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty());
+    let Some(home) = std::env::var_os("HOME") else {
+        return if api_key || vertex {
+            AuthState::SignedIn
+        } else {
+            AuthState::SignedOut
+        };
+    };
+    let root = PathBuf::from(home).join(".gemini");
+    let selected = std::fs::read(root.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .pointer("/security/auth/selectedType")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+    let gateway = std::env::var("GOOGLE_GEMINI_BASE_URL")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    gemini_auth_from_metadata(
+        selected.as_deref(),
+        root.join("oauth_creds.json").is_file(),
+        api_key,
+        vertex,
+        gateway,
+    )
+}
+
+fn gemini_auth_from_metadata(
+    selected: Option<&str>,
+    oauth_credentials: bool,
+    api_key: bool,
+    vertex: bool,
+    gateway: bool,
+) -> AuthState {
+    match selected {
+        Some("oauth-personal") if oauth_credentials => AuthState::SignedIn,
+        Some("gemini-api-key") if api_key => AuthState::SignedIn,
+        Some("vertex-ai" | "compute-default-credentials") if vertex => AuthState::SignedIn,
+        Some("gateway") if gateway => AuthState::SignedIn,
+        None if api_key || vertex => AuthState::SignedIn,
+        Some(_) | None => AuthState::SignedOut,
+    }
+}
+
 fn handle_machine_command(
     command: MachineCommand,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
@@ -751,6 +807,7 @@ fn handle_machine_command(
                 request_id,
                 provider,
                 events,
+                components,
                 cancel_rx,
                 login_cancels,
             ));
@@ -957,6 +1014,7 @@ async fn run_login(
     request_id: String,
     provider: String,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    components: Arc<ComponentStore>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     login_cancels: LoginCancels,
 ) {
@@ -994,18 +1052,24 @@ async fn run_login(
         }
     };
     let stdout = child.stdout.take().expect("piped stdout");
-    if let Some(mut stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
-        });
-    }
-    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let stderr = child.stderr.take().expect("piped stderr");
+    let mut stdout = tokio::io::BufReader::new(stdout).lines();
+    let mut stderr = tokio::io::BufReader::new(stderr).lines();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
     let mut verification_url = None;
     let mut user_code = None;
     let mut challenge_sent = false;
     loop {
         let line = tokio::select! {
-            line = lines.next_line() => line,
+            line = stdout.next_line(), if stdout_open => {
+                if matches!(line, Ok(None)) { stdout_open = false; }
+                line
+            },
+            line = stderr.next_line(), if stderr_open => {
+                if matches!(line, Ok(None)) { stderr_open = false; }
+                line
+            },
             changed = cancel.changed() => {
                 if changed.is_ok() && *cancel.borrow() {
                     let _ = child.kill().await;
@@ -1022,7 +1086,12 @@ async fn run_login(
                 continue;
             }
         };
-        let Ok(Some(line)) = line else { break };
+        let Ok(Some(line)) = line else {
+            if !stdout_open && !stderr_open {
+                break;
+            }
+            continue;
+        };
         for word in line.split_whitespace() {
             let trimmed = word.trim_matches(|character: char| {
                 matches!(character, '(' | ')' | '[' | ']' | ',' | ':' | ';')
@@ -1053,7 +1122,7 @@ async fn run_login(
     login_cancels.lock().remove(&request_id);
     let signed_in = status.is_ok_and(|status| status.success());
     let _ = events.send(MachineEvent::LoginState {
-        request_id,
+        request_id: request_id.clone(),
         provider,
         state: if signed_in {
             AuthState::SignedIn
@@ -1063,6 +1132,13 @@ async fn run_login(
         account_label: None,
         detail: (!signed_in).then_some("provider login did not complete".to_owned()),
     });
+    if signed_in {
+        let inventory = collect_inventory(&components).await;
+        let _ = events.send(MachineEvent::Inventory {
+            components: inventory,
+            observed_at_ms: unix_ms(),
+        });
+    }
 }
 
 fn current_platform() -> Platform {
@@ -1166,8 +1242,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        managed_provider_environment, parse_workspaces, reject_untrusted_workspace,
-        selected_zed_pair, validate_controller_url,
+        gemini_auth_from_metadata, managed_provider_environment, parse_workspaces,
+        reject_untrusted_workspace, selected_zed_pair, validate_controller_url,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
@@ -1183,6 +1259,26 @@ mod tests {
     fn loopback_controller_allows_plaintext_for_hermetic_tests() {
         assert!(validate_controller_url("http://127.0.0.1:43333").is_ok());
         assert!(validate_controller_url("http://localhost:43333").is_ok());
+    }
+
+    #[test]
+    fn gemini_auth_requires_non_secret_credential_evidence() {
+        assert_eq!(
+            gemini_auth_from_metadata(Some("oauth-personal"), true, false, false, false),
+            crate::machine_protocol::AuthState::SignedIn
+        );
+        assert_eq!(
+            gemini_auth_from_metadata(Some("oauth-personal"), false, false, false, false),
+            crate::machine_protocol::AuthState::SignedOut
+        );
+        assert_eq!(
+            gemini_auth_from_metadata(Some("gemini-api-key"), false, true, false, false),
+            crate::machine_protocol::AuthState::SignedIn
+        );
+        assert_eq!(
+            gemini_auth_from_metadata(None, false, false, false, false),
+            crate::machine_protocol::AuthState::SignedOut
+        );
     }
 
     #[test]

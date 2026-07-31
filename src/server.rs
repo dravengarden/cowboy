@@ -2422,6 +2422,7 @@ async fn api_new_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
+    let mut cwd = req.cwd;
     if req.machine_id != "local" {
         let Some(store) = state.store.as_ref() else {
             return (
@@ -2435,9 +2436,23 @@ async fn api_new_session(
                 .into_iter()
                 .find(|machine| machine.id == req.machine_id && !machine.revoked)
         });
+        let Some(machine) = machine else {
+            return (StatusCode::NOT_FOUND, "unknown or revoked machine").into_response();
+        };
+        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+            .inventory
+            .get("workspaces")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        cwd = match resolve_machine_workspace(&workspaces, cwd.as_deref()) {
+            Ok(path) => Some(path),
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        };
         let capacity: crate::machine_protocol::MachineCapacity = machine
-            .as_ref()
-            .and_then(|machine| machine.inventory.get("capacity").cloned())
+            .inventory
+            .get("capacity")
+            .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
         let active_sessions = state
@@ -2457,7 +2472,9 @@ async fn api_new_session(
                 .into_response();
         }
         let supported = machine
-            .and_then(|machine| machine.inventory.get("components").cloned())
+            .inventory
+            .get("components")
+            .cloned()
             .and_then(|value| {
                 serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(value)
                     .ok()
@@ -2476,7 +2493,7 @@ async fn api_new_session(
     }
     match state.supervisor.new_session_on(
         &req.provider,
-        req.cwd,
+        cwd,
         req.origin,
         req.system,
         &req.machine_id,
@@ -2486,6 +2503,20 @@ async fn api_new_session(
         }
         Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
     }
+}
+
+fn resolve_machine_workspace(
+    workspaces: &[crate::machine_protocol::MachineWorkspace],
+    requested_id: Option<&str>,
+) -> Result<String, String> {
+    let requested_id = requested_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "remote session requires a trusted workspace id".to_owned())?;
+    workspaces
+        .iter()
+        .find(|workspace| workspace.id == requested_id)
+        .map(|workspace| workspace.canonical_path.clone())
+        .ok_or_else(|| format!("unknown trusted workspace {requested_id:?}"))
 }
 
 fn machine_supports_provider(
@@ -2501,15 +2532,7 @@ fn machine_supports_provider(
         component.id.kind == ComponentKind::ProviderCli
             && matches!(component.id.slot.as_str(), candidate if candidate == slot || candidate == provider)
             && component.state == ComponentState::Active
-            && !matches!(
-                component.auth,
-                Some(
-                    AuthState::SignedOut
-                        | AuthState::Pending
-                        | AuthState::Expired
-                        | AuthState::Error
-                )
-            )
+            && component.auth == Some(AuthState::SignedIn)
     });
     if !cli_ready {
         return false;
@@ -2526,7 +2549,7 @@ fn machine_supports_provider(
 
 #[cfg(test)]
 mod machine_provider_tests {
-    use super::machine_supports_provider;
+    use super::{machine_supports_provider, resolve_machine_workspace};
     use crate::machine_protocol::{
         AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState,
     };
@@ -2577,13 +2600,36 @@ mod machine_provider_tests {
     }
 
     #[test]
-    fn gemini_cli_is_its_acp_entrypoint() {
+    fn gemini_cli_is_its_acp_entrypoint_only_after_login_is_confirmed() {
         let cli = component(
             ComponentKind::ProviderCli,
             "gemini",
-            Some(AuthState::Unsupported),
+            Some(AuthState::SignedOut),
         );
-        assert!(machine_supports_provider(&[cli], "gemini"));
+        assert!(!machine_supports_provider(
+            std::slice::from_ref(&cli),
+            "gemini"
+        ));
+        let authenticated = ComponentInventory {
+            auth: Some(AuthState::SignedIn),
+            ..cli
+        };
+        assert!(machine_supports_provider(&[authenticated], "gemini"));
+    }
+
+    #[test]
+    fn remote_workspace_id_is_resolved_before_session_persistence() {
+        let workspaces = [crate::machine_protocol::MachineWorkspace {
+            id: "cowboy".to_owned(),
+            display_name: "Cowboy".to_owned(),
+            canonical_path: "/srv/cowboy".to_owned(),
+        }];
+        assert_eq!(
+            resolve_machine_workspace(&workspaces, Some("cowboy")),
+            Ok("/srv/cowboy".to_owned())
+        );
+        assert!(resolve_machine_workspace(&workspaces, Some("/srv/cowboy")).is_err());
+        assert!(resolve_machine_workspace(&workspaces, Some("unknown")).is_err());
     }
 }
 

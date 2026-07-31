@@ -129,14 +129,14 @@ Login is capability-driven:
 - Codex App Server exposes account status plus a device-code flow. The Machine
   Agent returns the verification URL and user code to Cowboy; Mobile opens the
   URL and shows a copyable code, then listens for completion.
-- Claude and Gemini currently own browser/terminal login flows. A provider
-  helper runs under a constrained PTY, emits typed prompts/URLs, and accepts
-  only the explicitly requested response. Cowboy must not scrape or copy token
-  files. API-key modes use a masked secret input sent directly to the Machine
-  Agent and never enter the transcript.
-- When a provider lacks a stable non-interactive flow, the UI exposes a short
-  terminal-assisted login session rather than inventing an OAuth client or
-  impersonating the provider.
+- Claude owns its browser login flow. The Machine captures both output streams,
+  extracts only the verification URL/code, and leaves credentials in the
+  official CLI's state. Cowboy must not scrape or copy token files.
+- Gemini currently has no stable login/status subcommand. Its OAuth or API-key
+  setup remains in the official CLI on that Machine. Cowboy infers only a
+  redacted readiness state from the selected auth method, credential-file
+  presence, and relevant environment presence; it never reads credential
+  contents. Machines gives the exact local remediation and refreshes status.
 
 Every login request has an id, expiry, cancellation, and one active owner.
 Login frames are never replayed into a different UI client after expiry.

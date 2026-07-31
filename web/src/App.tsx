@@ -68,6 +68,7 @@ import {
 import { SessionControls } from "./Composer";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
+import { machineProviderAvailable } from "./machineProvider";
 import { Transcript } from "./Transcript";
 import {
     PROVIDERS,
@@ -1214,6 +1215,9 @@ type MachineChoice = {
         id: { kind: string; slot?: string };
         state: string;
         version: string;
+        generation: string;
+        rollback_generation?: string;
+        active_leases: number;
         auth?: string;
         detail?: string;
     }[];
@@ -1244,12 +1248,7 @@ function NewSessionDialog({
     const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
     const selectedMachine = machines.find((machine) => machine.id === machineId);
     const providerAvailable = (candidate: string): boolean => machineId === "local" || Boolean(
-        selectedMachine?.components.some((component) =>
-            component.id.kind === "provider_cli" &&
-            component.id.slot === candidate &&
-            component.state === "active" &&
-            !["signed_out", "pending", "expired", "error"].includes(component.auth ?? "")
-        ),
+        selectedMachine && machineProviderAvailable(candidate, selectedMachine.components),
     );
     useEffect(() => {
         if (!providerAvailable(provider)) {
@@ -1305,7 +1304,7 @@ function NewSessionDialog({
         if (machineId !== "local") {
             const remote = machines.find((machine) => machine.id === machineId);
             const choices: WorkspaceChoice[] = (remote?.workspaces ?? []).map((workspace) => ({
-                value: workspace.canonical_path,
+                value: workspace.id,
                 label: workspace.display_name,
                 help: workspace.canonical_path,
                 active_work_items: [],
@@ -3597,23 +3596,27 @@ function MachinesContent(): React.JSX.Element {
     const [enrollName, setEnrollName] = useState("");
     const [enrollment, setEnrollment] = useState<{ token: string; expires_in_seconds: number } | null>(null);
     const [enrollError, setEnrollError] = useState<string | null>(null);
-    const refresh = useCallback((): void => {
-        void fetch("/api/machines")
-            .then((response) => response.ok ? response.json() : [])
-            .then((value: MachineChoice[]) => setMachines(Array.isArray(value) ? value : []));
-    }, []);
-    useEffect(() => {
-        refresh();
-        const timer = globalThis.setInterval(refresh, 5_000);
-        return () => globalThis.clearInterval(timer);
-    }, [refresh]);
-    const loadEvents = (machineId: string): void => {
+    const loadEvents = useCallback((machineId: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
             .then((response) => response.ok ? response.json() : [])
             .then((value: MachineEventView[]) => {
                 setEvents((current) => ({ ...current, [machineId]: Array.isArray(value) ? value : [] }));
             });
-    };
+    }, []);
+    const refresh = useCallback((): void => {
+        void fetch("/api/machines")
+            .then((response) => response.ok ? response.json() : [])
+            .then((value: MachineChoice[]) => {
+                const next = Array.isArray(value) ? value : [];
+                setMachines(next);
+                next.filter((machine) => !machine.local).forEach((machine) => loadEvents(machine.id));
+            });
+    }, [loadEvents]);
+    useEffect(() => {
+        refresh();
+        const timer = globalThis.setInterval(refresh, 2_000);
+        return () => globalThis.clearInterval(timer);
+    }, [refresh]);
     const command = (machineId: string, action: "refresh" | "login" | "components/reconcile", provider?: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/${action}`, {
             method: "POST",
@@ -3641,6 +3644,9 @@ function MachinesContent(): React.JSX.Element {
             </Stack>
             {machines.map((machine) => {
                 const latest = events[machine.id]?.at(-1);
+                const gemini = machine.components.find((component) =>
+                    component.id.kind === "provider_cli" && component.id.slot === "gemini"
+                );
                 const challenge = [...(events[machine.id] ?? [])].reverse().find((event) =>
                     event.event === "login_challenge" && event.expires_at_ms > Date.now()
                 );
@@ -3661,7 +3667,7 @@ function MachinesContent(): React.JSX.Element {
                                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                                     <Button size="small" onClick={() => command(machine.id, "refresh")}>Refresh</Button>
                                     <Button size="small" onClick={() => command(machine.id, "components/reconcile")}>Update components</Button>
-                                    {(["codex", "claude", "gemini"] as const).map((provider) => (
+                                    {(["codex", "claude"] as const).map((provider) => (
                                         <Button key={provider} size="small" onClick={() => command(machine.id, "login", provider)}>
                                             Sign in {provider}
                                         </Button>
@@ -3672,18 +3678,49 @@ function MachinesContent(): React.JSX.Element {
                                     }}>Revoke</Button>
                                 </Stack>
                             )}
+                            {machine.workspaces.length > 0 && (
+                                <Box>
+                                    <Typography variant="overline" color="text.secondary">Trusted workspaces</Typography>
+                                    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                        {machine.workspaces.map((workspace) => (
+                                            <Chip key={workspace.id} size="small" variant="outlined" label={workspace.display_name} title={workspace.canonical_path} />
+                                        ))}
+                                    </Stack>
+                                </Box>
+                            )}
                             {machine.components.length > 0 && (
-                                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                <Stack spacing={0.5}>
+                                    <Typography variant="overline" color="text.secondary">Managed generations</Typography>
                                     {machine.components.map((component) => (
-                                        <Chip
+                                        <Stack
                                             key={`${component.id.kind}:${component.id.slot ?? ""}`}
-                                            size="small"
-                                            variant="outlined"
-                                            color={component.state === "active" ? "success" : component.state === "failed" ? "error" : "default"}
-                                            label={`${component.id.slot || component.id.kind} ${component.version || component.state}${component.auth ? ` · ${component.auth}` : ""}`}
-                                        />
+                                            direction="row"
+                                            spacing={1}
+                                            alignItems="center"
+                                            sx={{ minWidth: 0 }}
+                                        >
+                                            <Chip
+                                                size="small"
+                                                variant="outlined"
+                                                color={component.state === "active" ? "success" : component.state === "failed" ? "error" : "default"}
+                                                label={component.id.slot || component.id.kind}
+                                            />
+                                            <Typography variant="caption" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+                                                {component.version || component.state}
+                                                {component.generation ? ` · generation ${component.generation}` : ""}
+                                                {component.auth ? ` · ${component.auth}` : ""}
+                                                {component.active_leases ? ` · ${component.active_leases} active` : ""}
+                                                {component.rollback_generation ? ` · rollback ${component.rollback_generation}` : ""}
+                                                {component.detail ? ` · ${component.detail}` : ""}
+                                            </Typography>
+                                        </Stack>
                                     ))}
                                 </Stack>
+                            )}
+                            {!machine.local && gemini?.auth !== "signed_in" && (
+                                <Alert severity="info">
+                                    Gemini keeps its OAuth or API-key login in the official CLI. Run <code>gemini</code> once on {machine.display_name}, then Refresh; Cowboy never copies its credentials.
+                                </Alert>
                             )}
                             {challenge?.event === "login_challenge" && (
                                 <Alert severity="info">
