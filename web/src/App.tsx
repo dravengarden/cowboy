@@ -3596,11 +3596,6 @@ function MachinesContent(): React.JSX.Element {
     const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<Record<string, boolean>>({});
-    const [enrollOpen, setEnrollOpen] = useState(false);
-    const [enrollId, setEnrollId] = useState("");
-    const [enrollName, setEnrollName] = useState("");
-    const [enrollment, setEnrollment] = useState<{ token: string; expires_in_seconds: number } | null>(null);
-    const [enrollError, setEnrollError] = useState<string | null>(null);
     const loadEvents = useCallback((machineId: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
             .then((response) => response.ok ? response.json() : [])
@@ -3651,17 +3646,10 @@ function MachinesContent(): React.JSX.Element {
     };
     return (
         <Stack spacing={2}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between">
-                <Box>
-                    <Typography fontWeight={760}>Machines</Typography>
-                    <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
-                </Box>
-                <Button size="small" startIcon={<Add />} variant="outlined" onClick={() => {
-                    setEnrollment(null);
-                    setEnrollError(null);
-                    setEnrollOpen(true);
-                }}>Add machine</Button>
-            </Stack>
+            <Box>
+                <Typography fontWeight={760}>Machines</Typography>
+                <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
+            </Box>
             {machines.map((machine) => {
                 const latest = events[machine.id]?.at(-1);
                 const open = Boolean(expanded[machine.id]);
@@ -3832,12 +3820,6 @@ function MachinesContent(): React.JSX.Element {
                                             Gemini sign-in stays in the official CLI on {machine.display_name}.
                                         </Typography>
                                     )}
-                                    {!machine.local && (
-                                        <Button size="small" color="error" sx={{ alignSelf: "flex-start" }} onClick={() => {
-                                            if (!globalThis.confirm(`Revoke ${machine.display_name}? A new key enrollment will be required.`)) return;
-                                            void fetch(`/api/machines/${encodeURIComponent(machine.id)}/revoke`, { method: "POST" }).then(refresh);
-                                        }}>Revoke machine</Button>
-                                    )}
                                 </Stack>
                             )}
                             {challenge?.event === "login_challenge" && (
@@ -3865,51 +3847,6 @@ function MachinesContent(): React.JSX.Element {
                     </Paper>
                 );
             })}
-            <Dialog open={enrollOpen} onClose={() => setEnrollOpen(false)} fullWidth maxWidth="sm">
-                <DialogTitle>{enrollment ? "Install this machine" : "Add machine"}</DialogTitle>
-                <DialogContent>
-                    <Stack spacing={1.5} sx={{ pt: 0.5 }}>
-                        {!enrollment ? <>
-                            <TextField label="Machine ID" value={enrollId} onChange={(event) => setEnrollId(event.target.value.toLowerCase())} helperText="Lowercase letters, numbers, and hyphens" autoFocus />
-                            <TextField label="Display name" value={enrollName} onChange={(event) => setEnrollName(event.target.value)} />
-                            {enrollError && <Alert severity="error">{enrollError}</Alert>}
-                            <Stack direction="row" justifyContent="flex-end" spacing={1}>
-                                <Button onClick={() => setEnrollOpen(false)}>Cancel</Button>
-                                <Button variant="contained" disabled={!enrollId || !enrollName.trim()} onClick={() => {
-                                    setEnrollError(null);
-                                    void fetch("/api/machines/enrollment", {
-                                        method: "POST",
-                                        headers: { "content-type": "application/json" },
-                                        body: JSON.stringify({ machine_id: enrollId, display_name: enrollName }),
-                                    }).then(async (response) => {
-                                        if (!response.ok) throw new Error(await response.text());
-                                        return response.json();
-                                    }).then(setEnrollment).catch((error: unknown) => setEnrollError(error instanceof Error ? error.message : "Could not create enrollment"));
-                                }}>Create enrollment</Button>
-                            </Stack>
-                        </> : <>
-                            <Alert severity="warning">This one-time token expires in {Math.round(enrollment.expires_in_seconds / 60)} minutes. It disappears from the machine after enrollment.</Alert>
-                            <Typography variant="body2">Run on the target machine after installing the release binaries:</Typography>
-                            <Paper variant="outlined" sx={{ p: 1.5, fontFamily: "monospace", whiteSpace: "pre-wrap", overflowWrap: "anywhere", userSelect: "text" }}>
-                                {[
-                                    "cowboy-machine-install \\",
-                                    `  --controller-url ${globalThis.location.origin} \\`,
-                                    `  --machine-id ${enrollId} \\`,
-                                    `  --display-name '${enrollName.replaceAll("'", "'\\''")}' \\`,
-                                    "  --workspace main=/absolute/workspace \\",
-                                    "  --max-sessions 8 \\",
-                                    `  --enrollment-token '${enrollment.token}' \\`,
-                                    "  --artifact-public-key /path/to/publisher.pub",
-                                ].join("\n")}
-                            </Paper>
-                            <Stack direction="row" justifyContent="flex-end" spacing={1}>
-                                <Button onClick={() => void navigator.clipboard.writeText(enrollment.token)}>Copy token</Button>
-                                <Button variant="contained" onClick={() => { setEnrollOpen(false); refresh(); }}>Done</Button>
-                            </Stack>
-                        </>}
-                    </Stack>
-                </DialogContent>
-            </Dialog>
         </Stack>
     );
 }
