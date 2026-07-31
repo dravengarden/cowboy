@@ -37,6 +37,10 @@ import {
   DetentSheet,
   MobileSheetActionGroup,
 } from "../_shell";
+import {
+  type DesktopCommand,
+  useDesktopCommand,
+} from "../desktop/commands/DesktopCommandProvider";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
@@ -80,6 +84,28 @@ interface QuestionPageSummary {
   id: string;
   title: string;
   ordinal: number;
+}
+
+function DesktopQuestionDirectoryCommand({
+  available,
+  toggle,
+}: {
+  available: boolean;
+  toggle: () => void;
+}): null {
+  const command = useMemo<DesktopCommand>(() => ({
+    id: "conversation.toggleQuestionDirectory",
+    title: "Toggle Question Navigator",
+    description: "Find and jump to a question page",
+    group: "Conversation",
+    shortcut: "P",
+    contexts: ["conversation"],
+    when: () => available,
+    disabledReason: "No question pages are available",
+    run: toggle,
+  }), [available, toggle]);
+  useDesktopCommand(command);
+  return null;
 }
 
 function useQuestionPageIndex(
@@ -729,6 +755,28 @@ export function ExploreTranscript(
     });
   }, [pageIndex.data?.pages, pages]);
   const rootRef = useRef<HTMLDivElement>(null);
+  const [desktopDirectoryOpen, setDesktopDirectoryOpen] = useState(false);
+  const desktopDirectoryReturnFocusRef = useRef<HTMLElement | null>(null);
+  const closeDesktopDirectory = useCallback((restoreFocus = true): void => {
+    setDesktopDirectoryOpen(false);
+    const returnFocus = desktopDirectoryReturnFocusRef.current;
+    desktopDirectoryReturnFocusRef.current = null;
+    if (!restoreFocus) return;
+    requestAnimationFrame(() => {
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+      else rootRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+  const toggleDesktopDirectory = useCallback((): void => {
+    if (desktopDirectoryOpen) {
+      closeDesktopDirectory();
+      return;
+    }
+    desktopDirectoryReturnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setDesktopDirectoryOpen(true);
+  }, [closeDesktopDirectory, desktopDirectoryOpen]);
   const {
     pageId: retainedPageId,
     pageStartId,
@@ -800,6 +848,21 @@ export function ExploreTranscript(
   useEffect(() => () => {
     restoringPageRef.current = null;
   }, []);
+
+  useEffect(() => {
+    setDesktopDirectoryOpen(false);
+    desktopDirectoryReturnFocusRef.current = null;
+  }, [props.sessionId]);
+
+  useEffect(() => {
+    if (!desktopDirectoryOpen) return undefined;
+    const frame = requestAnimationFrame(() => {
+      rootRef.current
+        ?.querySelector<HTMLInputElement>("[data-explore-page-search]")
+        ?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [desktopDirectoryOpen]);
 
   useEffect(() => {
     if (!unresolvedQuestionRoot) {
@@ -994,34 +1057,58 @@ export function ExploreTranscript(
         flex: 1,
         minHeight: 0,
         display: "flex",
+        position: "relative",
         outline: "none",
       }}
     >
-      {props.desktop && pages.length > 0 && (
-        <>
+      {props.desktop && (
+        <DesktopQuestionDirectoryCommand
+          available={pages.length > 0}
+          toggle={toggleDesktopDirectory}
+        />
+      )}
+      {props.desktop && pages.length > 0 && desktopDirectoryOpen && (
           <Box
             component="nav"
             aria-label="Question pages"
+            data-desktop-region="conversation.questions"
+            onKeyDownCapture={(event): void => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              closeDesktopDirectory();
+            }}
             sx={{
-              width: "clamp(210px, 22%, 320px)",
-              flexShrink: 0,
+              position: "absolute",
+              zIndex: 6,
+              inset: "0 auto 30px 0",
+              width: "clamp(260px, 28%, 360px)",
               minHeight: 0,
               borderRight: 1,
               borderColor: "divider",
-              bgcolor: (theme) => alpha(theme.palette.background.paper, 0.3),
+              bgcolor: "background.paper",
+              boxShadow: 8,
             }}
           >
             <PageList
+              active={desktopDirectoryOpen}
               dense
               pages={indexedPages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - pages.length + 1)}
-              onSelect={select}
+              onSelect={(id): void => {
+                select(id);
+                closeDesktopDirectory();
+              }}
             />
           </Box>
-        </>
       )}
-      <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
+      <Stack
+        onPointerDownCapture={desktopDirectoryOpen
+          ? (): void => closeDesktopDirectory(false)
+          : undefined}
+        sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}
+      >
         {unresolvedQuestionRoot || restorePagePending
           ? (
             <Stack
@@ -1116,7 +1203,14 @@ export function ExploreTranscript(
             }}
           >
             <Typography variant="caption"><b>J/K</b> Page</Typography>
-            <Typography variant="caption"><b>/</b> Search</Typography>
+            {desktopDirectoryOpen
+              ? (
+                <>
+                  <Typography variant="caption"><b>/</b> Search</Typography>
+                  <Typography variant="caption"><b>Esc</b> Close</Typography>
+                </>
+              )
+              : <Typography variant="caption"><b>P</b> Pages</Typography>}
             <Typography variant="caption"><b>N</b> New question</Typography>
           </Stack>
         )}

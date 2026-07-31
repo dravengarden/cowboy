@@ -64,6 +64,9 @@ macOS input source cannot turn `j/k`, `gg/G`, `l`, or `i` into marked text.
 The Conversation header owns the visible `Following`/`Follow` control. It is
 session state, not a global top-bar action. While Conversation is focused:
 
+- Page View's question navigator is transient rather than a permanent column:
+  `p` opens it over the left edge without resizing the reader, focuses search,
+  and `Escape`, choosing a question, or returning to the reader closes it.
 - `j/k` scroll down/up by one reading line;
 - `Ctrl-d/u` scroll down/up by half a page;
 - `Ctrl-f/b` scroll down/up by one page;
