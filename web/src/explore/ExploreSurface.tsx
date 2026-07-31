@@ -1054,6 +1054,7 @@ export function ExploreTranscript(
     <Box
       ref={rootRef}
       tabIndex={props.desktop ? 0 : undefined}
+      data-desktop-page-view={props.desktop ? "true" : undefined}
       sx={{
         flex: 1,
         minHeight: 0,
@@ -1174,33 +1175,6 @@ export function ExploreTranscript(
               <Skeleton variant="text" width="88%" />
               <Skeleton variant="text" width="68%" />
             </Stack>
-          </Stack>
-        )}
-        {props.desktop && (
-          <Stack
-            direction="row"
-            alignItems="center"
-            justifyContent="flex-end"
-            spacing={1.25}
-            sx={{
-              minHeight: 30,
-              px: 1.5,
-              borderTop: 1,
-              borderColor: "divider",
-              color: "text.secondary",
-              flexShrink: 0,
-            }}
-          >
-            <Typography variant="caption"><b>J/K</b> Page</Typography>
-            {desktopDirectoryOpen
-              ? (
-                <>
-                  <Typography variant="caption"><b>/</b> Search</Typography>
-                  <Typography variant="caption"><b>Esc</b> Close</Typography>
-                </>
-              )
-              : <Typography variant="caption"><b>P</b> Pages</Typography>}
-            <Typography variant="caption"><b>N</b> New question</Typography>
           </Stack>
         )}
       </Stack>
