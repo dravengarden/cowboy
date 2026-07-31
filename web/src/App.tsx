@@ -3621,7 +3621,7 @@ function MachinesContent(): React.JSX.Element {
             .then((value: MachineChoice[]) => {
                 const next = Array.isArray(value) ? value : [];
                 setMachines(next);
-                next.filter((machine) => !machine.local).forEach((machine) => loadEvents(machine.id));
+                next.forEach((machine) => loadEvents(machine.id));
             });
     }, [loadEvents]);
     useEffect(() => {
@@ -3732,12 +3732,12 @@ function MachinesContent(): React.JSX.Element {
                                     <Stack direction="row" spacing={0.75} alignItems="baseline" flexWrap="wrap" useFlexGap>
                                         <Typography fontWeight={740}>{machine.display_name}</Typography>
                                         <Typography variant="caption" color="text.secondary">
-                                            {machine.local ? "Local server" : `${machine.platform} · ${machine.architecture}`}
+                                            {machine.platform} · {machine.architecture}{machine.local ? " · Local server" : ""}
                                         </Typography>
                                     </Stack>
                                     <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.1 }}>
                                         {machine.workspaces.length} workspace{machine.workspaces.length === 1 ? "" : "s"} · {machine.active_sessions} active session{machine.active_sessions === 1 ? "" : "s"}
-                                        {!machine.local ? ` · ${machine.capacity.max_sessions} max` : ""}
+                                        {` · ${machine.capacity.max_sessions} max`}
                                     </Typography>
                                 </Box>
                                 <Chip
@@ -3747,14 +3747,7 @@ function MachinesContent(): React.JSX.Element {
                                     sx={{ fontWeight: 650 }}
                                 />
                             </Stack>
-                            {machine.local ? (
-                                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                    {machine.workspaces.map((workspace) => (
-                                        <Chip key={workspace.id} size="small" variant="outlined" label={workspace.display_name} title={workspace.canonical_path} />
-                                    ))}
-                                </Stack>
-                            ) : (
-                                <Stack spacing={0.75}>
+                            <Stack spacing={0.75}>
                                     <Stack direction="row" spacing={1} alignItems="center">
                                         <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>Projects</Typography>
                                         <Chip
@@ -3793,9 +3786,8 @@ function MachinesContent(): React.JSX.Element {
                                             label={`Zed · ${zedComponent?.state === "active" ? "ready" : zedComponent?.state === "failed" ? "error" : "unavailable"}`}
                                         />
                                     </Stack>
-                                </Stack>
-                            )}
-                            {!machine.local && pending.length > 0 && (
+                            </Stack>
+                            {pending.length > 0 && (
                                 <Button
                                     size="small"
                                     variant="contained"
@@ -3807,7 +3799,7 @@ function MachinesContent(): React.JSX.Element {
                                     Update all ({pending.length})
                                 </Button>
                             )}
-                            {!machine.local && <ButtonBase
+                            <ButtonBase
                                 onClick={() => setExpanded((current) => ({ ...current, [machine.id]: !open }))}
                                 sx={{
                                     alignSelf: "stretch",
@@ -3822,8 +3814,8 @@ function MachinesContent(): React.JSX.Element {
                                     {open ? "Hide details" : "Details & versions"}
                                 </Typography>
                                 {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                            </ButtonBase>}
-                            {open && !machine.local && (
+                            </ButtonBase>
+                            {open && (
                                 <Stack spacing={1.25} sx={{ pt: 0.25 }}>
                                     <Stack spacing={0.75}>
                                         <Typography variant="overline" color="text.secondary">Projects</Typography>
@@ -3844,8 +3836,7 @@ function MachinesContent(): React.JSX.Element {
                                             </Typography>
                                         )}
                                     </Stack>
-                                    {!machine.local && (
-                                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                                    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                                             <Button
                                                 size="small"
                                                 startIcon={busy[`${machine.id}:refresh:`] ? <CircularProgress size={14} /> : <RefreshIcon />}
@@ -3861,8 +3852,7 @@ function MachinesContent(): React.JSX.Element {
                                                     onClick={() => command(machine.id, "login", component.id.slot)}
                                                 >Sign in {component.id.slot}</Button>
                                             ))}
-                                        </Stack>
-                                    )}
+                                    </Stack>
                                     {componentSections.map((section) => (
                                         <Stack key={section.label} spacing={0.75}>
                                             <Typography variant="overline" color="text.secondary">{section.label}</Typography>
@@ -3913,7 +3903,7 @@ function MachinesContent(): React.JSX.Element {
                                             })}
                                         </Stack>
                                     ))}
-                                    {!machine.local && providerComponents.some((component) =>
+                                    {providerComponents.some((component) =>
                                         component.id.slot === "gemini" && component.auth !== "signed_in"
                                     ) && (
                                         <Typography variant="caption" color="text.secondary">
