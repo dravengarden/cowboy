@@ -41,6 +41,7 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "../desktop/commands/DesktopCommandProvider";
+import { DesktopModal } from "../desktop/DesktopModal";
 import { derive } from "../derive";
 import type { Envelope, Status } from "../protocol";
 import {
@@ -1067,28 +1068,20 @@ export function ExploreTranscript(
           toggle={toggleDesktopDirectory}
         />
       )}
-      {props.desktop && pages.length > 0 && desktopDirectoryOpen && (
+      {props.desktop && pages.length > 0 && (
+        <DesktopModal
+          open={desktopDirectoryOpen}
+          onClose={closeDesktopDirectory}
+          title="Question Navigator"
+          description={`${String(total)} questions · select one to jump`}
+          icon={<ListAltOutlined color="primary" />}
+          width={620}
+        >
           <Box
             component="nav"
             aria-label="Question pages"
             data-desktop-region="conversation.questions"
-            onKeyDownCapture={(event): void => {
-              if (event.key !== "Escape") return;
-              event.preventDefault();
-              event.stopPropagation();
-              closeDesktopDirectory();
-            }}
-            sx={{
-              position: "absolute",
-              zIndex: 6,
-              inset: "0 auto 30px 0",
-              width: "clamp(260px, 28%, 360px)",
-              minHeight: 0,
-              borderRight: 1,
-              borderColor: "divider",
-              bgcolor: "background.paper",
-              boxShadow: 8,
-            }}
+            sx={{ height: "min(640px, calc(100vh - 190px))", minHeight: 320 }}
           >
             <PageList
               active={desktopDirectoryOpen}
@@ -1102,13 +1095,9 @@ export function ExploreTranscript(
               }}
             />
           </Box>
+        </DesktopModal>
       )}
-      <Stack
-        onPointerDownCapture={desktopDirectoryOpen
-          ? (): void => closeDesktopDirectory(false)
-          : undefined}
-        sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}
-      >
+      <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
         {unresolvedQuestionRoot || restorePagePending
           ? (
             <Stack
