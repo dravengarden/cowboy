@@ -171,6 +171,39 @@
           } else render();
         };
         const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const deployedEntry = async () => {
+          try {
+            // `/version` only proves that the API process is reachable. During
+            // an atomic web-root hand-off that is not enough: the old window
+            // may still be controlled by an old worker and request a removed
+            // hashed chunk. Prove that the network index AND the entry named by
+            // that index are both available before navigating.
+            const index = await fetch(`/?cowboy-recover-probe=${Date.now()}`, {
+              cache: "no-store",
+              headers: { "x-cowboy-recovery": "bundle-probe" },
+            });
+            if (!index.ok) return false;
+            const html = await index.text();
+            const tags = html.match(/<script\b[^>]*>/gi) || [];
+            const moduleTag = tags.find((tag) =>
+              /\btype\s*=\s*["']module["']/i.test(tag) &&
+              /\bsrc\s*=\s*["'][^"']+["']/i.test(tag)
+            );
+            const src = moduleTag &&
+              /\bsrc\s*=\s*["']([^"']+)["']/i.exec(moduleTag)?.[1];
+            if (!src) return false;
+            const entryUrl = new URL(src, location.origin);
+            if (entryUrl.origin !== location.origin) return false;
+            const entry = await fetch(entryUrl, {
+              cache: "no-store",
+              headers: { "x-cowboy-recovery": "entry-probe" },
+            });
+            return entry.ok &&
+              /(?:javascript|ecmascript)/i.test(entry.headers.get("content-type") || "");
+          } catch {
+            return false;
+          }
+        };
         const recover = async (force = false) => {
           if (recovering) return;
           recovering = true;
@@ -188,21 +221,27 @@
           writeState(state);
           showRecovery(false);
 
-          // A full host activation can briefly restart the HTTP server. Wait
-          // for a network response so navigation does not fall back to the same
-          // stale cached shell and immediately fail again.
-          for (let attempt = 0; attempt < 16; attempt += 1) {
-            try {
-              const response = await fetch(`/version?recover=${Date.now()}`, { cache: "no-store" });
-              if (response.ok) break;
-            } catch {}
-            await wait(500);
-          }
           try {
             const registration = await navigator.serviceWorker?.getRegistration();
             await registration?.update();
           } catch {}
-          await wait(200);
+
+          let ready = false;
+          for (let attempt = 0; attempt < 24; attempt += 1) {
+            if (await deployedEntry()) {
+              ready = true;
+              break;
+            }
+            await wait(500);
+          }
+          if (!ready) {
+            // Keep Retry functional. Previously `recovering` stayed true when
+            // the hand-off never became ready, so every later tap was ignored
+            // until the native window was restarted.
+            recovering = false;
+            showRecovery(true);
+            return;
+          }
           const url = new URL(location.href);
           url.searchParams.set(PARAM, String(Date.now()));
           location.replace(url.toString());
