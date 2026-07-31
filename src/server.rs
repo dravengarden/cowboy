@@ -1745,6 +1745,7 @@ struct FileTreeEntry {
     name: String,
     path: String,
     kind: &'static str,
+    ignored: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1768,6 +1769,7 @@ fn file_tree_revision(path: &str, entries: &[FileTreeEntry], truncated: bool) ->
         digest.update([0]);
         digest.update(entry.kind.as_bytes());
         digest.update([0]);
+        digest.update([u8::from(entry.ignored)]);
     }
     format!("{:x}", digest.finalize())
 }
@@ -2185,6 +2187,7 @@ async fn api_file_tree(
             } else {
                 "file"
             },
+            ignored: entry.ignored,
         })
         .collect::<Vec<_>>();
     let truncated = page.truncated;
@@ -3875,6 +3878,7 @@ mod code_tree_cache_tests {
             name: "src".to_owned(),
             path: "src".to_owned(),
             kind: "directory",
+            ignored: false,
         }];
         let revision = file_tree_revision("", &entries, false);
         assert_eq!(revision, file_tree_revision("", &entries, false));
@@ -3884,8 +3888,16 @@ mod code_tree_cache_tests {
             name: "source".to_owned(),
             path: "source".to_owned(),
             kind: "directory",
+            ignored: false,
         }];
         assert_ne!(revision, file_tree_revision("", &renamed, false));
+        let ignored = vec![FileTreeEntry {
+            name: "src".to_owned(),
+            path: "src".to_owned(),
+            kind: "directory",
+            ignored: true,
+        }];
+        assert_ne!(revision, file_tree_revision("", &ignored, false));
     }
 }
 

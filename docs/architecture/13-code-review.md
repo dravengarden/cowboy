@@ -40,8 +40,9 @@ The useful first screen is Git changes, followed by the worktree root and the
 last active file. It must not depend on a complete recursive scan.
 
 1. Fetch a small workspace manifest and change summary.
-2. Fetch one directory page at a time. Expanding a row starts an abortable
-   request; collapsing it cancels that request.
+2. Fetch one directory page at a time. Opening the drawer prefetches one shallow
+   breadth-first frontier; expanding a row consumes that cache and prefetches
+   the next frontier with a bounded concurrency/width budget.
 3. Fetch file metadata before content. Normal files arrive as one compressed,
    cacheable object; large files use line-addressed windows backed by a line
    index.
@@ -69,9 +70,13 @@ The effective exclusion policy is the union of:
 3. project `.zed/settings.json` `file_scan_exclusions`;
 4. Code-specific user additions.
 
-Project inclusions override only project exclusions, never security checks or
-the session worktree boundary. Ignored entries can be revealed explicitly, but
-are never speculatively scanned.
+Zed `file_scan_exclusions` are hard exclusions. Gitignored entries remain
+explicitly browsable (matching Zed's default project-panel behavior), but are
+never speculatively scanned unless `file_scan_inclusions` opts them back in.
+An ignored child that is itself a Git worktree becomes a new soft-ignore
+boundary, so Columbus project checkouts remain discoverable and preloadable.
+Inclusions never override Cowboy's heavyweight defaults, security checks, or
+the session worktree boundary.
 
 The v1 data plane is exposed under `/api/code/sessions/{id}`:
 

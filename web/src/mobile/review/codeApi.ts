@@ -28,6 +28,7 @@ export interface CodeTreeEntry {
   name: string;
   path: string;
   kind: "directory" | "file";
+  ignored: boolean;
 }
 
 export interface CodeTreePage {

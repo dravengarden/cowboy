@@ -87,6 +87,7 @@ pub struct CodeTreeEntry {
     pub name: String,
     pub path: String,
     pub is_directory: bool,
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +247,7 @@ impl CodeProvider for LocalCodeProvider {
                     name: entry.name,
                     path: entry.path,
                     is_directory: entry.is_directory,
+                    ignored: entry.ignored,
                 })
                 .collect(),
             truncated,

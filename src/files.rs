@@ -11,8 +11,10 @@ use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
+use serde::Deserialize;
 
 /// Hard cap on files collected from the walk, bounding latency on huge trees.
 /// Gitignore pruning already removes the heavy directories; this is a backstop
@@ -38,6 +40,167 @@ pub struct DirectoryEntry {
     pub name: String,
     pub path: String,
     pub is_directory: bool,
+    pub ignored: bool,
+}
+
+#[derive(Default, Deserialize)]
+struct ZedScanSettings {
+    file_scan_exclusions: Option<Vec<String>>,
+    file_scan_inclusions: Option<Vec<String>>,
+}
+
+struct TreeScanPolicy {
+    gitignore: Gitignore,
+    zed_exclusions: Gitignore,
+    zed_inclusions: Gitignore,
+}
+
+fn jsonc_to_json(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            for comment in chars.by_ref() {
+                if comment == '\n' {
+                    output.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut previous = '\0';
+            for comment in chars.by_ref() {
+                if previous == '*' && comment == '/' {
+                    break;
+                }
+                previous = comment;
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+
+    let mut without_trailing_commas = String::with_capacity(output.len());
+    let mut chars = output.chars().peekable();
+    in_string = false;
+    escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            without_trailing_commas.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            without_trailing_commas.push(ch);
+            continue;
+        }
+        if ch == ',' {
+            let mut lookahead = chars.clone();
+            if lookahead
+                .find(|next| !next.is_whitespace())
+                .is_some_and(|next| next == '}' || next == ']')
+            {
+                continue;
+            }
+        }
+        without_trailing_commas.push(ch);
+    }
+    without_trailing_commas
+}
+
+fn zed_scan_settings(root: &Path) -> ZedScanSettings {
+    let path = root.join(".zed/settings.json");
+    let Ok(bytes) = std::fs::read(path) else {
+        return ZedScanSettings::default();
+    };
+    if bytes.len() > 1024 * 1024 {
+        return ZedScanSettings::default();
+    }
+    let Ok(text) = String::from_utf8(bytes) else {
+        return ZedScanSettings::default();
+    };
+    serde_json::from_str(&jsonc_to_json(&text)).unwrap_or_default()
+}
+
+fn pattern_matcher(root: &Path, patterns: Option<&[String]>) -> Gitignore {
+    let mut builder = GitignoreBuilder::new(root);
+    for pattern in patterns.unwrap_or_default() {
+        let _ = builder.add_line(None, pattern);
+    }
+    builder.build().unwrap_or_else(|_| Gitignore::empty())
+}
+
+fn tree_scan_policy(root: &Path, relative: &Path) -> TreeScanPolicy {
+    let settings = zed_scan_settings(root);
+    let mut git_root = root.to_path_buf();
+    let mut candidate = root.to_path_buf();
+    for component in relative.components() {
+        if let Component::Normal(part) = component {
+            candidate.push(part);
+            if candidate.join(".git").exists() {
+                git_root.clone_from(&candidate);
+            }
+        }
+    }
+    let mut gitignore = GitignoreBuilder::new(&git_root);
+    let git_exclude = git_root.join(".git/info/exclude");
+    if git_exclude.is_file() {
+        let _ = gitignore.add(git_exclude);
+    }
+    let mut directory = git_root.clone();
+    let root_ignore = directory.join(".gitignore");
+    if root_ignore.is_file() {
+        let _ = gitignore.add(root_ignore);
+    }
+    let nested_relative = relative
+        .strip_prefix(
+            git_root
+                .strip_prefix(root)
+                .unwrap_or_else(|_| Path::new("")),
+        )
+        .unwrap_or(relative);
+    for component in nested_relative.components() {
+        if let Component::Normal(part) = component {
+            directory.push(part);
+            let nested = directory.join(".gitignore");
+            if nested.is_file() {
+                let _ = gitignore.add(nested);
+            }
+        }
+    }
+    TreeScanPolicy {
+        gitignore: gitignore.build().unwrap_or_else(|_| Gitignore::empty()),
+        zed_exclusions: pattern_matcher(root, settings.file_scan_exclusions.as_deref()),
+        zed_inclusions: pattern_matcher(root, settings.file_scan_inclusions.as_deref()),
+    }
 }
 
 struct Entry {
@@ -65,10 +228,10 @@ pub fn search(root: &Path, query: &str, limit: usize) -> Vec<String> {
 /// Return one stable, sorted filesystem directory page for a lazy tree UI.
 ///
 /// The boolean is true when more matching entries existed than the requested
-/// limit. Unlike file-reference search, the tree does not apply gitignore:
-/// ignored children can be independent repositories that remain valid reading
-/// targets. The path is canonicalized before scanning to contain symlink
-/// escapes; hidden entries and known heavyweight build directories stay out.
+/// limit. Zed `file_scan_exclusions` and Cowboy's heavyweight defaults are hard
+/// exclusions. Gitignored entries remain explicitly browsable (matching Zed's
+/// project panel), but are marked so the client never speculatively preloads
+/// them unless a Zed `file_scan_inclusions` pattern opts them back in.
 pub fn directory(
     root: &Path,
     relative: &str,
@@ -81,6 +244,7 @@ pub fn directory(
     if !canonical_target.starts_with(&canonical_root) || !canonical_target.is_dir() {
         return Err("directory not found");
     }
+    let policy = tree_scan_policy(&canonical_root, &relative);
 
     let mut entries = Vec::new();
     let children = std::fs::read_dir(canonical_target).map_err(|_| "directory unavailable")?;
@@ -96,10 +260,31 @@ pub fn directory(
             continue;
         }
         let path = relative.join(&name);
+        let absolute_path = canonical_root.join(&path);
+        let is_directory = file_type.is_dir();
+        if policy
+            .zed_exclusions
+            .matched_path_or_any_parents(&absolute_path, is_directory)
+            .is_ignore()
+        {
+            continue;
+        }
+        let included = policy
+            .zed_inclusions
+            .matched_path_or_any_parents(&absolute_path, is_directory)
+            .is_ignore();
+        let nested_repository = is_directory && absolute_path.join(".git").exists();
+        let ignored = !nested_repository
+            && !included
+            && policy
+                .gitignore
+                .matched_path_or_any_parents(&absolute_path, is_directory)
+                .is_ignore();
         entries.push(DirectoryEntry {
             name,
             path: path.to_string_lossy().replace('\\', "/"),
-            is_directory: file_type.is_dir(),
+            is_directory,
+            ignored,
         });
     }
     entries.sort_by(|a, b| {
@@ -283,6 +468,7 @@ mod tests {
     #[test]
     fn directory_keeps_gitignored_child_worktrees_visible() {
         let dir = scratch("ignored-worktrees");
+        fs::create_dir_all(dir.join("projects/standalone/.git")).unwrap();
         fs::create_dir_all(dir.join("projects/standalone/src")).unwrap();
         fs::write(dir.join(".gitignore"), "/projects/*\n").unwrap();
         fs::write(
@@ -295,13 +481,42 @@ mod tests {
         assert_eq!(
             projects
                 .iter()
-                .map(|entry| (entry.name.as_str(), entry.is_directory))
+                .map(|entry| (entry.name.as_str(), entry.is_directory, entry.ignored))
                 .collect::<Vec<_>>(),
-            vec![("standalone", true)],
+            vec![("standalone", true, false)],
         );
         assert!(!truncated);
         let (standalone, _) = directory(&dir, "projects/standalone", 20).unwrap();
         assert!(standalone.iter().any(|entry| entry.name == "src"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn directory_honors_zed_scan_exclusions_and_inclusions() {
+        let dir = scratch("zed-policy");
+        fs::create_dir_all(dir.join(".zed")).unwrap();
+        fs::create_dir_all(dir.join("vendor")).unwrap();
+        fs::create_dir_all(dir.join("keep")).unwrap();
+        fs::write(dir.join(".gitignore"), "/vendor\n/keep\n").unwrap();
+        fs::write(
+            dir.join(".zed/settings.json"),
+            r#"{
+                // Zed settings are JSONC and commonly retain trailing commas.
+                "file_scan_exclusions": ["**/vendor",],
+                "file_scan_inclusions": ["keep",],
+            }"#,
+        )
+        .unwrap();
+
+        let (entries, _) = directory(&dir, "", 20).unwrap();
+        assert!(!entries.iter().any(|entry| entry.name == "vendor"));
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.name == "keep")
+                .map(|entry| entry.ignored),
+            Some(false),
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
