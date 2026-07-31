@@ -87,6 +87,10 @@ export function bindMobileSpatialDrawer({
       side === "left" ? "-" : ""
     }18px 0 42px rgba(0,0,0,0.16)`;
   };
+  const clearOpenDepth = (): void => {
+    surface.style.removeProperty("border-radius");
+    surface.style.removeProperty("box-shadow");
+  };
   const render = (offset: number): void => {
     currentOffset = offset;
     const visual = mobileDrawerSurfaceVisual(
@@ -203,7 +207,13 @@ export function bindMobileSpatialDrawer({
     if (open) setOpen(true);
     settleTimer = globalThis.setTimeout(() => {
       clearTransitions();
-      if (!open) setOpen(false);
+      if (!open) {
+        setOpen(false);
+        // A closed surface is the native full-screen viewport. Let UIKit and
+        // WKWebView clip it to the real device corners instead of leaving a
+        // guessed phone/tablet radius that cuts a visible wedge from iPad.
+        clearOpenDepth();
+      }
       onSettled?.();
     }, duration + 20);
   };
@@ -357,7 +367,8 @@ export function bindMobileSpatialDrawer({
     render(getOpen() ? presentationWidth : 0);
   };
 
-  applyOpenDepth();
+  if (getOpen()) applyOpenDepth();
+  else clearOpenDepth();
   presentationWidth = drawerWidth();
   render(getOpen() ? presentationWidth : 0);
   gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -391,6 +402,7 @@ export function bindMobileSpatialDrawer({
           globalThis.clearTimeout(releaseIdle);
         }
       }
+      clearOpenDepth();
     },
   };
 }

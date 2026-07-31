@@ -1688,12 +1688,10 @@ export function App({
         };
     }, [anySheetOpen, mobile, phone]);
 
-    // Keyboard-facing corners are a native viewport concern, not a drawer
-    // gesture concern. Keep this listener alive even while a DetentSheet owns
-    // the gesture layer: a sheet can close with the composer already focused,
-    // and the drawer effect above is intentionally suspended while sheets are
-    // open. Tying the corner fix to that effect let the native window show
-    // through as gray wedges until the next drawer/focus transition.
+    // The native viewport owns full-screen device corners. While the keyboard
+    // is present, temporarily square the drawer surface's bottom edge; on
+    // release, remove only that override so an open drawer can recover its
+    // shared card radius and a closed drawer remains entirely native-clipped.
     useEffect(() => {
         if (!mobile) return undefined;
         const surface = columnRef.current;
@@ -1705,9 +1703,13 @@ export function App({
                 active.matches("input, textarea, [contenteditable='true']");
         };
         const apply = (): void => {
-            const radius = ownsKeyboard() ? "0px" : `${String(phone ? 36 : 30)}px`;
-            surface.style.borderBottomLeftRadius = radius;
-            surface.style.borderBottomRightRadius = radius;
+            if (ownsKeyboard()) {
+                surface.style.borderBottomLeftRadius = "0px";
+                surface.style.borderBottomRightRadius = "0px";
+            } else {
+                surface.style.removeProperty("border-bottom-left-radius");
+                surface.style.removeProperty("border-bottom-right-radius");
+            }
         };
         const onFocusIn = (): void => {
             globalThis.clearTimeout(restoreTimer);
@@ -1724,8 +1726,10 @@ export function App({
             document.removeEventListener("focusin", onFocusIn);
             document.removeEventListener("focusout", onFocusOut);
             globalThis.clearTimeout(restoreTimer);
+            surface.style.removeProperty("border-bottom-left-radius");
+            surface.style.removeProperty("border-bottom-right-radius");
         };
-    }, [mobile, phone]);
+    }, [mobile]);
 
     // Settings + Info are one merged sheet; this picks which tab it opens on.
     const [settingsTab, setSettingsTab] = useState<"settings" | "info">("settings");
