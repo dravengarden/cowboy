@@ -146,14 +146,19 @@ Login frames are never replayed into a different UI client after expiry.
 HTTPS alone authenticates the Cowboy server, not the machine. Remote mode uses:
 
 1. a short-lived, single-use enrollment token created in Cowboy;
-2. a new random per-machine key generated and stored locally (macOS Keychain
-   when available; otherwise a mode-0600 state file protected by the service
-   account);
+2. a new random Ed25519 key generated through the operating system's OpenSSH
+   implementation and stored in a mode-0700 Machine state root with a mode-0600
+   private key;
 3. strict Web PKI validation for the configured `wss://` endpoint, with no
    insecure or plaintext remote override;
 4. a server nonce signed by the enrolled machine key on every connection;
 5. controller-issued machine identity, key rotation, immediate revocation, and
    an auditable last-seen/source record.
+
+Enrollment is an HTTPS POST; the secret never enters the reconnecting WebSocket
+protocol. Cowboy stores only its SHA-256 digest and consumes it atomically. A
+successful connection receives a fresh epoch, so a superseded socket cannot
+mark its replacement offline when it finally closes.
 
 Production may additionally require mTLS at the reverse proxy, but application
 machine identity remains mandatory so credentials can be rotated and revoked

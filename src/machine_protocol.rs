@@ -178,6 +178,11 @@ pub enum MachineEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MachineFrame {
+    Challenge {
+        challenge_id: String,
+        nonce: String,
+        expires_at_ms: i64,
+    },
     Hello {
         hello: MachineHello,
     },

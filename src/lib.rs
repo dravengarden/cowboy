@@ -32,6 +32,7 @@ mod diff_snapshot;
 mod files;
 #[cfg(feature = "full")]
 mod inference;
+pub mod machine_auth;
 pub mod machine_cli;
 pub mod machine_protocol;
 #[cfg(feature = "full")]

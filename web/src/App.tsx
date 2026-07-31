@@ -1200,6 +1200,7 @@ type MachineChoice = {
     architecture: string;
     status: "online" | "offline" | "updating" | "degraded";
     local: boolean;
+    schedulable: boolean;
 };
 
 function NewSessionDialog({
@@ -1407,7 +1408,7 @@ function NewSessionDialog({
                             <MenuItem
                                 key={machine.id}
                                 value={machine.id}
-                                disabled={machine.status !== "online"}
+                                disabled={!machine.schedulable}
                             >
                                 {machine.display_name}{machine.local ? " · This machine" : ""}
                             </MenuItem>

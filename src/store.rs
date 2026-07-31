@@ -22,16 +22,38 @@
 #![warn(clippy::pedantic)]
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::io::Read as _;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
+use sha2::Digest as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::core::{
     Envelope, Event, JudgeRun, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin,
     Status, bound_history_page, question_summary_title,
 };
+
+fn valid_machine_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn hex_sha256(value: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(value);
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut output, byte| {
+            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+            output
+        })
+}
 
 /// Strip NUL (`U+0000`) code points from every string (and object key) inside a
 /// JSON value, in place.
@@ -125,7 +147,260 @@ pub struct ProviderActionLog {
     pub created_at_ms: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MachineRecord {
+    pub id: String,
+    pub display_name: String,
+    pub connection_mode: String,
+    pub platform: String,
+    pub architecture: String,
+    pub status: String,
+    pub inventory: serde_json::Value,
+    pub last_seen_at_ms: Option<i64>,
+    pub revoked: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrolledMachine {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct MachineRow {
+    id: String,
+    display_name: String,
+    connection_mode: String,
+    platform: String,
+    architecture: String,
+    status: String,
+    inventory: serde_json::Value,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 impl Store {
+    /// Create a short-lived, single-use Machine enrollment secret. Only its
+    /// SHA-256 digest is persisted.
+    ///
+    /// # Errors
+    /// Returns when secure randomness cannot be read or the database rejects
+    /// the requested machine identity.
+    pub async fn create_machine_enrollment(
+        &self,
+        machine_id: &str,
+        display_name: &str,
+        ttl_seconds: i64,
+    ) -> Result<String> {
+        anyhow::ensure!(
+            valid_machine_id(machine_id),
+            "machine id must use 1-64 lowercase ASCII letters, digits, or hyphens"
+        );
+        anyhow::ensure!(
+            !display_name.trim().is_empty(),
+            "display name cannot be empty"
+        );
+        anyhow::ensure!(
+            (60..=3600).contains(&ttl_seconds),
+            "enrollment TTL must be 60-3600s"
+        );
+        let mut random = [0_u8; 32];
+        std::fs::File::open("/dev/urandom")
+            .context("opening OS randomness")?
+            .read_exact(&mut random)
+            .context("reading OS randomness")?;
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
+        let token_hash = hex_sha256(token.as_bytes());
+        sqlx::query(
+            "INSERT INTO machine_enrollment_tokens \
+             (token_hash, machine_id, display_name, expires_at) \
+             VALUES ($1, $2, $3, now() + make_interval(secs => $4::double precision)) \
+             ON CONFLICT (machine_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, \
+             display_name = EXCLUDED.display_name, expires_at = EXCLUDED.expires_at, \
+             used_at = NULL, created_at = now()",
+        )
+        .bind(token_hash)
+        .bind(machine_id)
+        .bind(display_name.trim())
+        .bind(ttl_seconds)
+        .execute(&self.pool)
+        .await
+        .context("creating Machine enrollment")?;
+        Ok(token)
+    }
+
+    /// Atomically consume an enrollment token and bind a public key to the
+    /// requested stable machine id.
+    ///
+    /// # Errors
+    /// Returns when the token is invalid/expired/used or persistence fails.
+    pub async fn consume_machine_enrollment(
+        &self,
+        token: &str,
+        public_key: &str,
+    ) -> Result<EnrolledMachine> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("starting enrollment transaction")?;
+        let token_hash = hex_sha256(token.as_bytes());
+        let row: Option<(String, String)> = sqlx::query_as(
+            "UPDATE machine_enrollment_tokens SET used_at = now() \
+             WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() \
+             RETURNING machine_id, display_name",
+        )
+        .bind(token_hash)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("consuming Machine enrollment")?;
+        let (id, display_name) =
+            row.context("invalid, expired, or already used enrollment token")?;
+        sqlx::query(
+            "INSERT INTO machines \
+             (id, display_name, connection_mode, platform, architecture, status, public_key, enrolled_at) \
+             VALUES ($1, $2, 'outbound_wss', 'unknown', 'unknown', 'offline', $3, now()) \
+             ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, \
+             connection_mode = 'outbound_wss', public_key = EXCLUDED.public_key, \
+             enrolled_at = now(), revoked_at = NULL, updated_at = now()",
+        )
+        .bind(&id)
+        .bind(&display_name)
+        .bind(public_key)
+        .execute(&mut *transaction)
+        .await
+        .context("binding enrolled Machine public key")?;
+        transaction
+            .commit()
+            .await
+            .context("committing Machine enrollment")?;
+        Ok(EnrolledMachine { id, display_name })
+    }
+
+    /// Load the active public key for a Machine.
+    ///
+    /// # Errors
+    /// Returns when the database query fails.
+    pub async fn machine_public_key(&self, machine_id: &str) -> Result<Option<String>> {
+        let value: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT public_key FROM machines WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("loading Machine public key")?;
+        Ok(value.flatten())
+    }
+
+    /// List enrolled Machines, including revoked records for administrative UI.
+    ///
+    /// # Errors
+    /// Returns when the database query fails.
+    pub async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
+        let rows: Vec<MachineRow> = sqlx::query_as(
+            "SELECT id, display_name, connection_mode, platform, architecture, status, \
+             inventory, last_seen_at, revoked_at FROM machines ORDER BY id = 'local' DESC, display_name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("listing Machines")?;
+        Ok(rows
+            .into_iter()
+            .map(|row| MachineRecord {
+                id: row.id,
+                display_name: row.display_name,
+                connection_mode: row.connection_mode,
+                platform: row.platform,
+                architecture: row.architecture,
+                status: row.status,
+                inventory: row.inventory,
+                last_seen_at_ms: row.last_seen_at.map(|value| value.timestamp_millis()),
+                revoked: row.revoked_at.is_some(),
+            })
+            .collect())
+    }
+
+    /// Record an authenticated Machine connection and its current inventory.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn machine_connected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        platform: &str,
+        architecture: &str,
+        inventory: &serde_json::Value,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE machines SET connection_epoch = $2, platform = $3, architecture = $4, \
+             status = 'online', inventory = $5, last_seen_at = now(), updated_at = now() \
+             WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .bind(platform)
+        .bind(architecture)
+        .bind(inventory)
+        .execute(&self.pool)
+        .await
+        .context("recording Machine connection")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine was revoked during authentication"
+        );
+        Ok(())
+    }
+
+    /// Refresh the liveness timestamp and optional inventory of a Machine.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn machine_seen(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+        inventory: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE machines SET status = 'online', last_seen_at = now(), \
+             inventory = COALESCE($3, inventory), updated_at = now() \
+             WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .bind(inventory)
+        .execute(&self.pool)
+        .await
+        .context("refreshing Machine liveness")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine connection is no longer current"
+        );
+        Ok(())
+    }
+
+    /// Mark a disconnected Machine offline.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn machine_disconnected(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE machines SET status = 'offline', connection_epoch = NULL, updated_at = now() \
+             WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .execute(&self.pool)
+        .await
+        .context("recording Machine disconnect")?;
+        Ok(())
+    }
+
     pub async fn upsert_codex_reset(&self, fire_at_ms: i64, idempotency_key: &str) -> Result<()> {
         sqlx::query(
             "INSERT INTO scheduled_provider_actions (provider, action, fire_at_ms, idempotency_key) \

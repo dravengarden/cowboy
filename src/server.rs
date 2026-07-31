@@ -6,11 +6,13 @@
 //! ACP bridge clients retain the complete bootstrap unless they opt into lazy
 //! mode, preserving wire compatibility.
 //!
-//! v1 has **no auth** and binds `0.0.0.0` by deliberate choice (LAN-only use);
-//! design §9 auth/pairing is a follow-up.
+//! Browser clients still use the original LAN trust model. Machine connections
+//! use one-time enrollment plus an OpenSSH Ed25519 challenge before WebSocket
+//! protocol negotiation.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 
@@ -22,6 +24,7 @@ use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
+use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -980,6 +983,8 @@ async fn serve_axum(
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/machines", get(api_machines))
+        .route("/api/machine/enroll", post(api_machine_enroll))
+        .route("/api/machine/connect", any(machine_ws_upgrade))
         .route("/api/sessions", post(api_new_session))
         .route(
             "/api/sessions/reconcile-project",
@@ -1586,14 +1591,39 @@ struct MachineSummary {
     display_name: String,
     platform: String,
     architecture: String,
-    status: &'static str,
+    status: String,
     local: bool,
+    schedulable: bool,
 }
 
 /// The first multi-machine slice deliberately advertises only the operational
 /// local scheduler. Enrolled outbound machines are added here only after their
 /// authenticated connection and inventory have been accepted.
-async fn api_machines() -> Json<Vec<MachineSummary>> {
+async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
+    if let Some(store) = state.store.as_ref() {
+        return match store.list_machines().await {
+            Ok(machines) => Json(
+                machines
+                    .into_iter()
+                    .filter(|machine| !machine.revoked)
+                    .map(|machine| MachineSummary {
+                        local: machine.id == "local",
+                        schedulable: machine.id == "local" && machine.status == "online",
+                        id: machine.id,
+                        display_name: machine.display_name,
+                        platform: machine.platform,
+                        architecture: machine.architecture,
+                        status: machine.status,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response(),
+            Err(error) => {
+                tracing::error!(%error, "listing Machines");
+                (StatusCode::INTERNAL_SERVER_ERROR, "could not list machines").into_response()
+            }
+        };
+    }
     let display_name = std::env::var("HOSTNAME")
         .ok()
         .filter(|name| !name.trim().is_empty())
@@ -1603,9 +1633,238 @@ async fn api_machines() -> Json<Vec<MachineSummary>> {
         display_name,
         platform: std::env::consts::OS.to_owned(),
         architecture: std::env::consts::ARCH.to_owned(),
-        status: "online",
+        status: "online".to_owned(),
         local: true,
+        schedulable: true,
     }])
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct MachineEnrollRequest {
+    token: String,
+    public_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MachineEnrollResponse {
+    machine_id: String,
+    display_name: String,
+}
+
+async fn api_machine_enroll(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<MachineEnrollRequest>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Machine enrollment requires persistence",
+        )
+            .into_response();
+    };
+    let public_key = match crate::machine_auth::validate_public_key(&request.public_key) {
+        Ok(public_key) => public_key,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    match store
+        .consume_machine_enrollment(&request.token, &public_key)
+        .await
+    {
+        Ok(machine) => (
+            StatusCode::CREATED,
+            Json(MachineEnrollResponse {
+                machine_id: machine.id,
+                display_name: machine.display_name,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "Machine enrollment rejected");
+            (
+                StatusCode::UNAUTHORIZED,
+                "invalid or expired enrollment token",
+            )
+                .into_response()
+        }
+    }
+}
+
+const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const MACHINE_HEARTBEAT_MS: u64 = 15_000;
+
+async fn machine_ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_machine_ws(socket, state))
+}
+
+fn random_machine_token() -> anyhow::Result<String> {
+    let mut random = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .context("opening OS randomness")?
+        .read_exact(&mut random)
+        .context("reading OS randomness")?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
+}
+
+async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
+    let Some(store) = state.store.as_ref().cloned() else {
+        let _ = send_json(
+            &mut socket,
+            &crate::machine_protocol::MachineFrame::Reject {
+                reason: "Machine connections require persistence".to_owned(),
+            },
+        )
+        .await;
+        return;
+    };
+    let challenge_id = match random_machine_token() {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "creating Machine challenge");
+            return;
+        }
+    };
+    let nonce = match random_machine_token() {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "creating Machine nonce");
+            return;
+        }
+    };
+    let challenge = crate::machine_protocol::MachineFrame::Challenge {
+        challenge_id: challenge_id.clone(),
+        nonce: nonce.clone(),
+        expires_at_ms: now_ms().saturating_add(MACHINE_HANDSHAKE_TIMEOUT.as_millis() as i64),
+    };
+    if send_json(&mut socket, &challenge).await.is_err() {
+        return;
+    }
+    let incoming = match tokio::time::timeout(MACHINE_HANDSHAKE_TIMEOUT, socket.recv()).await {
+        Ok(Some(Ok(Message::Text(text)))) => text,
+        _ => return,
+    };
+    let crate::machine_protocol::MachineFrame::Hello { hello } =
+        (match serde_json::from_str(&incoming) {
+            Ok(frame) => frame,
+            Err(error) => {
+                tracing::warn!(%error, "invalid Machine hello");
+                return;
+            }
+        })
+    else {
+        return;
+    };
+    if hello.challenge_id.as_deref() != Some(&challenge_id) {
+        return;
+    }
+    let Some(signature) = hello.challenge_signature.as_deref() else {
+        return;
+    };
+    let public_key = match store.machine_public_key(&hello.machine_id).await {
+        Ok(Some(value)) => value,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::error!(%error, machine = %hello.machine_id, "loading Machine identity");
+            return;
+        }
+    };
+    let signature = signature.to_owned();
+    let verified = tokio::task::spawn_blocking(move || {
+        crate::machine_auth::verify(&public_key, nonce.as_bytes(), &signature)
+    })
+    .await;
+    if !matches!(verified, Ok(Ok(true))) {
+        tracing::warn!(machine = %hello.machine_id, "Machine challenge verification failed");
+        return;
+    }
+    let Some(protocol) = crate::machine_protocol::negotiate(
+        crate::machine_protocol::MIN_MACHINE_PROTOCOL_VERSION,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        hello.min_protocol,
+        hello.max_protocol,
+    ) else {
+        let _ = send_json(
+            &mut socket,
+            &crate::machine_protocol::MachineFrame::Reject {
+                reason: "no compatible Machine protocol".to_owned(),
+            },
+        )
+        .await;
+        return;
+    };
+    let platform = match hello.platform {
+        crate::machine_protocol::Platform::Linux => "linux",
+        crate::machine_protocol::Platform::Macos => "macos",
+    };
+    let inventory = serde_json::to_value(&hello.components).unwrap_or_default();
+    if let Err(error) = store
+        .machine_connected(
+            &hello.machine_id,
+            &challenge_id,
+            platform,
+            &hello.arch,
+            &inventory,
+        )
+        .await
+    {
+        tracing::error!(%error, machine = %hello.machine_id, "recording Machine connection");
+        return;
+    }
+    if send_json(
+        &mut socket,
+        &crate::machine_protocol::MachineFrame::Welcome {
+            protocol,
+            controller_epoch: 0,
+            heartbeat_interval_ms: MACHINE_HEARTBEAT_MS,
+            desired_components: Vec::new(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        let _ = store
+            .machine_disconnected(&hello.machine_id, &challenge_id)
+            .await;
+        return;
+    }
+    tracing::info!(machine = %hello.machine_id, "Machine connected");
+    while let Some(message) = socket.recv().await {
+        let Ok(Message::Text(text)) = message else {
+            break;
+        };
+        let Ok(frame) = serde_json::from_str::<crate::machine_protocol::MachineFrame>(&text) else {
+            break;
+        };
+        let result = match frame {
+            crate::machine_protocol::MachineFrame::Heartbeat { .. } => {
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, None)
+                    .await
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event: crate::machine_protocol::MachineEvent::Inventory { components, .. },
+            } => {
+                let inventory = serde_json::to_value(components).unwrap_or_default();
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
+                    .await
+            }
+            _ => continue,
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, machine = %hello.machine_id, "updating Machine state");
+            break;
+        }
+    }
+    if let Err(error) = store
+        .machine_disconnected(&hello.machine_id, &challenge_id)
+        .await
+    {
+        tracing::warn!(%error, machine = %hello.machine_id, "marking Machine offline");
+    }
 }
 
 async fn api_session_info(
@@ -3936,9 +4195,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
     }
 }
 
-async fn send_json<S>(sink: &mut S, msg: &Outbound) -> Result<(), ()>
+async fn send_json<S, T>(sink: &mut S, msg: &T) -> Result<(), ()>
 where
     S: SinkExt<Message> + Unpin,
+    T: Serialize,
 {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     sink.send(Message::Text(text.into())).await.map_err(|_| ())

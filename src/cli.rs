@@ -27,6 +27,22 @@ enum Command {
     ServeAcp(ServeAcpArgs),
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     TryAgent(TryAgentArgs),
+    /// Create a short-lived, single-use token for enrolling a remote Machine.
+    MachineEnroll(MachineEnrollArgs),
+}
+
+#[derive(Args)]
+pub struct MachineEnrollArgs {
+    #[arg(long, env = "COWBOY_POSTGRES_URL")]
+    postgres_url: String,
+    #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
+    data_dir: PathBuf,
+    #[arg(long)]
+    machine_id: String,
+    #[arg(long)]
+    display_name: String,
+    #[arg(long, default_value_t = 600)]
+    ttl_seconds: i64,
 }
 
 #[derive(Args)]
@@ -155,6 +171,23 @@ impl Cli {
                 local
                     .run_until(crate::acp::run_oneshot(&spec, args.cwd, args.prompt))
                     .await
+            }
+            Command::MachineEnroll(args) => {
+                let store = crate::store::Store::connect(
+                    &args.postgres_url,
+                    args.data_dir.join("artifacts"),
+                )
+                .await?;
+                store.migrate().await?;
+                let token = store
+                    .create_machine_enrollment(
+                        &args.machine_id,
+                        &args.display_name,
+                        args.ttl_seconds,
+                    )
+                    .await?;
+                println!("{token}");
+                Ok(())
             }
         }
     }

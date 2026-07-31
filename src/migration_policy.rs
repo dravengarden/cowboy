@@ -77,6 +77,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0017_machines.sql",
         "334060e9171db9c5eda5188982ab0777d6dd8ea95d66e1582881ec762904c3d3",
     ),
+    (
+        "0018_machine_enrollment.sql",
+        "b295ce695b06ef213144691956fd5d5e141a67e107426788f41ef26fcffcf491",
+    ),
 ];
 
 #[test]

@@ -43,6 +43,7 @@
           ./src/lib.rs
           ./src/agentd.rs
           ./src/machine_cli.rs
+          ./src/machine_auth.rs
           ./src/machine_protocol.rs
           ./src/runtime_wire.rs
           ./src/bin/cowboy-agentd.rs
@@ -99,7 +100,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-cFeifpk3xs5DgYZncgC3uGvR8wmV/agOyqlR2BO/n8M=";
+        hash = "sha256-7pa1jXFPx/RH1JKxzEvPJJpR1uwzFNpQEBF8k9wMISA=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -124,7 +125,7 @@
         src = cowboy-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = [ "--bin" "cowboy" "--bin" "cowboy-acp-worker" ];
-        nativeCheckInputs = [ pkgs.gitMinimal ];
+        nativeCheckInputs = [ pkgs.gitMinimal pkgs.openssh ];
         passthru.workerGeneration = worker-generation;
         meta = {
           description = "Drive coding-agent CLIs from anywhere over ACP";
@@ -144,6 +145,11 @@
           "--bin"
           "cowboy-machine"
         ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        postInstall = ''
+          wrapProgram $out/bin/cowboy-machine \
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
+        '';
         doCheck = false;
         meta = {
           description = "Stable local broker for detached Cowboy ACP workers";
