@@ -161,7 +161,10 @@ export function DesktopWorkspace({
                 projection={projection}
                 onChange={onProjectionChange}
               />
-              <DesktopConversationControls sessionId={sessionId} />
+              <DesktopConversationControls
+                sessionId={sessionId}
+                projection={projection}
+              />
             </>
           )}
         >

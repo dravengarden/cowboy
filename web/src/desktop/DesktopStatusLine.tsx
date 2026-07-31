@@ -53,7 +53,6 @@ interface RegionHint {
 function regionHints(
   region: string | null,
   status: Status,
-  pageView: boolean,
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -87,28 +86,9 @@ function regionHints(
         { keys: "I", label: "Edit" },
       ];
     case "conversation.transcript":
-      if (pageView) {
-        return [
-          { keys: "J/K", label: "Page" },
-          { keys: "Ctrl+D/U", label: "Half page" },
-          { keys: "Ctrl+F/B", label: "Scroll page" },
-          { keys: "GG/G", label: "Oldest/latest" },
-          { keys: "P", label: "Pages" },
-          { keys: "N", label: "New question" },
-          { keys: "Tab/Shift+Tab", label: "Widget" },
-          { keys: "H/L", label: "Close/open" },
-        ];
-      }
-      return [
-        { keys: "J/K", label: "Scroll" },
-        { keys: "Ctrl+D/U", label: "Half page" },
-        { keys: "Ctrl+F/B", label: "Page" },
-        { keys: "GG/G", label: "Oldest/latest" },
-        { keys: "F", label: "Following" },
-        { keys: "Tab/Shift+Tab", label: "Widget" },
-        { keys: "H/L", label: "Close/open" },
-        { keys: "Enter", label: "Toggle" },
-      ];
+      // Conversation owns a dedicated, projection-aware shortcut strip in its
+      // pane header. Do not repeat those hints in the global status line.
+      return [];
     case "prompt.composer":
       return [
         { keys: "Esc", label: "Normal" },
@@ -152,8 +132,6 @@ export function DesktopStatusLine({
     ? [...regionElement.querySelectorAll<HTMLElement>("[data-desktop-item]")]
       .filter((element) => element.offsetParent !== null).length
     : 0;
-  const pageView = regionElement
-    ?.closest("[data-desktop-page-view='true']") != null;
   const promptRegions = focusedPane === "prompt" &&
       focusedRegion?.startsWith("prompt.") === true &&
       focusedRegion !== "prompt.composer"
@@ -166,7 +144,7 @@ export function DesktopStatusLine({
     : [];
   const hints = [
     ...promptRegions,
-    ...regionHints(focusedRegion, status, pageView),
+    ...regionHints(focusedRegion, status),
     ...(focusedRegion === "sessions.list" && itemCount > 0
       ? [{ keys: "Mod+1…0", label: "Switch" }]
       : []),

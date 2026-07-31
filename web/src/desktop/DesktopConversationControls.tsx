@@ -1,10 +1,11 @@
 import { Box, Button, Stack, Tooltip, Typography } from "@mui/material";
 import { South } from "@mui/icons-material";
+import type { TranscriptProjection } from "../explore/exploreStore";
 import { requestStickToBottom, setSticky, useSticky } from "../stickyStore";
 import { DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 
-const READER_HINTS = [
+const HISTORY_HINTS = [
   { shortcut: "J/K", label: "Scroll" },
   { shortcut: "Ctrl+D/U", label: "Half page" },
   { shortcut: "Ctrl+F/B", label: "Page" },
@@ -13,12 +14,30 @@ const READER_HINTS = [
   { shortcut: "H/L", label: "Close/open" },
 ] as const;
 
+const PAGE_HINTS = [
+  { shortcut: "J/K", label: "Page" },
+  { shortcut: "Ctrl+D/U", label: "Half page" },
+  { shortcut: "Ctrl+F/B", label: "Scroll page" },
+  { shortcut: "GG/G", label: "Oldest/latest" },
+  { shortcut: "P", label: "Pages" },
+  { shortcut: "N", label: "New question" },
+  { shortcut: "Tab", label: "Widget" },
+  { shortcut: "H/L", label: "Close/open" },
+] as const;
+
 export function DesktopConversationControls(
-  { sessionId }: { sessionId: string },
+  {
+    sessionId,
+    projection,
+  }: {
+    sessionId: string;
+    projection: TranscriptProjection;
+  },
 ): React.JSX.Element {
   const following = useSticky(sessionId);
   const workspace = useDesktopWorkspace();
   const focused = workspace.focusedRegion === "conversation.transcript";
+  const hints = projection === "explore" ? PAGE_HINTS : HISTORY_HINTS;
   const toggle = (): void => {
     const scroller = document.querySelector<HTMLElement>(
       "[data-desktop-transcript-scroller]",
@@ -54,7 +73,7 @@ export function DesktopConversationControls(
             },
           }}
         >
-          {READER_HINTS.map(({ shortcut, label }) => (
+          {hints.map(({ shortcut, label }) => (
             <Tooltip
               key={shortcut}
               title={`${label} · ${shortcut}`}

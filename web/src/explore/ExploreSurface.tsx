@@ -1053,7 +1053,6 @@ export function ExploreTranscript(
     <Box
       ref={rootRef}
       tabIndex={props.desktop ? 0 : undefined}
-      data-desktop-page-view={props.desktop ? "true" : undefined}
       sx={{
         flex: 1,
         minHeight: 0,

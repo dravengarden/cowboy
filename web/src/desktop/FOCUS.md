@@ -64,8 +64,9 @@ session state, not a global top-bar action. While Conversation is focused:
 - Page View's question navigator is transient rather than a permanent column:
   `p` opens it as a modal without resizing or covering one side of the reader,
   focuses search, and `Escape`, choosing a question, or clicking the backdrop
-  closes it. Page-specific shortcuts live in the shared Desktop status line;
-  Page View does not render a second hint row inside the reader.
+  closes it. Page-specific shortcuts replace the ordinary reader hints in the
+  Conversation pane header; neither the reader nor the global status line
+  renders a duplicate hint row.
 - `j/k` scroll down/up by one reading line;
 - `Ctrl-d/u` scroll down/up by half a page;
 - `Ctrl-f/b` scroll down/up by one page;
