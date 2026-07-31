@@ -44,6 +44,8 @@
           ./src/agentd.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
+          ./src/machine_components.rs
+          ./src/machine_install.rs
           ./src/machine_protocol.rs
           ./src/runtime_wire.rs
           ./src/bin/cowboy-agentd.rs
