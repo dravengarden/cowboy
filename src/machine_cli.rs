@@ -11,7 +11,7 @@ use anyhow::{Context as _, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncBufReadExt as _;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -513,7 +513,8 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         host_build: env!("CARGO_PKG_VERSION").to_owned(),
         challenge_id: Some(challenge_id.clone()),
         challenge_signature: None,
-        components: collect_inventory(&config.components).await,
+        components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
+            .await,
         workspaces: config.workspaces.clone(),
         capacity: config.capacity.clone(),
     };
@@ -618,7 +619,10 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     }
 }
 
-async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
+async fn collect_inventory(
+    store: &ComponentStore,
+    zed_adapter_socket: Option<&std::path::Path>,
+) -> Vec<ComponentInventory> {
     let disabled = disabled_provider_slots();
     let mut inventory = vec![ComponentInventory {
         id: ComponentId {
@@ -678,7 +682,6 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
         ("codex", "codex", &["--version"][..]),
         ("claude", "claude", &["--version"][..]),
         ("gemini", "gemini", &["--version"][..]),
-        ("zed", "zed", &["--version"][..]),
     ] {
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;
@@ -716,11 +719,7 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
                 Some("version probe timed out".to_owned()),
             ),
         };
-        let kind = if slot == "zed" {
-            ComponentKind::ZedServer
-        } else {
-            ComponentKind::ProviderCli
-        };
+        let kind = ComponentKind::ProviderCli;
         let auth = match slot {
             "codex" => probe_exit_auth("codex", &["login", "status"]).await,
             "claude" => probe_exit_auth("claude", &["auth", "status", "--json"]).await,
@@ -731,9 +730,7 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
             .iter_mut()
             .find(|component| component.id.kind == kind && component.id.slot == slot)
         {
-            if slot != "zed" {
-                existing.auth = Some(auth);
-            }
+            existing.auth = Some(auth);
             continue;
         }
         inventory.push(ComponentInventory {
@@ -747,10 +744,11 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
             digest: String::new(),
             rollback_generation: None,
             active_leases: 0,
-            auth: (slot != "zed").then_some(auth),
+            auth: Some(auth),
             detail,
         });
     }
+    inventory.push(probe_zed_inventory(zed_adapter_socket).await);
     for (slot, command) in [("codex", "codex-acp"), ("claude", "claude-agent-acp")] {
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;
@@ -809,6 +807,61 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
         });
     }
     inventory
+}
+
+async fn probe_zed_inventory(socket: Option<&std::path::Path>) -> ComponentInventory {
+    let mut component = ComponentInventory {
+        id: ComponentId {
+            kind: ComponentKind::ZedServer,
+            slot: "zed".to_owned(),
+        },
+        state: ComponentState::Missing,
+        version: String::new(),
+        generation: String::new(),
+        digest: String::new(),
+        rollback_generation: None,
+        active_leases: 0,
+        auth: None,
+        detail: Some("Cowboy Zed adapter is not configured".to_owned()),
+    };
+    let Some(socket) = socket else {
+        return component;
+    };
+    let probe = tokio::time::timeout(Duration::from_secs(3), async {
+        let stream = UnixStream::connect(socket).await?;
+        let (reader, mut writer) = stream.into_split();
+        writer.write_all(b"{\"type\":\"health\"}\n").await?;
+        let mut line = String::new();
+        BufReader::new(reader).read_line(&mut line).await?;
+        Ok::<_, anyhow::Error>(serde_json::from_str::<serde_json::Value>(&line)?)
+    })
+    .await;
+    match probe {
+        Ok(Ok(value))
+            if value.get("type").and_then(serde_json::Value::as_str) == Some("health") =>
+        {
+            component.state = ComponentState::Active;
+            component.version = value
+                .get("zed_version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            component.detail = Some("Cowboy isolated Zed integration".to_owned());
+        }
+        Ok(Ok(_)) => {
+            component.state = ComponentState::Failed;
+            component.detail = Some("Zed adapter returned an invalid health response".to_owned());
+        }
+        Ok(Err(error)) => {
+            component.state = ComponentState::Failed;
+            component.detail = Some(error.to_string());
+        }
+        Err(_) => {
+            component.state = ComponentState::Failed;
+            component.detail = Some("Zed adapter health probe timed out".to_owned());
+        }
+    }
+    component
 }
 
 async fn probe_exit_auth(command: &str, args: &[&str]) -> AuthState {
@@ -896,7 +949,8 @@ fn handle_machine_command(
     match command {
         MachineCommand::RefreshInventory { request_id } => {
             tokio::spawn(async move {
-                let components = collect_inventory(&components).await;
+                let components =
+                    collect_inventory(&components, zed_adapter_socket.as_deref()).await;
                 let _ = events.send(MachineEvent::Inventory {
                     components,
                     observed_at_ms: unix_ms(),
@@ -919,6 +973,7 @@ fn handle_machine_command(
                 provider,
                 events,
                 components,
+                zed_adapter_socket,
                 cancel_rx,
                 login_cancels,
             ));
@@ -1119,6 +1174,7 @@ async fn run_login(
     provider: String,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
+    zed_adapter_socket: Option<PathBuf>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     login_cancels: LoginCancels,
 ) {
@@ -1237,7 +1293,7 @@ async fn run_login(
         detail: (!signed_in).then_some("provider login did not complete".to_owned()),
     });
     if signed_in {
-        let inventory = collect_inventory(&components).await;
+        let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
             observed_at_ms: unix_ms(),
