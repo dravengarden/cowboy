@@ -119,7 +119,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
     let mut script = "#!/bin/sh\nset -eu\n".to_owned();
     let _ = writeln!(
         script,
-        "PATH={}:$PATH; export PATH",
+        "PATH={}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
         shell_quote(&state.join("components/commands").display().to_string())
     );
     script.push_str(
@@ -278,6 +278,7 @@ mod tests {
         };
         let script = launcher_script(&args, Path::new("/state"), Path::new("/state/token"));
         assert!(script.contains("components/commands/cowboy-machine"));
+        assert!(script.contains("/opt/homebrew/bin"));
         assert!(script.contains("--enrollment-token-file"));
         assert!(!script.contains("secret"));
     }
