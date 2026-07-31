@@ -243,6 +243,18 @@ fn managed_provider_environment(
         })
     };
     let mut environment = BTreeMap::new();
+    for key in [
+        "COWBOY_ACP_CODEX_CMD",
+        "COWBOY_ACP_CLAUDE_CODE_CMD",
+        "COWBOY_ACP_GEMINI_CMD",
+        "COWBOY_ACP_GEMINI_ARGS",
+    ] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            environment.insert(key.to_owned(), value);
+        }
+    }
     if has(ComponentKind::ProviderAdapter, &["codex"]) {
         environment.insert(
             "COWBOY_ACP_CODEX_CMD".to_owned(),
@@ -697,6 +709,60 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
             rollback_generation: None,
             active_leases: 0,
             auth: (slot != "zed").then_some(auth),
+            detail,
+        });
+    }
+    for (slot, command) in [("codex", "codex-acp"), ("claude", "claude-agent-acp")] {
+        if inventory.iter().any(|component| {
+            component.id.kind == ComponentKind::ProviderAdapter && component.id.slot == slot
+        }) {
+            continue;
+        }
+        let output = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::process::Command::new(command)
+                .arg("--version")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        let (state, version, detail) = match output {
+            Ok(Ok(output)) if output.status.success() => (
+                ComponentState::Active,
+                String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+                Some("bootstrap adapter".to_owned()),
+            ),
+            Ok(Ok(output)) => (
+                ComponentState::Failed,
+                String::new(),
+                Some(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+            ),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                (ComponentState::Missing, String::new(), None)
+            }
+            Ok(Err(error)) => (
+                ComponentState::Failed,
+                String::new(),
+                Some(error.to_string()),
+            ),
+            Err(_) => (
+                ComponentState::Failed,
+                String::new(),
+                Some("version probe timed out".to_owned()),
+            ),
+        };
+        inventory.push(ComponentInventory {
+            id: ComponentId {
+                kind: ComponentKind::ProviderAdapter,
+                slot: slot.to_owned(),
+            },
+            state,
+            version,
+            generation: String::new(),
+            digest: String::new(),
+            rollback_generation: None,
+            active_leases: 0,
+            auth: None,
             detail,
         });
     }
