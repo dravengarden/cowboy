@@ -88,6 +88,34 @@ impl ComponentStore {
             generation.join("manifest.json"),
             serde_json::to_vec_pretty(&desired)?,
         )?;
+        if desired.automatic && desired.probe.is_none() {
+            bail!("automatic component activation requires a health probe");
+        }
+        if let Some(probe) = &desired.probe {
+            let timeout = probe.timeout_ms.clamp(100, 120_000);
+            let mut child = tokio::process::Command::new(&executable)
+                .args(&probe.args)
+                .current_dir(&generation)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .context("starting staged component health probe")?;
+            let status =
+                match tokio::time::timeout(std::time::Duration::from_millis(timeout), child.wait())
+                    .await
+                {
+                    Ok(status) => status.context("waiting for staged component health probe")?,
+                    Err(_) => {
+                        let _ = child.kill().await;
+                        bail!("staged component health probe timed out after {timeout}ms");
+                    }
+                };
+            if !status.success() {
+                bail!("staged component health probe exited with {status}");
+            }
+        }
         let active = self.root.join("active").join(&slot);
         let prior_generation = std::fs::read_link(&active).ok();
         let rollback_generation = prior_generation.as_ref().and_then(|target| {
@@ -143,6 +171,15 @@ impl ComponentStore {
         }
         active.sort_by_key(|(component, _)| component_slot(component));
         Ok(active)
+    }
+
+    pub fn rollback_generation(&self, desired: &DesiredComponent) -> Option<String> {
+        let target =
+            std::fs::read_link(self.root.join("rollback").join(component_slot(desired))).ok()?;
+        let manifest = std::fs::read(target.join("manifest.json")).ok()?;
+        serde_json::from_slice::<DesiredComponent>(&manifest)
+            .ok()
+            .map(|component| component.generation)
     }
 
     #[must_use]
@@ -274,16 +311,31 @@ fn component_proof(desired: &DesiredComponent) -> Vec<u8> {
         ArtifactFormat::Raw => "raw",
         ArtifactFormat::TarGz => "tar_gz",
     };
-    format!(
-        "cowboy-component-v2\n{}\n{}\n{}\n{}\n{}\n{}\n",
+    let probe = desired
+        .probe
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .expect("component probe serializes")
+        .unwrap_or_default();
+    let fields = [
         component_slot(desired),
-        desired.version,
-        desired.generation,
-        desired.digest,
-        format,
-        desired.entrypoint.as_deref().unwrap_or("")
-    )
-    .into_bytes()
+        desired.version.clone(),
+        desired.generation.clone(),
+        desired.digest.clone(),
+        format.to_owned(),
+        desired.entrypoint.clone().unwrap_or_default(),
+        probe,
+        desired.automatic.to_string(),
+    ];
+    let mut proof = b"cowboy-component-v3\n".to_vec();
+    for field in fields {
+        proof.extend_from_slice(field.len().to_string().as_bytes());
+        proof.push(b':');
+        proof.extend_from_slice(field.as_bytes());
+        proof.push(b'\n');
+    }
+    proof
 }
 
 fn component_executable(generation: &Path, desired: &DesiredComponent) -> anyhow::Result<PathBuf> {
@@ -369,6 +421,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            probe: None,
             automatic: true,
         };
         assert_eq!(
@@ -398,20 +451,62 @@ mod tests {
         std::fs::write(&public_key, identity.public_key()).expect("public key");
         let store = ComponentStore::new(root.join("store"), Some(&public_key)).expect("store");
 
-        let first = signed_component(&identity, serve_once(b"first").await, b"first", "v1");
+        const FIRST: &[u8] = b"#!/bin/sh\nexit 0\n# first\n";
+        const SECOND: &[u8] = b"#!/bin/sh\nexit 0\n# second\n";
+        let first = signed_component(&identity, serve_once(FIRST).await, FIRST, "v1");
         let activated = store.reconcile(first).await.expect("activate first");
         assert_eq!(activated.rollback_generation, None);
-        let second = signed_component(&identity, serve_once(b"second").await, b"second", "v2");
+        let second = signed_component(&identity, serve_once(SECOND).await, SECOND, "v2");
         let activated = store.reconcile(second).await.expect("activate second");
         assert!(activated.rollback_generation.is_some());
         let active =
             std::fs::read_link(root.join("store/active/provider_cli-codex")).expect("active link");
         assert_eq!(
             std::fs::read(active.join("bin")).expect("active bytes"),
-            b"second"
+            SECOND
         );
 
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn failed_health_probe_never_replaces_the_active_generation() {
+        const HEALTHY: &[u8] = b"#!/bin/sh\nexit 0\n";
+        const BROKEN: &[u8] = b"#!/bin/sh\nexit 23\n";
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-component-probe-test-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let identity = MachineIdentity::load_or_create(&root.join("signer")).unwrap();
+        let public_key = root.join("publisher.pub");
+        std::fs::write(&public_key, identity.public_key()).unwrap();
+        let store = ComponentStore::new(root.join("store"), Some(&public_key)).unwrap();
+
+        store
+            .reconcile(signed_component(
+                &identity,
+                serve_once(HEALTHY).await,
+                HEALTHY,
+                "healthy",
+            ))
+            .await
+            .unwrap();
+        let error = store
+            .reconcile(signed_component(
+                &identity,
+                serve_once(BROKEN).await,
+                BROKEN,
+                "broken",
+            ))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("health probe exited"));
+        let active = store.command_path("codex").canonicalize().unwrap();
+        assert!(active.to_string_lossy().contains("healthy"));
+        assert_eq!(std::fs::read(active).unwrap(), HEALTHY);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -474,6 +569,10 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            probe: Some(crate::machine_protocol::ComponentProbe {
+                args: Vec::new(),
+                timeout_ms: 2_000,
+            }),
             automatic: true,
         };
         desired.signature = Some(

@@ -226,13 +226,15 @@ bound and show a recoverable Machine Offline state.
 ## Update coordination
 
 Cowboy publishes signed desired manifests; each Machine Agent independently
-downloads, verifies, stages, probes, and reports readiness. Activation is
+downloads, verifies, stages, runs the manifest-bound executable probe, and
+reports readiness. Activation is
 explicitly either `manual` (the Machines UI requests reconciliation) or
 `automatic` (the signed manifest entry is sent after authentication), and never
 means "latest at process start". Busy ACP generations still drain through the
 runtime broker rather than inventing a third component-policy state.
 
-For ACP payloads, the existing safe-drain invariants apply. Busy workers finish
+Automatic entries without a probe are rejected. Probe failure leaves the
+previous active generation and rollback link untouched. For ACP payloads, the existing safe-drain invariants apply. Busy workers finish
 on their current immutable generation; new sessions use the activated
 generation; failed candidates roll back. Zed worktrees are leased and drain
 independently. Old payloads are retained while referenced by a live process or

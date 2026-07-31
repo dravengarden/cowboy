@@ -70,18 +70,27 @@ in the one-time mode-0600 file and never enter the plist.
 ## Component publication
 
 The controller manifest is a JSON array of `DesiredComponent`. Each artifact
-signature signs these exact UTF-8 bytes using OpenSSH namespace
-`cowboy-machine-v1`:
+signature signs a version-three, length-prefixed UTF-8 transcript using OpenSSH
+namespace `cowboy-machine-v1`. The fields, in order, are:
 
 ```text
-cowboy-component-v2
+cowboy-component-v3
 <kind-or-kind-slot>
 <version>
 <generation>
 <lowercase-sha256>
 <raw-or-tar_gz>
 <entrypoint-or-empty>
+<canonical probe JSON or empty>
+<automatic boolean>
 ```
+
+Each field is encoded as `<byte-length>:<value>\n`; this prevents delimiter
+ambiguity and binds both the readiness command and activation policy to the
+publisher signature. An automatic component must declare a bounded `probe`
+(`args` and `timeout_ms`). The Machine runs it against the staged executable
+before changing any active or command symlink. A timeout, spawn error, or
+non-zero exit leaves the prior generation active and reports a failed update.
 
 The Machine downloads over HTTPS, verifies the SHA-256 and Ed25519 signature,
 writes a content-addressed immutable generation, and atomically switches only

@@ -1206,6 +1206,7 @@ type MachineChoice = {
     schedulable: boolean;
     capacity: { max_sessions: number; draining: boolean };
     active_sessions: number;
+    pending_updates?: readonly { kind: string; slot?: string }[];
     workspaces: readonly {
         id: string;
         display_name: string;
@@ -3677,6 +3678,13 @@ function MachinesContent(): React.JSX.Element {
                                         void fetch(`/api/machines/${encodeURIComponent(machine.id)}/revoke`, { method: "POST" }).then(refresh);
                                     }}>Revoke</Button>
                                 </Stack>
+                            )}
+                            {(machine.pending_updates?.length ?? 0) > 0 && (
+                                <Alert severity="warning" action={
+                                    <Button size="small" onClick={() => command(machine.id, "components/reconcile")}>Update</Button>
+                                }>
+                                    {machine.pending_updates?.length} signed component update{machine.pending_updates?.length === 1 ? "" : "s"} pending
+                                </Alert>
                             )}
                             {machine.workspaces.length > 0 && (
                                 <Box>

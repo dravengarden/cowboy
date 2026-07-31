@@ -203,8 +203,24 @@ pub struct DesiredComponent {
     pub entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Optional executable readiness check run against the staged generation
+    /// before any active symlink changes. Automatic activation requires one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<ComponentProbe>,
     #[serde(default)]
     pub automatic: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentProbe {
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_probe_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_probe_timeout_ms() -> u64 {
+    10_000
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,10 +244,6 @@ pub enum MachineCommand {
     },
     CancelLogin {
         request_id: String,
-    },
-    DrainComponent {
-        request_id: String,
-        component: ComponentId,
     },
     RefreshInventory {
         request_id: String,
@@ -350,6 +362,7 @@ mod tests {
         .unwrap();
         assert_eq!(component.artifact_format, ArtifactFormat::Raw);
         assert_eq!(component.entrypoint, None);
+        assert_eq!(component.probe, None);
     }
 
     #[test]

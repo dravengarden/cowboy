@@ -596,21 +596,20 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
     let has_managed_acp = managed
         .iter()
         .any(|(component, _)| component.id.kind == ComponentKind::AcpRuntime);
-    inventory.extend(
-        managed
-            .into_iter()
-            .map(|(component, _)| ComponentInventory {
-                id: component.id,
-                state: ComponentState::Active,
-                version: component.version,
-                generation: component.generation,
-                digest: component.digest,
-                rollback_generation: None,
-                active_leases: 0,
-                auth: None,
-                detail: None,
-            }),
-    );
+    inventory.extend(managed.into_iter().map(|(component, _)| {
+        let rollback_generation = store.rollback_generation(&component);
+        ComponentInventory {
+            id: component.id,
+            state: ComponentState::Active,
+            version: component.version,
+            generation: component.generation,
+            digest: component.digest,
+            rollback_generation,
+            active_leases: 0,
+            auth: None,
+            detail: None,
+        }
+    }));
     if !has_managed_acp {
         inventory.push(ComponentInventory {
             id: ComponentId {
@@ -865,13 +864,6 @@ fn handle_machine_command(
                 request_id,
                 accepted,
                 detail: (!accepted).then_some("login request is not active".to_owned()),
-            });
-        }
-        MachineCommand::DrainComponent { request_id, .. } => {
-            let _ = events.send(MachineEvent::CommandResult {
-                request_id,
-                accepted: false,
-                detail: Some("this Machine host does not support that operation yet".to_owned()),
             });
         }
     }
@@ -1295,6 +1287,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            probe: None,
             automatic: true,
         };
         let mismatched = vec![
@@ -1342,6 +1335,7 @@ mod tests {
             artifact_format: ArtifactFormat::Raw,
             entrypoint: None,
             signature: None,
+            probe: None,
             automatic: true,
         };
         for (name, desired) in [

@@ -1636,6 +1636,7 @@ struct MachineSummary {
     components: Vec<crate::machine_protocol::ComponentInventory>,
     capacity: crate::machine_protocol::MachineCapacity,
     active_sessions: u32,
+    pending_updates: Vec<crate::machine_protocol::ComponentId>,
 }
 
 async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
@@ -1652,12 +1653,13 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             .cloned()
                             .and_then(|value| serde_json::from_value(value).ok())
                             .unwrap_or_default();
-                        let components: Vec<crate::machine_protocol::ComponentInventory> = machine
-                            .inventory
-                            .get("components")
-                            .cloned()
-                            .and_then(|value| serde_json::from_value(value).ok())
-                            .unwrap_or_default();
+                        let mut components: Vec<crate::machine_protocol::ComponentInventory> =
+                            machine
+                                .inventory
+                                .get("components")
+                                .cloned()
+                                .and_then(|value| serde_json::from_value(value).ok())
+                                .unwrap_or_default();
                         let capacity: crate::machine_protocol::MachineCapacity = machine
                             .inventory
                             .get("capacity")
@@ -1676,6 +1678,29 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                 .count(),
                         )
                         .unwrap_or(u32::MAX);
+                        for component in &mut components {
+                            if matches!(
+                                component.id.kind,
+                                crate::machine_protocol::ComponentKind::AcpRuntime
+                                    | crate::machine_protocol::ComponentKind::ProviderAdapter
+                                    | crate::machine_protocol::ComponentKind::ProviderCli
+                            ) {
+                                component.active_leases = u64::from(active_sessions);
+                            }
+                        }
+                        let pending_updates = state
+                            .desired_machine_components
+                            .iter()
+                            .filter(|desired| {
+                                !components.iter().any(|current| {
+                                    current.id == desired.id
+                                        && current.digest.eq_ignore_ascii_case(&desired.digest)
+                                        && current.state
+                                            == crate::machine_protocol::ComponentState::Active
+                                })
+                            })
+                            .map(|desired| desired.id.clone())
+                            .collect();
                         let schedulable = state
                             .runtime_router
                             .as_ref()
@@ -1696,6 +1721,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             components,
                             capacity,
                             active_sessions,
+                            pending_updates,
                         }
                     })
                     .collect::<Vec<_>>(),
@@ -1742,6 +1768,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                 .count(),
         )
         .unwrap_or(u32::MAX),
+        pending_updates: Vec::new(),
     }])
     .into_response()
 }
