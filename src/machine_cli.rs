@@ -636,6 +636,7 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
             Duration::from_secs(3),
             tokio::process::Command::new(command)
                 .args(version_args)
+                .kill_on_drop(true)
                 .output(),
         )
         .await;
@@ -705,7 +706,10 @@ async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
 async fn probe_exit_auth(command: &str, args: &[&str]) -> AuthState {
     match tokio::time::timeout(
         Duration::from_secs(3),
-        tokio::process::Command::new(command).args(args).output(),
+        tokio::process::Command::new(command)
+            .args(args)
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     {
