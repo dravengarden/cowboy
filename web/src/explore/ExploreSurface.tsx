@@ -70,6 +70,7 @@ import {
 import {
   nextFollowedTailPage,
   pageStartHandshakeIdentity,
+  questionPageNeedsRestore,
   shouldAdoptLoadedPage,
 } from "./retainedPage";
 
@@ -742,6 +743,8 @@ export function ExploreTranscript(
   const restorePageId = authoritativeTailId ?? retainedPageId;
   const restorePageLoaded = restorePageId === null ||
     isQuestionPageLoaded(props.sessionId, restorePageId);
+  const restorePagePending = restorePageId !== null &&
+    questionPageNeedsRestore(props.status, restorePageLoaded);
 
   useEffect(() => {
     if (
@@ -758,11 +761,10 @@ export function ExploreTranscript(
   ]);
 
   useEffect(() => {
-    if (props.status === "busy" || restorePageId === null) {
+    if (!restorePagePending || restorePageId === null) {
       restoringPageRef.current = null;
       return;
     }
-    if (restorePageLoaded) return;
     // The latest page is mutable only while its turn is active. Once the
     // session returns to idle, the authoritative index can safely repair a
     // retained projection that starts inside the completed answer.
@@ -791,6 +793,7 @@ export function ExploreTranscript(
     props.status,
     restorePageId,
     restorePageLoaded,
+    restorePagePending,
     retainedPageId,
   ]);
 
@@ -1019,7 +1022,7 @@ export function ExploreTranscript(
         </>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {unresolvedQuestionRoot || !restorePageLoaded
+        {unresolvedQuestionRoot || restorePagePending
           ? (
             <Stack
               role="status"

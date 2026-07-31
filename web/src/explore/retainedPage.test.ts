@@ -2,6 +2,7 @@ import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import {
   nextFollowedTailPage,
   pageStartHandshakeIdentity,
+  questionPageNeedsRestore,
   shouldAdoptLoadedPage,
 } from "./retainedPage.ts";
 
@@ -54,4 +55,10 @@ Deno.test("a newly appended page follows only the previously selected tail", () 
     nextFollowedTailPage("page-45", "page-45", "page-45", false),
     null,
   );
+});
+
+Deno.test("a busy live tail renders without waiting for persisted page restore", () => {
+  assertEquals(questionPageNeedsRestore("busy", false), false);
+  assertEquals(questionPageNeedsRestore("running", false), true);
+  assertEquals(questionPageNeedsRestore("running", true), false);
 });
