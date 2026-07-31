@@ -6,9 +6,31 @@ import {
   deriveQuestionPages,
   groupQuestionPages,
   indexedQuestionPagePosition,
+  mergeQuestionPageDirectory,
   pageContainingItemKey,
   questionTitle,
 } from "./questionPages";
+
+Deno.test("question directory merges live pages and sorts oldest to newest", () => {
+  assertEquals(
+    mergeQuestionPageDirectory(
+      [
+        { id: "20", title: "Second", ordinal: 2 },
+        { id: "10", title: "First", ordinal: 1 },
+      ],
+      [
+        { id: "20", title: "Hydrated second" },
+        { id: "30", title: "Live third" },
+      ],
+      3,
+    ),
+    [
+      { id: "10", title: "First", ordinal: 1 },
+      { id: "20", title: "Second", ordinal: 2 },
+      { id: "30", title: "Live third", ordinal: 3 },
+    ],
+  );
+});
 
 function user(key: string, text: string, autoResumed = false): RenderItem {
   return {

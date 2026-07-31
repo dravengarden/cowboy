@@ -69,6 +69,7 @@ import {
   deriveQuestionPages,
   groupQuestionPages,
   indexedQuestionPagePosition,
+  mergeQuestionPageDirectory,
   pageContainingItemKey,
   type QuestionPage,
 } from "./questionPages";
@@ -746,17 +747,15 @@ export function ExploreTranscript(
   const atTail = indexedCurrentOrdinal === undefined
     ? currentIndex === pages.length - 1
     : indexedCurrentOrdinal === total;
-  const indexedPages = useMemo(() => {
-    const ordinalById = new Map(
-      (pageIndex.data?.pages ?? []).map((page) => [page.id, page.ordinal]),
-    );
-    return pages.map((page) => {
-      const ordinal = ordinalById.get(page.id);
-      return ordinal === undefined ? page : { ...page, ordinal };
-    });
-  }, [pageIndex.data?.pages, pages]);
+  const directoryPages = useMemo(
+    () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, total),
+    [pageIndex.data?.pages, pages, total],
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const [desktopDirectoryOpen, setDesktopDirectoryOpen] = useState(false);
+  const [desktopDirectoryLoadingPageId, setDesktopDirectoryLoadingPageId] = useState<
+    string | null
+  >(null);
   const desktopDirectoryReturnFocusRef = useRef<HTMLElement | null>(null);
   const closeDesktopDirectory = useCallback((restoreFocus = true): void => {
     setDesktopDirectoryOpen(false);
@@ -1087,12 +1086,27 @@ export function ExploreTranscript(
             <PageList
               active={desktopDirectoryOpen}
               dense
-              pages={indexedPages}
+              pages={directoryPages}
               currentId={current?.id ?? null}
-              firstOrdinal={Math.max(1, total - pages.length + 1)}
+              firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
+              hasEarlier={pageIndex.data?.nextBeforeSeq !== null}
+              loadingEarlier={pageIndex.loadingEarlier}
+              loadingPageId={desktopDirectoryLoadingPageId}
+              onReachStart={(): void => void pageIndex.loadEarlier()}
               onSelect={(id): void => {
-                select(id);
-                closeDesktopDirectory();
+                if (desktopDirectoryLoadingPageId) return;
+                if (isQuestionPageLoaded(props.sessionId, id)) {
+                  select(id);
+                  closeDesktopDirectory();
+                  return;
+                }
+                setDesktopDirectoryLoadingPageId(id);
+                void loadQuestionPage(props.sessionId, id).then((loaded) => {
+                  setDesktopDirectoryLoadingPageId(null);
+                  if (!loaded) return;
+                  select(id);
+                  closeDesktopDirectory();
+                });
               }}
             />
           </Box>
@@ -1233,22 +1247,10 @@ export function MobilePageDock({
     loadingAdjacentPageId === indexedPrevious?.id;
   const loadingNext = loadingAdjacentPageId === indexedNext?.id;
   const onlyCompletePage = total <= 1 && !hasEarlierHistory;
-  const directoryPages = useMemo(() => {
-    const summaries = pageIndex.data?.pages ?? [];
-    const byId = new Map(summaries.map((page) => [page.id, page]));
-    let nextOrdinal = summaries.at(-1)?.ordinal ??
-      Math.max(0, total - pages.length);
-    for (const page of pages) {
-      if (byId.has(page.id)) continue;
-      nextOrdinal += 1;
-      byId.set(page.id, {
-        id: page.id,
-        title: page.title,
-        ordinal: nextOrdinal,
-      });
-    }
-    return [...byId.values()].sort((left, right) => left.ordinal - right.ordinal);
-  }, [pageIndex.data?.pages, pages, total]);
+  const directoryPages = useMemo(
+    () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, total),
+    [pageIndex.data?.pages, pages, total],
+  );
   const currentOrdinal = indexedPosition.ordinal !== undefined
     ? indexedPosition.ordinal
     : Math.max(

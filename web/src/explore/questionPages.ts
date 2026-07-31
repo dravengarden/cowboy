@@ -14,6 +14,39 @@ export interface QuestionPageIndexEntry {
   ordinal: number;
 }
 
+export interface QuestionPageDirectoryEntry extends QuestionPageIndexEntry {
+  title: string;
+}
+
+/**
+ * Merge the durable question index with the currently hydrated transcript.
+ *
+ * The index may be a paged suffix while the transcript can contain a live page
+ * that has not reached storage yet. Keep one row per durable id and sort by the
+ * human ordinal so every directory surface reads oldest-to-newest, top-to-bottom.
+ */
+export function mergeQuestionPageDirectory(
+  indexed: readonly QuestionPageDirectoryEntry[],
+  loaded: readonly Pick<QuestionPage, "id" | "title">[],
+  total: number,
+): QuestionPageDirectoryEntry[] {
+  const byId = new Map(indexed.map((page) => [page.id, page]));
+  let nextOrdinal = indexed.reduce(
+    (highest, page) => Math.max(highest, page.ordinal),
+    Math.max(0, total - loaded.length),
+  );
+  for (const page of loaded) {
+    if (byId.has(page.id)) continue;
+    nextOrdinal += 1;
+    byId.set(page.id, {
+      id: page.id,
+      title: page.title,
+      ordinal: nextOrdinal,
+    });
+  }
+  return [...byId.values()].sort((left, right) => left.ordinal - right.ordinal);
+}
+
 /**
  * Resolve a provisional live-tail page to its durable user-message root.
  *
