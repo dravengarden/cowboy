@@ -227,8 +227,10 @@ bound and show a recoverable Machine Offline state.
 
 Cowboy publishes signed desired manifests; each Machine Agent independently
 downloads, verifies, stages, probes, and reports readiness. Activation is
-policy-controlled (`manual`, `when_idle`, or `automatic`) and never means
-"latest at process start".
+explicitly either `manual` (the Machines UI requests reconciliation) or
+`automatic` (the signed manifest entry is sent after authentication), and never
+means "latest at process start". Busy ACP generations still drain through the
+runtime broker rather than inventing a third component-policy state.
 
 For ACP payloads, the existing safe-drain invariants apply. Busy workers finish
 on their current immutable generation; new sessions use the activated

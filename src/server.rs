@@ -2462,22 +2462,7 @@ async fn api_new_session(
                 serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(value)
                     .ok()
             })
-            .is_some_and(|components| {
-                components.into_iter().any(|component| {
-                    component.id.kind == crate::machine_protocol::ComponentKind::ProviderCli
-                        && component.id.slot == req.provider
-                        && component.state == crate::machine_protocol::ComponentState::Active
-                        && !matches!(
-                            component.auth,
-                            Some(
-                                crate::machine_protocol::AuthState::SignedOut
-                                    | crate::machine_protocol::AuthState::Pending
-                                    | crate::machine_protocol::AuthState::Expired
-                                    | crate::machine_protocol::AuthState::Error
-                            )
-                        )
-                })
-            });
+            .is_some_and(|components| machine_supports_provider(&components, &req.provider));
         if !supported {
             return (
                 StatusCode::CONFLICT,
@@ -2500,6 +2485,105 @@ async fn api_new_session(
             (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response()
         }
         Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+    }
+}
+
+fn machine_supports_provider(
+    components: &[crate::machine_protocol::ComponentInventory],
+    provider: &str,
+) -> bool {
+    use crate::machine_protocol::{AuthState, ComponentKind, ComponentState};
+    let slot = match provider {
+        "claude-code" => "claude",
+        provider => provider,
+    };
+    let cli_ready = components.iter().any(|component| {
+        component.id.kind == ComponentKind::ProviderCli
+            && matches!(component.id.slot.as_str(), candidate if candidate == slot || candidate == provider)
+            && component.state == ComponentState::Active
+            && !matches!(
+                component.auth,
+                Some(
+                    AuthState::SignedOut
+                        | AuthState::Pending
+                        | AuthState::Expired
+                        | AuthState::Error
+                )
+            )
+    });
+    if !cli_ready {
+        return false;
+    }
+    if provider == "gemini" {
+        return true;
+    }
+    components.iter().any(|component| {
+        component.id.kind == ComponentKind::ProviderAdapter
+            && matches!(component.id.slot.as_str(), candidate if candidate == slot || candidate == provider)
+            && component.state == ComponentState::Active
+    })
+}
+
+#[cfg(test)]
+mod machine_provider_tests {
+    use super::machine_supports_provider;
+    use crate::machine_protocol::{
+        AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState,
+    };
+
+    fn component(kind: ComponentKind, slot: &str, auth: Option<AuthState>) -> ComponentInventory {
+        ComponentInventory {
+            id: ComponentId {
+                kind,
+                slot: slot.to_owned(),
+            },
+            state: ComponentState::Active,
+            version: "v1".to_owned(),
+            generation: "v1".to_owned(),
+            digest: "digest".to_owned(),
+            rollback_generation: None,
+            active_leases: 0,
+            auth,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn codex_requires_authenticated_cli_and_adapter() {
+        let cli = component(
+            ComponentKind::ProviderCli,
+            "codex",
+            Some(AuthState::SignedIn),
+        );
+        assert!(!machine_supports_provider(
+            std::slice::from_ref(&cli),
+            "codex"
+        ));
+        let adapter = component(ComponentKind::ProviderAdapter, "codex", None);
+        assert!(machine_supports_provider(&[cli, adapter], "codex"));
+    }
+
+    #[test]
+    fn claude_provider_id_maps_to_managed_claude_slot() {
+        let components = [
+            component(
+                ComponentKind::ProviderCli,
+                "claude",
+                Some(AuthState::SignedIn),
+            ),
+            component(ComponentKind::ProviderAdapter, "claude", None),
+        ];
+        assert!(machine_supports_provider(&components, "claude-code"));
+    }
+
+    #[test]
+    fn gemini_cli_is_its_acp_entrypoint() {
+        let cli = component(
+            ComponentKind::ProviderCli,
+            "gemini",
+            Some(AuthState::Unsupported),
+        );
+        assert!(machine_supports_provider(&[cli], "gemini"));
     }
 }
 

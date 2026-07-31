@@ -91,13 +91,20 @@ archive links are rejected. Existing ACP workers and Zed worktrees keep leases
 on their old executable; unrelated slots are not restarted.
 
 The Machine supervises the active Code Adapter and the selected Cowboy-managed
-Zed adapter/server pair. Adapter generations restart independently when their
+Zed adapter/server pair. A Zed adapter and server are paired only when their
+component slots share the same compatibility key (normally the exact Zed
+version); independently active but mismatched payloads are never launched.
+Adapter generations restart independently when their
 content-addressed links change. The Code Adapter revalidates every requested
 root against the Machine's declared trusted workspaces before touching files or
 Git, so remote sessions never fall back to the controller filesystem.
 `max_sessions` and `draining` are reported by the host; Cowboy derives active
 leases from its persisted session ownership and refuses new placement when the
 envelope is full or draining. Existing sessions remain pinned and resumable.
+Provider CLI, provider adapter, managed Node, and ACP-runtime activation causes
+the small stable host process to be relaunched by launchd/systemd so its worker
+launch environment is rebuilt atomically. Detached worker services and their
+session generations remain alive and are adopted by the new broker.
 
 ## Ownership
 

@@ -2,6 +2,7 @@
 //! alias. Provider and Zed lifecycle subcommands join this surface without
 //! copying the ACP broker implementation.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -160,6 +161,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     );
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
+    let worker_environment = managed_provider_environment(&components)?;
     let agentd = AgentdArgs {
         socket: args.socket,
         worker_command,
@@ -168,6 +170,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
             CliSpawnMode::Direct => SpawnMode::Direct,
             CliSpawnMode::SystemdUser => SpawnMode::SystemdUser,
         },
+        worker_environment,
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
     };
     let Some(controller_url) = args.controller_url else {
@@ -230,6 +233,41 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn managed_provider_environment(
+    components: &ComponentStore,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    let active = components.active()?;
+    let has = |kind, slots: &[&str]| {
+        active.iter().any(|(component, _)| {
+            component.id.kind == kind && slots.contains(&component.id.slot.as_str())
+        })
+    };
+    let mut environment = BTreeMap::new();
+    if has(ComponentKind::ProviderAdapter, &["codex"]) {
+        environment.insert(
+            "COWBOY_ACP_CODEX_CMD".to_owned(),
+            components.command_path("codex-acp").display().to_string(),
+        );
+    }
+    if has(ComponentKind::ProviderAdapter, &["claude", "claude-code"]) {
+        environment.insert(
+            "COWBOY_ACP_CLAUDE_CODE_CMD".to_owned(),
+            components
+                .command_path("claude-agent-acp")
+                .display()
+                .to_string(),
+        );
+    }
+    if has(ComponentKind::ProviderCli, &["gemini"]) {
+        environment.insert(
+            "COWBOY_ACP_GEMINI_CMD".to_owned(),
+            components.command_path("gemini").display().to_string(),
+        );
+        environment.insert("COWBOY_ACP_GEMINI_ARGS".to_owned(), "--acp".to_owned());
+    }
+    Ok(environment)
+}
+
 async fn supervise_zed_adapter(
     components: Arc<ComponentStore>,
     socket: Option<PathBuf>,
@@ -240,17 +278,7 @@ async fn supervise_zed_adapter(
     };
     loop {
         let active = components.active()?;
-        let adapter = active
-            .iter()
-            .rev()
-            .find(|(component, _)| component.id.kind == ComponentKind::ZedAdapter)
-            .map(|(_, path)| path.clone());
-        let server = active
-            .iter()
-            .rev()
-            .find(|(component, _)| component.id.kind == ComponentKind::ZedServer)
-            .map(|(_, path)| path.clone());
-        let (Some(adapter), Some(server)) = (adapter, server) else {
+        let Some((_, adapter, server)) = selected_zed_pair(&active) else {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         };
@@ -273,9 +301,10 @@ async fn supervise_zed_adapter(
                 }
                 () = tokio::time::sleep(Duration::from_secs(2)) => {
                     let active = components.active().unwrap_or_default();
-                    let current_adapter = active.iter().rev().find(|(component, _)| component.id.kind == ComponentKind::ZedAdapter).map(|(_, path)| path);
-                    let current_server = active.iter().rev().find(|(component, _)| component.id.kind == ComponentKind::ZedServer).map(|(_, path)| path);
-                    if current_adapter != Some(&adapter) || current_server != Some(&server) {
+                    let current = selected_zed_pair(&active);
+                    if current.as_ref().map(|(_, adapter, server)| (adapter, server))
+                        != Some((&adapter, &server))
+                    {
                         child.kill().await?;
                         let _ = child.wait().await;
                         break;
@@ -285,6 +314,27 @@ async fn supervise_zed_adapter(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+fn selected_zed_pair(
+    active: &[(crate::machine_protocol::DesiredComponent, PathBuf)],
+) -> Option<(String, PathBuf, PathBuf)> {
+    active.iter().rev().find_map(|(adapter, adapter_path)| {
+        (adapter.id.kind == ComponentKind::ZedAdapter).then(|| {
+            active
+                .iter()
+                .find(|(server, _)| {
+                    server.id.kind == ComponentKind::ZedServer && server.id.slot == adapter.id.slot
+                })
+                .map(|(_, server_path)| {
+                    (
+                        adapter.id.slot.clone(),
+                        adapter_path.clone(),
+                        server_path.clone(),
+                    )
+                })
+        })?
+    })
 }
 
 async fn supervise_code_adapter(
@@ -442,12 +492,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     if !desired_components.is_empty() {
         let active = config.components.active().unwrap_or_default();
         let restart_host = desired_components.iter().any(|component| {
-            matches!(
-                component.id.kind,
-                ComponentKind::MachineHost | ComponentKind::AcpRuntime
-            ) && !active.iter().any(|(current, _)| {
-                current.id == component.id && current.digest.eq_ignore_ascii_case(&component.digest)
-            })
+            component_requires_host_restart(&component.id.kind)
+                && !active.iter().any(|(current, _)| {
+                    current.id == component.id
+                        && current.digest.eq_ignore_ascii_case(&component.digest)
+                })
         });
         let events = reconcile_components(
             "welcome".to_owned(),
@@ -728,13 +777,11 @@ fn handle_machine_command(
             tokio::spawn(async move {
                 let active = components.active().unwrap_or_default();
                 let restart_host = desired.iter().any(|component| {
-                    matches!(
-                        component.id.kind,
-                        ComponentKind::MachineHost | ComponentKind::AcpRuntime
-                    ) && !active.iter().any(|(current, _)| {
-                        current.id == component.id
-                            && current.digest.eq_ignore_ascii_case(&component.digest)
-                    })
+                    component_requires_host_restart(&component.id.kind)
+                        && !active.iter().any(|(current, _)| {
+                            current.id == component.id
+                                && current.digest.eq_ignore_ascii_case(&component.digest)
+                        })
                 });
                 let result = reconcile_components(request_id, desired, components).await;
                 let accepted = result.iter().any(|event| {
@@ -771,6 +818,17 @@ fn handle_machine_command(
             });
         }
     }
+}
+
+fn component_requires_host_restart(kind: &ComponentKind) -> bool {
+    matches!(
+        kind,
+        ComponentKind::MachineHost
+            | ComponentKind::AcpRuntime
+            | ComponentKind::ProviderAdapter
+            | ComponentKind::ProviderCli
+            | ComponentKind::ManagedNode
+    )
 }
 
 async fn run_adapter_request(
@@ -1105,7 +1163,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_workspaces, reject_untrusted_workspace, validate_controller_url};
+    use std::path::PathBuf;
+
+    use super::{
+        managed_provider_environment, parse_workspaces, reject_untrusted_workspace,
+        selected_zed_pair, validate_controller_url,
+    };
+    use crate::machine_components::ComponentStore;
+    use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
     use crate::runtime_wire::{CoreCommand, Frame, StartSession};
 
     #[test]
@@ -1118,6 +1183,102 @@ mod tests {
     fn loopback_controller_allows_plaintext_for_hermetic_tests() {
         assert!(validate_controller_url("http://127.0.0.1:43333").is_ok());
         assert!(validate_controller_url("http://localhost:43333").is_ok());
+    }
+
+    #[test]
+    fn zed_supervisor_selects_only_an_exact_compatibility_pair() {
+        let component = |kind, slot: &str| DesiredComponent {
+            id: ComponentId {
+                kind,
+                slot: slot.to_owned(),
+            },
+            version: slot.to_owned(),
+            generation: slot.to_owned(),
+            artifact_url: "https://example.invalid/zed".to_owned(),
+            digest: "digest".to_owned(),
+            artifact_format: ArtifactFormat::Raw,
+            entrypoint: None,
+            signature: None,
+            automatic: true,
+        };
+        let mismatched = vec![
+            (
+                component(ComponentKind::ZedAdapter, "1.2.0"),
+                PathBuf::from("adapter"),
+            ),
+            (
+                component(ComponentKind::ZedServer, "1.1.0"),
+                PathBuf::from("server"),
+            ),
+        ];
+        assert!(selected_zed_pair(&mismatched).is_none());
+        let mut matched = mismatched;
+        matched.push((
+            component(ComponentKind::ZedServer, "1.2.0"),
+            PathBuf::from("server-1.2"),
+        ));
+        assert_eq!(
+            selected_zed_pair(&matched),
+            Some((
+                "1.2.0".to_owned(),
+                PathBuf::from("adapter"),
+                PathBuf::from("server-1.2")
+            ))
+        );
+    }
+
+    #[test]
+    fn managed_components_define_worker_provider_commands() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-machine-provider-env-{}",
+            std::process::id()
+        ));
+        let store = ComponentStore::new(root.clone(), None).expect("component store");
+        let component = |kind, slot: &str| DesiredComponent {
+            id: ComponentId {
+                kind,
+                slot: slot.to_owned(),
+            },
+            version: "v1".to_owned(),
+            generation: "v1".to_owned(),
+            artifact_url: "https://example.invalid/provider".to_owned(),
+            digest: "digest".to_owned(),
+            artifact_format: ArtifactFormat::Raw,
+            entrypoint: None,
+            signature: None,
+            automatic: true,
+        };
+        for (name, desired) in [
+            (
+                "provider_adapter-codex",
+                component(ComponentKind::ProviderAdapter, "codex"),
+            ),
+            (
+                "provider_adapter-claude",
+                component(ComponentKind::ProviderAdapter, "claude"),
+            ),
+            (
+                "provider_cli-gemini",
+                component(ComponentKind::ProviderCli, "gemini"),
+            ),
+        ] {
+            let generation = root.join("test-generations").join(name);
+            std::fs::create_dir_all(&generation).expect("generation");
+            std::fs::write(
+                generation.join("manifest.json"),
+                serde_json::to_vec(&desired).expect("manifest"),
+            )
+            .expect("manifest file");
+            std::fs::write(generation.join("bin"), b"test").expect("executable");
+            std::os::unix::fs::symlink(&generation, root.join("active").join(name))
+                .expect("active link");
+        }
+        let environment = managed_provider_environment(&store).expect("provider environment");
+        assert!(environment["COWBOY_ACP_CODEX_CMD"].ends_with("commands/codex-acp"));
+        assert!(environment["COWBOY_ACP_CLAUDE_CODE_CMD"].ends_with("commands/claude-agent-acp"));
+        assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
+        assert_eq!(environment["COWBOY_ACP_GEMINI_ARGS"], "--acp");
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

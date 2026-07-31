@@ -108,7 +108,7 @@ impl ComponentStore {
         std::fs::rename(&temporary_link, &active)?;
         if let Some(command) = component_command(&desired) {
             replace_symlink(
-                &self.root.join("commands").join(command),
+                &self.root.join("commands").join(&command),
                 &executable,
                 &format!(".{command}.next"),
             )?;
@@ -182,19 +182,25 @@ impl ComponentStore {
     }
 }
 
-fn component_command(desired: &DesiredComponent) -> Option<&str> {
+fn component_command(desired: &DesiredComponent) -> Option<String> {
     use crate::machine_protocol::ComponentKind;
     match desired.id.kind {
-        ComponentKind::MachineHost => Some("cowboy-machine"),
-        ComponentKind::AcpRuntime => Some("cowboy-acp-worker"),
-        ComponentKind::CodeAdapter => Some("cowboy-code-adapter"),
-        ComponentKind::ZedAdapter => Some("cowboy-zed-adapter"),
-        ComponentKind::ZedServer => Some("cowboy-zed-server"),
-        ComponentKind::ProviderAdapter
-        | ComponentKind::ProviderCli
-        | ComponentKind::ManagedNode => {
-            (!desired.id.slot.is_empty()).then_some(desired.id.slot.as_str())
+        ComponentKind::MachineHost => Some("cowboy-machine".to_owned()),
+        ComponentKind::AcpRuntime => Some("cowboy-acp-worker".to_owned()),
+        ComponentKind::CodeAdapter => Some("cowboy-code-adapter".to_owned()),
+        ComponentKind::ZedAdapter => Some("cowboy-zed-adapter".to_owned()),
+        ComponentKind::ZedServer => Some("cowboy-zed-server".to_owned()),
+        ComponentKind::ProviderCli => {
+            (!desired.id.slot.is_empty()).then(|| desired.id.slot.clone())
         }
+        ComponentKind::ProviderAdapter => match desired.id.slot.as_str() {
+            "codex" => Some("codex-acp".to_owned()),
+            "claude" | "claude-code" => Some("claude-agent-acp".to_owned()),
+            "gemini" => Some("gemini-acp".to_owned()),
+            "" => None,
+            slot => Some(format!("cowboy-acp-{slot}")),
+        },
+        ComponentKind::ManagedNode => Some("node".to_owned()),
     }
 }
 
@@ -348,6 +354,36 @@ mod tests {
     use crate::machine_protocol::{ComponentId, ComponentKind};
 
     static TEST_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn provider_cli_and_adapter_commands_never_collide() {
+        let component = |kind, slot: &str| DesiredComponent {
+            id: ComponentId {
+                kind,
+                slot: slot.to_owned(),
+            },
+            version: "v1".to_owned(),
+            generation: "v1".to_owned(),
+            artifact_url: "https://example.invalid/component".to_owned(),
+            digest: "digest".to_owned(),
+            artifact_format: ArtifactFormat::Raw,
+            entrypoint: None,
+            signature: None,
+            automatic: true,
+        };
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderCli, "codex")).as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderAdapter, "codex")).as_deref(),
+            Some("codex-acp")
+        );
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderAdapter, "claude")).as_deref(),
+            Some("claude-agent-acp")
+        );
+    }
 
     #[tokio::test]
     async fn signed_payload_activates_by_content_and_remembers_rollback() {

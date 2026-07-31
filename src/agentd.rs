@@ -4,7 +4,7 @@
 //! It grants one controller lease, routes commands, starts session workers, and
 //! lets workers replay their unacknowledged outboxes after either side restarts.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::fd::FromRawFd as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +40,9 @@ pub struct AgentdArgs {
     pub worker_command: PathBuf,
     pub desired_generation: String,
     pub spawn_mode: SpawnMode,
+    /// Environment owned by the Machine component resolver and injected into
+    /// every worker. The local compatibility daemon leaves this empty.
+    pub worker_environment: BTreeMap<String, String>,
     pub worker_ready_timeout: Duration,
 }
 
@@ -1158,7 +1161,11 @@ impl Broker {
                 )
             })?;
         let mut command = match self.args.spawn_mode {
-            SpawnMode::Direct => Command::new(&worker_command),
+            SpawnMode::Direct => {
+                let mut command = Command::new(&worker_command);
+                command.envs(&self.args.worker_environment);
+                command
+            }
             SpawnMode::SystemdUser => {
                 let mut command = Command::new("systemd-run");
                 let unit = worker_unit_name(&session.session_id);
@@ -1182,6 +1189,9 @@ impl Broker {
                     ) || name.starts_with("COWBOY_ACP_")
                 }) {
                     command.arg(format!("--setenv={name}"));
+                }
+                for (name, value) in &self.args.worker_environment {
+                    command.arg(format!("--setenv={name}={value}"));
                 }
                 if let Some(fallback_for) = &session.fallback_for {
                     command.arg(format!("--setenv=COWBOY_FALLBACK_FOR={fallback_for}"));
@@ -1827,6 +1837,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1918,6 +1929,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -1972,6 +1984,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: String::new(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -2009,6 +2022,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         });
         for (session_id, provider) in [("sess-codex", "codex"), ("sess-claude", "claude-code")] {
@@ -2122,6 +2136,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         });
         let launch = StartSession {
@@ -2165,6 +2180,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         }));
         broker
@@ -2194,6 +2210,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(100),
         }));
         broker
@@ -2235,6 +2252,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         });
         broker
@@ -2272,6 +2290,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(10),
         }));
         broker.unhealthy_generations.lock().insert(
@@ -2306,6 +2325,7 @@ mod tests {
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
             spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
             worker_ready_timeout: Duration::from_millis(100),
         }));
         for _ in 0..100 {

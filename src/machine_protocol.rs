@@ -63,7 +63,8 @@ pub enum AuthState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComponentId {
     pub kind: ComponentKind,
-    /// Provider id, Zed adapter ABI, or Zed client version. Empty only for
+    /// Provider id or Zed compatibility key (normally the exact client/server
+    /// version). Empty only for
     /// singleton components such as the Machine host and managed Node runtime.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub slot: String,
