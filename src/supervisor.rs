@@ -21,6 +21,7 @@ use crate::acp::{self, AgentCommand};
 use crate::core::{Hub, SessionOrigin, SessionRegistration, Status};
 use crate::provider::{self, LaunchSpec};
 use crate::remote_runtime::RemoteRuntime;
+use crate::runtime_router::RuntimeRouter;
 use crate::runtime_wire::StartSession;
 use crate::workspace::{
     current_project_checkout, resolve_session_workspace, session_belongs_to_project,
@@ -28,7 +29,7 @@ use crate::workspace::{
 
 enum Backend {
     Local(Mutex<HashMap<String, mpsc::UnboundedSender<AgentCommand>>>),
-    Remote(Arc<RemoteRuntime>),
+    Remote(Arc<RuntimeRouter>),
 }
 
 /// Spawns and tracks agent sessions; routes commands to their threads.
@@ -76,11 +77,27 @@ impl Supervisor {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn new_remote(
         hub: Hub,
         workspace_root: PathBuf,
         persistent_floor: u64,
         runtime: Arc<RemoteRuntime>,
+    ) -> Self {
+        Self::new_routed(
+            hub,
+            workspace_root,
+            persistent_floor,
+            RuntimeRouter::new(runtime),
+        )
+    }
+
+    #[must_use]
+    pub fn new_routed(
+        hub: Hub,
+        workspace_root: PathBuf,
+        persistent_floor: u64,
+        router: Arc<RuntimeRouter>,
     ) -> Self {
         let clock_floor = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -91,7 +108,7 @@ impl Supervisor {
         Self {
             hub,
             workspace_root,
-            backend: Backend::Remote(runtime),
+            backend: Backend::Remote(router),
             counter: AtomicU64::new(initial),
             lifecycle: Mutex::new(()),
         }
@@ -147,7 +164,12 @@ impl Supervisor {
         system: bool,
         machine_id: &str,
     ) -> Result<String, String> {
-        if machine_id != "local" {
+        if let Backend::Remote(router) = &self.backend
+            && !router.connected(machine_id)
+        {
+            return Err(format!("machine {machine_id:?} is not connected"));
+        }
+        if matches!(self.backend, Backend::Local(_)) && machine_id != "local" {
             return Err(format!("machine {machine_id:?} is not connected"));
         }
         let spec =
@@ -208,9 +230,10 @@ impl Supervisor {
         resume: Option<String>,
     ) -> Result<(), String> {
         let Backend::Local(senders) = &self.backend else {
-            let Backend::Remote(runtime) = &self.backend else {
+            let Backend::Remote(router) = &self.backend else {
                 unreachable!();
             };
+            let runtime = self.runtime_for_session(router, session_id)?;
             runtime.ensure(StartSession {
                 session_id: session_id.to_owned(),
                 provider: spec.id.to_owned(),
@@ -265,7 +288,8 @@ impl Supervisor {
     pub fn send(&self, session_id: &str, command: AgentCommand) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         self.prepare_session_inner(session_id)?;
-        if let Backend::Remote(runtime) = &self.backend {
+        if let Backend::Remote(router) = &self.backend {
+            let runtime = self.runtime_for_session(router, session_id)?;
             if !self
                 .hub
                 .session_list()
@@ -357,7 +381,8 @@ impl Supervisor {
             return Ok(true);
         }
         match &self.backend {
-            Backend::Remote(runtime) => {
+            Backend::Remote(router) => {
+                let runtime = self.runtime_for_session(router, session_id)?;
                 if runtime.has_worker(session_id) {
                     return Ok(false);
                 }
@@ -442,7 +467,10 @@ impl Supervisor {
     /// alive). Unknown / already-torn-down sessions are a no-op and return
     /// `false`.
     pub fn delete_session(&self, session_id: &str) -> bool {
-        if let Backend::Remote(runtime) = &self.backend {
+        if let Backend::Remote(router) = &self.backend {
+            let Ok(runtime) = self.runtime_for_session(router, session_id) else {
+                return false;
+            };
             let existed = runtime.has_worker(session_id);
             runtime.stop(session_id);
             return existed;
@@ -572,6 +600,12 @@ impl Supervisor {
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        // Remote paths belong to the selected Machine and are validated by
+        // its trusted-workspace boundary. Never reinterpret them against the
+        // controller's Hawk-local Columbus layout during resume.
+        if meta.machine_id != "local" {
+            return Ok(false);
+        }
         let stored_cwd = PathBuf::from(&meta.cwd);
         let resolved = resolve_session_workspace(&self.workspace_root, &stored_cwd)?;
         if !resolved.changed {
@@ -592,7 +626,8 @@ impl Supervisor {
 
     fn recycle_session_inner(&self, session_id: &str) -> Result<(), String> {
         match &self.backend {
-            Backend::Remote(runtime) => {
+            Backend::Remote(router) => {
+                let runtime = self.runtime_for_session(router, session_id)?;
                 self.hub.set_status(session_id, Status::Starting, None);
                 runtime.reset(self.start_session(session_id)?);
                 Ok(())
@@ -602,6 +637,23 @@ impl Supervisor {
                 self.revive(session_id)
             }
         }
+    }
+
+    fn runtime_for_session(
+        &self,
+        router: &RuntimeRouter,
+        session_id: &str,
+    ) -> Result<Arc<RemoteRuntime>, String> {
+        let machine_id = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+            .map(|meta| meta.machine_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        router
+            .runtime(&machine_id)
+            .ok_or_else(|| format!("machine {machine_id:?} is not connected"))
     }
 }
 

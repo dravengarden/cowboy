@@ -31,8 +31,10 @@ import {
     ListItemIcon,
     ListItemText,
     ListSubheader,
+    Link,
     Menu,
     MenuItem,
+    Paper,
     Select,
     Skeleton,
     Snackbar,
@@ -1201,6 +1203,20 @@ type MachineChoice = {
     status: "online" | "offline" | "updating" | "degraded";
     local: boolean;
     schedulable: boolean;
+    capacity: { max_sessions: number; draining: boolean };
+    active_sessions: number;
+    workspaces: readonly {
+        id: string;
+        display_name: string;
+        canonical_path: string;
+    }[];
+    components: readonly {
+        id: { kind: string; slot?: string };
+        state: string;
+        version: string;
+        auth?: string;
+        detail?: string;
+    }[];
 };
 
 function NewSessionDialog({
@@ -1226,6 +1242,21 @@ function NewSessionDialog({
     const [workspaces, setWorkspaces] =
         useState<readonly WorkspaceChoice[]>(WORKING_DIRS);
     const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
+    const selectedMachine = machines.find((machine) => machine.id === machineId);
+    const providerAvailable = (candidate: string): boolean => machineId === "local" || Boolean(
+        selectedMachine?.components.some((component) =>
+            component.id.kind === "provider_cli" &&
+            component.id.slot === candidate &&
+            component.state === "active" &&
+            !["signed_out", "pending", "expired", "error"].includes(component.auth ?? "")
+        ),
+    );
+    useEffect(() => {
+        if (!providerAvailable(provider)) {
+            const fallback = PROVIDERS.find(providerAvailable);
+            if (fallback) setProvider(fallback);
+        }
+    }, [machineId, machines, provider]);
     const selectedWorkItem = selectedWorkspace?.active_work_items.find(
         (item) => item.id === workItemId,
     );
@@ -1260,17 +1291,6 @@ function NewSessionDialog({
     }, [open]);
     useEffect(() => {
         if (!open) return;
-        void fetch("/api/workspaces")
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: WorkspaceChoice[] | null) => {
-                if (Array.isArray(data) && data.length > 0) setWorkspaces(data);
-            })
-            .catch(() => {
-                // Keep the hard-coded fallback on any error.
-            });
-    }, [open]);
-    useEffect(() => {
-        if (!open) return;
         void fetch("/api/machines")
             .then((r) => (r.ok ? r.json() : null))
             .then((data: MachineChoice[] | null) => {
@@ -1280,6 +1300,34 @@ function NewSessionDialog({
                 // Older daemons remain an implicit local machine.
             });
     }, [open]);
+    useEffect(() => {
+        if (!open) return;
+        if (machineId !== "local") {
+            const remote = machines.find((machine) => machine.id === machineId);
+            const choices: WorkspaceChoice[] = (remote?.workspaces ?? []).map((workspace) => ({
+                value: workspace.canonical_path,
+                label: workspace.display_name,
+                help: workspace.canonical_path,
+                active_work_items: [],
+            }));
+            setWorkspaces(choices);
+            setCwd(choices[0]?.value ?? "");
+            setWorkItemId("");
+            return;
+        }
+        void fetch("/api/workspaces")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: WorkspaceChoice[] | null) => {
+                const choices = Array.isArray(data) && data.length > 0 ? data : WORKING_DIRS;
+                setWorkspaces(choices);
+                setCwd(choices[0].value);
+                setWorkItemId("");
+            })
+            .catch(() => {
+                setWorkspaces(WORKING_DIRS);
+                setCwd(WORKING_DIRS[0].value);
+            });
+    }, [open, machineId, machines]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
@@ -1391,7 +1439,7 @@ function NewSessionDialog({
                     onChange={(e): void => setProvider(e.target.value)}
                 >
                     {PROVIDERS.map((p) => (
-                        <MenuItem key={p} value={p}>
+                        <MenuItem key={p} value={p} disabled={!providerAvailable(p)}>
                             {p}
                         </MenuItem>
                     ))}
@@ -3535,6 +3583,182 @@ function AutoResumeSettings({ showToggle = true }: { showToggle?: boolean } = {}
     );
 }
 
+type MachineEventView =
+    | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; expires_at_ms: number }
+    | { event: "login_state"; request_id: string; provider: string; state: string; account_label?: string; detail?: string }
+    | { event: "command_result"; request_id: string; accepted: boolean; detail?: string }
+    | { event: "inventory"; observed_at_ms: number; components: unknown[] };
+
+function MachinesContent(): React.JSX.Element {
+    const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
+    const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
+    const [enrollOpen, setEnrollOpen] = useState(false);
+    const [enrollId, setEnrollId] = useState("");
+    const [enrollName, setEnrollName] = useState("");
+    const [enrollment, setEnrollment] = useState<{ token: string; expires_in_seconds: number } | null>(null);
+    const [enrollError, setEnrollError] = useState<string | null>(null);
+    const refresh = useCallback((): void => {
+        void fetch("/api/machines")
+            .then((response) => response.ok ? response.json() : [])
+            .then((value: MachineChoice[]) => setMachines(Array.isArray(value) ? value : []));
+    }, []);
+    useEffect(() => {
+        refresh();
+        const timer = globalThis.setInterval(refresh, 5_000);
+        return () => globalThis.clearInterval(timer);
+    }, [refresh]);
+    const loadEvents = (machineId: string): void => {
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
+            .then((response) => response.ok ? response.json() : [])
+            .then((value: MachineEventView[]) => {
+                setEvents((current) => ({ ...current, [machineId]: Array.isArray(value) ? value : [] }));
+            });
+    };
+    const command = (machineId: string, action: "refresh" | "login" | "components/reconcile", provider?: string): void => {
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/${action}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            ...(action === "login" ? { body: JSON.stringify({ provider }) } : {}),
+        }).finally(() => {
+            globalThis.setTimeout(() => {
+                refresh();
+                loadEvents(machineId);
+            }, 500);
+        });
+    };
+    return (
+        <Stack spacing={1.5}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+                <Box>
+                    <Typography fontWeight={700}>Machines</Typography>
+                    <Typography variant="caption" color="text.secondary">Outbound-only macOS and Linux runtimes</Typography>
+                </Box>
+                <Button startIcon={<Add />} variant="outlined" onClick={() => {
+                    setEnrollment(null);
+                    setEnrollError(null);
+                    setEnrollOpen(true);
+                }}>Add machine</Button>
+            </Stack>
+            {machines.map((machine) => {
+                const latest = events[machine.id]?.at(-1);
+                const challenge = [...(events[machine.id] ?? [])].reverse().find((event) =>
+                    event.event === "login_challenge" && event.expires_at_ms > Date.now()
+                );
+                return (
+                    <Paper key={machine.id} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+                        <Stack spacing={1}>
+                            <Stack direction="row" alignItems="center" spacing={1}>
+                                <StatusDot status={machine.status === "online" ? "running" : "exited"} />
+                                <Box sx={{ minWidth: 0, flex: 1 }}>
+                                    <Typography fontWeight={700}>{machine.display_name}</Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                        {machine.id} · {machine.platform}/{machine.architecture} · {machine.workspaces.length} workspaces · {machine.active_sessions}/{machine.capacity.max_sessions} sessions
+                                    </Typography>
+                                </Box>
+                                <Chip size="small" label={machine.schedulable ? "Ready" : machine.capacity.draining ? "Draining" : machine.status} color={machine.schedulable ? "success" : "default"} />
+                            </Stack>
+                            {!machine.local && (
+                                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                                    <Button size="small" onClick={() => command(machine.id, "refresh")}>Refresh</Button>
+                                    <Button size="small" onClick={() => command(machine.id, "components/reconcile")}>Update components</Button>
+                                    {(["codex", "claude", "gemini"] as const).map((provider) => (
+                                        <Button key={provider} size="small" onClick={() => command(machine.id, "login", provider)}>
+                                            Sign in {provider}
+                                        </Button>
+                                    ))}
+                                    <Button size="small" color="error" onClick={() => {
+                                        if (!globalThis.confirm(`Revoke ${machine.display_name}? A new key enrollment will be required.`)) return;
+                                        void fetch(`/api/machines/${encodeURIComponent(machine.id)}/revoke`, { method: "POST" }).then(refresh);
+                                    }}>Revoke</Button>
+                                </Stack>
+                            )}
+                            {machine.components.length > 0 && (
+                                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                    {machine.components.map((component) => (
+                                        <Chip
+                                            key={`${component.id.kind}:${component.id.slot ?? ""}`}
+                                            size="small"
+                                            variant="outlined"
+                                            color={component.state === "active" ? "success" : component.state === "failed" ? "error" : "default"}
+                                            label={`${component.id.slot || component.id.kind} ${component.version || component.state}${component.auth ? ` · ${component.auth}` : ""}`}
+                                        />
+                                    ))}
+                                </Stack>
+                            )}
+                            {challenge?.event === "login_challenge" && (
+                                <Alert severity="info">
+                                    Open <Link href={challenge.verification_url} target="_blank" rel="noreferrer">{challenge.verification_url}</Link>
+                                    {challenge.user_code ? ` and enter ${challenge.user_code}` : ""}
+                                    <Button
+                                        size="small"
+                                        onClick={() => {
+                                            void fetch(
+                                                `/api/machines/${encodeURIComponent(machine.id)}/login/${encodeURIComponent(challenge.request_id)}`,
+                                                { method: "DELETE" },
+                                            ).finally(() => loadEvents(machine.id));
+                                        }}
+                                    >Cancel</Button>
+                                </Alert>
+                            )}
+                            {latest && latest.event !== "inventory" && (
+                                <Typography variant="caption" color="text.secondary">
+                                    {latest.event === "command_result" ? latest.detail ?? (latest.accepted ? "Command accepted" : "Command rejected") :
+                                        latest.event === "login_state" ? `${latest.provider}: ${latest.state}${latest.detail ? ` · ${latest.detail}` : ""}` : ""}
+                                </Typography>
+                            )}
+                        </Stack>
+                    </Paper>
+                );
+            })}
+            <Dialog open={enrollOpen} onClose={() => setEnrollOpen(false)} fullWidth maxWidth="sm">
+                <DialogTitle>{enrollment ? "Install this machine" : "Add machine"}</DialogTitle>
+                <DialogContent>
+                    <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+                        {!enrollment ? <>
+                            <TextField label="Machine ID" value={enrollId} onChange={(event) => setEnrollId(event.target.value.toLowerCase())} helperText="Lowercase letters, numbers, and hyphens" autoFocus />
+                            <TextField label="Display name" value={enrollName} onChange={(event) => setEnrollName(event.target.value)} />
+                            {enrollError && <Alert severity="error">{enrollError}</Alert>}
+                            <Stack direction="row" justifyContent="flex-end" spacing={1}>
+                                <Button onClick={() => setEnrollOpen(false)}>Cancel</Button>
+                                <Button variant="contained" disabled={!enrollId || !enrollName.trim()} onClick={() => {
+                                    setEnrollError(null);
+                                    void fetch("/api/machines/enrollment", {
+                                        method: "POST",
+                                        headers: { "content-type": "application/json" },
+                                        body: JSON.stringify({ machine_id: enrollId, display_name: enrollName }),
+                                    }).then(async (response) => {
+                                        if (!response.ok) throw new Error(await response.text());
+                                        return response.json();
+                                    }).then(setEnrollment).catch((error: unknown) => setEnrollError(error instanceof Error ? error.message : "Could not create enrollment"));
+                                }}>Create enrollment</Button>
+                            </Stack>
+                        </> : <>
+                            <Alert severity="warning">This one-time token expires in {Math.round(enrollment.expires_in_seconds / 60)} minutes. It disappears from the machine after enrollment.</Alert>
+                            <Typography variant="body2">Run on the target machine after installing the release binaries:</Typography>
+                            <Paper variant="outlined" sx={{ p: 1.5, fontFamily: "monospace", whiteSpace: "pre-wrap", overflowWrap: "anywhere", userSelect: "text" }}>
+                                {[
+                                    "cowboy-machine-install \\",
+                                    `  --controller-url ${globalThis.location.origin} \\`,
+                                    `  --machine-id ${enrollId} \\`,
+                                    `  --display-name '${enrollName.replaceAll("'", "'\\''")}' \\`,
+                                    "  --workspace main=/absolute/workspace \\",
+                                    "  --max-sessions 8 \\",
+                                    `  --enrollment-token '${enrollment.token}' \\`,
+                                    "  --artifact-public-key /path/to/publisher.pub",
+                                ].join("\n")}
+                            </Paper>
+                            <Stack direction="row" justifyContent="flex-end" spacing={1}>
+                                <Button onClick={() => void navigator.clipboard.writeText(enrollment.token)}>Copy token</Button>
+                                <Button variant="contained" onClick={() => { setEnrollOpen(false); refresh(); }}>Done</Button>
+                            </Stack>
+                        </>}
+                    </Stack>
+                </DialogContent>
+            </Dialog>
+        </Stack>
+    );
+}
+
 function SettingsShell({
     open,
     onClose,
@@ -3550,7 +3774,7 @@ function SettingsShell({
 }): React.JSX.Element {
     // Merged sheet: a Settings / Info segmented switch in the header. Each open
     // lands on the tab whose button was tapped (gear → settings, ℹ️ → info).
-    const [tab, setTab] = useState<"settings" | "info" | "logs">(initialTab);
+    const [tab, setTab] = useState<"settings" | "machines" | "info" | "logs">(initialTab);
     useEffect(() => {
         if (open) setTab(initialTab);
     }, [open, initialTab]);
@@ -3601,7 +3825,7 @@ function SettingsShell({
             const target = event.target;
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
             const key = workspaceCommandKey(event).toLowerCase();
-            const tabs = ["settings", "info", "logs"] as const;
+            const tabs = ["settings", "machines", "info", "logs"] as const;
             if (!desktop && (key === "[" || key === "]")) {
                 event.preventDefault();
                 const index = tabs.indexOf(tab);
@@ -3697,7 +3921,7 @@ function SettingsShell({
                 {!desktop && <SegmentedPill
                     value={tab}
                     onChange={setTab}
-                    options={[{ value: "settings", label: "Settings" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
+                    options={[{ value: "settings", label: "Settings" }, { value: "machines", label: "Machines" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
                 />}
                 <Box
                     sx={{
@@ -3730,6 +3954,9 @@ function SettingsShell({
                     }}
                 >
                     <DesktopSettingsContent themeMode={themeMode} onSetThemeMode={onSetThemeMode} />
+                    <DesktopModalBlock label="Remote runtimes & credentials" title="Machines" shortcut="M">
+                        <MachinesContent />
+                    </DesktopModalBlock>
                     <DesktopModalBlock label="Runtime, usage & audit" title="Info" shortcut="I" section="info">
                         <InfoContent
                             desktop
@@ -3741,7 +3968,7 @@ function SettingsShell({
                         />
                     </DesktopModalBlock>
                 </Box>
-            ) : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
+            ) : tab === "machines" ? <MachinesContent /> : tab === "info" ? <InfoContent /> : tab === "logs" ? <UsageLogs /> : (
             <Stack spacing={3}>
                 <ThemeModeControl value={themeMode} onChange={onSetThemeMode} />
 

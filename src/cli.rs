@@ -144,6 +144,12 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_RUNTIME_WORKER_COMMAND")]
     pub runtime_worker_command: Option<PathBuf>,
 
+    /// Controller-owned signed desired-component manifest sent to every
+    /// authenticated Machine. The browser can request reconciliation but
+    /// cannot supply artifact URLs, hashes, or signatures.
+    #[arg(long, env = "COWBOY_MACHINE_COMPONENTS_MANIFEST")]
+    pub machine_components_manifest: Option<PathBuf>,
+
     /// `PostgreSQL` connection URL for persistent sessions + events. When
     /// absent the daemon runs in pure in-memory mode (v0 fallback, no
     /// restart recovery). The hawk-provisioned cowboy-private cluster

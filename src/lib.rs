@@ -21,9 +21,11 @@ mod cgroup;
 #[cfg(feature = "full")]
 pub mod cli;
 #[cfg(feature = "full")]
+pub mod code_adapter;
+#[cfg(feature = "full")]
 mod code_cache;
 #[cfg(feature = "full")]
-mod code_review;
+pub mod code_review;
 #[cfg(feature = "full")]
 mod core;
 #[cfg(feature = "full")]
@@ -34,6 +36,10 @@ mod files;
 mod inference;
 pub mod machine_auth;
 pub mod machine_cli;
+mod machine_components;
+#[cfg(feature = "full")]
+mod machine_control;
+pub mod machine_install;
 pub mod machine_protocol;
 #[cfg(feature = "full")]
 mod persistence;
@@ -43,6 +49,8 @@ mod provider;
 mod remote_runtime;
 #[cfg(feature = "full")]
 mod runtime;
+#[cfg(feature = "full")]
+mod runtime_router;
 pub mod runtime_wire;
 #[cfg(feature = "full")]
 mod scheduler;

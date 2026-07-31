@@ -31,6 +31,7 @@ pub enum ComponentKind {
     AcpRuntime,
     ProviderAdapter,
     ProviderCli,
+    CodeAdapter,
     ZedAdapter,
     ZedServer,
     ManagedNode,
@@ -105,6 +106,43 @@ pub struct MachineHello {
     pub challenge_signature: Option<String>,
     #[serde(default)]
     pub components: Vec<ComponentInventory>,
+    /// Explicit launch roots exported by the Machine. Cowboy never sends an
+    /// arbitrary controller-side path to a remote host.
+    #[serde(default)]
+    pub workspaces: Vec<MachineWorkspace>,
+    /// Scheduling envelope declared by the stable host. Active usage is
+    /// controller-derived so a reconnect cannot under-report existing
+    /// session leases.
+    #[serde(default)]
+    pub capacity: MachineCapacity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineCapacity {
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: u32,
+    #[serde(default)]
+    pub draining: bool,
+}
+
+impl Default for MachineCapacity {
+    fn default() -> Self {
+        Self {
+            max_sessions: default_max_sessions(),
+            draining: false,
+        }
+    }
+}
+
+fn default_max_sessions() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineWorkspace {
+    pub id: String,
+    pub display_name: String,
+    pub canonical_path: String,
 }
 
 /// Build the exact version-one proof signed during a remote Machine handshake.
@@ -156,10 +194,24 @@ pub struct DesiredComponent {
     pub generation: String,
     pub artifact_url: String,
     pub digest: String,
+    #[serde(default)]
+    pub artifact_format: ArtifactFormat,
+    /// Relative executable path within an archive. Raw artifacts always use
+    /// `bin` and leave this unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
     #[serde(default)]
     pub automatic: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactFormat {
+    #[default]
+    Raw,
+    TarGz,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +234,13 @@ pub enum MachineCommand {
     },
     RefreshInventory {
         request_id: String,
+    },
+    /// Forward one stable Cowboy product request to a versioned adapter on
+    /// the Machine. Raw Zed protobuf never crosses this boundary.
+    AdapterRequest {
+        request_id: String,
+        adapter: String,
+        payload: serde_json::Value,
     },
 }
 
@@ -212,6 +271,14 @@ pub enum MachineEvent {
         state: AuthState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    AdapterResponse {
+        request_id: String,
+        accepted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payload: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
@@ -270,6 +337,40 @@ mod tests {
     }
 
     #[test]
+    fn old_raw_component_manifest_keeps_its_additive_defaults() {
+        let component: DesiredComponent = serde_json::from_value(serde_json::json!({
+            "id": { "kind": "provider_cli", "slot": "codex" },
+            "version": "1",
+            "generation": "1",
+            "artifact_url": "https://example.invalid/codex",
+            "digest": "00",
+            "automatic": false
+        }))
+        .unwrap();
+        assert_eq!(component.artifact_format, ArtifactFormat::Raw);
+        assert_eq!(component.entrypoint, None);
+    }
+
+    #[test]
+    fn old_machine_hello_defaults_to_a_safe_single_session_capacity() {
+        let hello: MachineHello = serde_json::from_value(serde_json::json!({
+            "machine_id": "old",
+            "display_name": "Old Machine",
+            "platform": "linux",
+            "arch": "x86_64",
+            "connection_mode": "outbound_tls",
+            "min_protocol": 1,
+            "max_protocol": 1,
+            "min_runtime_protocol": 1,
+            "max_runtime_protocol": 1,
+            "host_build": "old"
+        }))
+        .unwrap();
+        assert_eq!(hello.capacity.max_sessions, 1);
+        assert!(!hello.capacity.draining);
+    }
+
+    #[test]
     fn challenge_proof_binds_machine_and_protocol_without_display_metadata() {
         let hello = MachineHello {
             machine_id: "falcon".to_owned(),
@@ -285,6 +386,8 @@ mod tests {
             challenge_id: None,
             challenge_signature: None,
             components: Vec::new(),
+            workspaces: Vec::new(),
+            capacity: MachineCapacity::default(),
         };
         let proof = challenge_proof_v1("id", "nonce", 42, &hello);
         let mut renamed = hello.clone();
@@ -318,6 +421,8 @@ mod tests {
                 challenge_id: None,
                 challenge_signature: None,
                 components: Vec::new(),
+                workspaces: Vec::new(),
+                capacity: MachineCapacity::default(),
             },
         };
         let value = serde_json::to_value(frame).expect("serialize machine hello");

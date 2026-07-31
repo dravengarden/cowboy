@@ -42,9 +42,11 @@ use crate::core::{
     RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
+use crate::machine_control::MachineControl;
 use crate::persistence::EventReducer;
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
+use crate::runtime_router::RuntimeRouter;
 use crate::runtime_wire::StartSession;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
@@ -62,6 +64,9 @@ struct AppState {
     shutdown: watch::Receiver<bool>,
     runtime_health: Arc<RuntimeHealth>,
     remote_runtime: Option<Arc<RemoteRuntime>>,
+    runtime_router: Option<Arc<RuntimeRouter>>,
+    machine_control: Arc<MachineControl>,
+    desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
@@ -94,6 +99,16 @@ fn scheduled_reset_failure_policy(
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
+    let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
+        serde_json::from_slice::<Vec<crate::machine_protocol::DesiredComponent>>(
+            &std::fs::read(path).with_context(|| {
+                format!("reading Machine component manifest {}", path.display())
+            })?,
+        )
+        .with_context(|| format!("parsing Machine component manifest {}", path.display()))?
+    } else {
+        Vec::new()
+    };
     init_tracing();
     let code_cache =
         crate::code_cache::CodeCache::open(args.data_dir.join("code-cache"), args.code_cache_bytes)
@@ -234,6 +249,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .map(|path| path.display().to_string()),
         )
     });
+    let runtime_router = remote_runtime
+        .as_ref()
+        .map(|runtime| RuntimeRouter::new(Arc::clone(runtime)));
     // Reset credits belong to the Codex account, not a session. Restore one
     // shared provider-level timer and keep it independent from session queues.
     if let Some(store) = store.as_ref() {
@@ -389,12 +407,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             }
         }
     }
-    let supervisor = Arc::new(match &remote_runtime {
-        Some(runtime) => Supervisor::new_remote(
+    let supervisor = Arc::new(match &runtime_router {
+        Some(router) => Supervisor::new_routed(
             hub.clone(),
             args.workspace_root.clone(),
             session_id_floor,
-            Arc::clone(runtime),
+            Arc::clone(router),
         ),
         None => Supervisor::new(hub.clone(), args.workspace_root.clone(), session_id_floor),
     });
@@ -521,6 +539,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             shutdown: shutdown_rx,
             runtime_health,
             remote_runtime: remote_runtime.clone(),
+            runtime_router,
+            machine_control: Arc::new(MachineControl::default()),
+            desired_machine_components: Arc::new(desired_machine_components),
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
@@ -983,6 +1004,22 @@ async fn serve_axum(
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
         .route("/api/machines", get(api_machines))
+        .route(
+            "/api/machines/enrollment",
+            post(api_machine_create_enrollment),
+        )
+        .route("/api/machines/{id}/events", get(api_machine_events))
+        .route("/api/machines/{id}/refresh", post(api_machine_refresh))
+        .route("/api/machines/{id}/login", post(api_machine_login))
+        .route(
+            "/api/machines/{id}/login/{request_id}",
+            axum::routing::delete(api_machine_login_cancel),
+        )
+        .route(
+            "/api/machines/{id}/components/reconcile",
+            post(api_machine_reconcile),
+        )
+        .route("/api/machines/{id}/revoke", post(api_machine_revoke))
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
         .route("/api/sessions", post(api_new_session))
@@ -1595,11 +1632,12 @@ struct MachineSummary {
     local: bool,
     schedulable: bool,
     fingerprint: Option<String>,
+    workspaces: Vec<crate::machine_protocol::MachineWorkspace>,
+    components: Vec<crate::machine_protocol::ComponentInventory>,
+    capacity: crate::machine_protocol::MachineCapacity,
+    active_sessions: u32,
 }
 
-/// The first multi-machine slice deliberately advertises only the operational
-/// local scheduler. Enrolled outbound machines are added here only after their
-/// authenticated connection and inventory have been accepted.
 async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
     if let Some(store) = state.store.as_ref() {
         return match store.list_machines().await {
@@ -1607,15 +1645,58 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                 machines
                     .into_iter()
                     .filter(|machine| !machine.revoked)
-                    .map(|machine| MachineSummary {
-                        local: machine.id == "local",
-                        schedulable: machine.id == "local" && machine.status == "online",
-                        id: machine.id,
-                        display_name: machine.display_name,
-                        platform: machine.platform,
-                        architecture: machine.architecture,
-                        status: machine.status,
-                        fingerprint: machine.fingerprint,
+                    .map(|machine| {
+                        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+                            .inventory
+                            .get("workspaces")
+                            .cloned()
+                            .and_then(|value| serde_json::from_value(value).ok())
+                            .unwrap_or_default();
+                        let components: Vec<crate::machine_protocol::ComponentInventory> = machine
+                            .inventory
+                            .get("components")
+                            .cloned()
+                            .and_then(|value| serde_json::from_value(value).ok())
+                            .unwrap_or_default();
+                        let capacity: crate::machine_protocol::MachineCapacity = machine
+                            .inventory
+                            .get("capacity")
+                            .cloned()
+                            .and_then(|value| serde_json::from_value(value).ok())
+                            .unwrap_or_default();
+                        let active_sessions = u32::try_from(
+                            state
+                                .hub
+                                .session_list()
+                                .into_iter()
+                                .filter(|session| {
+                                    session.machine_id == machine.id
+                                        && session.status != crate::agent_model::Status::Exited
+                                })
+                                .count(),
+                        )
+                        .unwrap_or(u32::MAX);
+                        let schedulable = state
+                            .runtime_router
+                            .as_ref()
+                            .is_some_and(|router| router.connected(&machine.id))
+                            && (machine.id == "local" || !workspaces.is_empty())
+                            && !capacity.draining
+                            && active_sessions < capacity.max_sessions;
+                        MachineSummary {
+                            local: machine.id == "local",
+                            schedulable,
+                            id: machine.id,
+                            display_name: machine.display_name,
+                            platform: machine.platform,
+                            architecture: machine.architecture,
+                            status: machine.status,
+                            fingerprint: machine.fingerprint,
+                            workspaces,
+                            components,
+                            capacity,
+                            active_sessions,
+                        }
                     })
                     .collect::<Vec<_>>(),
             )
@@ -1639,8 +1720,184 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
         local: true,
         schedulable: true,
         fingerprint: None,
+        workspaces: vec![crate::machine_protocol::MachineWorkspace {
+            id: "default".to_owned(),
+            display_name: "Default workspace".to_owned(),
+            canonical_path: state.supervisor.workspace_root().display().to_string(),
+        }],
+        components: Vec::new(),
+        capacity: crate::machine_protocol::MachineCapacity {
+            max_sessions: u32::MAX,
+            draining: false,
+        },
+        active_sessions: u32::try_from(
+            state
+                .hub
+                .session_list()
+                .into_iter()
+                .filter(|session| {
+                    session.machine_id == "local"
+                        && session.status != crate::agent_model::Status::Exited
+                })
+                .count(),
+        )
+        .unwrap_or(u32::MAX),
     }])
     .into_response()
+}
+
+async fn api_machine_events(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    Json(state.machine_control.events(&machine_id)).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct MachineLoginRequest {
+    provider: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MachineEnrollmentRequest {
+    machine_id: String,
+    display_name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MachineEnrollmentResponse {
+    machine_id: String,
+    display_name: String,
+    token: String,
+    expires_in_seconds: i64,
+}
+
+async fn api_machine_create_enrollment(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<MachineEnrollmentRequest>,
+) -> Response {
+    const TTL_SECONDS: i64 = 900;
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Machine enrollment requires persistence",
+        )
+            .into_response();
+    };
+    match store
+        .create_machine_enrollment(&request.machine_id, &request.display_name, TTL_SECONDS)
+        .await
+    {
+        Ok(token) => Json(MachineEnrollmentResponse {
+            machine_id: request.machine_id,
+            display_name: request.display_name,
+            token,
+            expires_in_seconds: TTL_SECONDS,
+        })
+        .into_response(),
+        Err(error) => (StatusCode::CONFLICT, error.to_string()).into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct MachineCommandResponse {
+    request_id: String,
+}
+
+fn machine_request_id(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}",
+        random_machine_token().unwrap_or_else(|_| now_ms().to_string())
+    )
+}
+
+async fn api_machine_refresh(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    let request_id = machine_request_id("refresh");
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::RefreshInventory {
+            request_id: request_id.clone(),
+        },
+    ) {
+        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_machine_login(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+    Json(request): Json<MachineLoginRequest>,
+) -> Response {
+    if !matches!(request.provider.as_str(), "codex" | "claude" | "gemini") {
+        return (StatusCode::BAD_REQUEST, "unknown provider").into_response();
+    }
+    let request_id = machine_request_id("login");
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::BeginLogin {
+            request_id: request_id.clone(),
+            provider: request.provider,
+        },
+    ) {
+        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_machine_reconcile(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    if state.desired_machine_components.is_empty() {
+        return (
+            StatusCode::PRECONDITION_FAILED,
+            "no signed Machine component manifest is configured",
+        )
+            .into_response();
+    }
+    let request_id = machine_request_id("reconcile");
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::Reconcile {
+            request_id: request_id.clone(),
+            components: state.desired_machine_components.as_ref().clone(),
+        },
+    ) {
+        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_machine_login_cancel(
+    State(state): State<Arc<AppState>>,
+    Path((machine_id, request_id)): Path<(String, String)>,
+) -> Response {
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::CancelLogin {
+            request_id: request_id.clone(),
+        },
+    ) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_machine_revoke(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "persistence unavailable").into_response();
+    };
+    match store.revoke_machine(&machine_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1810,7 +2067,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         crate::machine_protocol::Platform::Linux => "linux",
         crate::machine_protocol::Platform::Macos => "macos",
     };
-    let inventory = serde_json::to_value(&hello.components).unwrap_or_default();
+    let inventory = serde_json::json!({
+        "components": &hello.components,
+        "workspaces": &hello.workspaces,
+        "capacity": &hello.capacity,
+    });
     if let Err(error) = store
         .machine_connected(
             &hello.machine_id,
@@ -1830,7 +2091,12 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             protocol,
             controller_epoch: 0,
             heartbeat_interval_ms: MACHINE_HEARTBEAT_MS,
-            desired_components: Vec::new(),
+            desired_components: state
+                .desired_machine_components
+                .iter()
+                .filter(|component| component.automatic)
+                .cloned()
+                .collect(),
         },
     )
     .await
@@ -1842,12 +2108,99 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         return;
     }
     tracing::info!(machine = %hello.machine_id, "Machine connected");
+    let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
+    state.machine_control.install(
+        hello.machine_id.clone(),
+        challenge_id.clone(),
+        machine_command_tx,
+    );
+    state.machine_control.record(
+        &hello.machine_id,
+        crate::machine_protocol::MachineEvent::Inventory {
+            components: hello.components.clone(),
+            observed_at_ms: now_ms(),
+        },
+    );
+    let (runtime_core, runtime_tunnel) = match UnixStream::pair() {
+        Ok(pair) => pair,
+        Err(error) => {
+            tracing::error!(%error, machine = %hello.machine_id, "creating Machine runtime tunnel");
+            return;
+        }
+    };
+    let (mut runtime_reader, mut runtime_writer) = runtime_tunnel.into_split();
+    let (runtime_tx, mut runtime_rx) = tokio::sync::oneshot::channel();
+    if let Some(router) = state.runtime_router.clone() {
+        let hub = state.hub.clone();
+        let machine_id = hello.machine_id.clone();
+        let generation = hello
+            .components
+            .iter()
+            .find(|component| {
+                component.id.kind == crate::machine_protocol::ComponentKind::AcpRuntime
+                    && component.state == crate::machine_protocol::ComponentState::Active
+            })
+            .map_or_else(
+                || hello.host_build.clone(),
+                |component| component.generation.clone(),
+            );
+        tokio::spawn(async move {
+            let label = PathBuf::from(format!("machine://{machine_id}"));
+            match RemoteBootstrap::from_stream(label, runtime_core).await {
+                Ok(bootstrap) => {
+                    // Executable paths are machine-local. The remote broker
+                    // registered this generation from its own active
+                    // content-addressed component before connecting.
+                    let runtime = RemoteRuntime::new(hub, &bootstrap, generation, None);
+                    router.install(machine_id, Arc::clone(&runtime));
+                    runtime.start(bootstrap);
+                    let _ = runtime_tx.send(runtime);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, machine = %machine_id, "Machine runtime handshake failed");
+                }
+            }
+        });
+    }
+    let mut connected_runtime: Option<Arc<RemoteRuntime>> = None;
+    let mut runtime_registration_pending = true;
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
     loop {
         let message = tokio::select! {
-            message = socket.recv() => message,
+            message = socket.recv() => Some(message),
+            runtime = &mut runtime_rx, if runtime_registration_pending => {
+                runtime_registration_pending = false;
+                if let Ok(runtime) = runtime {
+                    connected_runtime = Some(runtime);
+                }
+                None
+            }
+            frame = crate::runtime_wire::read_frame(&mut runtime_reader) => {
+                match frame {
+                    Ok(Some(frame)) => {
+                        if send_json(
+                            &mut socket,
+                            &crate::machine_protocol::MachineFrame::Runtime { frame },
+                        ).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            command = machine_command_rx.recv() => {
+                let Some(command) = command else { break };
+                if send_json(
+                    &mut socket,
+                    &crate::machine_protocol::MachineFrame::Command { command },
+                ).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             _ = revocation_check.tick() => {
                 match store.machine_connection_is_current(&hello.machine_id, &challenge_id).await {
                     Ok(true) => continue,
@@ -1862,6 +2215,9 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
             }
+        };
+        let Some(message) = message else {
+            continue;
         };
         let Some(message) = message else {
             break;
@@ -1881,10 +2237,36 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             crate::machine_protocol::MachineFrame::Event {
                 event: crate::machine_protocol::MachineEvent::Inventory { components, .. },
             } => {
-                let inventory = serde_json::to_value(components).unwrap_or_default();
+                state.machine_control.record(
+                    &hello.machine_id,
+                    crate::machine_protocol::MachineEvent::Inventory {
+                        components: components.clone(),
+                        observed_at_ms: now_ms(),
+                    },
+                );
+                let inventory = serde_json::json!({
+                    "components": components,
+                    "workspaces": &hello.workspaces,
+                    "capacity": &hello.capacity,
+                });
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, Some(&inventory))
                     .await
+            }
+            crate::machine_protocol::MachineFrame::Event { event } => {
+                state.machine_control.record(&hello.machine_id, event);
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, None)
+                    .await
+            }
+            crate::machine_protocol::MachineFrame::Runtime { frame } => {
+                if let Err(error) =
+                    crate::runtime_wire::write_frame(&mut runtime_writer, &frame).await
+                {
+                    tracing::warn!(%error, machine = %hello.machine_id, "writing Machine runtime frame");
+                    break;
+                }
+                continue;
             }
             _ => continue,
         };
@@ -1893,6 +2275,12 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             break;
         }
     }
+    if let (Some(router), Some(runtime)) = (&state.runtime_router, connected_runtime.as_ref()) {
+        router.remove_if_current(&hello.machine_id, runtime);
+    }
+    state
+        .machine_control
+        .remove_if_current(&hello.machine_id, &challenge_id);
     if let Err(error) = store
         .machine_disconnected(&hello.machine_id, &challenge_id)
         .await
@@ -2034,6 +2422,73 @@ async fn api_new_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
+    if req.machine_id != "local" {
+        let Some(store) = state.store.as_ref() else {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "machine registry unavailable",
+            )
+                .into_response();
+        };
+        let machine = store.list_machines().await.ok().and_then(|machines| {
+            machines
+                .into_iter()
+                .find(|machine| machine.id == req.machine_id && !machine.revoked)
+        });
+        let capacity: crate::machine_protocol::MachineCapacity = machine
+            .as_ref()
+            .and_then(|machine| machine.inventory.get("capacity").cloned())
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        let active_sessions = state
+            .hub
+            .session_list()
+            .into_iter()
+            .filter(|session| {
+                session.machine_id == req.machine_id
+                    && session.status != crate::agent_model::Status::Exited
+            })
+            .count();
+        if capacity.draining || active_sessions >= capacity.max_sessions as usize {
+            return (
+                StatusCode::CONFLICT,
+                format!("machine {:?} is draining or at capacity", req.machine_id),
+            )
+                .into_response();
+        }
+        let supported = machine
+            .and_then(|machine| machine.inventory.get("components").cloned())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(value)
+                    .ok()
+            })
+            .is_some_and(|components| {
+                components.into_iter().any(|component| {
+                    component.id.kind == crate::machine_protocol::ComponentKind::ProviderCli
+                        && component.id.slot == req.provider
+                        && component.state == crate::machine_protocol::ComponentState::Active
+                        && !matches!(
+                            component.auth,
+                            Some(
+                                crate::machine_protocol::AuthState::SignedOut
+                                    | crate::machine_protocol::AuthState::Pending
+                                    | crate::machine_protocol::AuthState::Expired
+                                    | crate::machine_protocol::AuthState::Error
+                            )
+                        )
+                })
+            });
+        if !supported {
+            return (
+                StatusCode::CONFLICT,
+                format!(
+                    "provider {:?} is not installed and authenticated on machine {:?}",
+                    req.provider, req.machine_id
+                ),
+            )
+                .into_response();
+        }
+    }
     match state.supervisor.new_session_on(
         &req.provider,
         req.cwd,
@@ -2177,7 +2632,7 @@ struct CodeChangesResponse {
 #[serde(rename_all = "camelCase")]
 struct CodeManifestResponse {
     api_version: u8,
-    provider: &'static str,
+    provider: String,
     revision: String,
     head: Option<String>,
     project: String,
@@ -2360,7 +2815,13 @@ async fn zed_adapter_request(
     )
     .await
     .context("Zed adapter response timed out")??;
-    match serde_json::from_str::<ZedAdapterResponse>(&line)? {
+    validate_zed_adapter_response(serde_json::from_str::<ZedAdapterResponse>(&line)?)
+}
+
+fn validate_zed_adapter_response(
+    response: ZedAdapterResponse,
+) -> anyhow::Result<ZedAdapterResponse> {
+    match response {
         response @ (ZedAdapterResponse::Worktree { api_version: 1, .. }
         | ZedAdapterResponse::Buffer { api_version: 1, .. }
         | ZedAdapterResponse::BufferLanguage { api_version: 1, .. }
@@ -2380,6 +2841,84 @@ async fn zed_adapter_request(
     }
 }
 
+async fn zed_adapter_request_for_session(
+    state: &AppState,
+    session_id: &str,
+    request: serde_json::Value,
+) -> anyhow::Result<ZedAdapterResponse> {
+    let machine_id = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|meta| meta.id == session_id)
+        .map(|meta| meta.machine_id)
+        .context("unknown session")?;
+    if machine_id == "local" {
+        let socket = state
+            .zed_adapter_socket
+            .as_deref()
+            .context("local Zed adapter is not configured")?;
+        return zed_adapter_request(socket, request).await;
+    }
+    let value = state
+        .machine_control
+        .adapter_request(&machine_id, "zed", request)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    validate_zed_adapter_response(serde_json::from_value(value)?)
+}
+
+async fn remote_code_request(
+    state: &AppState,
+    session_id: &str,
+    cwd: &str,
+    operation: serde_json::Value,
+) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
+    let machine_id = state
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|meta| meta.id == session_id)
+        .map(|meta| meta.machine_id)
+        .context("unknown session")?;
+    if machine_id == "local" {
+        return Ok(None);
+    }
+    let mut request = operation;
+    request
+        .as_object_mut()
+        .context("code adapter operation must be an object")?
+        .insert("root".to_owned(), serde_json::Value::String(cwd.to_owned()));
+    let value = state
+        .machine_control
+        .adapter_request(&machine_id, "code", request)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    Ok(Some(serde_json::from_value(value)?))
+}
+
+async fn ensure_zed_worktree_for_session(
+    state: &AppState,
+    session_id: &str,
+    cwd: &str,
+) -> anyhow::Result<bool> {
+    match zed_adapter_request_for_session(
+        state,
+        session_id,
+        serde_json::json!({
+            "type": "ensureWorktree",
+            "path": cwd,
+            "trusted": true,
+        }),
+    )
+    .await?
+    {
+        ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
+        _ => anyhow::bail!("unexpected Zed adapter response"),
+    }
+}
+
+#[cfg(test)]
 async fn ensure_zed_worktree(socket: &FsPath, cwd: &str) -> anyhow::Result<bool> {
     match zed_adapter_request(
         socket,
@@ -2495,11 +3034,24 @@ async fn api_search_files(
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     let limit = query.limit.clamp(1, 100);
-    let files = tokio::task::spawn_blocking(move || {
-        crate::files::search(std::path::Path::new(&cwd), &query.q, limit)
-    })
+    let files = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
+    )
     .await
-    .unwrap_or_default();
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
+        }
+        Ok(None) => tokio::task::spawn_blocking(move || {
+            crate::files::search(std::path::Path::new(&cwd), &query.q, limit)
+        })
+        .await
+        .unwrap_or_default(),
+    };
     Json(FileSearchResponse { files }).into_response()
 }
 
@@ -2512,11 +3064,24 @@ async fn api_code_search(
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
     let limit = query.limit.clamp(1, 100);
-    let files = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(cwd).search(&query.q, limit)
-    })
+    let files = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
+    )
     .await
-    .unwrap_or_default();
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
+        }
+        Ok(None) => tokio::task::spawn_blocking(move || {
+            crate::code_review::LocalCodeProvider::new(cwd).search(&query.q, limit)
+        })
+        .await
+        .unwrap_or_default(),
+    };
     Json(CodeSearchResponse {
         api_version: 1,
         files,
@@ -2548,6 +3113,46 @@ async fn api_file_tree(
     let limit = query.limit.clamp(20, 500);
     let path = query.path;
     let requested_path = path.clone();
+    let remote_page = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "directory", "path": path.clone(), "limit": limit }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Directory(page))) => Some(page),
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote directory unavailable").into_response();
+        }
+        Ok(None) => None,
+    };
+    if let Some(page) = remote_page {
+        let entries = page
+            .entries
+            .into_iter()
+            .map(|entry| FileTreeEntry {
+                name: entry.name,
+                path: entry.path,
+                kind: if entry.is_directory {
+                    "directory"
+                } else {
+                    "file"
+                },
+                ignored: entry.ignored,
+            })
+            .collect::<Vec<_>>();
+        let revision = file_tree_revision(&requested_path, &entries, page.truncated);
+        let body = serde_json::to_vec(&FileTreeResponse {
+            api_version: 1,
+            path: requested_path,
+            revision: revision.clone(),
+            entries,
+            truncated: page.truncated,
+        })
+        .expect("file tree response serializes");
+        return file_tree_http_response(&headers, &revision, body);
+    }
     let cache = state.code_cache.clone();
     let cache_root = cwd.clone();
     let cache_path = requested_path.clone();
@@ -2630,24 +3235,35 @@ async fn api_code_manifest(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let language_ready = if let Some(socket) = &state.zed_adapter_socket {
-        match ensure_zed_worktree(socket, &cwd).await {
-            Ok(ready) => ready,
-            Err(error) => {
-                tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
-                false
-            }
+    let language_ready = match ensure_zed_worktree_for_session(&state, &session_id, &cwd).await {
+        Ok(ready) => ready,
+        Err(error) => {
+            tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
+            false
         }
-    } else {
-        false
     };
-    let manifest_cwd = cwd;
-    let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(manifest_cwd).manifest()
-    })
-    .await;
-    let Ok(Ok(manifest)) = result else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable").into_response();
+    let manifest = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "manifest" }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Manifest(manifest))) => manifest,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote worktree unavailable").into_response();
+        }
+        Ok(None) => {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(cwd).manifest()
+            })
+            .await;
+            let Ok(Ok(manifest)) = result else {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable").into_response();
+            };
+            manifest
+        }
     };
     let language_state = if language_ready {
         "ready"
@@ -2714,12 +3330,29 @@ async fn api_code_changes(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
-    })
-    .await;
-    let Ok(Ok(result)) = result else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable").into_response();
+    let result = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "changes" }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Changes(changes))) => changes,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote git changes unavailable").into_response();
+        }
+        Ok(None) => {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
+            })
+            .await;
+            let Ok(Ok(changes)) = result else {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable")
+                    .into_response();
+            };
+            changes
+        }
     };
     Json(CodeChangesResponse {
         api_version: 1,
@@ -2785,16 +3418,39 @@ async fn api_code_diff(
         CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
     };
     let key = DiffSnapshotKey {
-        session_id,
+        session_id: session_id.clone(),
         cwd: cwd.clone(),
         path: path.clone(),
         context: query.context,
         show_whitespace: query.show_whitespace,
         scope,
     };
+    let remote_document = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({
+            "type": "diff",
+            "path": path.clone(),
+            "context": query.context,
+            "show_whitespace": query.show_whitespace,
+            "scope": scope,
+        }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Diff(document))) => Some(document),
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote diff unavailable").into_response();
+        }
+        Ok(None) => None,
+    };
     let page = state
         .diff_snapshots
         .first_page(key, || async move {
+            if let Some(document) = remote_document {
+                return Ok(document);
+            }
             tokio::task::spawn_blocking(move || {
                 crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).diff_snapshot(
                     &path,
@@ -2833,24 +3489,37 @@ async fn api_code_file(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let cache = state.code_cache.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        if let Some(cached) = cache.get_or_load(FsPath::new(&cwd), &query.path)? {
-            debug_assert_eq!(cached.size, cached.bytes.len() as u64);
-            crate::code_review::cached_file_page(
-                &query.path,
-                cached.bytes,
-                cached.revision,
-                query.cursor.as_deref(),
-            )
-        } else {
-            crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
-                .file_page(&query.path, query.cursor.as_deref())
+    let result = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "file", "path": query.path.clone(), "cursor": query.cursor.clone() }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::File(file))) => Ok(file),
+        Ok(Some(_)) | Err(_) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
+        Ok(None) => {
+            let cache = state.code_cache.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                if let Some(cached) = cache.get_or_load(FsPath::new(&cwd), &query.path)? {
+                    debug_assert_eq!(cached.size, cached.bytes.len() as u64);
+                    crate::code_review::cached_file_page(
+                        &query.path,
+                        cached.bytes,
+                        cached.revision,
+                        query.cursor.as_deref(),
+                    )
+                } else {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                        .file_page(&query.path, query.cursor.as_deref())
+                }
+            }).await;
+            let Ok(result) = result else {
+                return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
+            };
+            result
         }
-    })
-    .await;
-    let Ok(result) = result else {
-        return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
     };
     let result = match result {
         Ok(result) => result,
@@ -2942,18 +3611,12 @@ async fn api_code_language(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let Some(socket) = &state.zed_adapter_socket else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "language service unavailable",
-        )
-            .into_response();
-    };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    match zed_adapter_request(
-        socket,
+    match zed_adapter_request_for_session(
+        &state,
+        &session_id,
         serde_json::json!({
             "type": "bufferLanguage",
             "worktree": cwd,
@@ -3002,18 +3665,12 @@ async fn api_code_hover(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let Some(socket) = &state.zed_adapter_socket else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "language service unavailable",
-        )
-            .into_response();
-    };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    match zed_adapter_request(
-        socket,
+    match zed_adapter_request_for_session(
+        &state,
+        &session_id,
         serde_json::json!({
             "type": "bufferHover",
             "worktree": cwd,
@@ -3054,18 +3711,12 @@ async fn api_code_navigation(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let Some(socket) = &state.zed_adapter_socket else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "language service unavailable",
-        )
-            .into_response();
-    };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    match zed_adapter_request(
-        socket,
+    match zed_adapter_request_for_session(
+        &state,
+        &session_id,
         serde_json::json!({
             "type": "bufferNavigate",
             "worktree": cwd,
@@ -3109,18 +3760,12 @@ async fn api_code_outline(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let Some(socket) = &state.zed_adapter_socket else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "language service unavailable",
-        )
-            .into_response();
-    };
     if query.path.is_empty() {
         return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
     }
-    match zed_adapter_request(
-        socket,
+    match zed_adapter_request_for_session(
+        &state,
+        &session_id,
         serde_json::json!({
             "type": "bufferSymbols",
             "worktree": cwd,
@@ -3168,13 +3813,6 @@ async fn api_code_buffer_lease(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let Some(socket) = &state.zed_adapter_socket else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "language service unavailable",
-        )
-            .into_response();
-    };
     if request.path.is_empty()
         || request.lease_id.is_empty()
         || request.lease_id.len() > 128
@@ -3182,15 +3820,20 @@ async fn api_code_buffer_lease(
     {
         return (StatusCode::BAD_REQUEST, "invalid buffer lease").into_response();
     }
-    if open && ensure_zed_worktree(socket, &cwd).await.is_err() {
+    if open
+        && ensure_zed_worktree_for_session(&state, &session_id, &cwd)
+            .await
+            .is_err()
+    {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "language service unavailable",
         )
             .into_response();
     }
-    let response = zed_adapter_request(
-        socket,
+    let response = zed_adapter_request_for_session(
+        &state,
+        &session_id,
         serde_json::json!({
             "type": if open { "openBuffer" } else { "closeBuffer" },
             "worktree": cwd,

@@ -51,6 +51,19 @@ impl RemoteBootstrap {
         }
     }
 
+    /// Acquire the agentd controller lease through an already-authenticated
+    /// transport, such as a Machine WebSocket tunnel.
+    pub async fn from_stream(socket: PathBuf, stream: UnixStream) -> Result<Self> {
+        let (reader, writer, workers, buffered) = connect_settled_stream(stream).await?;
+        Ok(Self {
+            socket,
+            reader,
+            writer,
+            workers,
+            buffered,
+        })
+    }
+
     #[must_use]
     pub fn workers(&self) -> &[WorkerSnapshot] {
         &self.workers
@@ -400,6 +413,14 @@ impl RemoteRuntime {
         }
     }
 
+    /// Fence a disconnected Machine runtime without entering the local socket
+    /// reconnect loop. Durable prompts remain owned by the Hub.
+    pub fn disconnect(&self) {
+        self.shared.shutdown.store(true, Ordering::Release);
+        self.shared.connected.store(false, Ordering::Release);
+        let _ = self.shared.notify.send(());
+    }
+
     fn queue(&self, key: String, command: CoreCommand) {
         self.shared.sent.lock().remove(&key);
         self.shared.pending.lock().insert(key, command);
@@ -459,6 +480,37 @@ async fn connect_once(
     }
 }
 
+async fn connect_once_stream(
+    stream: UnixStream,
+) -> Result<(
+    FrameReader<OwnedReadHalf>,
+    OwnedWriteHalf,
+    Vec<WorkerSnapshot>,
+)> {
+    let (mut reader, mut writer) = stream.into_split();
+    write_frame(
+        &mut writer,
+        &Frame::Hello {
+            role: PeerRole::Core,
+            min_protocol: MIN_PROTOCOL_VERSION,
+            max_protocol: PROTOCOL_VERSION,
+            build: env!("CARGO_PKG_VERSION").to_owned(),
+            session_id: None,
+            worker_epoch: None,
+            generation: None,
+            executable: None,
+            fallback_for: None,
+        },
+    )
+    .await?;
+    match read_frame(&mut reader).await? {
+        Some(Frame::Welcome { workers, .. }) => Ok((FrameReader::new(reader), writer, workers)),
+        Some(Frame::Reject { reason }) => anyhow::bail!("agentd rejected Cowboy: {reason}"),
+        Some(other) => anyhow::bail!("unexpected agentd handshake frame: {other:?}"),
+        None => anyhow::bail!("agentd closed during handshake"),
+    }
+}
+
 /// Let surviving workers converge around every new broker connection, not only
 /// process startup. Until this settles, `Shared.workers` intentionally keeps its
 /// last snapshot so an agentd restart cannot race an `EnsureSession` into
@@ -472,6 +524,48 @@ async fn connect_settled(
     Vec<Frame>,
 )> {
     let (mut reader, writer, mut workers) = connect_once(socket).await?;
+    let mut buffered = Vec::new();
+    let now = tokio::time::Instant::now();
+    let minimum_settle = now + Duration::from_millis(500);
+    let deadline = now + Duration::from_secs(1);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let quiet = remaining.min(Duration::from_millis(250));
+        match tokio::time::timeout(quiet, reader.next()).await {
+            Ok(Ok(Some(frame))) => {
+                if let Frame::Snapshot { worker } = &frame {
+                    if let Some(existing) = workers
+                        .iter_mut()
+                        .find(|existing| existing.session_id == worker.session_id)
+                    {
+                        existing.clone_from(worker);
+                    } else {
+                        workers.push((**worker).clone());
+                    }
+                }
+                buffered.push(frame);
+            }
+            Ok(Ok(None)) => anyhow::bail!("agentd closed during runtime settle"),
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) if tokio::time::Instant::now() < minimum_settle => {}
+            Err(_) => break,
+        }
+    }
+    Ok((reader, writer, workers, buffered))
+}
+
+async fn connect_settled_stream(
+    stream: UnixStream,
+) -> Result<(
+    FrameReader<OwnedReadHalf>,
+    OwnedWriteHalf,
+    Vec<WorkerSnapshot>,
+    Vec<Frame>,
+)> {
+    let (mut reader, writer, mut workers) = connect_once_stream(stream).await?;
     let mut buffered = Vec::new();
     let now = tokio::time::Instant::now();
     let minimum_settle = now + Duration::from_millis(500);

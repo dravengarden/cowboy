@@ -256,21 +256,21 @@ enrolled online machine before removing an old version.
 - Offline, incompatible, draining, and revoked are visually distinct and carry
   a concrete remediation action.
 
-## Delivery slices
+## Implemented boundary
 
-1. Persist `machine_id` on sessions and expose a local-only machine inventory.
-   Existing behavior remains unchanged.
-2. Extract the current agentd + worker packaging into `cowboy-machine` local UDS
-   mode while keeping the existing runtime wire.
-3. Add outbound WSS enrollment and run one non-production remote machine.
-4. Add provider inventory, managed payload generations, login status/actions,
-   and Machines UI.
-5. Route session creation and all runtime commands by immutable `machine_id`.
-6. Move the isolated Zed adapter/server under its own Machine generation and
-   add multi-version Zed slots.
-7. Enroll Mac, then Falcon; verify disconnect/replay, core update, Machine host
-   update, ACP drain/rollback, Zed-only update, credential revocation, and
-   offline UX before making remote scheduling the default.
+The controller and Machine now implement immutable session placement, outbound
+authenticated WSS enrollment, epoch fencing, runtime replay, trusted remote
+workspaces, provider inventory/login actions, signed independently activated
+components, Code Adapter routing, isolated Zed adapter/server supervision,
+capacity/drain-aware scheduling, Machines UI, and user-scoped macOS/Linux
+installation. The stable Machine wire remains additive and distinct from ACP
+runtime and Zed adapter contracts.
+
+Operational rollout is deliberately separate from implementation. A target is
+selectable only after its one-time enrollment, signed desired manifest,
+provider login, workspace declaration, and capacity report are healthy. An
+unreachable target remains offline; Cowboy never falls back to a different
+machine or silently runs its session on Hawk.
 
 ## Upstream contracts
 

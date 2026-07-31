@@ -10,6 +10,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
 const MAX_CHANGES: usize = 1_000;
@@ -17,7 +18,7 @@ const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 const FILE_PAGE_BYTES: usize = 256 * 1024;
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeChange {
     pub path: String,
     pub old_path: Option<String>,
@@ -26,7 +27,8 @@ pub struct CodeChange {
     pub unstaged: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChangeStatus {
     Modified,
     Added,
@@ -36,14 +38,15 @@ pub enum ChangeStatus {
     Conflicted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DiffScope {
     Combined,
     Staged,
     Unstaged,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeList {
     pub head: Option<String>,
     pub revision: String,
@@ -51,7 +54,7 @@ pub struct ChangeList {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffDocument {
     pub path: String,
     pub text: String,
@@ -60,7 +63,7 @@ pub struct DiffDocument {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileDocument {
     pub path: String,
     pub revision: String,
@@ -71,9 +74,9 @@ pub struct FileDocument {
     pub limited: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorktreeManifest {
-    pub provider: &'static str,
+    pub provider: String,
     pub revision: String,
     pub head: Option<String>,
     pub project: String,
@@ -82,7 +85,7 @@ pub struct WorktreeManifest {
     pub change_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeTreeEntry {
     pub name: String,
     pub path: String,
@@ -90,7 +93,7 @@ pub struct CodeTreeEntry {
     pub ignored: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeTreePage {
     pub entries: Vec<CodeTreeEntry>,
     pub truncated: bool,
@@ -227,7 +230,7 @@ impl CodeProvider for LocalCodeProvider {
         let head = self.head();
         let (project, worktree) = self.repository_identity();
         Ok(WorktreeManifest {
-            provider: "local",
+            provider: "local".to_owned(),
             revision: Self::worktree_revision(head.as_deref(), &status),
             head,
             project,

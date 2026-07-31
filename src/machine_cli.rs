@@ -3,20 +3,41 @@
 //! copying the ACP broker implementation.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncBufReadExt as _;
+use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::agentd::{AgentdArgs, SpawnMode};
 use crate::machine_auth::MachineIdentity;
+use crate::machine_components::ComponentStore;
 use crate::machine_protocol::{
-    ComponentInventory, ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION,
-    MachineFrame, MachineHello, Platform,
+    AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ConnectionMode,
+    MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity, MachineCommand,
+    MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
 };
+
+type LoginCancels =
+    Arc<parking_lot::Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>;
+
+struct ControllerConfig {
+    controller_url: String,
+    machine_id: String,
+    display_name: String,
+    identity: MachineIdentity,
+    runtime_socket: PathBuf,
+    workspaces: Vec<MachineWorkspace>,
+    components: Arc<ComponentStore>,
+    zed_adapter_socket: Option<PathBuf>,
+    code_adapter_socket: Option<PathBuf>,
+    capacity: MachineCapacity,
+}
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSpawnMode {
@@ -59,6 +80,32 @@ pub struct Args {
     /// shell history; omit after the first successful enrollment.
     #[arg(long, env = "COWBOY_MACHINE_ENROLLMENT_TOKEN")]
     enrollment_token: Option<String>,
+    /// Mode-0600 one-time token file. It is removed after enrollment.
+    #[arg(long, env = "COWBOY_MACHINE_ENROLLMENT_TOKEN_FILE")]
+    enrollment_token_file: Option<PathBuf>,
+    /// Trusted remote launch root in `id=/absolute/path` form. Repeat for each
+    /// workspace the controller may target.
+    #[arg(
+        long = "workspace",
+        env = "COWBOY_MACHINE_WORKSPACES",
+        value_delimiter = ','
+    )]
+    workspaces: Vec<String>,
+    /// Ed25519/OpenSSH public key allowed to sign managed component artifacts.
+    #[arg(long, env = "COWBOY_MACHINE_ARTIFACT_PUBLIC_KEY")]
+    artifact_public_key: Option<PathBuf>,
+    /// Unix socket of the Cowboy-managed versioned Zed adapter payload.
+    #[arg(long, env = "COWBOY_MACHINE_ZED_ADAPTER_SOCKET")]
+    zed_adapter_socket: Option<PathBuf>,
+    /// Unix socket of the Cowboy-managed filesystem/Git adapter payload.
+    #[arg(long, env = "COWBOY_MACHINE_CODE_ADAPTER_SOCKET")]
+    code_adapter_socket: Option<PathBuf>,
+    /// Maximum detached ACP sessions accepted by this Machine.
+    #[arg(long, env = "COWBOY_MACHINE_MAX_SESSIONS", default_value_t = 8)]
+    max_sessions: u32,
+    /// Keep existing sessions alive while refusing new placement.
+    #[arg(long, env = "COWBOY_MACHINE_DRAINING", default_value_t = false)]
+    draining: bool,
 }
 
 #[derive(Serialize)]
@@ -92,10 +139,31 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         .init();
     let args =
         Args::parse_from(std::iter::once(command_name.to_owned()).chain(std::env::args().skip(1)));
+    let runtime_socket = args.socket.clone();
+    let components = Arc::new(ComponentStore::new(
+        args.state_dir.join("components"),
+        args.artifact_public_key.as_deref(),
+    )?);
+    let active_acp = components
+        .active()?
+        .into_iter()
+        .find(|(component, _)| component.id.kind == ComponentKind::AcpRuntime);
+    let desired_generation = active_acp.as_ref().map_or_else(
+        || {
+            if args.desired_generation.is_empty() {
+                env!("CARGO_PKG_VERSION").to_owned()
+            } else {
+                args.desired_generation.clone()
+            }
+        },
+        |(component, _)| component.generation.clone(),
+    );
+    let worker_command =
+        active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
     let agentd = AgentdArgs {
         socket: args.socket,
-        worker_command: args.worker_command,
-        desired_generation: args.desired_generation,
+        worker_command,
+        desired_generation,
         spawn_mode: match args.spawn_mode {
             CliSpawnMode::Direct => SpawnMode::Direct,
             CliSpawnMode::SystemdUser => SpawnMode::SystemdUser,
@@ -108,12 +176,158 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     validate_controller_url(&controller_url)?;
     let identity = MachineIdentity::load_or_create(&args.state_dir)?;
     let display_name = args.display_name.unwrap_or_else(default_display_name);
-    if let Some(token) = args.enrollment_token.as_deref() {
+    let workspaces = parse_workspaces(&args.workspaces)?;
+    let file_token = args
+        .enrollment_token_file
+        .as_ref()
+        .filter(|path| path.exists())
+        .map(std::fs::read_to_string)
+        .transpose()
+        .context("reading Machine enrollment token file")?;
+    if let Some(token) = args
+        .enrollment_token
+        .as_deref()
+        .or(file_token.as_deref().map(str::trim))
+    {
         enroll(&controller_url, token, identity.public_key()).await?;
+        if let Some(path) = args.enrollment_token_file.as_ref() {
+            std::fs::remove_file(path).context("removing consumed enrollment token file")?;
+        }
     }
-    let controller = controller_loop(controller_url, args.machine_id, display_name, identity);
-    tokio::try_join!(crate::agentd::run(agentd), controller)?;
+    let code_adapter_socket = args.code_adapter_socket.clone();
+    let zed_adapter_socket = args.zed_adapter_socket.clone();
+    let controller = controller_loop(ControllerConfig {
+        controller_url,
+        machine_id: args.machine_id,
+        display_name,
+        identity,
+        runtime_socket,
+        workspaces: workspaces.clone(),
+        components: Arc::clone(&components),
+        zed_adapter_socket: zed_adapter_socket.clone(),
+        code_adapter_socket: code_adapter_socket.clone(),
+        capacity: MachineCapacity {
+            max_sessions: args.max_sessions.max(1),
+            draining: args.draining,
+        },
+    });
+    let code_adapter = supervise_code_adapter(
+        Arc::clone(&components),
+        code_adapter_socket,
+        workspaces.clone(),
+    );
+    let zed_adapter = supervise_zed_adapter(
+        Arc::clone(&components),
+        zed_adapter_socket,
+        args.state_dir.join("zed"),
+    );
+    tokio::try_join!(
+        crate::agentd::run(agentd),
+        controller,
+        code_adapter,
+        zed_adapter
+    )?;
     Ok(())
+}
+
+async fn supervise_zed_adapter(
+    components: Arc<ComponentStore>,
+    socket: Option<PathBuf>,
+    state_dir: PathBuf,
+) -> anyhow::Result<()> {
+    let Some(socket) = socket else {
+        return std::future::pending().await;
+    };
+    loop {
+        let active = components.active()?;
+        let adapter = active
+            .iter()
+            .rev()
+            .find(|(component, _)| component.id.kind == ComponentKind::ZedAdapter)
+            .map(|(_, path)| path.clone());
+        let server = active
+            .iter()
+            .rev()
+            .find(|(component, _)| component.id.kind == ComponentKind::ZedServer)
+            .map(|(_, path)| path.clone());
+        let (Some(adapter), Some(server)) = (adapter, server) else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        };
+        let mut child = tokio::process::Command::new(&adapter)
+            .arg("serve")
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--zed-server")
+            .arg(&server)
+            .arg("--state-dir")
+            .arg(&state_dir)
+            .kill_on_drop(true)
+            .spawn()
+            .with_context(|| format!("starting {}", adapter.display()))?;
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    tracing::warn!(?status, "Zed adapter exited");
+                    break;
+                }
+                () = tokio::time::sleep(Duration::from_secs(2)) => {
+                    let active = components.active().unwrap_or_default();
+                    let current_adapter = active.iter().rev().find(|(component, _)| component.id.kind == ComponentKind::ZedAdapter).map(|(_, path)| path);
+                    let current_server = active.iter().rev().find(|(component, _)| component.id.kind == ComponentKind::ZedServer).map(|(_, path)| path);
+                    if current_adapter != Some(&adapter) || current_server != Some(&server) {
+                        child.kill().await?;
+                        let _ = child.wait().await;
+                        break;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn supervise_code_adapter(
+    components: Arc<ComponentStore>,
+    socket: Option<PathBuf>,
+    workspaces: Vec<MachineWorkspace>,
+) -> anyhow::Result<()> {
+    let Some(socket) = socket else {
+        return std::future::pending().await;
+    };
+    loop {
+        let command = components.command_path("cowboy-code-adapter");
+        let Ok(executable) = command.canonicalize() else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        };
+        let mut child =
+            tokio::process::Command::new(&executable)
+                .arg("--socket")
+                .arg(&socket)
+                .args(workspaces.iter().flat_map(|workspace| {
+                    ["--workspace".to_owned(), workspace.canonical_path.clone()]
+                }))
+                .kill_on_drop(true)
+                .spawn()
+                .with_context(|| format!("starting {}", executable.display()))?;
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    tracing::warn!(?status, "Code adapter exited");
+                    break;
+                }
+                () = tokio::time::sleep(Duration::from_secs(2)) => {
+                    if command.canonicalize().ok().as_ref() != Some(&executable) {
+                        child.kill().await?;
+                        let _ = child.wait().await;
+                        break;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
 fn validate_controller_url(value: &str) -> anyhow::Result<()> {
@@ -156,15 +370,10 @@ async fn enroll(controller_url: &str, token: &str, public_key: &str) -> anyhow::
     Ok(())
 }
 
-async fn controller_loop(
-    controller_url: String,
-    machine_id: String,
-    display_name: String,
-    identity: MachineIdentity,
-) -> anyhow::Result<()> {
+async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
     let mut retry = Duration::from_secs(1);
     loop {
-        match controller_connection(&controller_url, &machine_id, &display_name, &identity).await {
+        match controller_connection(&config).await {
             Ok(()) => retry = Duration::from_secs(1),
             Err(error) => tracing::warn!(%error, "Machine controller disconnected"),
         }
@@ -173,13 +382,9 @@ async fn controller_loop(
     }
 }
 
-async fn controller_connection(
-    controller_url: &str,
-    machine_id: &str,
-    display_name: &str,
-    identity: &MachineIdentity,
-) -> anyhow::Result<()> {
-    let mut endpoint = reqwest::Url::parse(controller_url).context("parsing controller URL")?;
+async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> {
+    let mut endpoint =
+        reqwest::Url::parse(&config.controller_url).context("parsing controller URL")?;
     endpoint
         .set_scheme(if endpoint.scheme() == "https" {
             "wss"
@@ -205,8 +410,8 @@ async fn controller_connection(
         bail!("controller challenge already expired");
     }
     let mut hello = MachineHello {
-        machine_id: machine_id.to_owned(),
-        display_name: display_name.to_owned(),
+        machine_id: config.machine_id.clone(),
+        display_name: config.display_name.clone(),
         platform: current_platform(),
         arch: std::env::consts::ARCH.to_owned(),
         connection_mode: ConnectionMode::OutboundTls,
@@ -217,37 +422,589 @@ async fn controller_connection(
         host_build: env!("CARGO_PKG_VERSION").to_owned(),
         challenge_id: Some(challenge_id.clone()),
         challenge_signature: None,
-        components: Vec::<ComponentInventory>::new(),
+        components: collect_inventory(&config.components).await,
+        workspaces: config.workspaces.clone(),
+        capacity: config.capacity.clone(),
     };
     let proof =
         crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello);
-    hello.challenge_signature = Some(identity.sign(&proof)?);
+    hello.challenge_signature = Some(config.identity.sign(&proof)?);
     send_frame(&mut socket, &MachineFrame::Hello { hello }).await?;
     let MachineFrame::Welcome {
         heartbeat_interval_ms,
+        desired_components,
         ..
     } = receive_frame(&mut socket).await?
     else {
         bail!("controller rejected Machine hello");
     };
-    tracing::info!(machine = machine_id, "Machine controller authenticated");
+    tracing::info!(machine = %config.machine_id, "Machine controller authenticated");
+    if !desired_components.is_empty() {
+        let active = config.components.active().unwrap_or_default();
+        let restart_host = desired_components.iter().any(|component| {
+            matches!(
+                component.id.kind,
+                ComponentKind::MachineHost | ComponentKind::AcpRuntime
+            ) && !active.iter().any(|(current, _)| {
+                current.id == component.id && current.digest.eq_ignore_ascii_case(&component.digest)
+            })
+        });
+        let events = reconcile_components(
+            "welcome".to_owned(),
+            desired_components,
+            Arc::clone(&config.components),
+        )
+        .await;
+        for event in events {
+            send_frame(&mut socket, &MachineFrame::Event { event }).await?;
+        }
+        if restart_host {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            std::process::exit(75);
+        }
+    }
+    let runtime = UnixStream::connect(&config.runtime_socket)
+        .await
+        .with_context(|| {
+            format!(
+                "connecting agentd socket {}",
+                config.runtime_socket.display()
+            )
+        })?;
+    let (mut runtime_reader, mut runtime_writer) = runtime.into_split();
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let login_cancels: LoginCancels = Arc::default();
     heartbeat.tick().await;
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
                 send_frame(&mut socket, &MachineFrame::Heartbeat { sent_at_ms: unix_ms() }).await?;
             }
+            event = event_rx.recv() => {
+                let Some(event) = event else { continue };
+                send_frame(&mut socket, &MachineFrame::Event { event }).await?;
+            }
             message = socket.next() => {
                 match message {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
                     Some(Ok(Message::Ping(value))) => socket.send(Message::Pong(value)).await?,
+                    Some(Ok(Message::Text(text))) => {
+                        let frame: MachineFrame = serde_json::from_str(&text)
+                            .context("parsing Machine controller frame")?;
+                        match frame {
+                            MachineFrame::Runtime { frame } => {
+                                if let Some(rejection) = reject_untrusted_workspace(&frame, &config.workspaces) {
+                                    send_frame(&mut socket, &MachineFrame::Runtime { frame: rejection }).await?;
+                                    continue;
+                                }
+                                crate::runtime_wire::write_frame(&mut runtime_writer, &frame).await?;
+                            }
+                            MachineFrame::Command { command } => {
+                                handle_machine_command(
+                                    command,
+                                    event_tx.clone(),
+                                    Arc::clone(&config.components),
+                                    config.zed_adapter_socket.clone(),
+                                    config.code_adapter_socket.clone(),
+                                    config.workspaces.clone(),
+                                    Arc::clone(&login_cancels),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
                     Some(Ok(_)) => {}
                 }
             }
+            frame = crate::runtime_wire::read_frame(&mut runtime_reader) => {
+                let Some(frame) = frame? else {
+                    bail!("agentd runtime tunnel closed");
+                };
+                send_frame(&mut socket, &MachineFrame::Runtime { frame }).await?;
+            }
         }
     }
+}
+
+async fn collect_inventory(store: &ComponentStore) -> Vec<ComponentInventory> {
+    let mut inventory = vec![ComponentInventory {
+        id: ComponentId {
+            kind: ComponentKind::MachineHost,
+            slot: String::new(),
+        },
+        state: ComponentState::Active,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        generation: env!("CARGO_PKG_VERSION").to_owned(),
+        digest: String::new(),
+        rollback_generation: None,
+        active_leases: 1,
+        auth: None,
+        detail: None,
+    }];
+    let managed = store.active().unwrap_or_default();
+    let has_managed_acp = managed
+        .iter()
+        .any(|(component, _)| component.id.kind == ComponentKind::AcpRuntime);
+    inventory.extend(
+        managed
+            .into_iter()
+            .map(|(component, _)| ComponentInventory {
+                id: component.id,
+                state: ComponentState::Active,
+                version: component.version,
+                generation: component.generation,
+                digest: component.digest,
+                rollback_generation: None,
+                active_leases: 0,
+                auth: None,
+                detail: None,
+            }),
+    );
+    if !has_managed_acp {
+        inventory.push(ComponentInventory {
+            id: ComponentId {
+                kind: ComponentKind::AcpRuntime,
+                slot: String::new(),
+            },
+            state: ComponentState::Active,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            generation: env!("CARGO_PKG_VERSION").to_owned(),
+            digest: String::new(),
+            rollback_generation: None,
+            active_leases: 0,
+            auth: None,
+            detail: Some("bootstrap generation".to_owned()),
+        });
+    }
+    for (slot, command, version_args) in [
+        ("codex", "codex", &["--version"][..]),
+        ("claude", "claude", &["--version"][..]),
+        ("gemini", "gemini", &["--version"][..]),
+        ("zed", "zed", &["--version"][..]),
+    ] {
+        let output = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::process::Command::new(command)
+                .args(version_args)
+                .output(),
+        )
+        .await;
+        let (state, version, detail) = match output {
+            Ok(Ok(output)) if output.status.success() => (
+                ComponentState::Active,
+                String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+                None,
+            ),
+            Ok(Ok(output)) => (
+                ComponentState::Failed,
+                String::new(),
+                Some(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+            ),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                (ComponentState::Missing, String::new(), None)
+            }
+            Ok(Err(error)) => (
+                ComponentState::Failed,
+                String::new(),
+                Some(error.to_string()),
+            ),
+            Err(_) => (
+                ComponentState::Failed,
+                String::new(),
+                Some("version probe timed out".to_owned()),
+            ),
+        };
+        let kind = if slot == "zed" {
+            ComponentKind::ZedServer
+        } else {
+            ComponentKind::ProviderCli
+        };
+        let auth = match slot {
+            "codex" => probe_exit_auth("codex", &["login", "status"]).await,
+            "claude" => probe_exit_auth("claude", &["auth", "status", "--json"]).await,
+            "gemini" => AuthState::Unsupported,
+            _ => AuthState::Unsupported,
+        };
+        if let Some(existing) = inventory
+            .iter_mut()
+            .find(|component| component.id.kind == kind && component.id.slot == slot)
+        {
+            if slot != "zed" {
+                existing.auth = Some(auth);
+            }
+            continue;
+        }
+        inventory.push(ComponentInventory {
+            id: ComponentId {
+                kind,
+                slot: slot.to_owned(),
+            },
+            state,
+            version,
+            generation: String::new(),
+            digest: String::new(),
+            rollback_generation: None,
+            active_leases: 0,
+            auth: (slot != "zed").then_some(auth),
+            detail,
+        });
+    }
+    inventory
+}
+
+async fn probe_exit_auth(command: &str, args: &[&str]) -> AuthState {
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::process::Command::new(command).args(args).output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) if output.status.success() => AuthState::SignedIn,
+        Ok(Ok(_)) => AuthState::SignedOut,
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => AuthState::Unsupported,
+        Ok(Err(_)) | Err(_) => AuthState::Error,
+    }
+}
+
+fn handle_machine_command(
+    command: MachineCommand,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    components: Arc<ComponentStore>,
+    zed_adapter_socket: Option<PathBuf>,
+    code_adapter_socket: Option<PathBuf>,
+    workspaces: Vec<MachineWorkspace>,
+    login_cancels: LoginCancels,
+) {
+    match command {
+        MachineCommand::RefreshInventory { request_id } => {
+            tokio::spawn(async move {
+                let components = collect_inventory(&components).await;
+                let _ = events.send(MachineEvent::Inventory {
+                    components,
+                    observed_at_ms: unix_ms(),
+                });
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted: true,
+                    detail: None,
+                });
+            });
+        }
+        MachineCommand::BeginLogin {
+            request_id,
+            provider,
+        } => {
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+            login_cancels.lock().insert(request_id.clone(), cancel_tx);
+            tokio::spawn(run_login(
+                request_id,
+                provider,
+                events,
+                cancel_rx,
+                login_cancels,
+            ));
+        }
+        MachineCommand::AdapterRequest {
+            request_id,
+            adapter,
+            payload,
+        } => {
+            tokio::spawn(run_adapter_request(
+                request_id,
+                adapter,
+                payload,
+                zed_adapter_socket,
+                code_adapter_socket,
+                workspaces,
+                events,
+            ));
+        }
+        MachineCommand::Reconcile {
+            request_id,
+            components: desired,
+        } => {
+            tokio::spawn(async move {
+                let active = components.active().unwrap_or_default();
+                let restart_host = desired.iter().any(|component| {
+                    matches!(
+                        component.id.kind,
+                        ComponentKind::MachineHost | ComponentKind::AcpRuntime
+                    ) && !active.iter().any(|(current, _)| {
+                        current.id == component.id
+                            && current.digest.eq_ignore_ascii_case(&component.digest)
+                    })
+                });
+                let result = reconcile_components(request_id, desired, components).await;
+                let accepted = result.iter().any(|event| {
+                    matches!(event, MachineEvent::CommandResult { accepted: true, .. })
+                });
+                for event in result {
+                    let _ = events.send(event);
+                }
+                if restart_host && accepted {
+                    // The service manager owns host replacement. Payload
+                    // processes and state survive; exit only after the result
+                    // has had a chance to reach the controller.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    std::process::exit(75);
+                }
+            });
+        }
+        MachineCommand::CancelLogin { request_id } => {
+            let accepted = login_cancels
+                .lock()
+                .remove(&request_id)
+                .is_some_and(|cancel| cancel.send(true).is_ok());
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted,
+                detail: (!accepted).then_some("login request is not active".to_owned()),
+            });
+        }
+        MachineCommand::DrainComponent { request_id, .. } => {
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted: false,
+                detail: Some("this Machine host does not support that operation yet".to_owned()),
+            });
+        }
+    }
+}
+
+async fn run_adapter_request(
+    request_id: String,
+    adapter: String,
+    payload: serde_json::Value,
+    zed_adapter_socket: Option<PathBuf>,
+    code_adapter_socket: Option<PathBuf>,
+    workspaces: Vec<MachineWorkspace>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let result = async {
+        let socket = match adapter.as_str() {
+            "zed" => zed_adapter_socket.context("Zed adapter is not configured on this Machine")?,
+            "code" => {
+                code_adapter_socket.context("Code adapter is not configured on this Machine")?
+            }
+            _ => bail!("unknown Machine adapter {adapter:?}"),
+        };
+        if adapter == "zed" {
+            validate_adapter_workspace(&payload, &workspaces)?;
+        }
+        let stream = tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(&socket))
+            .await
+            .context("Zed adapter connect timed out")??;
+        let (read, mut write) = stream.into_split();
+        use tokio::io::AsyncWriteExt as _;
+        write.write_all(payload.to_string().as_bytes()).await?;
+        write.write_all(b"\n").await?;
+        write.shutdown().await?;
+        let mut line = String::new();
+        tokio::time::timeout(
+            Duration::from_secs(35),
+            tokio::io::BufReader::new(read).read_line(&mut line),
+        )
+        .await
+        .context("Machine adapter response timed out")??;
+        let response: serde_json::Value =
+            serde_json::from_str(&line).context("decoding Machine adapter response")?;
+        if response.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+            bail!(
+                "{}",
+                response
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("adapter rejected request")
+            );
+        }
+        Ok(response.get("value").cloned().unwrap_or(response))
+    }
+    .await;
+    let event = match result {
+        Ok(payload) => MachineEvent::AdapterResponse {
+            request_id,
+            accepted: true,
+            payload: Some(payload),
+            detail: None,
+        },
+        Err(error) => MachineEvent::AdapterResponse {
+            request_id,
+            accepted: false,
+            payload: None,
+            detail: Some(format!("{error:#}")),
+        },
+    };
+    let _ = events.send(event);
+}
+
+fn validate_adapter_workspace(
+    payload: &serde_json::Value,
+    workspaces: &[MachineWorkspace],
+) -> anyhow::Result<()> {
+    for key in ["path", "worktree"] {
+        let Some(value) = payload.get(key).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let path = PathBuf::from(value);
+        if !path.is_absolute() {
+            continue;
+        }
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("canonicalizing {value}"))?;
+        if !workspaces.iter().any(|workspace| {
+            let trusted = PathBuf::from(&workspace.canonical_path);
+            canonical == trusted || canonical.starts_with(trusted)
+        }) {
+            bail!("adapter path is outside the trusted Machine workspaces");
+        }
+    }
+    Ok(())
+}
+
+async fn reconcile_components(
+    request_id: String,
+    desired: Vec<crate::machine_protocol::DesiredComponent>,
+    store: Arc<ComponentStore>,
+) -> Vec<MachineEvent> {
+    let mut inventory = Vec::with_capacity(desired.len());
+    for component in desired {
+        match store.reconcile(component).await {
+            Ok(component) => inventory.push(component),
+            Err(error) => {
+                return vec![MachineEvent::CommandResult {
+                    request_id,
+                    accepted: false,
+                    detail: Some(format!("component reconciliation failed: {error:#}")),
+                }];
+            }
+        }
+    }
+    vec![
+        MachineEvent::Inventory {
+            components: inventory,
+            observed_at_ms: unix_ms(),
+        },
+        MachineEvent::CommandResult {
+            request_id,
+            accepted: true,
+            detail: None,
+        },
+    ]
+}
+
+async fn run_login(
+    request_id: String,
+    provider: String,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    login_cancels: LoginCancels,
+) {
+    let (command, args): (&str, &[&str]) = match provider.as_str() {
+        "codex" => ("codex", &["login", "--device-auth"]),
+        "claude" => ("claude", &["auth", "login"]),
+        _ => {
+            login_cancels.lock().remove(&request_id);
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted: false,
+                detail: Some(format!(
+                    "{provider} currently requires terminal-assisted login"
+                )),
+            });
+            return;
+        }
+    };
+    let mut child = match tokio::process::Command::new(command)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            login_cancels.lock().remove(&request_id);
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted: false,
+                detail: Some(error.to_string()),
+            });
+            return;
+        }
+    };
+    let stdout = child.stdout.take().expect("piped stdout");
+    if let Some(mut stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+        });
+    }
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let mut verification_url = None;
+    let mut user_code = None;
+    let mut challenge_sent = false;
+    loop {
+        let line = tokio::select! {
+            line = lines.next_line() => line,
+            changed = cancel.changed() => {
+                if changed.is_ok() && *cancel.borrow() {
+                    let _ = child.kill().await;
+                    login_cancels.lock().remove(&request_id);
+                    let _ = events.send(MachineEvent::LoginState {
+                        request_id,
+                        provider,
+                        state: AuthState::SignedOut,
+                        account_label: None,
+                        detail: Some("login cancelled".to_owned()),
+                    });
+                    return;
+                }
+                continue;
+            }
+        };
+        let Ok(Some(line)) = line else { break };
+        for word in line.split_whitespace() {
+            let trimmed = word.trim_matches(|character: char| {
+                matches!(character, '(' | ')' | '[' | ']' | ',' | ':' | ';')
+            });
+            if trimmed.starts_with("https://") {
+                verification_url = Some(trimmed.to_owned());
+            } else if trimmed.len() >= 6
+                && trimmed
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                && trimmed.contains('-')
+            {
+                user_code = Some(trimmed.to_owned());
+            }
+        }
+        if !challenge_sent && let Some(url) = verification_url.clone() {
+            let _ = events.send(MachineEvent::LoginChallenge {
+                request_id: request_id.clone(),
+                provider: provider.clone(),
+                verification_url: url,
+                user_code: user_code.clone(),
+                expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
+            });
+            challenge_sent = true;
+        }
+    }
+    let status = child.wait().await;
+    login_cancels.lock().remove(&request_id);
+    let signed_in = status.is_ok_and(|status| status.success());
+    let _ = events.send(MachineEvent::LoginState {
+        request_id,
+        provider,
+        state: if signed_in {
+            AuthState::SignedIn
+        } else {
+            AuthState::Error
+        },
+        account_label: None,
+        detail: (!signed_in).then_some("provider login did not complete".to_owned()),
+    });
 }
 
 fn current_platform() -> Platform {
@@ -256,6 +1013,60 @@ fn current_platform() -> Platform {
     } else {
         Platform::Linux
     }
+}
+
+fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> {
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let (id, path) = value
+            .split_once('=')
+            .with_context(|| format!("workspace {value:?} must use id=/absolute/path"))?;
+        if id.trim().is_empty() || id.contains('/') {
+            bail!("workspace id {id:?} is invalid");
+        }
+        let canonical = std::fs::canonicalize(path)
+            .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
+        if !canonical.is_dir() {
+            bail!("workspace {id:?} is not a directory");
+        }
+        out.push(MachineWorkspace {
+            id: id.to_owned(),
+            display_name: id.to_owned(),
+            canonical_path: canonical.display().to_string(),
+        });
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out.dedup_by(|a, b| a.id == b.id);
+    Ok(out)
+}
+
+fn reject_untrusted_workspace(
+    frame: &crate::runtime_wire::Frame,
+    workspaces: &[MachineWorkspace],
+) -> Option<crate::runtime_wire::Frame> {
+    let crate::runtime_wire::Frame::CoreCommand {
+        command: crate::runtime_wire::CoreCommand::EnsureSession { session },
+    } = frame
+    else {
+        return None;
+    };
+    let allowed = std::fs::canonicalize(&session.cwd)
+        .ok()
+        .is_some_and(|target| {
+            workspaces.iter().any(|workspace| {
+                let root = std::path::Path::new(&workspace.canonical_path);
+                target == root || target.starts_with(root)
+            })
+        });
+    (!allowed).then(|| crate::runtime_wire::Frame::CommandAck {
+        session_id: session.session_id.clone(),
+        command_id: format!("ensure:{}", session.session_id),
+        accepted: false,
+        reason: Some(format!(
+            "session workspace is outside this Machine's trusted roots: {}",
+            session.cwd
+        )),
+    })
 }
 
 fn unix_ms() -> i64 {
@@ -294,7 +1105,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::validate_controller_url;
+    use super::{parse_workspaces, reject_untrusted_workspace, validate_controller_url};
+    use crate::runtime_wire::{CoreCommand, Frame, StartSession};
 
     #[test]
     fn remote_controller_requires_https() {
@@ -306,5 +1118,40 @@ mod tests {
     fn loopback_controller_allows_plaintext_for_hermetic_tests() {
         assert!(validate_controller_url("http://127.0.0.1:43333").is_ok());
         assert!(validate_controller_url("http://localhost:43333").is_ok());
+    }
+
+    #[test]
+    fn remote_launch_is_confined_to_canonical_workspace() {
+        let root =
+            std::env::temp_dir().join(format!("cowboy-machine-workspace-{}", std::process::id()));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).expect("workspace");
+        let workspaces = parse_workspaces(&[format!("main={}", root.display())]).expect("parse");
+        let ensure = |cwd: String| Frame::CoreCommand {
+            command: CoreCommand::EnsureSession {
+                session: StartSession {
+                    session_id: "session".to_owned(),
+                    provider: "codex".to_owned(),
+                    cwd,
+                    agent_session_id: None,
+                    system: false,
+                    generation: "test".to_owned(),
+                    fallback_for: None,
+                    adopt_only: false,
+                },
+            },
+        };
+        assert!(
+            reject_untrusted_workspace(&ensure(nested.display().to_string()), &workspaces)
+                .is_none()
+        );
+        assert!(
+            reject_untrusted_workspace(
+                &ensure("/definitely/not/a/workspace".to_owned()),
+                &workspaces
+            )
+            .is_some()
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 }
