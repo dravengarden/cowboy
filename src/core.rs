@@ -3183,15 +3183,19 @@ impl Hub {
         Ok(())
     }
 
-    /// Forget a session's resumable agent id so the NEXT spawn starts a fresh
-    /// `session/new` (a clean agent context) instead of `session/load`. Persist
-    /// NULL immediately: the replacement id remains memory-only until its first
-    /// user turn creates a real Codex rollout.
-    pub fn clear_agent_session_id(&self, session_id: &str) {
+    /// Prepare a session for a fresh-context worker replacement.
+    ///
+    /// Forget the resumable agent id so the next spawn uses `session/new`, and
+    /// release the old worker's in-flight guard. The replacement has its own
+    /// lifecycle fence; carrying this guard across the reset would leave the new
+    /// idle worker permanently unable to dispatch a queued prompt because the
+    /// normal `Starting` -> `Running` edge deliberately does not clear it.
+    pub fn prepare_context_reset(&self, session_id: &str) {
         {
             let mut sessions = self.inner.sessions.lock();
             if let Some(s) = sessions.get_mut(session_id) {
                 s.meta.agent_session_id = None;
+                s.in_flight = false;
             }
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
@@ -5214,6 +5218,29 @@ mod confirm_hold_tests {
                 .event_count,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn context_reset_releases_stale_in_flight_guard_for_queued_send() {
+        let hub = hub_with_session("reset-queue");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("reset-queue", Status::Running, None);
+
+        hub.submit("reset-queue", "old turn".to_owned(), vec![], None);
+        let old_turn = rx.recv().await.expect("old turn dispatch");
+        assert_eq!(old_turn.text, "old turn");
+        hub.submit("reset-queue", "after reset".to_owned(), vec![], None);
+        assert_eq!(queue_texts(&hub, "reset-queue"), vec!["after reset"]);
+
+        hub.prepare_context_reset("reset-queue");
+        hub.set_status("reset-queue", Status::Starting, None);
+        hub.set_status("reset-queue", Status::Running, None);
+
+        let dispatched = rx.recv().await.expect("queued dispatch after reset");
+        assert_eq!(dispatched.text, "after reset");
+        assert!(rx.try_recv().is_err());
+        assert!(queue_texts(&hub, "reset-queue").is_empty());
     }
 
     #[test]

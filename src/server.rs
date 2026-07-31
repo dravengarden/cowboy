@@ -4827,7 +4827,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // 4. Atomically fence + replace the worker. This must not use the
             //    permanent delete path: agentd retains delete tombstones to
             //    reject stale launches for genuinely deleted sessions.
-            state.hub.clear_agent_session_id(&session_id);
+            state.hub.prepare_context_reset(&session_id);
             state.hub.clear_transcript(&session_id);
             state.hub.mark_context_cleared(&session_id);
             match state.supervisor.reset_session(&session_id) {
