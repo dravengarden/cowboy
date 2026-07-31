@@ -62,6 +62,7 @@ struct AppState {
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
+    code_cache: crate::code_cache::CodeCache,
     zed_adapter_socket: Option<PathBuf>,
 }
 
@@ -91,6 +92,10 @@ fn scheduled_reset_failure_policy(
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     init_tracing();
+    let code_cache =
+        crate::code_cache::CodeCache::open(args.data_dir.join("code-cache"), args.code_cache_bytes)
+            .map_err(anyhow::Error::msg)
+            .context("opening code content cache")?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     // Persistence closes only after dispatcher/runtime quiescence. Using the
     // HTTP shutdown signal directly would race a last-millisecond prompt
@@ -516,6 +521,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
+            code_cache,
             zed_adapter_socket: args.zed_adapter_socket,
         },
         shutdown_tx,
@@ -1151,6 +1157,10 @@ struct Metrics {
     runtime_draining_workers: usize,
     runtime_handoff_workers: usize,
     runtime_pending_commands: usize,
+    code_cache_bytes: u64,
+    code_cache_hits: u64,
+    code_cache_misses: u64,
+    code_cache_evictions: u64,
 }
 
 /// Resident set size of THIS process (the daemon, not its agent children) from
@@ -1177,6 +1187,7 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         .as_ref()
         .map(|runtime| runtime.stats())
         .unwrap_or_default();
+    let code_cache = state.code_cache.metrics();
     Json(Metrics {
         db_bytes,
         events_rows,
@@ -1202,6 +1213,10 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         runtime_draining_workers: runtime.draining_workers,
         runtime_handoff_workers: runtime.handoff_workers,
         runtime_pending_commands: runtime.pending_commands,
+        code_cache_bytes: code_cache.bytes,
+        code_cache_hits: code_cache.hits,
+        code_cache_misses: code_cache.misses,
+        code_cache_evictions: code_cache.evictions,
     })
     .into_response()
 }
@@ -1774,6 +1789,38 @@ fn file_tree_revision(path: &str, entries: &[FileTreeEntry], truncated: bool) ->
     format!("{:x}", digest.finalize())
 }
 
+fn file_tree_http_response(headers: &HeaderMap, revision: &str, bytes: Vec<u8>) -> Response {
+    const TREE_CACHE_CONTROL: &str = "private, max-age=15, stale-while-revalidate=120";
+    let etag = format!("\"{revision}\"");
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains(etag.as_str()))
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag.as_str()),
+                (header::CACHE_CONTROL, TREE_CACHE_CONTROL),
+            ],
+        )
+            .into_response();
+    }
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(TREE_CACHE_CONTROL),
+    );
+    if let Ok(value) = etag.parse() {
+        response.headers_mut().insert(header::ETAG, value);
+    }
+    response
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeChangeResponse {
@@ -2169,8 +2216,19 @@ async fn api_file_tree(
     let limit = query.limit.clamp(20, 500);
     let path = query.path;
     let requested_path = path.clone();
+    let cache = state.code_cache.clone();
+    let cache_root = cwd.clone();
+    let cache_path = requested_path.clone();
+    let cached = tokio::task::spawn_blocking(move || {
+        cache.get_directory(FsPath::new(&cache_root), &cache_path, limit)
+    })
+    .await;
+    if let Ok(Ok(Some(cached))) = cached {
+        return file_tree_http_response(&headers, &cached.revision, cached.bytes);
+    }
+    let scan_root = cwd.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(cwd).directory(&path, limit)
+        crate::code_review::LocalCodeProvider::new(scan_root).directory(&path, limit)
     })
     .await;
     let Ok(Ok(page)) = result else {
@@ -2192,38 +2250,35 @@ async fn api_file_tree(
         .collect::<Vec<_>>();
     let truncated = page.truncated;
     let revision = file_tree_revision(&requested_path, &entries, truncated);
-    let etag = format!("\"{revision}\"");
-    const TREE_CACHE_CONTROL: &str = "private, max-age=15, stale-while-revalidate=120";
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains(etag.as_str()))
-    {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag.as_str()),
-                (header::CACHE_CONTROL, TREE_CACHE_CONTROL),
-            ],
-        )
-            .into_response();
-    }
-    let mut response = Json(FileTreeResponse {
+    let body = serde_json::to_vec(&FileTreeResponse {
         api_version: 1,
-        path: requested_path,
-        revision,
+        path: requested_path.clone(),
+        revision: revision.clone(),
         entries,
         truncated,
     })
-    .into_response();
-    response
-        .headers_mut()
-        .insert(header::ETAG, etag.parse().expect("SHA256 ETag is valid"));
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static(TREE_CACHE_CONTROL),
-    );
-    response
+    .expect("file tree response serializes");
+    let cache = state.code_cache.clone();
+    let cache_revision = revision.clone();
+    let cache_body = body.clone();
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            cache.put_directory(
+                FsPath::new(&cwd),
+                &requested_path,
+                limit,
+                &cache_revision,
+                &cache_body,
+            )
+        })
+        .await;
+        if let Ok(Err(error)) = result {
+            tracing::warn!(%error, "persisting lazy directory cache failed");
+        } else if let Err(error) = result {
+            tracing::warn!(%error, "lazy directory cache task failed");
+        }
+    });
+    file_tree_http_response(&headers, &revision, body)
 }
 
 fn session_cwd(state: &AppState, session_id: &str) -> Option<String> {
@@ -2446,9 +2501,20 @@ async fn api_code_file(
     let Some(cwd) = session_cwd(&state, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let cache = state.code_cache.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
-            .file_page(&query.path, query.cursor.as_deref())
+        if let Some(cached) = cache.get_or_load(FsPath::new(&cwd), &query.path)? {
+            debug_assert_eq!(cached.size, cached.bytes.len() as u64);
+            crate::code_review::cached_file_page(
+                &query.path,
+                cached.bytes,
+                cached.revision,
+                query.cursor.as_deref(),
+            )
+        } else {
+            crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                .file_page(&query.path, query.cursor.as_deref())
+        }
     })
     .await;
     let Ok(result) = result else {

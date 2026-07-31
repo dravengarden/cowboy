@@ -47,6 +47,7 @@ sha2 = "0.10"
 # converts "no cascade as long as no critical section ever panics" (a hand-held
 # invariant) into "no cascade, structurally".
 parking_lot = "0.12"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 mime_guess = "2"

@@ -91,6 +91,14 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_ZED_ADAPTER_SOCKET")]
     pub zed_adapter_socket: Option<PathBuf>,
 
+    /// Hawk-local saved-file content cache quota. Set to zero to disable.
+    #[arg(
+        long,
+        env = "COWBOY_CODE_CACHE_BYTES",
+        default_value_t = 2 * 1024 * 1024 * 1024_u64
+    )]
+    pub code_cache_bytes: u64,
+
     /// Desired detached worker generation. Agentd uses this for new sessions;
     /// workers already serving a turn remain on their current generation until
     /// the rollout reaches a safe boundary.

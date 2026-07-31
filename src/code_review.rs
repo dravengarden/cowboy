@@ -442,6 +442,55 @@ fn file_revision(relative: &Path, metadata: &std::fs::Metadata) -> String {
     format!("{:x}", digest.finalize())
 }
 
+pub(crate) fn cached_file_page(
+    relative: &str,
+    bytes: Vec<u8>,
+    revision: String,
+    cursor: Option<&str>,
+) -> Result<FileDocument, String> {
+    let size = u64::try_from(bytes.len()).map_err(|error| error.to_string())?;
+    let offset = match cursor {
+        Some(cursor) => {
+            let (cursor_revision, offset) = parse_file_cursor(cursor)?;
+            if cursor_revision != revision {
+                return Err("file snapshot changed".to_owned());
+            }
+            offset
+        }
+        None => 0,
+    };
+    let available = bytes.len();
+    if offset >= available && !(offset == 0 && available == 0) {
+        return Err("invalid file cursor".to_owned());
+    }
+    let mut page = bytes[offset..available.min(offset + FILE_PAGE_BYTES + 4)].to_vec();
+    if page.contains(&0) {
+        return Err("binary file".to_owned());
+    }
+    let valid_len = match std::str::from_utf8(&page) {
+        Ok(_) => page.len(),
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        Err(_) => return Err("file is not UTF-8".to_owned()),
+    };
+    let mut end = valid_len.min(FILE_PAGE_BYTES);
+    if offset + end < available
+        && let Some(newline) = page[..end].iter().rposition(|byte| *byte == b'\n')
+    {
+        end = newline + 1;
+    }
+    page.truncate(end);
+    let next_offset = offset + end;
+    Ok(FileDocument {
+        path: relative.to_owned(),
+        revision: revision.clone(),
+        text: String::from_utf8(page).map_err(|error| error.to_string())?,
+        size,
+        truncated: next_offset < available,
+        next_cursor: (next_offset < available).then(|| format!("{revision}:{next_offset}")),
+        limited: false,
+    })
+}
+
 fn parse_file_cursor(cursor: &str) -> Result<(&str, usize), String> {
     let (revision, offset) = cursor
         .rsplit_once(':')

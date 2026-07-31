@@ -5,6 +5,12 @@ pagination, restart recovery. Persistence is **Postgres** (optional — passed v
 `--postgres-url`); with no URL the daemon runs fully in-memory and forgets on
 restart. The deployed service uses the host's service-private Postgres.
 
+Regenerable Code review data is intentionally separate from durable product
+state. Saved files and lazy directory pages use the bounded Hawk-local
+`data_dir/code-cache` SQLite/CAS store described in
+[13-code-review.md](13-code-review.md). It can be deleted without losing user
+state; Zed owns unsaved buffers.
+
 ## Write-behind
 
 The Hub never blocks on the database. It emits a `StoreWrite` intent onto a

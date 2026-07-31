@@ -37,11 +37,35 @@ type DirectoryPage = CodeTreePage & { cachedAt: number };
 
 const directoryCache = new Map<string, DirectoryPage>();
 const MEMORY_FRESH_MS = 15_000;
+const MEMORY_MAX_AGE_MS = 5 * 60_000;
+const MEMORY_MAX_PAGES = 128;
 const DIRECTORY_PREFETCH_CONCURRENCY = 3;
 const DIRECTORY_PREFETCH_LIMIT = 12;
 
 function cacheKey(sessionId: string, path: string): string {
   return `${sessionId}\0${path}`;
+}
+
+function getDirectoryPage(key: string): DirectoryPage | undefined {
+  const page = directoryCache.get(key);
+  if (!page) return undefined;
+  if (Date.now() - page.cachedAt > MEMORY_MAX_AGE_MS) {
+    directoryCache.delete(key);
+    return undefined;
+  }
+  directoryCache.delete(key);
+  directoryCache.set(key, page);
+  return page;
+}
+
+function putDirectoryPage(key: string, page: DirectoryPage): void {
+  directoryCache.delete(key);
+  directoryCache.set(key, page);
+  while (directoryCache.size > MEMORY_MAX_PAGES) {
+    const oldest = directoryCache.keys().next().value;
+    if (typeof oldest !== "string") break;
+    directoryCache.delete(oldest);
+  }
 }
 
 function DirectoryRows({
@@ -238,7 +262,7 @@ export function ReviewFileTree({
       const path = prefetchQueue.current.shift();
       if (!path) continue;
       const key = cacheKey(sessionId, path);
-      const cached = directoryCache.get(key);
+      const cached = getDirectoryPage(key);
       if (cached && Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) {
         prefetchPending.current.delete(path);
         continue;
@@ -250,7 +274,7 @@ export function ReviewFileTree({
       void fetchCodeTree(sessionId, path, controller.signal)
         .then((page) => {
           if (generation !== prefetchGeneration.current) return;
-          directoryCache.set(key, { ...page, cachedAt: Date.now() });
+          putDirectoryPage(key, { ...page, cachedAt: Date.now() });
         })
         .catch(() => {
           // Prefetch is opportunistic. An explicit expansion will retry and
@@ -276,7 +300,7 @@ export function ReviewFileTree({
         DIRECTORY_PREFETCH_LIMIT,
       );
       for (const path of paths) {
-        const cached = directoryCache.get(cacheKey(sessionId, path));
+        const cached = getDirectoryPage(cacheKey(sessionId, path));
         if (
           (cached && Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) ||
           prefetchPending.current.has(path) ||
@@ -305,7 +329,7 @@ export function ReviewFileTree({
       return;
     }
     const key = cacheKey(sessionId, "");
-    const cached = directoryCache.get(key);
+    const cached = getDirectoryPage(key);
     if (cached && !refresh) {
       setRoot(cached);
       prefetchChildDirectories(cached);
@@ -330,7 +354,7 @@ export function ReviewFileTree({
         ...(await fetchCodeTree(sessionId, "", controller.signal, refresh)),
         cachedAt: Date.now(),
       };
-      directoryCache.set(key, page);
+      putDirectoryPage(key, page);
       setRoot(page);
       prefetchChildDirectories(page);
     } catch (error) {
@@ -351,7 +375,7 @@ export function ReviewFileTree({
   const loadDirectory = useCallback(async (path: string): Promise<void> => {
     if (!sessionId) return;
     const key = cacheKey(sessionId, path);
-    const cached = directoryCache.get(key);
+    const cached = getDirectoryPage(key);
     if (cached) {
       setPages((current) => new Map(current).set(path, cached));
       prefetchChildDirectories(cached);
@@ -374,7 +398,7 @@ export function ReviewFileTree({
         ...(await fetchCodeTree(sessionId, path, controller.signal)),
         cachedAt: Date.now(),
       };
-      directoryCache.set(key, page);
+      putDirectoryPage(key, page);
       setPages((current) => new Map(current).set(path, page));
       prefetchChildDirectories(page);
     } catch (error) {

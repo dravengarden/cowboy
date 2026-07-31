@@ -53,11 +53,28 @@ last active file. It must not depend on a complete recursive scan.
    preloading on constrained networks.
 
 Tree responses use stable relative paths until the Zed provider supplies entry
-IDs. Content responses use a content hash and immutable cache key. Directory
-pages carry a content revision and matching `ETag`; browser HTTP storage keeps
-them fresh for 15 seconds and may paint stale data for up to two minutes while
-revalidating. The in-memory tree paints immediately, then revalidates expired
-pages without blanking expanded folders. Explicit refresh uses cache reload.
+IDs. Directory pages and saved files form a lazy, partial Merkle graph under
+`data_dir/code-cache`: opening the drawer materializes only requested directory
+nodes, while opening a saved file below 32 MiB materializes its SHA-256 leaf and
+content-addressed blob. Large files remain bounded page reads so navigation
+never forces a full-file hash. Directory pages carry a content revision and
+matching `ETag`; browser HTTP storage keeps them fresh for 15 seconds and may
+paint stale data for up to two minutes while revalidating. The in-memory tree
+paints immediately, then revalidates expired pages without blanking expanded
+folders. Explicit refresh uses cache reload.
+
+The Hawk-local store uses SQLite WAL for node/leaf metadata and atomic-renamed
+CAS blobs. Metadata is a fast invalidation key; a cache miss reads the file once
+and hashes those same bytes. Unsaved Zed buffers remain an in-memory Zed overlay
+and never enter the persistent graph. The default 2 GiB quota starts eviction
+at 85%, drains to 70%, evicts single-hit/cold blobs first, and removes entries
+idle for 30 days on startup. Missing, corrupt, or orphaned blobs are discarded
+and rebuilt rather than becoming file-load failures.
+
+Mobile's process-local directory cache is independently bounded to 128 pages,
+uses access-order eviction, and drops idle pages after five minutes. Browser
+HTTP storage remains browser-quota-managed and every response is
+revalidation-safe, so no client cache is required for correctness.
 The Mobile drawer debounces file queries and caps results at 50, so navigating a
 large worktree does not require expanding its hierarchy.
 
