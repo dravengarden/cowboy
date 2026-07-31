@@ -31,11 +31,14 @@ import {
   fetchCodeSearch,
   fetchCodeTree,
 } from "./codeApi";
+import { directoryPrefetchTargets } from "./directoryPrefetch";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
 
 const directoryCache = new Map<string, DirectoryPage>();
 const MEMORY_FRESH_MS = 15_000;
+const DIRECTORY_PREFETCH_CONCURRENCY = 3;
+const DIRECTORY_PREFETCH_LIMIT = 12;
 
 function cacheKey(sessionId: string, path: string): string {
   return `${sessionId}\0${path}`;
@@ -209,8 +212,85 @@ export function ReviewFileTree({
   const controllerRef = useRef<AbortController | null>(null);
   const searchControllerRef = useRef<AbortController | null>(null);
   const directoryControllers = useRef(new Map<string, AbortController>());
+  const prefetchControllers = useRef(new Map<string, AbortController>());
+  const prefetchQueue = useRef<string[]>([]);
+  const prefetchPending = useRef(new Set<string>());
+  const prefetchActive = useRef(0);
+  const prefetchGeneration = useRef(0);
   const treeScrollerRef = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
+
+  const resetPrefetch = useCallback((): void => {
+    prefetchGeneration.current += 1;
+    prefetchControllers.current.forEach((controller) => controller.abort());
+    prefetchControllers.current.clear();
+    prefetchQueue.current = [];
+    prefetchPending.current.clear();
+    prefetchActive.current = 0;
+  }, []);
+
+  const pumpPrefetchQueue = useCallback((): void => {
+    if (!sessionId) return;
+    while (
+      prefetchActive.current < DIRECTORY_PREFETCH_CONCURRENCY &&
+      prefetchQueue.current.length > 0
+    ) {
+      const path = prefetchQueue.current.shift();
+      if (!path) continue;
+      const key = cacheKey(sessionId, path);
+      const cached = directoryCache.get(key);
+      if (cached && Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) {
+        prefetchPending.current.delete(path);
+        continue;
+      }
+      const controller = new AbortController();
+      const generation = prefetchGeneration.current;
+      prefetchControllers.current.set(path, controller);
+      prefetchActive.current += 1;
+      void fetchCodeTree(sessionId, path, controller.signal)
+        .then((page) => {
+          if (generation !== prefetchGeneration.current) return;
+          directoryCache.set(key, { ...page, cachedAt: Date.now() });
+        })
+        .catch(() => {
+          // Prefetch is opportunistic. An explicit expansion will retry and
+          // surface its own error state if the directory is actually needed.
+        })
+        .finally(() => {
+          if (generation !== prefetchGeneration.current) return;
+          if (prefetchControllers.current.get(path) === controller) {
+            prefetchControllers.current.delete(path);
+          }
+          prefetchPending.current.delete(path);
+          prefetchActive.current = Math.max(0, prefetchActive.current - 1);
+          pumpPrefetchQueue();
+        });
+    }
+  }, [sessionId]);
+
+  const prefetchChildDirectories = useCallback(
+    (page: CodeTreePage): void => {
+      if (!sessionId) return;
+      const paths = directoryPrefetchTargets(
+        page.entries,
+        DIRECTORY_PREFETCH_LIMIT,
+      );
+      for (const path of paths) {
+        const cached = directoryCache.get(cacheKey(sessionId, path));
+        if (
+          (cached && Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) ||
+          prefetchPending.current.has(path) ||
+          directoryControllers.current.has(path)
+        ) {
+          continue;
+        }
+        prefetchPending.current.add(path);
+        prefetchQueue.current.push(path);
+      }
+      pumpPrefetchQueue();
+    },
+    [pumpPrefetchQueue, sessionId],
+  );
 
   const load = useCallback(async (refresh = false): Promise<void> => {
     if (!sessionId) {
@@ -228,9 +308,11 @@ export function ReviewFileTree({
     const cached = directoryCache.get(key);
     if (cached && !refresh) {
       setRoot(cached);
+      prefetchChildDirectories(cached);
       if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
     }
     if (refresh) {
+      resetPrefetch();
       for (const cacheKey of directoryCache.keys()) {
         if (cacheKey.startsWith(`${sessionId}\0`)) {
           directoryCache.delete(cacheKey);
@@ -250,6 +332,7 @@ export function ReviewFileTree({
       };
       directoryCache.set(key, page);
       setRoot(page);
+      prefetchChildDirectories(page);
     } catch (error) {
       if (
         !cached &&
@@ -263,7 +346,7 @@ export function ReviewFileTree({
         setLoading(false);
       }
     }
-  }, [sessionId]);
+  }, [prefetchChildDirectories, resetPrefetch, sessionId]);
 
   const loadDirectory = useCallback(async (path: string): Promise<void> => {
     if (!sessionId) return;
@@ -271,8 +354,10 @@ export function ReviewFileTree({
     const cached = directoryCache.get(key);
     if (cached) {
       setPages((current) => new Map(current).set(path, cached));
+      prefetchChildDirectories(cached);
       if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
     }
+    prefetchControllers.current.get(path)?.abort();
     directoryControllers.current.get(path)?.abort();
     const controller = new AbortController();
     directoryControllers.current.set(path, controller);
@@ -291,6 +376,7 @@ export function ReviewFileTree({
       };
       directoryCache.set(key, page);
       setPages((current) => new Map(current).set(path, page));
+      prefetchChildDirectories(page);
     } catch (error) {
       if (
         !cached &&
@@ -308,7 +394,7 @@ export function ReviewFileTree({
         });
       }
     }
-  }, [sessionId]);
+  }, [prefetchChildDirectories, sessionId]);
 
   const toggleDirectory = useCallback((path: string): void => {
     setExpanded((current) => {
@@ -361,8 +447,9 @@ export function ReviewFileTree({
       controllerRef.current?.abort();
       searchControllerRef.current?.abort();
       directoryControllers.current.forEach((controller) => controller.abort());
+      resetPrefetch();
     };
-  }, [load]);
+  }, [load, resetPrefetch]);
 
   useEffect(() => {
     if (previousRefreshToken.current === refreshToken) return;
