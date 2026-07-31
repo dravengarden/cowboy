@@ -249,9 +249,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .map(|path| path.display().to_string()),
         )
     });
-    let runtime_router = remote_runtime
-        .as_ref()
-        .map(|runtime| RuntimeRouter::new(Arc::clone(runtime)));
+    let runtime_router = RuntimeRouter::new();
+    // Explicit development compatibility only. Production does not pass a
+    // runtime socket; every deployed runtime arrives through Machine hello.
+    if let Some(runtime) = remote_runtime.as_ref() {
+        runtime_router.install("local".to_owned(), Arc::clone(runtime));
+    }
     // Reset credits belong to the Codex account, not a session. Restore one
     // shared provider-level timer and keep it independent from session queues.
     if let Some(store) = store.as_ref() {
@@ -407,15 +410,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             }
         }
     }
-    let supervisor = Arc::new(match &runtime_router {
-        Some(router) => Supervisor::new_routed(
-            hub.clone(),
-            args.workspace_root.clone(),
-            session_id_floor,
-            Arc::clone(router),
-        ),
-        None => Supervisor::new(hub.clone(), args.workspace_root.clone(), session_id_floor),
-    });
+    let supervisor = Arc::new(Supervisor::new_routed(
+        hub.clone(),
+        args.workspace_root.clone(),
+        session_id_floor,
+        Arc::clone(&runtime_router),
+    ));
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
     // call the Supervisor (which holds the Hub) — that cycle is why the queue
@@ -539,7 +539,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             shutdown: shutdown_rx,
             runtime_health,
             remote_runtime: remote_runtime.clone(),
-            runtime_router,
+            runtime_router: Some(runtime_router),
             machine_control: Arc::new(MachineControl::default()),
             desired_machine_components: Arc::new(desired_machine_components),
             web_root: args.web_root,
@@ -1651,13 +1651,12 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                     .into_iter()
                     .filter(|machine| !machine.revoked)
                     .map(|machine| {
-                        let mut workspaces: Vec<crate::machine_protocol::MachineWorkspace> =
-                            machine
-                                .inventory
-                                .get("workspaces")
-                                .cloned()
-                                .and_then(|value| serde_json::from_value(value).ok())
-                                .unwrap_or_default();
+                        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
+                            .inventory
+                            .get("workspaces")
+                            .cloned()
+                            .and_then(|value| serde_json::from_value(value).ok())
+                            .unwrap_or_default();
                         let mut components: Vec<crate::machine_protocol::ComponentInventory> =
                             machine
                                 .inventory
@@ -1665,7 +1664,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                 .cloned()
                                 .and_then(|value| serde_json::from_value(value).ok())
                                 .unwrap_or_default();
-                        let mut capacity: crate::machine_protocol::MachineCapacity = machine
+                        let capacity: crate::machine_protocol::MachineCapacity = machine
                             .inventory
                             .get("capacity")
                             .cloned()
@@ -1683,22 +1682,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                 .count(),
                         )
                         .unwrap_or(u32::MAX);
-                        let local = machine.id == "local";
-                        if local {
-                            workspaces = vec![crate::machine_protocol::MachineWorkspace {
-                                id: "home".to_owned(),
-                                display_name: "home".to_owned(),
-                                canonical_path: state
-                                    .supervisor
-                                    .workspace_root()
-                                    .display()
-                                    .to_string(),
-                            }];
-                            capacity = crate::machine_protocol::MachineCapacity {
-                                max_sessions: u32::MAX,
-                                draining: false,
-                            };
-                        }
+                        let local = machine.connection_mode == "local";
                         for component in &mut components {
                             if matches!(
                                 component.id.kind,
@@ -1722,39 +1706,22 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             })
                             .map(|desired| desired.id.clone())
                             .collect();
-                        let schedulable = (local
-                            || state
-                                .runtime_router
-                                .as_ref()
-                                .is_some_and(|router| router.connected(&machine.id)))
-                            && (machine.id == "local" || !workspaces.is_empty())
+                        let schedulable = state
+                            .runtime_router
+                            .as_ref()
+                            .is_some_and(|router| router.connected(&machine.id))
+                            && !workspaces.is_empty()
                             && !capacity.draining
                             && active_sessions < capacity.max_sessions;
                         MachineSummary {
                             local,
                             schedulable,
                             id: machine.id,
-                            display_name: if local {
-                                local_machine_display_name()
-                            } else {
-                                machine.display_name
-                            },
-                            platform: if local {
-                                std::env::consts::OS.to_owned()
-                            } else {
-                                machine.platform
-                            },
-                            architecture: if local {
-                                std::env::consts::ARCH.to_owned()
-                            } else {
-                                machine.architecture
-                            },
-                            status: if local {
-                                "online".to_owned()
-                            } else {
-                                machine.status
-                            },
-                            fingerprint: if local { None } else { machine.fingerprint },
+                            display_name: machine.display_name,
+                            platform: machine.platform,
+                            architecture: machine.architecture,
+                            status: machine.status,
+                            fingerprint: machine.fingerprint,
                             workspaces,
                             components,
                             capacity,
@@ -1771,44 +1738,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
             }
         };
     }
-    let display_name = std::env::var("HOSTNAME")
-        .ok()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "This machine".to_owned());
-    Json(vec![MachineSummary {
-        id: "local".to_owned(),
-        display_name,
-        platform: std::env::consts::OS.to_owned(),
-        architecture: std::env::consts::ARCH.to_owned(),
-        status: "online".to_owned(),
-        local: true,
-        schedulable: true,
-        fingerprint: None,
-        workspaces: vec![crate::machine_protocol::MachineWorkspace {
-            id: "default".to_owned(),
-            display_name: "Default workspace".to_owned(),
-            canonical_path: state.supervisor.workspace_root().display().to_string(),
-        }],
-        components: Vec::new(),
-        capacity: crate::machine_protocol::MachineCapacity {
-            max_sessions: u32::MAX,
-            draining: false,
-        },
-        active_sessions: u32::try_from(
-            state
-                .hub
-                .session_list()
-                .into_iter()
-                .filter(|session| {
-                    session.machine_id == "local"
-                        && session.status != crate::agent_model::Status::Exited
-                })
-                .count(),
-        )
-        .unwrap_or(u32::MAX),
-        pending_updates: Vec::new(),
-    }])
-    .into_response()
+    Json(Vec::<MachineSummary>::new()).into_response()
 }
 
 async fn api_machine_events(
@@ -1961,19 +1891,6 @@ async fn api_machine_reconcile_one(
         Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
-}
-
-fn local_machine_display_name() -> String {
-    let hostname = std::env::var("HOSTNAME")
-        .ok()
-        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "This machine".to_owned());
-    let mut chars = hostname.chars();
-    chars.next().map_or(hostname.clone(), |first| {
-        first.to_uppercase().collect::<String>() + chars.as_str()
-    })
 }
 
 async fn api_machine_login_cancel(
@@ -2171,6 +2088,10 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         crate::machine_protocol::Platform::Linux => "linux",
         crate::machine_protocol::Platform::Macos => "macos",
     };
+    let connection_mode = match hello.connection_mode {
+        crate::machine_protocol::ConnectionMode::LocalUds => "local",
+        crate::machine_protocol::ConnectionMode::OutboundTls => "outbound_wss",
+    };
     let inventory = serde_json::json!({
         "components": &hello.components,
         "workspaces": &hello.workspaces,
@@ -2182,6 +2103,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             &challenge_id,
             platform,
             &hello.arch,
+            connection_mode,
             &inventory,
         )
         .await

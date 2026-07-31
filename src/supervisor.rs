@@ -28,6 +28,9 @@ use crate::workspace::{
 };
 
 enum Backend {
+    // Explicit in-process development/test mode. Deployed controllers always
+    // construct the routed backend and never own agent processes.
+    #[allow(dead_code)]
     Local(Mutex<HashMap<String, mpsc::UnboundedSender<AgentCommand>>>),
     Remote(Arc<RuntimeRouter>),
 }
@@ -57,6 +60,7 @@ fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
 
 impl Supervisor {
     #[must_use]
+    #[allow(dead_code)]
     pub fn new(hub: Hub, workspace_root: PathBuf, persistent_floor: u64) -> Self {
         // The wall-clock floor prevents reuse even after old tombstones are
         // purged. `persistent_floor` covers clock rollback and, critically,
@@ -84,12 +88,9 @@ impl Supervisor {
         persistent_floor: u64,
         runtime: Arc<RemoteRuntime>,
     ) -> Self {
-        Self::new_routed(
-            hub,
-            workspace_root,
-            persistent_floor,
-            RuntimeRouter::new(runtime),
-        )
+        let router = RuntimeRouter::new();
+        router.install("local".to_owned(), runtime);
+        Self::new_routed(hub, workspace_root, persistent_floor, router)
     }
 
     #[must_use]

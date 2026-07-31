@@ -38,6 +38,7 @@ struct ControllerConfig {
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     capacity: MachineCapacity,
+    local: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -107,6 +108,11 @@ pub struct Args {
     /// Keep existing sessions alive while refusing new placement.
     #[arg(long, env = "COWBOY_MACHINE_DRAINING", default_value_t = false)]
     draining: bool,
+    /// Mark this authenticated Machine as colocated with the controller for
+    /// display and scheduling preference only. Runtime traffic still uses the
+    /// normal Machine WebSocket protocol.
+    #[arg(long, env = "COWBOY_MACHINE_LOCAL", default_value_t = false)]
+    local: bool,
 }
 
 #[derive(Serialize)]
@@ -213,6 +219,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
             max_sessions: args.max_sessions.max(1),
             draining: args.draining,
         },
+        local: args.local,
     });
     let code_adapter = supervise_code_adapter(
         Arc::clone(&components),
@@ -505,7 +512,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         display_name: config.display_name.clone(),
         platform: current_platform(),
         arch: std::env::consts::ARCH.to_owned(),
-        connection_mode: ConnectionMode::OutboundTls,
+        connection_mode: if config.local {
+            ConnectionMode::LocalUds
+        } else {
+            ConnectionMode::OutboundTls
+        },
         min_protocol: MIN_MACHINE_PROTOCOL_VERSION,
         max_protocol: MACHINE_PROTOCOL_VERSION,
         min_runtime_protocol: crate::runtime_wire::MIN_PROTOCOL_VERSION,

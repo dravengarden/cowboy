@@ -12,25 +12,20 @@ use crate::remote_runtime::RemoteRuntime;
 /// Routes immutable session placement to the latest authenticated connection
 /// for that machine.
 pub struct RuntimeRouter {
-    local: Arc<RemoteRuntime>,
-    remote: RwLock<HashMap<String, Arc<RemoteRuntime>>>,
+    runtimes: RwLock<HashMap<String, Arc<RemoteRuntime>>>,
 }
 
 impl RuntimeRouter {
     #[must_use]
-    pub fn new(local: Arc<RemoteRuntime>) -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            local,
-            remote: RwLock::new(HashMap::new()),
+            runtimes: RwLock::new(HashMap::new()),
         })
     }
 
     #[must_use]
     pub fn runtime(&self, machine_id: &str) -> Option<Arc<RemoteRuntime>> {
-        if machine_id == "local" {
-            return Some(Arc::clone(&self.local));
-        }
-        self.remote.read().get(machine_id).cloned()
+        self.runtimes.read().get(machine_id).cloned()
     }
 
     #[must_use]
@@ -40,20 +35,18 @@ impl RuntimeRouter {
     }
 
     pub fn install(&self, machine_id: String, runtime: Arc<RemoteRuntime>) {
-        if machine_id != "local"
-            && let Some(previous) = self.remote.write().insert(machine_id, runtime)
-        {
+        if let Some(previous) = self.runtimes.write().insert(machine_id, runtime) {
             previous.disconnect();
         }
     }
 
     pub fn remove_if_current(&self, machine_id: &str, runtime: &Arc<RemoteRuntime>) {
-        let mut remote = self.remote.write();
-        if remote
+        let mut runtimes = self.runtimes.write();
+        if runtimes
             .get(machine_id)
             .is_some_and(|current| Arc::ptr_eq(current, runtime))
         {
-            remote.remove(machine_id);
+            runtimes.remove(machine_id);
             runtime.disconnect();
         }
     }
@@ -64,10 +57,30 @@ mod tests {
     use super::*;
     use crate::core::Hub;
 
+    #[test]
+    fn empty_router_does_not_synthesize_a_local_runtime() {
+        let router = RuntimeRouter::new();
+        assert!(router.runtime("local").is_none());
+        assert!(router.runtime("hawk").is_none());
+    }
+
+    #[tokio::test]
+    async fn colocated_machine_uses_the_same_registry_as_remote_machines() {
+        let router = RuntimeRouter::new();
+        let hawk = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        let falcon = RemoteRuntime::for_test(Hub::new(), Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&hawk));
+        router.install("falcon".to_owned(), Arc::clone(&falcon));
+        assert!(Arc::ptr_eq(&router.runtime("hawk").expect("hawk"), &hawk));
+        assert!(Arc::ptr_eq(
+            &router.runtime("falcon").expect("falcon"),
+            &falcon
+        ));
+    }
+
     #[tokio::test]
     async fn stale_disconnect_cannot_remove_replacement_runtime() {
-        let local = RemoteRuntime::for_test(Hub::new(), Vec::new());
-        let router = RuntimeRouter::new(local);
+        let router = RuntimeRouter::new();
         let first = RemoteRuntime::for_test(Hub::new(), Vec::new());
         let second = RemoteRuntime::for_test(Hub::new(), Vec::new());
         router.install("falcon".to_owned(), Arc::clone(&first));

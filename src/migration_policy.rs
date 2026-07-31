@@ -81,6 +81,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0018_machine_enrollment.sql",
         "b295ce695b06ef213144691956fd5d5e141a67e107426788f41ef26fcffcf491",
     ),
+    (
+        "0019_unify_local_machine.sql",
+        "3b9ae1a0569d12b880165c9a8f1b9311be09e43cc8c638a6b9ea1b55c18bc993",
+    ),
 ];
 
 #[test]

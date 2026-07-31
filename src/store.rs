@@ -418,17 +418,19 @@ impl Store {
         connection_epoch: &str,
         platform: &str,
         architecture: &str,
+        connection_mode: &str,
         inventory: &serde_json::Value,
     ) -> Result<()> {
         let result = sqlx::query(
             "UPDATE machines SET connection_epoch = $2, platform = $3, architecture = $4, \
-             status = 'online', inventory = $5, last_seen_at = now(), updated_at = now() \
+             connection_mode = $5, status = 'online', inventory = $6, last_seen_at = now(), updated_at = now() \
              WHERE id = $1 AND revoked_at IS NULL",
         )
         .bind(machine_id)
         .bind(connection_epoch)
         .bind(platform)
         .bind(architecture)
+        .bind(connection_mode)
         .bind(inventory)
         .execute(&self.pool)
         .await

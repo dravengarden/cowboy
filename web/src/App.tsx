@@ -1237,7 +1237,7 @@ function NewSessionDialog({
     onCreated: (sessionId: string) => void;
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>("codex");
-    const [machineId, setMachineId] = useState<string>("local");
+    const [machineId, setMachineId] = useState<string>("");
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const desktop = useSurfaceProfile().kind === "desktop";
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
@@ -1250,7 +1250,7 @@ function NewSessionDialog({
         useState<readonly WorkspaceChoice[]>(WORKING_DIRS);
     const selectedWorkspace = workspaces.find((workspace) => workspace.value === cwd);
     const selectedMachine = machines.find((machine) => machine.id === machineId);
-    const providerAvailable = (candidate: string): boolean => machineId === "local" || Boolean(
+    const providerAvailable = (candidate: string): boolean => Boolean(
         selectedMachine && machineProviderAvailable(candidate, selectedMachine.components),
     );
     useEffect(() => {
@@ -1283,7 +1283,7 @@ function NewSessionDialog({
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setProvider("codex");
-        setMachineId("local");
+        setMachineId("");
         setWorkItemId("");
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();
@@ -1296,7 +1296,13 @@ function NewSessionDialog({
         void fetch("/api/machines")
             .then((r) => (r.ok ? r.json() : null))
             .then((data: MachineChoice[] | null) => {
-                if (Array.isArray(data) && data.length > 0) setMachines(data);
+                if (Array.isArray(data) && data.length > 0) {
+                    setMachines(data);
+                    setMachineId((current) =>
+                        current || data.find((machine) => machine.local && machine.schedulable)?.id ||
+                            data.find((machine) => machine.schedulable)?.id || data[0]!.id
+                    );
+                }
             })
             .catch(() => {
                 // Older daemons remain an implicit local machine.
@@ -1304,9 +1310,9 @@ function NewSessionDialog({
     }, [open]);
     useEffect(() => {
         if (!open) return;
-        if (machineId !== "local") {
-            const remote = machines.find((machine) => machine.id === machineId);
-            const choices: WorkspaceChoice[] = (remote?.workspaces ?? []).map((workspace) => ({
+        if (machineId) {
+            const machine = machines.find((candidate) => candidate.id === machineId);
+            const choices: WorkspaceChoice[] = (machine?.workspaces ?? []).map((workspace) => ({
                 value: workspace.id,
                 label: workspace.display_name,
                 help: workspace.canonical_path,
@@ -1315,20 +1321,7 @@ function NewSessionDialog({
             setWorkspaces(choices);
             setCwd(choices[0]?.value ?? "");
             setWorkItemId("");
-            return;
         }
-        void fetch("/api/workspaces")
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: WorkspaceChoice[] | null) => {
-                const choices = Array.isArray(data) && data.length > 0 ? data : WORKING_DIRS;
-                setWorkspaces(choices);
-                setCwd(choices[0].value);
-                setWorkItemId("");
-            })
-            .catch(() => {
-                setWorkspaces(WORKING_DIRS);
-                setCwd(WORKING_DIRS[0].value);
-            });
     }, [open, machineId, machines]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
