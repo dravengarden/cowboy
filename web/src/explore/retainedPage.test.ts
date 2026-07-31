@@ -1,5 +1,6 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
 import {
+  nextFollowedTailPage,
   pageStartHandshakeIdentity,
   shouldAdoptLoadedPage,
 } from "./retainedPage.ts";
@@ -33,5 +34,24 @@ Deno.test("a different page root starts a new page-start handshake", () => {
   assertNotEquals(
     pageStartHandshakeIdentity("next", ["next"]),
     pageStartHandshakeIdentity("question", ["question"]),
+  );
+});
+
+Deno.test("a newly appended page follows only the previously selected tail", () => {
+  assertEquals(
+    nextFollowedTailPage("page-45", "page-45", "page-46", false),
+    "page-46",
+  );
+  assertEquals(
+    nextFollowedTailPage("page-12", "page-45", "page-46", false),
+    null,
+  );
+  assertEquals(
+    nextFollowedTailPage("page-45", "page-45", "page-46", true),
+    null,
+  );
+  assertEquals(
+    nextFollowedTailPage("page-45", "page-45", "page-45", false),
+    null,
   );
 });

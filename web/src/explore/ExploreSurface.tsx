@@ -68,6 +68,7 @@ import {
   type QuestionPage,
 } from "./questionPages";
 import {
+  nextFollowedTailPage,
   pageStartHandshakeIdentity,
   shouldAdoptLoadedPage,
 } from "./retainedPage";
@@ -245,6 +246,19 @@ function usePages(
     () => groupQuestionPages(basePages, pageParents),
     [basePages, pageParents],
   );
+  const tailPageId = pages.at(-1)?.id ?? null;
+  const previousTailPageIdRef = useRef<string | null>(tailPageId);
+  useEffect(() => {
+    const previousTailPageId = previousTailPageIdRef.current;
+    previousTailPageIdRef.current = tailPageId;
+    const nextPageId = nextFollowedTailPage(
+      pageId,
+      previousTailPageId,
+      tailPageId,
+      pendingFollowUp !== null,
+    );
+    if (nextPageId !== null) setExplorePage(sessionId, nextPageId);
+  }, [pageId, pendingFollowUp, sessionId, tailPageId]);
   const transitionPage = pageContainingItemKey(pages, transitionAnchorKey);
   const selectedPageId = transitionPage?.id ?? pageId;
   const selectedIndex = selectedPageId

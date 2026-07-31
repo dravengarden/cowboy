@@ -7,6 +7,23 @@ export function shouldAdoptLoadedPage(
   return retainedPageId === null || loadedPageIds.includes(retainedPageId);
 }
 
+export function nextFollowedTailPage(
+  retainedPageId: string | null,
+  previousTailPageId: string | null,
+  currentTailPageId: string | null,
+  pendingFollowUp: boolean,
+): string | null {
+  if (
+    pendingFollowUp ||
+    retainedPageId === null ||
+    previousTailPageId === null ||
+    currentTailPageId === null ||
+    previousTailPageId === currentTailPageId ||
+    retainedPageId !== previousTailPageId
+  ) return null;
+  return currentTailPageId;
+}
+
 export function pageStartHandshakeIdentity(
   pageId: string | null,
   itemKeys: readonly string[],
