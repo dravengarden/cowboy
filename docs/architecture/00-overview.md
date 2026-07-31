@@ -104,6 +104,7 @@ Read the chapters in order; each one zooms into a box above:
 10. [Build & deploy](10-deploy-build.md)
 11. [Operations](11-operations.md)
 12. [Zero-interruption rolling updates](12-rolling-updates.md)
+13. [Multi-machine runtime](15-multi-machine.md)
 
 Zed setup and the ACP bridge's current compatibility boundary are documented in
 [Zed ACP integration](../integrations/zed.md).

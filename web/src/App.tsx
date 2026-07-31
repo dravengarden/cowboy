@@ -808,6 +808,23 @@ function SessionList({
                                             }}
                                         />
                                     )}
+                                    {(s.machine_id ?? "local") !== "local" && (
+                                        <Chip
+                                            size="small"
+                                            label={s.machine_id}
+                                            variant="outlined"
+                                            sx={{
+                                                height: "1.5rem",
+                                                maxWidth: "8rem",
+                                                fontSize: "0.75rem",
+                                                "& .MuiChip-label": {
+                                                    px: "0.625rem",
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis",
+                                                },
+                                            }}
+                                        />
+                                    )}
                                     <SessionProjectionBadge sessionId={s.id} />
                                     <AutoResumeBadge meta={s} defaultOn={autoResumeDefault} />
                                     <ScheduleBadge meta={s} />
@@ -1176,6 +1193,15 @@ type WorkspaceChoice = {
     active_work_items: readonly WorkspaceWorkItem[];
 };
 
+type MachineChoice = {
+    id: string;
+    display_name: string;
+    platform: string;
+    architecture: string;
+    status: "online" | "offline" | "updating" | "degraded";
+    local: boolean;
+};
+
 function NewSessionDialog({
     open,
     onClose,
@@ -1187,6 +1213,8 @@ function NewSessionDialog({
     onCreated: (sessionId: string) => void;
 }): React.JSX.Element {
     const [provider, setProvider] = useState<string>("codex");
+    const [machineId, setMachineId] = useState<string>("local");
+    const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const desktop = useSurfaceProfile().kind === "desktop";
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
     const [workItemId, setWorkItemId] = useState<string>("");
@@ -1221,6 +1249,7 @@ function NewSessionDialog({
         if (!open) return undefined;
         setTitle(`New session ${sessionCountRef.current + 1}`);
         setProvider("codex");
+        setMachineId("local");
         setWorkItemId("");
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();
@@ -1239,6 +1268,17 @@ function NewSessionDialog({
                 // Keep the hard-coded fallback on any error.
             });
     }, [open]);
+    useEffect(() => {
+        if (!open) return;
+        void fetch("/api/machines")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: MachineChoice[] | null) => {
+                if (Array.isArray(data) && data.length > 0) setMachines(data);
+            })
+            .catch(() => {
+                // Older daemons remain an implicit local machine.
+            });
+    }, [open]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
@@ -1247,7 +1287,7 @@ function NewSessionDialog({
         void fetch("/api/sessions", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider, cwd, origin: "web" }),
+            body: JSON.stringify({ provider, machine_id: machineId, cwd, origin: "web" }),
         })
             .then((r) => (r.ok ? r.json() : null))
             .then((data: { session_id?: string } | null) => {
@@ -1355,6 +1395,25 @@ function NewSessionDialog({
                         </MenuItem>
                     ))}
                 </TextField>
+                {machines.length > 1 ? (
+                    <TextField
+                        select
+                        label="Machine"
+                        value={machineId}
+                        onChange={(e): void => setMachineId(e.target.value)}
+                        helperText="Sessions stay on the selected machine"
+                    >
+                        {machines.map((machine) => (
+                            <MenuItem
+                                key={machine.id}
+                                value={machine.id}
+                                disabled={machine.status !== "online"}
+                            >
+                                {machine.display_name}{machine.local ? " · This machine" : ""}
+                            </MenuItem>
+                        ))}
+                    </TextField>
+                ) : null}
                 <TextField
                     select
                     label="Working directory"

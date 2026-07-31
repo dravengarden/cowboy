@@ -1,0 +1,261 @@
+# Multi-machine runtime
+
+Cowboy evolves from one Hawk-local runtime into a control plane that can route
+sessions and code-intelligence work to independently operated macOS and Linux
+machines. The durable boundary is a small `cowboy-machine` host agent. Agent
+CLIs, ACP adapters/workers, and Zed are payloads supervised by that host; they
+are not linked into the Cowboy HTTP daemon and do not share an update
+generation.
+
+This design extends the existing `runtime_wire` fencing, command idempotency,
+worker snapshots, event replay, and safe drain rules. It does not introduce a
+second session protocol or proxy ACP itself over the public network.
+
+## Topology
+
+```mermaid
+flowchart LR
+    UI["Cowboy clients"] --> CP["Cowboy control plane"]
+    CP -->|"UDS · local"| HM["cowboy-machine · Hawk"]
+    MM["cowboy-machine · Mac"] -->|"outbound WSS + machine auth"| CP
+    FM["cowboy-machine · Falcon"] -->|"outbound WSS + machine auth"| CP
+    HM --> HA["ACP generation"]
+    HM --> HZ["Zed generation(s)"]
+    MM --> MA["ACP generation"]
+    MM --> MZ["Zed generation(s)"]
+    FM --> FA["ACP generation"]
+    FM --> FZ["Zed generation(s)"]
+    HA --> HC["Codex / Claude / Gemini"]
+    HZ --> HZS["isolated Zed adapter + server"]
+```
+
+Remote agents initiate the connection. A machine opens no public listener and
+does not need a per-machine public domain. The configured endpoint is the
+Cowboy control-plane domain, for example
+`wss://cowboy.example/api/machine/connect`. This works through NAT and avoids
+turning every development host into an Internet-facing service.
+
+SOCKS is not a runtime transport. It can carry arbitrary TCP, but it provides
+none of the machine identity, lease fencing, command deduplication, event
+replay, capability negotiation, or component lifecycle semantics Cowboy needs.
+The local fast path remains a Unix-domain socket. Remote machines use the same
+length-bounded application frames over WebSocket/TLS.
+
+## Stable host, replaceable payloads
+
+`cowboy-machine` owns only mechanisms expected to remain stable:
+
+- machine identity, enrollment, credential rotation, and revocation;
+- one reconnecting control-plane connection and heartbeat;
+- content-addressed downloads with digest/signature verification;
+- atomic generation activation, health probes, drain, and rollback;
+- process supervision, per-runtime state roots, logs, and resource reporting;
+- the existing detached ACP worker pool and its replay/fencing contract;
+- provider and Zed authentication orchestration without reading credentials
+  into Cowboy's database or event stream.
+
+It does **not** contain provider-specific UI rules or Zed protocol logic. Those
+live in independently versioned payloads:
+
+| Payload domain | Contents | Roll trigger |
+|---|---|---|
+| `acp-runtime` | ACP SDK, worker, provider launch policy | ACP SDK/worker change |
+| `provider-adapter:<id>` | `codex-acp`, `claude-agent-acp`, or native Gemini ACP entry | adapter release |
+| `provider-cli:<id>` | Codex, Claude Code, or Gemini CLI | provider release |
+| `zed-adapter:<abi>` | Cowboy's GPL-isolated stable product adapter | adapter contract change |
+| `zed-server:<zed-version>` | official server matching one Zed revision | matching Zed client/update |
+
+Each domain has its own desired generation, readiness gate, drain set, rollback
+target, and update policy. Updating Zed must not drain ACP turns. Updating
+Codex must not restart Claude/Gemini workers or Zed language servers. Updating
+the Machine host must leave all content-addressed payload executables running;
+the replacement host adopts them from snapshots after reconnect.
+
+## Zed is a version set, not one global binary
+
+Zed remote development requires the remote server version to exactly match the
+connecting Zed client. Cowboy's Code Provider also pins a Zed server and a
+matching `cowboy-zed-adapter` revision. Therefore a machine may retain several
+Zed server generations concurrently:
+
+```text
+payloads/zed-server/<platform>/<zed-version>/<sha256>/bin/zed-remote-server
+payloads/zed-adapter/<adapter-abi>/<sha256>/bin/cowboy-zed-adapter
+state/zed/<adapter-abi>/<worktree-id>/...
+```
+
+The Machine Agent never mutates Zed's user-owned `~/.zed_server` directory.
+Zed's native SSH client may continue to own that location. Cowboy-managed Zed
+state stays under the Machine Agent root and is selected by an explicit
+generation lease. This preserves the existing ownership boundary and keeps the
+GPL adapter/process isolated from the MIT Cowboy daemon.
+
+## Provider distribution
+
+The Machine Agent uses a private tool root and never depends on an interactive
+shell's `PATH`, Homebrew state, or `npx latest` in the session-start path:
+
+```text
+payloads/<component>/<version>/<digest>/...
+active/<component> -> ../../payloads/<component>/<version>/<digest>
+state/<provider>/...       # provider-owned auth/config, mode 0700
+```
+
+- **Codex:** prefer the official standalone macOS/Linux release artifact. It is
+  a single native executable and avoids Node/Homebrew coupling.
+- **Claude Code:** until Anthropic's native installer leaves its documented
+  alpha status, install the official npm package into a Machine-owned prefix.
+  Its own auto-updater is disabled; Cowboy stages and activates reviewed
+  versions explicitly.
+- **Gemini:** install the official stable npm package into a Machine-owned
+  prefix. OAuth remains inside the official CLI. API-key/Vertex modes remain
+  supported provider choices.
+- **ACP adapters:** install as explicit versioned payloads. Session startup
+  executes the active immutable path directly; it never installs packages.
+
+The managed Node runtime, when needed, is itself a versioned payload. macOS and
+Linux therefore use the same lifecycle. Brew/Nix may bootstrap
+`cowboy-machine`, but they are not part of provider runtime correctness.
+
+## Authentication
+
+Credentials stay on the execution machine in provider-owned state. Cowboy only
+stores and displays a redacted status such as `signed_out`, `pending`,
+`signed_in`, `expired`, or `error`, plus non-secret account labels returned by
+the provider.
+
+Login is capability-driven:
+
+- Codex App Server exposes account status plus a device-code flow. The Machine
+  Agent returns the verification URL and user code to Cowboy; Mobile opens the
+  URL and shows a copyable code, then listens for completion.
+- Claude and Gemini currently own browser/terminal login flows. A provider
+  helper runs under a constrained PTY, emits typed prompts/URLs, and accepts
+  only the explicitly requested response. Cowboy must not scrape or copy token
+  files. API-key modes use a masked secret input sent directly to the Machine
+  Agent and never enter the transcript.
+- When a provider lacks a stable non-interactive flow, the UI exposes a short
+  terminal-assisted login session rather than inventing an OAuth client or
+  impersonating the provider.
+
+Every login request has an id, expiry, cancellation, and one active owner.
+Login frames are never replayed into a different UI client after expiry.
+
+## Enrollment and transport security
+
+HTTPS alone authenticates the Cowboy server, not the machine. Remote mode uses:
+
+1. a short-lived, single-use enrollment token created in Cowboy;
+2. a new random per-machine key generated and stored locally (macOS Keychain
+   when available; otherwise a mode-0600 state file protected by the service
+   account);
+3. strict Web PKI validation for the configured `wss://` endpoint, with no
+   insecure or plaintext remote override;
+4. a server nonce signed by the enrolled machine key on every connection;
+5. controller-issued machine identity, key rotation, immediate revocation, and
+   an auditable last-seen/source record.
+
+Production may additionally require mTLS at the reverse proxy, but application
+machine identity remains mandatory so credentials can be rotated and revoked
+without coupling the product protocol to one proxy. Local UDS mode relies on
+filesystem ownership and peer credentials and does not require enrollment.
+
+The server authorizes canonical workspace roots per machine. A session request
+contains a `machine_id` and a machine-local workspace id; arbitrary client-sent
+absolute paths are rejected. The Machine Agent resolves the workspace id to a
+canonical path and rechecks it before launching a worker or Zed worktree.
+
+## Protocol layers
+
+There are three deliberately separate compatibility contracts:
+
+1. **Machine control protocol:** identity, inventory, component reconciliation,
+   login actions, health, and multiplexed runtime frames. Additive v1 fields
+   default safely; min/max negotiation rejects non-overlap.
+2. **ACP runtime protocol:** the existing `runtime_wire` contract between the
+   controller and detached workers. Machine transport carries these frames
+   without reinterpreting ACP updates.
+3. **Zed adapter contract:** Cowboy product requests such as open worktree,
+   hover, symbols, and navigation. Raw Zed protobuf never crosses the Cowboy
+   control-plane boundary.
+
+ACP SDK code is bundled in the `acp-runtime` payload, not in the stable Machine
+host. Zed protobuf code is bundled only in the GPL-isolated Zed adapter. This is
+what lets ordinary provider/Zed upgrades avoid a Machine Agent release.
+
+## Scheduling and session ownership
+
+Every session persists its immutable `machine_id`. The default for a new
+session is the UI's current/local machine when healthy, otherwise the most
+recently used healthy compatible machine. A machine is selectable only when it
+reports:
+
+- online and not draining;
+- the requested provider capability installed and authenticated;
+- the selected workspace available and trusted;
+- compatible machine/runtime protocol versions;
+- sufficient free capacity for a new worker.
+
+Once created, a session never silently migrates to another machine: the agent's
+native session store, worktree, credentials, and running tools are local. A
+future explicit migration operation must first prove provider resume support,
+workspace identity, and credential compatibility. Offline sessions remain
+bound and show a recoverable Machine Offline state.
+
+## Update coordination
+
+Cowboy publishes signed desired manifests; each Machine Agent independently
+downloads, verifies, stages, probes, and reports readiness. Activation is
+policy-controlled (`manual`, `when_idle`, or `automatic`) and never means
+"latest at process start".
+
+For ACP payloads, the existing safe-drain invariants apply. Busy workers finish
+on their current immutable generation; new sessions use the activated
+generation; failed candidates roll back. Zed worktrees are leased and drain
+independently. Old payloads are retained while referenced by a live process or
+rollback slot, then evicted by size/age policy.
+
+Cowboy itself may update without changing the Machine desired manifest. Machine
+Agents may update at a slower cadence as long as protocol ranges overlap. The
+control plane must retain at least one protocol version accepted by every
+enrolled online machine before removing an old version.
+
+## Product surfaces
+
+- Session rows and headers show a compact machine tag only when more than one
+  machine exists or the bound machine is not local.
+- New Session groups `Machine`, `Workspace`, and `Provider`; changing Machine
+  refreshes the other two from that machine's capability snapshot. Current
+  machine is preselected.
+- Machines lists connectivity, platform/architecture, capacity, allowed
+  workspaces, provider install/auth/version state, ACP generation, Zed
+  generations, pending updates, and last error.
+- Login and update actions are explicit sheets/dialogs with progress and
+  cancellation. Secret material is never rendered after submission.
+- Offline, incompatible, draining, and revoked are visually distinct and carry
+  a concrete remediation action.
+
+## Delivery slices
+
+1. Persist `machine_id` on sessions and expose a local-only machine inventory.
+   Existing behavior remains unchanged.
+2. Extract the current agentd + worker packaging into `cowboy-machine` local UDS
+   mode while keeping the existing runtime wire.
+3. Add outbound WSS enrollment and run one non-production remote machine.
+4. Add provider inventory, managed payload generations, login status/actions,
+   and Machines UI.
+5. Route session creation and all runtime commands by immutable `machine_id`.
+6. Move the isolated Zed adapter/server under its own Machine generation and
+   add multi-version Zed slots.
+7. Enroll Mac, then Falcon; verify disconnect/replay, core update, Machine host
+   update, ACP drain/rollback, Zed-only update, credential revocation, and
+   offline UX before making remote scheduling the default.
+
+## Upstream contracts
+
+- [Codex installation](https://github.com/openai/codex/blob/main/README.md)
+  and [App Server account/login API](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+- [Claude Code setup and update channels](https://docs.anthropic.com/en/docs/claude-code/getting-started)
+- [Gemini CLI releases and authentication](https://github.com/google-gemini/gemini-cli)
+- [Zed remote development and exact server matching](https://zed.dev/docs/remote-development)
+- [Zed release artifacts](https://github.com/zed-industries/zed/releases)

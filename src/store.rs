@@ -317,7 +317,7 @@ impl Store {
     /// If a query fails or a payload is unparseable.
     pub async fn load_all(&self) -> Result<Vec<LoadedSession>> {
         let session_rows: Vec<SessionRow> = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, provider, cwd, title, origin, status, agent_session_id, auto_resume, \
+            "SELECT id, provider, machine_id, cwd, title, origin, status, agent_session_id, auto_resume, \
              awaiting_user, done, system, next_seq, queue, drafts, judge_runs, \
              mobile_review_state, created_at \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
@@ -677,11 +677,12 @@ impl Store {
     /// If the row already exists or the INSERT fails.
     pub async fn insert_session(&self, m: &SessionMeta) -> Result<()> {
         sqlx::query(
-            "INSERT INTO sessions(id, provider, cwd, title, origin, status, next_seq, system) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0, $7)",
+            "INSERT INTO sessions(id, provider, machine_id, cwd, title, origin, status, next_seq, system) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8)",
         )
         .bind(&m.id)
         .bind(&m.provider)
+        .bind(&m.machine_id)
         .bind(&m.cwd)
         .bind(strip_nul_str(&m.title))
         .bind(origin_to_str(m.origin))
@@ -1129,6 +1130,7 @@ fn status_from_str(s: &str) -> Status {
 struct SessionRow {
     id: String,
     provider: String,
+    machine_id: String,
     cwd: String,
     title: String,
     origin: String,
@@ -1152,6 +1154,7 @@ impl SessionRow {
         SessionMeta {
             id: self.id,
             provider: self.provider,
+            machine_id: self.machine_id,
             cwd: self.cwd,
             title: self.title,
             status: status_from_str(&self.status),

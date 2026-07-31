@@ -35,6 +35,8 @@ export function originLabel(o: SessionOrigin | undefined): string {
 export interface SessionMeta {
   id: string;
   provider: string;
+  /** Stable machine placement. Missing on older daemons means local. */
+  machine_id?: string;
   cwd: string;
   title: string;
   status: Status;

@@ -42,8 +42,11 @@
           ./Cargo.lock
           ./src/lib.rs
           ./src/agentd.rs
+          ./src/machine_cli.rs
+          ./src/machine_protocol.rs
           ./src/runtime_wire.rs
           ./src/bin/cowboy-agentd.rs
+          ./src/bin/cowboy-machine.rs
         ];
       };
 
@@ -134,7 +137,13 @@
         version = "0.1.0";
         src = agentd-src;
         cargoDeps = cowboy-cargo-deps;
-        cargoBuildFlags = [ "--no-default-features" "--bin" "cowboy-agentd" ];
+        cargoBuildFlags = [
+          "--no-default-features"
+          "--bin"
+          "cowboy-agentd"
+          "--bin"
+          "cowboy-machine"
+        ];
         doCheck = false;
         meta = {
           description = "Stable local broker for detached Cowboy ACP workers";

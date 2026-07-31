@@ -1588,6 +1588,7 @@ mod tests {
         let meta = SessionMeta {
             id: "sess-1".to_owned(),
             provider: "codex".to_owned(),
+            machine_id: "local".to_owned(),
             cwd: "/tmp".to_owned(),
             title: "test".to_owned(),
             status: Status::Busy,

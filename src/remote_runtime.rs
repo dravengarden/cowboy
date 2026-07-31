@@ -1237,7 +1237,7 @@ mod tests {
     #[test]
     fn rejected_prompt_returns_to_durable_queue() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),
@@ -1263,7 +1263,7 @@ mod tests {
     #[tokio::test]
     async fn reset_uses_existing_wire_and_preserves_replacement_declaration() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),
@@ -1368,7 +1368,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_reset_keeps_native_thread_and_uses_replacement_cwd() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/old/checkout".to_owned(),
@@ -1427,7 +1427,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_rejection_automatically_queues_worker_reset() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),
@@ -1457,7 +1457,7 @@ mod tests {
     #[tokio::test]
     async fn stale_idle_status_cannot_end_a_newer_remote_turn() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),
@@ -1557,7 +1557,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_returns_unacknowledged_prompt_to_queue() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),
@@ -1592,7 +1592,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_does_not_duplicate_prompt_already_owned_by_broker() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),

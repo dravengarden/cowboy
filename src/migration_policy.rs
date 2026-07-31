@@ -73,6 +73,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0016_mobile_review_state.sql",
         "9f20a15c4b9a000209e1af070aadc86f7874c753bba86324292670b71ac8c7a8",
     ),
+    (
+        "0017_machines.sql",
+        "334060e9171db9c5eda5188982ab0777d6dd8ea95d66e1582881ec762904c3d3",
+    ),
 ];
 
 #[test]

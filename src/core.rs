@@ -367,6 +367,11 @@ fn last_stop_reason(log: &[Envelope]) -> Option<String> {
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
+    /// Stable machine placement. A session never silently migrates to another
+    /// machine because its provider credentials, cwd, and native thread all
+    /// belong to the selected host.
+    #[serde(default = "local_machine_id")]
+    pub machine_id: String,
     pub cwd: String,
     pub title: String,
     pub status: Status,
@@ -441,6 +446,21 @@ pub struct SessionMeta {
     /// "next fires at …" without shipping every draft to the list. Transient.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_schedule_ms: Option<i64>,
+}
+
+fn local_machine_id() -> String {
+    "local".to_owned()
+}
+
+/// Immutable attributes assigned when a Cowboy session is registered.
+pub struct SessionRegistration {
+    pub id: String,
+    pub provider: String,
+    pub machine_id: String,
+    pub cwd: String,
+    pub title: String,
+    pub origin: SessionOrigin,
+    pub system: bool,
 }
 
 /// One staged message — either a QUEUED prompt (waiting for the current turn to
@@ -1969,7 +1989,8 @@ impl Hub {
     }
 
     /// Register a new session in `Starting` state and broadcast the new list.
-    pub fn create_session(
+    #[cfg(test)]
+    pub fn create_local_session(
         &self,
         id: String,
         provider: String,
@@ -1978,9 +1999,32 @@ impl Hub {
         origin: SessionOrigin,
         system: bool,
     ) {
+        self.create_session(SessionRegistration {
+            id,
+            provider,
+            machine_id: "local".to_owned(),
+            cwd,
+            title,
+            origin,
+            system,
+        });
+    }
+
+    /// Register a session on a specific stable machine identity.
+    pub fn create_session(&self, registration: SessionRegistration) {
+        let SessionRegistration {
+            id,
+            provider,
+            machine_id,
+            cwd,
+            title,
+            origin,
+            system,
+        } = registration;
         let meta = SessionMeta {
             id: id.clone(),
             provider,
+            machine_id,
             cwd,
             title,
             status: Status::Starting,
@@ -4590,7 +4634,7 @@ mod confirm_hold_tests {
 
     fn hub_with_session(id: &str) -> Hub {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             id.to_owned(),
             "claude-code".to_owned(),
             "/tmp".to_owned(),
@@ -4854,7 +4898,7 @@ mod confirm_hold_tests {
         let (tx, _rx) = mpsc::channel(HOT_TAIL + HOT_TAIL_TRIM_BATCH + 2);
         let health = std::sync::Arc::new(PersistenceHealth::default());
         let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
-        hub.create_session(
+        hub.create_local_session(
             "bounded".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),

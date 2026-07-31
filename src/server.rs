@@ -979,6 +979,7 @@ async fn serve_axum(
         )
         .route("/metrics", get(prometheus_metrics))
         .route("/api/workspaces", get(api_workspaces))
+        .route("/api/machines", get(api_machines))
         .route("/api/sessions", post(api_new_session))
         .route(
             "/api/sessions/reconcile-project",
@@ -1579,6 +1580,34 @@ async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
     Json(out).into_response()
 }
 
+#[derive(Debug, Serialize)]
+struct MachineSummary {
+    id: String,
+    display_name: String,
+    platform: String,
+    architecture: String,
+    status: &'static str,
+    local: bool,
+}
+
+/// The first multi-machine slice deliberately advertises only the operational
+/// local scheduler. Enrolled outbound machines are added here only after their
+/// authenticated connection and inventory have been accepted.
+async fn api_machines() -> Json<Vec<MachineSummary>> {
+    let display_name = std::env::var("HOSTNAME")
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "This machine".to_owned());
+    Json(vec![MachineSummary {
+        id: "local".to_owned(),
+        display_name,
+        platform: std::env::consts::OS.to_owned(),
+        architecture: std::env::consts::ARCH.to_owned(),
+        status: "online",
+        local: true,
+    }])
+}
+
 async fn api_session_info(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -1636,6 +1665,9 @@ async fn api_session_prompt(
 #[derive(Debug, Deserialize)]
 struct NewSessionRequest {
     provider: String,
+    /// Stable machine placement. Older clients omit it and remain local.
+    #[serde(default = "default_machine_id")]
+    machine_id: String,
     #[serde(default)]
     cwd: Option<String>,
     /// Which surface opened the session — defaults to `Api` for direct
@@ -1647,6 +1679,10 @@ struct NewSessionRequest {
     /// UI never sets it.
     #[serde(default)]
     system: bool,
+}
+
+fn default_machine_id() -> String {
+    "local".to_owned()
 }
 
 /// Response body for `POST /api/sessions`.
@@ -1705,10 +1741,13 @@ async fn api_new_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
-    match state
-        .supervisor
-        .new_session(&req.provider, req.cwd, req.origin, req.system)
-    {
+    match state.supervisor.new_session_on(
+        &req.provider,
+        req.cwd,
+        req.origin,
+        req.system,
+        &req.machine_id,
+    ) {
         Ok(session_id) => {
             (StatusCode::CREATED, Json(NewSessionResponse { session_id })).into_response()
         }
@@ -4061,7 +4100,7 @@ mod bootstrap_tests {
     fn hub_with_sessions() -> Hub {
         let hub = Hub::new();
         for id in ["focused", "inactive"] {
-            hub.create_session(
+            hub.create_local_session(
                 id.to_owned(),
                 "codex".to_owned(),
                 "/tmp".to_owned(),

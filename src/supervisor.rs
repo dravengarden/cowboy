@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 use crate::acp::{self, AgentCommand};
-use crate::core::{Hub, SessionOrigin, Status};
+use crate::core::{Hub, SessionOrigin, SessionRegistration, Status};
 use crate::provider::{self, LaunchSpec};
 use crate::remote_runtime::RemoteRuntime;
 use crate::runtime_wire::StartSession;
@@ -133,6 +133,23 @@ impl Supervisor {
         origin: SessionOrigin,
         system: bool,
     ) -> Result<String, String> {
+        self.new_session_on(provider, cwd, origin, system, "local")
+    }
+
+    /// Create a session with immutable machine placement. Phase one only
+    /// schedules the local machine; accepting an unknown id would otherwise
+    /// make a remote-looking session run locally with the wrong credentials.
+    pub fn new_session_on(
+        &self,
+        provider: &str,
+        cwd: Option<String>,
+        origin: SessionOrigin,
+        system: bool,
+        machine_id: &str,
+    ) -> Result<String, String> {
+        if machine_id != "local" {
+            return Err(format!("machine {machine_id:?} is not connected"));
+        }
         let spec =
             provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
 
@@ -157,14 +174,15 @@ impl Supervisor {
 
         let id = format!("sess-{}", self.counter.fetch_add(1, Ordering::Relaxed));
         let title = format!("{provider} · {}", cwd.display());
-        self.hub.create_session(
-            id.clone(),
-            provider.to_owned(),
-            cwd.display().to_string(),
+        self.hub.create_session(SessionRegistration {
+            id: id.clone(),
+            provider: provider.to_owned(),
+            machine_id: machine_id.to_owned(),
+            cwd: cwd.display().to_string(),
             title,
             origin,
             system,
-        );
+        });
 
         // Fresh session — no agent id to resume.
         self.spawn_agent(&id, &spec, cwd, None)?;
@@ -652,7 +670,7 @@ mod tests {
     #[test]
     fn session_counter_honors_live_persistent_and_clock_floors() {
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "sess-99".to_owned(),
             "codex".to_owned(),
             "/tmp".to_owned(),
@@ -672,7 +690,7 @@ mod tests {
         let cwd = root.path().join("checkout");
         std::fs::create_dir_all(&cwd).expect("checkout");
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             cwd.display().to_string(),
@@ -727,7 +745,7 @@ mod tests {
         let cwd = root.path().join("checkout");
         std::fs::create_dir_all(&cwd).expect("checkout");
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             cwd.display().to_string(),
@@ -772,7 +790,7 @@ mod tests {
         let checkout = columbus.join("projects/corsair/main");
         std::fs::create_dir_all(checkout.join(".git")).expect("checkout");
         let hub = Hub::new();
-        hub.create_session(
+        hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),
             checkout.display().to_string(),
