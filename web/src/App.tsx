@@ -3591,6 +3591,25 @@ type MachineEventView =
     | { event: "command_result"; request_id: string; accepted: boolean; detail?: string }
     | { event: "inventory"; observed_at_ms: number; components: unknown[] };
 
+function machineProviderName(slot?: string): string {
+    if (slot === "codex") return "Codex";
+    if (slot === "claude" || slot === "claude-code") return "Claude Code";
+    if (slot === "gemini") return "Gemini";
+    return slot || "Agent";
+}
+
+function machineComponentName(component: MachineChoice["components"][number]): string {
+    if (component.id.kind === "provider_cli") return machineProviderName(component.id.slot);
+    if (component.id.kind === "provider_adapter") return `${machineProviderName(component.id.slot)} adapter`;
+    if (component.id.kind === "zed_server") return "Zed";
+    if (component.id.kind === "zed_adapter") return "Zed adapter";
+    if (component.id.kind === "code_adapter") return "Code adapter";
+    if (component.id.kind === "machine_host") return "Machine host";
+    if (component.id.kind === "acp_runtime") return "ACP runtime";
+    if (component.id.kind === "managed_node") return "Managed Node";
+    return component.id.slot || component.id.kind.replaceAll("_", " ");
+}
+
 function MachinesContent(): React.JSX.Element {
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
@@ -3654,14 +3673,51 @@ function MachinesContent(): React.JSX.Element {
                 const latest = events[machine.id]?.at(-1);
                 const open = Boolean(expanded[machine.id]);
                 const pending = machine.pending_updates ?? [];
+                const projectWorkspaces = machine.workspaces.filter((workspace) =>
+                    workspace.id !== "home" && workspace.id !== "columbus"
+                );
+                const rootWorkspaces = machine.workspaces.filter((workspace) =>
+                    workspace.id === "home" || workspace.id === "columbus"
+                );
                 const visibleComponents = machine.components.filter((component) =>
-                    component.state !== "missing" || pending.some((id) =>
+                    component.state !== "missing" ||
+                    component.id.kind === "provider_cli" ||
+                    component.id.kind === "zed_server" ||
+                    component.id.kind === "zed_adapter" ||
+                    pending.some((id) =>
                         id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
                     )
                 );
-                const providerComponents = visibleComponents.filter((component) =>
+                const providerComponents = machine.components.filter((component) =>
                     component.id.kind === "provider_cli"
                 );
+                const zedComponent = machine.components.find((component) =>
+                    component.id.kind === "zed_server"
+                );
+                const componentSections = [
+                    {
+                        label: "Agents",
+                        components: visibleComponents.filter((component) =>
+                            component.id.kind === "provider_cli" || component.id.kind === "provider_adapter"
+                        ),
+                    },
+                    {
+                        label: "Integrations",
+                        components: visibleComponents.filter((component) =>
+                            component.id.kind === "zed_server" || component.id.kind === "zed_adapter" || component.id.kind === "code_adapter"
+                        ),
+                    },
+                    {
+                        label: "Runtime",
+                        components: visibleComponents.filter((component) =>
+                            component.id.kind !== "provider_cli" &&
+                            component.id.kind !== "provider_adapter" &&
+                            component.id.kind !== "zed_server" &&
+                            component.id.kind !== "zed_adapter" &&
+                            component.id.kind !== "code_adapter"
+                        ),
+                    },
+                ].filter((section) => section.components.length > 0);
                 const challenge = [...(events[machine.id] ?? [])].reverse().find((event) =>
                     event.event === "login_challenge" && event.expires_at_ms > Date.now()
                 );
@@ -3698,20 +3754,54 @@ function MachinesContent(): React.JSX.Element {
                                     sx={{ fontWeight: 650 }}
                                 />
                             </Stack>
-                            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                {machine.workspaces.slice(0, 3).map((workspace) => (
-                                    <Chip key={workspace.id} size="small" variant="outlined" label={workspace.display_name} title={workspace.canonical_path} />
-                                ))}
-                                {providerComponents.map((component) => (
-                                    <Chip
-                                        key={component.id.slot}
-                                        size="small"
-                                        variant="outlined"
-                                        color={component.auth === "signed_in" ? "success" : component.state === "failed" ? "error" : "default"}
-                                        label={`${component.id.slot ?? "provider"}${component.auth === "signed_in" ? " ready" : component.auth === "signed_out" ? " sign in" : ""}`}
-                                    />
-                                ))}
-                            </Stack>
+                            {machine.local ? (
+                                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                    {machine.workspaces.map((workspace) => (
+                                        <Chip key={workspace.id} size="small" variant="outlined" label={workspace.display_name} title={workspace.canonical_path} />
+                                    ))}
+                                </Stack>
+                            ) : (
+                                <Stack spacing={0.75}>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                        <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>Projects</Typography>
+                                        <Chip
+                                            size="small"
+                                            variant="outlined"
+                                            label={`${projectWorkspaces.length} project${projectWorkspaces.length === 1 ? "" : "s"}`}
+                                            title={projectWorkspaces.map((workspace) => workspace.display_name).join(", ")}
+                                        />
+                                    </Stack>
+                                    <Stack direction="row" spacing={1} alignItems="flex-start">
+                                        <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0, pt: 0.35 }}>Agents</Typography>
+                                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
+                                            {providerComponents.map((component) => {
+                                                const unavailable = component.state === "missing";
+                                                const failed = component.state === "failed" || component.auth === "error" || component.auth === "expired";
+                                                const ready = component.state === "active" && component.auth === "signed_in";
+                                                const state = unavailable ? "unavailable" : ready ? "ready" : failed ? "error" : component.auth === "signed_out" ? "sign in" : component.state;
+                                                return (
+                                                    <Chip
+                                                        key={component.id.slot}
+                                                        size="small"
+                                                        variant="outlined"
+                                                        color={ready ? "success" : failed ? "error" : "default"}
+                                                        label={`${machineProviderName(component.id.slot)} · ${state}`}
+                                                    />
+                                                );
+                                            })}
+                                        </Stack>
+                                    </Stack>
+                                    <Stack direction="row" spacing={1} alignItems="center">
+                                        <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0 }}>Integrations</Typography>
+                                        <Chip
+                                            size="small"
+                                            variant="outlined"
+                                            color={zedComponent?.state === "active" ? "success" : zedComponent?.state === "failed" ? "error" : "default"}
+                                            label={`Zed · ${zedComponent?.state === "active" ? "ready" : zedComponent?.state === "failed" ? "error" : "unavailable"}`}
+                                        />
+                                    </Stack>
+                                </Stack>
+                            )}
                             {!machine.local && pending.length > 0 && (
                                 <Button
                                     size="small"
@@ -3736,12 +3826,31 @@ function MachinesContent(): React.JSX.Element {
                                 }}
                             >
                                 <Typography variant="body2" fontWeight={650}>
-                                    {open ? "Hide details" : "Components & access"}
+                                    {open ? "Hide details" : "Details & versions"}
                                 </Typography>
                                 {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
                             </ButtonBase>}
                             {open && !machine.local && (
                                 <Stack spacing={1.25} sx={{ pt: 0.25 }}>
+                                    <Stack spacing={0.75}>
+                                        <Typography variant="overline" color="text.secondary">Projects</Typography>
+                                        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                            {projectWorkspaces.map((workspace) => (
+                                                <Chip
+                                                    key={workspace.id}
+                                                    size="small"
+                                                    variant="outlined"
+                                                    label={workspace.display_name}
+                                                    title={workspace.canonical_path}
+                                                />
+                                            ))}
+                                        </Stack>
+                                        {rootWorkspaces.length > 0 && (
+                                            <Typography variant="caption" color="text.secondary">
+                                                Roots: {rootWorkspaces.map((workspace) => workspace.display_name).join(" · ")}
+                                            </Typography>
+                                        )}
+                                    </Stack>
                                     {!machine.local && (
                                         <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                                             <Button
@@ -3761,10 +3870,10 @@ function MachinesContent(): React.JSX.Element {
                                             ))}
                                         </Stack>
                                     )}
-                                    {visibleComponents.length > 0 && (
-                                        <Stack spacing={0.75}>
-                                            <Typography variant="overline" color="text.secondary">Components</Typography>
-                                            {visibleComponents.map((component) => {
+                                    {componentSections.map((section) => (
+                                        <Stack key={section.label} spacing={0.75}>
+                                            <Typography variant="overline" color="text.secondary">{section.label}</Typography>
+                                            {section.components.map((component) => {
                                                 const componentPending = pending.some((id) =>
                                                     id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
                                                 );
@@ -3785,9 +3894,7 @@ function MachinesContent(): React.JSX.Element {
                                                     >
                                                         <Box sx={{ minWidth: 0, flex: 1 }}>
                                                             <Typography variant="body2" fontWeight={650}>
-                                                                {component.id.kind === "provider_adapter"
-                                                                    ? `${component.id.slot ?? "Provider"} adapter`
-                                                                    : component.id.slot || component.id.kind.replaceAll("_", " ")}
+                                                                {machineComponentName(component)}
                                                             </Typography>
                                                             <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
                                                                 {component.version || component.state}
@@ -3812,7 +3919,7 @@ function MachinesContent(): React.JSX.Element {
                                                 );
                                             })}
                                         </Stack>
-                                    )}
+                                    ))}
                                     {!machine.local && providerComponents.some((component) =>
                                         component.id.slot === "gemini" && component.auth !== "signed_in"
                                     ) && (
