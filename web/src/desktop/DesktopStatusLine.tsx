@@ -1,4 +1,5 @@
 import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
+import { useExploreSessionState } from "../explore/exploreStore";
 import type { Status } from "../protocol";
 import { useStoreSelector } from "../store";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
@@ -50,9 +51,32 @@ interface RegionHint {
   label: string;
 }
 
+const HISTORY_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Scroll" },
+  { keys: "Ctrl+D/U", label: "Half page" },
+  { keys: "Ctrl+F/B", label: "Page" },
+  { keys: "GG/G", label: "Oldest/latest" },
+  { keys: "F", label: "Follow" },
+  { keys: "Tab", label: "Widget" },
+  { keys: "H/L", label: "Close/open" },
+];
+
+const EXPLORE_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Page" },
+  { keys: "Ctrl+D/U", label: "Half page" },
+  { keys: "Ctrl+F/B", label: "Scroll page" },
+  { keys: "GG/G", label: "Oldest/latest" },
+  { keys: "P", label: "Pages" },
+  { keys: "N", label: "New question" },
+  { keys: "F", label: "Follow" },
+  { keys: "Tab", label: "Widget" },
+  { keys: "H/L", label: "Close/open" },
+];
+
 function regionHints(
   region: string | null,
   status: Status,
+  projection: "history" | "explore",
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -86,9 +110,7 @@ function regionHints(
         { keys: "I", label: "Edit" },
       ];
     case "conversation.transcript":
-      // Conversation owns a dedicated, projection-aware shortcut strip in its
-      // pane header. Do not repeat those hints in the global status line.
-      return [];
+      return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
     case "prompt.composer":
       return [
         { keys: "Esc", label: "Normal" },
@@ -100,6 +122,7 @@ function regionHints(
 }
 
 export function DesktopStatusLine({
+  sessionId,
   status,
 }: {
   sessionId: string;
@@ -112,6 +135,7 @@ export function DesktopStatusLine({
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
+  const projection = useExploreSessionState(sessionId).projection;
   const connected = useStoreSelector((snapshot) => snapshot.connected);
   const promptEditorContext = focusedRegion?.startsWith("prompt.") === true;
   const effectiveMode = promptEditorContext && vimEnabled ? vimMode : mode;
@@ -144,7 +168,7 @@ export function DesktopStatusLine({
     : [];
   const hints = [
     ...promptRegions,
-    ...regionHints(focusedRegion, status),
+    ...regionHints(focusedRegion, status, projection),
     ...(focusedRegion === "sessions.list" && itemCount > 0
       ? [{ keys: "Mod+1…0", label: "Switch" }]
       : []),
@@ -260,9 +284,7 @@ export function DesktopStatusLine({
               spacing={0.5}
               alignItems="center"
             >
-              {hint.keys.includes("Mod+")
-                ? <DesktopShortcut shortcut={hint.keys} quiet />
-                : <DesktopKeycap keyLabel={hint.keys} quiet />}
+              <DesktopShortcut shortcut={hint.keys} quiet />
               <Box component="span" sx={{ fontSize: "0.625rem", whiteSpace: "nowrap" }}>
                 {hint.label}
               </Box>

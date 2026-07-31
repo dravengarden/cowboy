@@ -1,43 +1,11 @@
-import { Box, Button, Stack, Tooltip, Typography } from "@mui/material";
+import { Button, Stack, Tooltip } from "@mui/material";
 import { South } from "@mui/icons-material";
-import type { TranscriptProjection } from "../explore/exploreStore";
 import { requestStickToBottom, setSticky, useSticky } from "../stickyStore";
-import { DesktopShortcut } from "./commands/DesktopKeycap";
-import { useDesktopWorkspace } from "./DesktopWorkspaceController";
-
-const HISTORY_HINTS = [
-  { shortcut: "J/K", label: "Scroll" },
-  { shortcut: "Ctrl+D/U", label: "Half page" },
-  { shortcut: "Ctrl+F/B", label: "Page" },
-  { shortcut: "GG/G", label: "Oldest/latest" },
-  { shortcut: "Tab", label: "Widget" },
-  { shortcut: "H/L", label: "Close/open" },
-] as const;
-
-const PAGE_HINTS = [
-  { shortcut: "J/K", label: "Page" },
-  { shortcut: "Ctrl+D/U", label: "Half page" },
-  { shortcut: "Ctrl+F/B", label: "Scroll page" },
-  { shortcut: "GG/G", label: "Oldest/latest" },
-  { shortcut: "P", label: "Pages" },
-  { shortcut: "N", label: "New question" },
-  { shortcut: "Tab", label: "Widget" },
-  { shortcut: "H/L", label: "Close/open" },
-] as const;
 
 export function DesktopConversationControls(
-  {
-    sessionId,
-    projection,
-  }: {
-    sessionId: string;
-    projection: TranscriptProjection;
-  },
+  { sessionId }: { sessionId: string },
 ): React.JSX.Element {
   const following = useSticky(sessionId);
-  const workspace = useDesktopWorkspace();
-  const focused = workspace.focusedRegion === "conversation.transcript";
-  const hints = projection === "explore" ? PAGE_HINTS : HISTORY_HINTS;
   const toggle = (): void => {
     const scroller = document.querySelector<HTMLElement>(
       "[data-desktop-transcript-scroller]",
@@ -59,43 +27,6 @@ export function DesktopConversationControls(
       spacing={0.75}
       sx={{ minWidth: 0 }}
     >
-      {focused && (
-        <Stack
-          data-desktop-conversation-shortcuts
-          direction="row"
-          alignItems="center"
-          spacing={0.75}
-          sx={{
-            minWidth: 0,
-            mr: 0.25,
-            "@media (max-width: 1240px)": {
-              "& [data-conversation-hint-label]": { display: "none" },
-            },
-          }}
-        >
-          {hints.map(({ shortcut, label }) => (
-            <Tooltip
-              key={shortcut}
-              title={`${label} · ${shortcut}`}
-              enterDelay={450}
-            >
-              <Box
-                sx={{ display: "inline-flex", alignItems: "center", gap: 0.4 }}
-              >
-                <DesktopShortcut shortcut={shortcut} quiet />
-                <Typography
-                  data-conversation-hint-label
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ whiteSpace: "nowrap", fontSize: "0.65rem" }}
-                >
-                  {label}
-                </Typography>
-              </Box>
-            </Tooltip>
-          ))}
-        </Stack>
-      )}
       <Tooltip
         title={following
           ? "Pause automatic transcript following (F)"
@@ -107,7 +38,6 @@ export function DesktopConversationControls(
           color={following ? "primary" : "inherit"}
           variant={following ? "contained" : "text"}
           startIcon={<South fontSize="small" />}
-          endIcon={focused ? <DesktopShortcut shortcut="F" quiet /> : undefined}
           onClick={toggle}
           sx={{
             height: 28,
@@ -118,7 +48,6 @@ export function DesktopConversationControls(
             textTransform: "none",
             boxShadow: "none",
             whiteSpace: "nowrap",
-            "& .MuiButton-endIcon": { ml: 0.65 },
             ...(following && {
               bgcolor: "action.selected",
               color: "primary.main",
