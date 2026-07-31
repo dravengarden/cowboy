@@ -107,6 +107,48 @@ pub struct MachineHello {
     pub components: Vec<ComponentInventory>,
 }
 
+/// Build the exact version-one proof signed during a remote Machine handshake.
+/// Length-prefixed fields avoid delimiter ambiguity while keeping the proof
+/// independent from later additions to the wire `Hello` object.
+#[must_use]
+pub fn challenge_proof_v1(
+    challenge_id: &str,
+    nonce: &str,
+    expires_at_ms: i64,
+    hello: &MachineHello,
+) -> Vec<u8> {
+    let platform = match hello.platform {
+        Platform::Linux => "linux",
+        Platform::Macos => "macos",
+    };
+    let connection_mode = match hello.connection_mode {
+        ConnectionMode::LocalUds => "local_uds",
+        ConnectionMode::OutboundTls => "outbound_tls",
+    };
+    let fields = [
+        challenge_id.to_owned(),
+        nonce.to_owned(),
+        expires_at_ms.to_string(),
+        hello.machine_id.clone(),
+        platform.to_owned(),
+        hello.arch.clone(),
+        connection_mode.to_owned(),
+        hello.min_protocol.to_string(),
+        hello.max_protocol.to_string(),
+        hello.min_runtime_protocol.to_string(),
+        hello.max_runtime_protocol.to_string(),
+        hello.host_build.clone(),
+    ];
+    let mut proof = b"cowboy-machine-proof-v1\n".to_vec();
+    for field in fields {
+        proof.extend_from_slice(field.len().to_string().as_bytes());
+        proof.push(b':');
+        proof.extend_from_slice(field.as_bytes());
+        proof.push(b'\n');
+    }
+    proof
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesiredComponent {
     pub id: ComponentId,
@@ -225,6 +267,38 @@ mod tests {
     fn machine_protocol_negotiates_overlap_only() {
         assert_eq!(negotiate(1, 2, 2, 3), Some(2));
         assert_eq!(negotiate(1, 1, 2, 2), None);
+    }
+
+    #[test]
+    fn challenge_proof_binds_machine_and_protocol_without_display_metadata() {
+        let hello = MachineHello {
+            machine_id: "falcon".to_owned(),
+            display_name: "Falcon".to_owned(),
+            platform: Platform::Linux,
+            arch: "x86_64".to_owned(),
+            connection_mode: ConnectionMode::OutboundTls,
+            min_protocol: 1,
+            max_protocol: 1,
+            min_runtime_protocol: 1,
+            max_runtime_protocol: 2,
+            host_build: "build-a".to_owned(),
+            challenge_id: None,
+            challenge_signature: None,
+            components: Vec::new(),
+        };
+        let proof = challenge_proof_v1("id", "nonce", 42, &hello);
+        let mut renamed = hello.clone();
+        renamed.display_name = "Renamed Falcon".to_owned();
+        assert_eq!(proof, challenge_proof_v1("id", "nonce", 42, &renamed));
+        let mut other_machine = hello.clone();
+        other_machine.machine_id = "macbook-air".to_owned();
+        assert_ne!(proof, challenge_proof_v1("id", "nonce", 42, &other_machine));
+        let mut other_protocol = hello;
+        other_protocol.max_runtime_protocol = 3;
+        assert_ne!(
+            proof,
+            challenge_proof_v1("id", "nonce", 42, &other_protocol)
+        );
     }
 
     #[test]

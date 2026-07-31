@@ -1594,6 +1594,7 @@ struct MachineSummary {
     status: String,
     local: bool,
     schedulable: bool,
+    fingerprint: Option<String>,
 }
 
 /// The first multi-machine slice deliberately advertises only the operational
@@ -1614,6 +1615,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                         platform: machine.platform,
                         architecture: machine.architecture,
                         status: machine.status,
+                        fingerprint: machine.fingerprint,
                     })
                     .collect::<Vec<_>>(),
             )
@@ -1636,6 +1638,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
         status: "online".to_owned(),
         local: true,
         schedulable: true,
+        fingerprint: None,
     }])
     .into_response()
 }
@@ -1650,6 +1653,7 @@ struct MachineEnrollRequest {
 struct MachineEnrollResponse {
     machine_id: String,
     display_name: String,
+    fingerprint: String,
 }
 
 async fn api_machine_enroll(
@@ -1676,6 +1680,7 @@ async fn api_machine_enroll(
             Json(MachineEnrollResponse {
                 machine_id: machine.id,
                 display_name: machine.display_name,
+                fingerprint: machine.fingerprint,
             }),
         )
             .into_response(),
@@ -1734,10 +1739,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             return;
         }
     };
+    let expires_at_ms = now_ms().saturating_add(MACHINE_HANDSHAKE_TIMEOUT.as_millis() as i64);
     let challenge = crate::machine_protocol::MachineFrame::Challenge {
         challenge_id: challenge_id.clone(),
         nonce: nonce.clone(),
-        expires_at_ms: now_ms().saturating_add(MACHINE_HANDSHAKE_TIMEOUT.as_millis() as i64),
+        expires_at_ms,
     };
     if send_json(&mut socket, &challenge).await.is_err() {
         return;
@@ -1771,9 +1777,14 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             return;
         }
     };
+    if now_ms() > expires_at_ms {
+        return;
+    }
+    let proof =
+        crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello);
     let signature = signature.to_owned();
     let verified = tokio::task::spawn_blocking(move || {
-        crate::machine_auth::verify(&public_key, nonce.as_bytes(), &signature)
+        crate::machine_auth::verify(&public_key, &proof, &signature)
     })
     .await;
     if !matches!(verified, Ok(Ok(true))) {
@@ -1831,7 +1842,30 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         return;
     }
     tracing::info!(machine = %hello.machine_id, "Machine connected");
-    while let Some(message) = socket.recv().await {
+    let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
+    revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    revocation_check.tick().await;
+    loop {
+        let message = tokio::select! {
+            message = socket.recv() => message,
+            _ = revocation_check.tick() => {
+                match store.machine_connection_is_current(&hello.machine_id, &challenge_id).await {
+                    Ok(true) => continue,
+                    Ok(false) => {
+                        tracing::info!(machine = %hello.machine_id, "Machine connection fenced");
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, machine = %hello.machine_id, "checking Machine revocation");
+                        break;
+                    }
+                }
+            }
+        };
+        let Some(message) = message else {
+            break;
+        };
         let Ok(Message::Text(text)) = message else {
             break;
         };

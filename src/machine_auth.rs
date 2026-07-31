@@ -14,6 +14,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, bail};
+use base64::Engine as _;
+use sha2::Digest as _;
 
 const SIGNATURE_NAMESPACE: &str = "cowboy-machine-v1";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -154,6 +156,26 @@ pub fn validate_public_key(value: &str) -> Result<String> {
     normalize_public_key(value)
 }
 
+/// Return the conventional OpenSSH SHA-256 fingerprint for an enrolled key.
+///
+/// # Errors
+/// Returns when the public key is malformed.
+pub fn fingerprint(public_key: &str) -> Result<String> {
+    let normalized = normalize_public_key(public_key)?;
+    let body = normalized
+        .split_once(' ')
+        .context("normalized Machine public key has no body")?
+        .1;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .context("decoding Machine public key")?;
+    let digest = sha2::Sha256::digest(decoded);
+    Ok(format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)
+    ))
+}
+
 fn normalize_public_key(value: &str) -> Result<String> {
     let mut fields = value.split_whitespace();
     let kind = fields.next().context("Machine public key has no type")?;
@@ -239,5 +261,9 @@ mod tests {
             normalize_public_key("ssh-ed25519 QUJD comment\nmalicious *").expect("normalize");
         assert_eq!(normalized, "ssh-ed25519 QUJD");
         assert!(normalize_public_key("ssh-rsa QUJD").is_err());
+        assert_eq!(
+            fingerprint("ssh-ed25519 QUJD comment").expect("fingerprint"),
+            "SHA256:tdQEXD9Gb6kf4sxqvnkjKhpXzfEE96JucW4KHieJ33g"
+        );
     }
 }

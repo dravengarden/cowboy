@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::agentd::{AgentdArgs, SpawnMode};
@@ -65,6 +65,12 @@ pub struct Args {
 struct EnrollmentRequest<'a> {
     token: &'a str,
     public_key: &'a str,
+}
+
+#[derive(Deserialize)]
+struct EnrollmentResponse {
+    machine_id: String,
+    fingerprint: String,
 }
 
 /// Parse the stable local-mode CLI and run the existing detached ACP broker.
@@ -131,14 +137,22 @@ async fn enroll(controller_url: &str, token: &str, public_key: &str) -> anyhow::
         "{}/api/machine/enroll",
         controller_url.trim_end_matches('/')
     );
-    reqwest::Client::new()
+    let response = reqwest::Client::new()
         .post(endpoint)
         .json(&EnrollmentRequest { token, public_key })
         .send()
         .await
         .context("sending Machine enrollment")?
         .error_for_status()
-        .context("Machine enrollment rejected")?;
+        .context("Machine enrollment rejected")?
+        .json::<EnrollmentResponse>()
+        .await
+        .context("decoding Machine enrollment response")?;
+    tracing::info!(
+        machine = %response.machine_id,
+        fingerprint = %response.fingerprint,
+        "Machine identity enrolled"
+    );
     Ok(())
 }
 
@@ -182,33 +196,33 @@ async fn controller_connection(
     let MachineFrame::Challenge {
         challenge_id,
         nonce,
-        expires_at_ms: _,
+        expires_at_ms,
     } = challenge
     else {
         bail!("controller did not begin with a challenge");
     };
-    let signature = identity.sign(nonce.as_bytes())?;
-    send_frame(
-        &mut socket,
-        &MachineFrame::Hello {
-            hello: MachineHello {
-                machine_id: machine_id.to_owned(),
-                display_name: display_name.to_owned(),
-                platform: current_platform(),
-                arch: std::env::consts::ARCH.to_owned(),
-                connection_mode: ConnectionMode::OutboundTls,
-                min_protocol: MIN_MACHINE_PROTOCOL_VERSION,
-                max_protocol: MACHINE_PROTOCOL_VERSION,
-                min_runtime_protocol: crate::runtime_wire::MIN_PROTOCOL_VERSION,
-                max_runtime_protocol: crate::runtime_wire::PROTOCOL_VERSION,
-                host_build: env!("CARGO_PKG_VERSION").to_owned(),
-                challenge_id: Some(challenge_id),
-                challenge_signature: Some(signature),
-                components: Vec::<ComponentInventory>::new(),
-            },
-        },
-    )
-    .await?;
+    if expires_at_ms < unix_ms() {
+        bail!("controller challenge already expired");
+    }
+    let mut hello = MachineHello {
+        machine_id: machine_id.to_owned(),
+        display_name: display_name.to_owned(),
+        platform: current_platform(),
+        arch: std::env::consts::ARCH.to_owned(),
+        connection_mode: ConnectionMode::OutboundTls,
+        min_protocol: MIN_MACHINE_PROTOCOL_VERSION,
+        max_protocol: MACHINE_PROTOCOL_VERSION,
+        min_runtime_protocol: crate::runtime_wire::MIN_PROTOCOL_VERSION,
+        max_runtime_protocol: crate::runtime_wire::PROTOCOL_VERSION,
+        host_build: env!("CARGO_PKG_VERSION").to_owned(),
+        challenge_id: Some(challenge_id.clone()),
+        challenge_signature: None,
+        components: Vec::<ComponentInventory>::new(),
+    };
+    let proof =
+        crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello);
+    hello.challenge_signature = Some(identity.sign(&proof)?);
+    send_frame(&mut socket, &MachineFrame::Hello { hello }).await?;
     let MachineFrame::Welcome {
         heartbeat_interval_ms,
         ..

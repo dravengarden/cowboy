@@ -160,6 +160,22 @@ protocol. Cowboy stores only its SHA-256 digest and consumes it atomically. A
 successful connection receives a fresh epoch, so a superseded socket cannot
 mark its replacement offline when it finally closes.
 
+The signed version-one proof is a canonical, domain-separated transcript. It
+binds the challenge id, nonce, expiry, machine id, platform, architecture,
+connection mode, Machine protocol range, runtime protocol range, and host
+build. It deliberately excludes the mutable display name and inventory. A
+captured signature therefore cannot be replayed as another Machine or reused
+to negotiate downgraded protocol capabilities.
+
+Cowboy exposes the conventional OpenSSH `SHA256:...` public-key fingerprint for
+human verification. An active public key is never replaced by ordinary
+enrollment: rotation is the explicit sequence revoke, create a new one-time
+token, enroll the replacement key, and verify the new fingerprint. Revocation
+clears the current connection epoch and the controller fences the live socket
+within two seconds; unused enrollment tokens for that Machine are discarded in
+the same transaction. Re-enrollment with the revoked public key is rejected, so
+rotation cannot accidentally reactivate a credential that may be compromised.
+
 Production may additionally require mTLS at the reverse proxy, but application
 machine identity remains mandatory so credentials can be rotated and revoked
 without coupling the product protocol to one proxy. Local UDS mode relies on

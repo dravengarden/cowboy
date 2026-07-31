@@ -158,12 +158,14 @@ pub struct MachineRecord {
     pub inventory: serde_json::Value,
     pub last_seen_at_ms: Option<i64>,
     pub revoked: bool,
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnrolledMachine {
     pub id: String,
     pub display_name: String,
+    pub fingerprint: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -177,6 +179,7 @@ struct MachineRow {
     inventory: serde_json::Value,
     last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
     revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    public_key: Option<String>,
 }
 
 impl Store {
@@ -196,6 +199,7 @@ impl Store {
             valid_machine_id(machine_id),
             "machine id must use 1-64 lowercase ASCII letters, digits, or hyphens"
         );
+        anyhow::ensure!(machine_id != "local", "the local Machine id is reserved");
         anyhow::ensure!(
             !display_name.trim().is_empty(),
             "display name cannot be empty"
@@ -203,6 +207,17 @@ impl Store {
         anyhow::ensure!(
             (60..=3600).contains(&ttl_seconds),
             "enrollment TTL must be 60-3600s"
+        );
+        let active_key_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1 AND public_key IS NOT NULL AND revoked_at IS NULL)",
+        )
+        .bind(machine_id)
+        .fetch_one(&self.pool)
+        .await
+        .context("checking existing Machine identity")?;
+        anyhow::ensure!(
+            !active_key_exists,
+            "Machine already has an active identity; revoke it before re-enrollment"
         );
         let mut random = [0_u8; 32];
         std::fs::File::open("/dev/urandom")
@@ -256,13 +271,15 @@ impl Store {
         .context("consuming Machine enrollment")?;
         let (id, display_name) =
             row.context("invalid, expired, or already used enrollment token")?;
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO machines \
              (id, display_name, connection_mode, platform, architecture, status, public_key, enrolled_at) \
              VALUES ($1, $2, 'outbound_wss', 'unknown', 'unknown', 'offline', $3, now()) \
              ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, \
              connection_mode = 'outbound_wss', public_key = EXCLUDED.public_key, \
-             enrolled_at = now(), revoked_at = NULL, updated_at = now()",
+             enrolled_at = now(), revoked_at = NULL, updated_at = now() \
+             WHERE machines.public_key IS NULL OR \
+             (machines.revoked_at IS NOT NULL AND machines.public_key IS DISTINCT FROM EXCLUDED.public_key)",
         )
         .bind(&id)
         .bind(&display_name)
@@ -270,11 +287,20 @@ impl Store {
         .execute(&mut *transaction)
         .await
         .context("binding enrolled Machine public key")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Machine already has this identity or an active identity"
+        );
         transaction
             .commit()
             .await
             .context("committing Machine enrollment")?;
-        Ok(EnrolledMachine { id, display_name })
+        let fingerprint = crate::machine_auth::fingerprint(public_key)?;
+        Ok(EnrolledMachine {
+            id,
+            display_name,
+            fingerprint,
+        })
     }
 
     /// Load the active public key for a Machine.
@@ -299,7 +325,7 @@ impl Store {
     pub async fn list_machines(&self) -> Result<Vec<MachineRecord>> {
         let rows: Vec<MachineRow> = sqlx::query_as(
             "SELECT id, display_name, connection_mode, platform, architecture, status, \
-             inventory, last_seen_at, revoked_at FROM machines ORDER BY id = 'local' DESC, display_name",
+             inventory, last_seen_at, revoked_at, public_key FROM machines ORDER BY id = 'local' DESC, display_name",
         )
         .fetch_all(&self.pool)
         .await
@@ -316,8 +342,70 @@ impl Store {
                 inventory: row.inventory,
                 last_seen_at_ms: row.last_seen_at.map(|value| value.timestamp_millis()),
                 revoked: row.revoked_at.is_some(),
+                fingerprint: row
+                    .public_key
+                    .as_deref()
+                    .and_then(|key| crate::machine_auth::fingerprint(key).ok()),
             })
             .collect())
+    }
+
+    /// Revoke a remote Machine identity and fence its current connection.
+    /// The active controller observes the cleared epoch on its next bounded
+    /// revocation check and closes the socket.
+    ///
+    /// # Errors
+    /// Returns when the id is reserved, unknown, or persistence fails.
+    pub async fn revoke_machine(&self, machine_id: &str) -> Result<()> {
+        anyhow::ensure!(machine_id != "local", "the local Machine cannot be revoked");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("starting Machine revocation")?;
+        let result = sqlx::query(
+            "UPDATE machines SET revoked_at = now(), status = 'offline', \
+             connection_epoch = NULL, updated_at = now() \
+             WHERE id = $1 AND public_key IS NOT NULL AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .execute(&mut *transaction)
+        .await
+        .context("revoking Machine identity")?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "unknown or already revoked Machine"
+        );
+        sqlx::query("DELETE FROM machine_enrollment_tokens WHERE machine_id = $1")
+            .bind(machine_id)
+            .execute(&mut *transaction)
+            .await
+            .context("discarding Machine enrollment tokens")?;
+        transaction
+            .commit()
+            .await
+            .context("committing Machine revocation")?;
+        Ok(())
+    }
+
+    /// Test whether a connection epoch still owns an active Machine identity.
+    ///
+    /// # Errors
+    /// Returns when persistence cannot be queried.
+    pub async fn machine_connection_is_current(
+        &self,
+        machine_id: &str,
+        connection_epoch: &str,
+    ) -> Result<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1 \
+             AND connection_epoch = $2 AND revoked_at IS NULL)",
+        )
+        .bind(machine_id)
+        .bind(connection_epoch)
+        .fetch_one(&self.pool)
+        .await
+        .context("checking Machine connection epoch")
     }
 
     /// Record an authenticated Machine connection and its current inventory.

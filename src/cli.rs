@@ -29,6 +29,9 @@ enum Command {
     TryAgent(TryAgentArgs),
     /// Create a short-lived, single-use token for enrolling a remote Machine.
     MachineEnroll(MachineEnrollArgs),
+    /// Revoke a remote Machine identity. Re-enrollment requires a new token
+    /// and creates an explicit key-rotation boundary.
+    MachineRevoke(MachineRevokeArgs),
 }
 
 #[derive(Args)]
@@ -43,6 +46,16 @@ pub struct MachineEnrollArgs {
     display_name: String,
     #[arg(long, default_value_t = 600)]
     ttl_seconds: i64,
+}
+
+#[derive(Args)]
+pub struct MachineRevokeArgs {
+    #[arg(long, env = "COWBOY_POSTGRES_URL")]
+    postgres_url: String,
+    #[arg(long, env = "COWBOY_DATA_DIR", default_value = "/var/lib/cowboy")]
+    data_dir: PathBuf,
+    #[arg(long)]
+    machine_id: String,
 }
 
 #[derive(Args)]
@@ -188,6 +201,15 @@ impl Cli {
                     .await?;
                 println!("{token}");
                 Ok(())
+            }
+            Command::MachineRevoke(args) => {
+                let store = crate::store::Store::connect(
+                    &args.postgres_url,
+                    args.data_dir.join("artifacts"),
+                )
+                .await?;
+                store.migrate().await?;
+                store.revoke_machine(&args.machine_id).await
             }
         }
     }
