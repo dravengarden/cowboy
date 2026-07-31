@@ -417,6 +417,7 @@ function SessionList({
     desktop,
     mobileDrawer = false,
     mobileDrawerOpen = false,
+    phone = false,
 }: {
     sessions: SessionMeta[];
     activeId: string | null;
@@ -434,6 +435,7 @@ function SessionList({
     desktop: boolean;
     mobileDrawer?: boolean;
     mobileDrawerOpen?: boolean;
+    phone?: boolean;
 }): React.JSX.Element {
     // Desktop-only modal list state. Normal mode navigates with j/k; Pin turns
     // the same keys into spatial reorder commands until P/Esc (or opening a
@@ -929,6 +931,14 @@ function SessionList({
                         bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
                         display: "flex",
                         justifyContent: "center",
+                        // The open foreground card keeps a deep edge shadow over
+                        // the revealed rail. On iPad the rail is capped at 440px,
+                        // so a centred two-action island can otherwise put its
+                        // trailing Close action under that edge. Reserve the
+                        // shadow/gesture seam inside the rail; phones have enough
+                        // proportional reveal and retain true centring.
+                        boxSizing: "border-box",
+                        pr: phone ? 0 : 4,
                         pointerEvents: "none",
                     }}
                 >
@@ -1975,6 +1985,7 @@ export function App({
             desktop={surface === "desktop"}
             mobileDrawer={mobile}
             mobileDrawerOpen={mobile && drawerOpen}
+            phone={phone}
         />
     );
 
@@ -2619,9 +2630,9 @@ export function App({
                             // bar read lopsided. Dropping it gives the hamburger the
                             // same gutter, symmetric with the gear on the right.
                             <IconButton
-                                aria-label="Open sessions"
+                                aria-label={drawerOpen ? "Close sessions" : "Open sessions"}
                                 onClick={(): void => {
-                                    if (mobile) settleMobileDrawerRef.current?.(true);
+                                    if (mobile) settleMobileDrawerRef.current?.(!drawerOpen);
                                     else setDrawerOpen(true);
                                 }}
                                 onPointerDown={(event): void => {
@@ -2652,7 +2663,7 @@ export function App({
                                     },
                                 }}
                             >
-                                <MenuIcon />
+                                {drawerOpen ? <CloseIcon /> : <MenuIcon />}
                             </IconButton>
                         )}
                         {active ? (
