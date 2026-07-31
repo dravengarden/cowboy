@@ -1182,12 +1182,16 @@ export function ExploreTranscript(
         : event.key;
       if (key === "j" || key === "k") {
         event.preventDefault();
-        const next = Math.max(
-          0,
-          Math.min(pages.length - 1, currentIndex + (key === "j" ? 1 : -1)),
-        );
-        const page = pages[next];
-        if (page) select(page.id);
+        event.stopPropagation();
+        // Explore is still a reading surface. Keep j/k identical to History:
+        // move by one visual line without replacing the entire question page.
+        // Page changes remain explicit through the navigator and page controls.
+        root.closest<HTMLElement>("[data-desktop-transcript-scroller]")
+          ?.dispatchEvent(
+            new CustomEvent("cowboy:desktop-transcript-nav", {
+              detail: { action: key === "j" ? "line-down" : "line-up" },
+            }),
+          );
         return;
       }
       if (key === "/") {
@@ -1207,7 +1211,7 @@ export function ExploreTranscript(
     };
     root.addEventListener("keydown", onKeyDown);
     return () => root.removeEventListener("keydown", onKeyDown);
-  }, [currentIndex, pages, props.desktop, select]);
+  }, [props.desktop]);
 
   if (!current && !props.loading) {
     return (
