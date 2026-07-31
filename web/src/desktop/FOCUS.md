@@ -36,23 +36,20 @@ same controller state.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Alt-b/p/c/t`: jump directly to Sessions, Prompt, Conversation or Top Bar.
-- `p/o/d/i`: jump to Plan, Queue, Drafts or Editor after Prompt owns focus.
-  The composer keeps native Vim `p/o/d/i`; these region jumps are available
-  only while a non-editor Prompt region owns focus. One scoped exception keeps
-  the visible Plan hint honest: `p` may leave a completely empty Normal-mode
+- `p`, `Mod-y`, and `Mod-d` jump to Plan, Queue, and Drafts after Prompt owns
+  focus. `Mod-i` returns to the Composer in Normal mode from anywhere. The
+  composer keeps native Vim letter commands. One scoped exception keeps the
+  visible Plan hint honest: `p` may leave a completely empty Normal-mode
   composer for Plan; once the editor has text or attachments, it is Vim paste.
-- `o` is also the Queue disclosure action: from another non-editor Prompt
-  region it expands and focuses Queue; from Queue it collapses the panel and
-  returns to the Composer in Normal mode.
+- `Mod-y` is also the Queue disclosure action: from another Prompt region it
+  expands and focuses Queue; from Queue it collapses the panel and returns to
+  the Composer in Normal mode.
 - `Mod-1…0`: jump to one of the first ten visible items in the focused region.
   In Sessions this switches the active session immediately while retaining
   focus in the rail, so the next `j/k` continues from the selected row.
 - `Mod-j/k`: reorder the focused Queue or Draft item. Sessions use the more
   deliberate Pin mode above so ordinary navigation and reordering cannot be
   confused.
-- Inside Prompt, `E` returns from Plan, Queue, or Drafts to the main editor and
-  lands on the Desktop Vim command sink in Normal mode.
-
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
 navigation must never intercept unmodified keys while a text-editing target
 owns focus.

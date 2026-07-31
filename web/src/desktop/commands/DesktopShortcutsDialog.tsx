@@ -30,9 +30,9 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["C"], title: "Compact Conversation in Top Bar" },
   { keys: ["S"], title: "Stop Current Turn in Top Bar" },
   {
-    keys: ["P/O/D/I"],
-    title: "Plan / Queue / Drafts / Editor inside Prompt",
-    description: "Available from Prompt lists; the composer keeps native Vim commands",
+    keys: ["P / Mod+Y / Mod+D"],
+    title: "Plan / Queue / Drafts inside Prompt",
+    description: "Mod+I returns to the editor; the composer keeps native Vim commands",
   },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },

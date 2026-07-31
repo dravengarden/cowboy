@@ -199,15 +199,6 @@ export function DesktopCommandHost({
       },
     },
     {
-      id: "prompt.focusEditor",
-      title: "Focus Prompt Editor",
-      description: "Return to the main editor in Vim Normal mode",
-      group: "Prompt",
-      shortcut: "I",
-      contexts: ["prompt"],
-      run: () => workspace.focusRegion("prompt.composer"),
-    },
-    {
       id: "conversation.focusTranscript",
       title: "Focus Transcript",
       group: "Conversation",
