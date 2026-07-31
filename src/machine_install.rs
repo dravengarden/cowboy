@@ -122,6 +122,15 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         "PATH={}:$PATH; export PATH",
         shell_quote(&state.join("components/commands").display().to_string())
     );
+    script.push_str(
+        "if command -v codex-acp >/dev/null 2>&1; then COWBOY_ACP_CODEX_CMD=$(command -v codex-acp); export COWBOY_ACP_CODEX_CMD; fi\n",
+    );
+    script.push_str(
+        "if command -v claude-agent-acp >/dev/null 2>&1; then COWBOY_ACP_CLAUDE_CODE_CMD=$(command -v claude-agent-acp); export COWBOY_ACP_CLAUDE_CODE_CMD; fi\n",
+    );
+    script.push_str(
+        "if command -v gemini >/dev/null 2>&1; then COWBOY_ACP_GEMINI_CMD=$(command -v gemini); COWBOY_ACP_GEMINI_ARGS=--acp; export COWBOY_ACP_GEMINI_CMD COWBOY_ACP_GEMINI_ARGS; fi\n",
+    );
     let _ = writeln!(
         script,
         "mkdir -p {}",

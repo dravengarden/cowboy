@@ -62,8 +62,10 @@ import {
     InfoOutlined,
     Menu as MenuIcon,
     MoreVert,
+    Refresh as RefreshIcon,
     Schedule,
     Settings as SettingsIcon,
+    SystemUpdateAlt,
 } from "@mui/icons-material";
 import { SessionControls } from "./Composer";
 import { MobileComposer } from "./mobile/MobileComposer";
@@ -3592,6 +3594,8 @@ type MachineEventView =
 function MachinesContent(): React.JSX.Element {
     const [machines, setMachines] = useState<readonly MachineChoice[]>([]);
     const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
+    const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+    const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [enrollOpen, setEnrollOpen] = useState(false);
     const [enrollId, setEnrollId] = useState("");
     const [enrollName, setEnrollName] = useState("");
@@ -3619,25 +3623,40 @@ function MachinesContent(): React.JSX.Element {
         return () => globalThis.clearInterval(timer);
     }, [refresh]);
     const command = (machineId: string, action: "refresh" | "login" | "components/reconcile", provider?: string): void => {
+        const busyKey = `${machineId}:${action}:${provider ?? ""}`;
+        setBusy((current) => ({ ...current, [busyKey]: true }));
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/${action}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             ...(action === "login" ? { body: JSON.stringify({ provider }) } : {}),
         }).finally(() => {
+            setBusy((current) => ({ ...current, [busyKey]: false }));
             globalThis.setTimeout(() => {
                 refresh();
                 loadEvents(machineId);
             }, 500);
         });
     };
+    const updateOne = (machineId: string, component: MachineChoice["components"][number]): void => {
+        const key = `${machineId}:component:${component.id.kind}:${component.id.slot ?? ""}`;
+        setBusy((current) => ({ ...current, [key]: true }));
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/components/reconcile-one`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
+        }).finally(() => {
+            setBusy((current) => ({ ...current, [key]: false }));
+            globalThis.setTimeout(refresh, 500);
+        });
+    };
     return (
-        <Stack spacing={1.5}>
+        <Stack spacing={2}>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
                 <Box>
-                    <Typography fontWeight={700}>Machines</Typography>
-                    <Typography variant="caption" color="text.secondary">Outbound-only macOS and Linux runtimes</Typography>
+                    <Typography fontWeight={760}>Machines</Typography>
+                    <Typography variant="caption" color="text.secondary">Where Cowboy sessions run</Typography>
                 </Box>
-                <Button startIcon={<Add />} variant="outlined" onClick={() => {
+                <Button size="small" startIcon={<Add />} variant="outlined" onClick={() => {
                     setEnrollment(null);
                     setEnrollError(null);
                     setEnrollOpen(true);
@@ -3645,90 +3664,181 @@ function MachinesContent(): React.JSX.Element {
             </Stack>
             {machines.map((machine) => {
                 const latest = events[machine.id]?.at(-1);
-                const gemini = machine.components.find((component) =>
-                    component.id.kind === "provider_cli" && component.id.slot === "gemini"
+                const open = Boolean(expanded[machine.id]);
+                const pending = machine.pending_updates ?? [];
+                const visibleComponents = machine.components.filter((component) =>
+                    component.state !== "missing" || pending.some((id) =>
+                        id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
+                    )
+                );
+                const providerComponents = visibleComponents.filter((component) =>
+                    component.id.kind === "provider_cli"
                 );
                 const challenge = [...(events[machine.id] ?? [])].reverse().find((event) =>
                     event.event === "login_challenge" && event.expires_at_ms > Date.now()
                 );
                 return (
-                    <Paper key={machine.id} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
-                        <Stack spacing={1}>
-                            <Stack direction="row" alignItems="center" spacing={1}>
+                    <Paper
+                        key={machine.id}
+                        variant="outlined"
+                        sx={{
+                            borderRadius: 3,
+                            overflow: "hidden",
+                            borderColor: open ? "primary.main" : "divider",
+                            transition: "border-color .2s",
+                        }}
+                    >
+                        <Stack spacing={1.25} sx={{ p: 1.5 }}>
+                            <Stack direction="row" alignItems="center" spacing={1.25}>
                                 <StatusDot status={machine.status === "online" ? "running" : "exited"} />
                                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                                    <Typography fontWeight={700}>{machine.display_name}</Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                        {machine.id} · {machine.platform}/{machine.architecture} · {machine.workspaces.length} workspaces · {machine.active_sessions}/{machine.capacity.max_sessions} sessions
+                                    <Stack direction="row" spacing={0.75} alignItems="baseline" flexWrap="wrap" useFlexGap>
+                                        <Typography fontWeight={740}>{machine.display_name}</Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                            {machine.local ? "Local server" : `${machine.platform} · ${machine.architecture}`}
+                                        </Typography>
+                                    </Stack>
+                                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.1 }}>
+                                        {machine.workspaces.length} workspace{machine.workspaces.length === 1 ? "" : "s"} · {machine.active_sessions} active session{machine.active_sessions === 1 ? "" : "s"}
+                                        {!machine.local ? ` · ${machine.capacity.max_sessions} max` : ""}
                                     </Typography>
                                 </Box>
-                                <Chip size="small" label={machine.schedulable ? "Ready" : machine.capacity.draining ? "Draining" : machine.status} color={machine.schedulable ? "success" : "default"} />
+                                <Chip
+                                    size="small"
+                                    label={machine.schedulable ? "Ready" : machine.capacity.draining ? "Draining" : machine.status}
+                                    color={machine.schedulable ? "success" : "default"}
+                                    sx={{ fontWeight: 650 }}
+                                />
                             </Stack>
-                            {!machine.local && (
-                                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                                    <Button size="small" onClick={() => command(machine.id, "refresh")}>Refresh</Button>
-                                    <Button size="small" onClick={() => command(machine.id, "components/reconcile")}>Update components</Button>
-                                    {(["codex", "claude"] as const).map((provider) => (
-                                        <Button key={provider} size="small" onClick={() => command(machine.id, "login", provider)}>
-                                            Sign in {provider}
-                                        </Button>
-                                    ))}
-                                    <Button size="small" color="error" onClick={() => {
-                                        if (!globalThis.confirm(`Revoke ${machine.display_name}? A new key enrollment will be required.`)) return;
-                                        void fetch(`/api/machines/${encodeURIComponent(machine.id)}/revoke`, { method: "POST" }).then(refresh);
-                                    }}>Revoke</Button>
-                                </Stack>
+                            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                {machine.workspaces.slice(0, 3).map((workspace) => (
+                                    <Chip key={workspace.id} size="small" variant="outlined" label={workspace.display_name} title={workspace.canonical_path} />
+                                ))}
+                                {providerComponents.map((component) => (
+                                    <Chip
+                                        key={component.id.slot}
+                                        size="small"
+                                        variant="outlined"
+                                        color={component.auth === "signed_in" ? "success" : component.state === "failed" ? "error" : "default"}
+                                        label={`${component.id.slot ?? "provider"}${component.auth === "signed_in" ? " ready" : component.auth === "signed_out" ? " sign in" : ""}`}
+                                    />
+                                ))}
+                            </Stack>
+                            {!machine.local && pending.length > 0 && (
+                                <Button
+                                    size="small"
+                                    variant="contained"
+                                    startIcon={busy[`${machine.id}:components/reconcile:`] ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
+                                    disabled={busy[`${machine.id}:components/reconcile:`]}
+                                    onClick={() => command(machine.id, "components/reconcile")}
+                                    sx={{ alignSelf: "flex-start" }}
+                                >
+                                    Update all ({pending.length})
+                                </Button>
                             )}
-                            {(machine.pending_updates?.length ?? 0) > 0 && (
-                                <Alert severity="warning" action={
-                                    <Button size="small" onClick={() => command(machine.id, "components/reconcile")}>Update</Button>
-                                }>
-                                    {machine.pending_updates?.length} signed component update{machine.pending_updates?.length === 1 ? "" : "s"} pending
-                                </Alert>
-                            )}
-                            {machine.workspaces.length > 0 && (
-                                <Box>
-                                    <Typography variant="overline" color="text.secondary">Trusted workspaces</Typography>
-                                    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                                        {machine.workspaces.map((workspace) => (
-                                            <Chip key={workspace.id} size="small" variant="outlined" label={workspace.display_name} title={workspace.canonical_path} />
-                                        ))}
-                                    </Stack>
-                                </Box>
-                            )}
-                            {machine.components.length > 0 && (
-                                <Stack spacing={0.5}>
-                                    <Typography variant="overline" color="text.secondary">Managed generations</Typography>
-                                    {machine.components.map((component) => (
-                                        <Stack
-                                            key={`${component.id.kind}:${component.id.slot ?? ""}`}
-                                            direction="row"
-                                            spacing={1}
-                                            alignItems="center"
-                                            sx={{ minWidth: 0 }}
-                                        >
-                                            <Chip
+                            {!machine.local && <ButtonBase
+                                onClick={() => setExpanded((current) => ({ ...current, [machine.id]: !open }))}
+                                sx={{
+                                    alignSelf: "stretch",
+                                    justifyContent: "space-between",
+                                    minHeight: 40,
+                                    px: 0.5,
+                                    borderRadius: 1.5,
+                                    color: "text.secondary",
+                                }}
+                            >
+                                <Typography variant="body2" fontWeight={650}>
+                                    {open ? "Hide details" : "Components & access"}
+                                </Typography>
+                                {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+                            </ButtonBase>}
+                            {open && !machine.local && (
+                                <Stack spacing={1.25} sx={{ pt: 0.25 }}>
+                                    {!machine.local && (
+                                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                                            <Button
                                                 size="small"
-                                                variant="outlined"
-                                                color={component.state === "active" ? "success" : component.state === "failed" ? "error" : "default"}
-                                                label={component.id.slot || component.id.kind}
-                                            />
-                                            <Typography variant="caption" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
-                                                {component.version || component.state}
-                                                {component.generation ? ` · generation ${component.generation}` : ""}
-                                                {component.auth ? ` · ${component.auth}` : ""}
-                                                {component.active_leases ? ` · ${component.active_leases} active` : ""}
-                                                {component.rollback_generation ? ` · rollback ${component.rollback_generation}` : ""}
-                                                {component.detail ? ` · ${component.detail}` : ""}
-                                            </Typography>
+                                                startIcon={busy[`${machine.id}:refresh:`] ? <CircularProgress size={14} /> : <RefreshIcon />}
+                                                disabled={busy[`${machine.id}:refresh:`]}
+                                                onClick={() => command(machine.id, "refresh")}
+                                            >Refresh</Button>
+                                            {providerComponents.filter((component) =>
+                                                component.auth && component.auth !== "signed_in"
+                                            ).map((component) => (
+                                                <Button
+                                                    key={component.id.slot}
+                                                    size="small"
+                                                    onClick={() => command(machine.id, "login", component.id.slot)}
+                                                >Sign in {component.id.slot}</Button>
+                                            ))}
                                         </Stack>
-                                    ))}
+                                    )}
+                                    {visibleComponents.length > 0 && (
+                                        <Stack spacing={0.75}>
+                                            <Typography variant="overline" color="text.secondary">Components</Typography>
+                                            {visibleComponents.map((component) => {
+                                                const componentPending = pending.some((id) =>
+                                                    id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
+                                                );
+                                                const componentKey = `${machine.id}:component:${component.id.kind}:${component.id.slot ?? ""}`;
+                                                return (
+                                                    <Stack
+                                                        key={`${component.id.kind}:${component.id.slot ?? ""}`}
+                                                        direction="row"
+                                                        spacing={1}
+                                                        alignItems="center"
+                                                        sx={{
+                                                            minWidth: 0,
+                                                            py: 0.75,
+                                                            px: 1,
+                                                            borderRadius: 1.5,
+                                                            bgcolor: "action.hover",
+                                                        }}
+                                                    >
+                                                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                                                            <Typography variant="body2" fontWeight={650}>
+                                                                {component.id.kind === "provider_adapter"
+                                                                    ? `${component.id.slot ?? "Provider"} adapter`
+                                                                    : component.id.slot || component.id.kind.replaceAll("_", " ")}
+                                                            </Typography>
+                                                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
+                                                                {component.version || component.state}
+                                                                {component.auth ? ` · ${component.auth.replaceAll("_", " ")}` : ""}
+                                                                {component.generation ? ` · generation ${component.generation}` : ""}
+                                                            </Typography>
+                                                        </Box>
+                                                        <Chip
+                                                            size="small"
+                                                            variant="outlined"
+                                                            color={component.state === "active" ? "success" : component.state === "failed" ? "error" : "default"}
+                                                            label={componentPending ? "Update" : component.state}
+                                                        />
+                                                        {componentPending && (
+                                                            <Button
+                                                                size="small"
+                                                                disabled={busy[componentKey]}
+                                                                onClick={() => updateOne(machine.id, component)}
+                                                            >{busy[componentKey] ? <CircularProgress size={14} /> : "Update"}</Button>
+                                                        )}
+                                                    </Stack>
+                                                );
+                                            })}
+                                        </Stack>
+                                    )}
+                                    {!machine.local && providerComponents.some((component) =>
+                                        component.id.slot === "gemini" && component.auth !== "signed_in"
+                                    ) && (
+                                        <Typography variant="caption" color="text.secondary">
+                                            Gemini sign-in stays in the official CLI on {machine.display_name}.
+                                        </Typography>
+                                    )}
+                                    {!machine.local && (
+                                        <Button size="small" color="error" sx={{ alignSelf: "flex-start" }} onClick={() => {
+                                            if (!globalThis.confirm(`Revoke ${machine.display_name}? A new key enrollment will be required.`)) return;
+                                            void fetch(`/api/machines/${encodeURIComponent(machine.id)}/revoke`, { method: "POST" }).then(refresh);
+                                        }}>Revoke machine</Button>
+                                    )}
                                 </Stack>
-                            )}
-                            {!machine.local && gemini?.auth !== "signed_in" && (
-                                <Alert severity="info">
-                                    Gemini keeps its OAuth or API-key login in the official CLI. Run <code>gemini</code> once on {machine.display_name}, then Refresh; Cowboy never copies its credentials.
-                                </Alert>
                             )}
                             {challenge?.event === "login_challenge" && (
                                 <Alert severity="info">
@@ -3956,19 +4066,38 @@ function SettingsShell({
                     bgcolor: desktop ? "background.paper" : "transparent",
                 }}
             >
-            <Box sx={{ display: "flex", alignItems: "center", mt: 0.25, mb: desktop ? 1 : 1.5, py: desktop ? 0.5 : 0 }}>
+            <Box
+                sx={{
+                    display: desktop ? "flex" : "grid",
+                    gridTemplateColumns: desktop ? "none" : "1fr",
+                    alignItems: "center",
+                    mt: 0.25,
+                    mb: desktop ? 1 : 1.5,
+                    py: desktop ? 0.5 : 0,
+                    width: "100%",
+                }}
+            >
                 {desktop ? (
                     <Box sx={{ flex: 1 }}>
                         <Typography variant="h6" fontWeight={780}>Cowboy control center</Typography>
                         <Typography variant="caption" color="text.secondary">Preferences, runtime information, and automation history</Typography>
                     </Box>
-                ) : <Box sx={{ flex: 1 }} />}
+                ) : null}
                 {!desktop && <SegmentedPill
                     value={tab}
                     onChange={setTab}
                     options={[{ value: "settings", label: "Settings" }, { value: "machines", label: "Machines" }, { value: "info", label: "Info" }, { value: "logs", label: "Logs" }]}
+                    sx={{
+                        width: "100%",
+                        justifySelf: "center",
+                        "& .MuiButtonBase-root": {
+                            flex: 1,
+                            minWidth: 0,
+                            px: 0.75,
+                        },
+                    }}
                 />}
-                <Box
+                {desktop && <Box
                     sx={{
                         flex: 1,
                         display: "flex",
@@ -3983,7 +4112,7 @@ function SettingsShell({
                         </IconButton>
                         <Kbd keys="Esc" floating />
                     </Box>
-                </Box>
+                </Box>}
             </Box>
             </Box>
             {desktop ? (

@@ -1019,6 +1019,10 @@ async fn serve_axum(
             "/api/machines/{id}/components/reconcile",
             post(api_machine_reconcile),
         )
+        .route(
+            "/api/machines/{id}/components/reconcile-one",
+            post(api_machine_reconcile_one),
+        )
         .route("/api/machines/{id}/revoke", post(api_machine_revoke))
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
@@ -1647,12 +1651,13 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                     .into_iter()
                     .filter(|machine| !machine.revoked)
                     .map(|machine| {
-                        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
-                            .inventory
-                            .get("workspaces")
-                            .cloned()
-                            .and_then(|value| serde_json::from_value(value).ok())
-                            .unwrap_or_default();
+                        let mut workspaces: Vec<crate::machine_protocol::MachineWorkspace> =
+                            machine
+                                .inventory
+                                .get("workspaces")
+                                .cloned()
+                                .and_then(|value| serde_json::from_value(value).ok())
+                                .unwrap_or_default();
                         let mut components: Vec<crate::machine_protocol::ComponentInventory> =
                             machine
                                 .inventory
@@ -1660,7 +1665,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                 .cloned()
                                 .and_then(|value| serde_json::from_value(value).ok())
                                 .unwrap_or_default();
-                        let capacity: crate::machine_protocol::MachineCapacity = machine
+                        let mut capacity: crate::machine_protocol::MachineCapacity = machine
                             .inventory
                             .get("capacity")
                             .cloned()
@@ -1678,6 +1683,22 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                 .count(),
                         )
                         .unwrap_or(u32::MAX);
+                        let local = machine.id == "local";
+                        if local {
+                            workspaces = vec![crate::machine_protocol::MachineWorkspace {
+                                id: "home".to_owned(),
+                                display_name: "home".to_owned(),
+                                canonical_path: state
+                                    .supervisor
+                                    .workspace_root()
+                                    .display()
+                                    .to_string(),
+                            }];
+                            capacity = crate::machine_protocol::MachineCapacity {
+                                max_sessions: u32::MAX,
+                                draining: false,
+                            };
+                        }
                         for component in &mut components {
                             if matches!(
                                 component.id.kind,
@@ -1701,22 +1722,39 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             })
                             .map(|desired| desired.id.clone())
                             .collect();
-                        let schedulable = state
-                            .runtime_router
-                            .as_ref()
-                            .is_some_and(|router| router.connected(&machine.id))
+                        let schedulable = (local
+                            || state
+                                .runtime_router
+                                .as_ref()
+                                .is_some_and(|router| router.connected(&machine.id)))
                             && (machine.id == "local" || !workspaces.is_empty())
                             && !capacity.draining
                             && active_sessions < capacity.max_sessions;
                         MachineSummary {
-                            local: machine.id == "local",
+                            local,
                             schedulable,
                             id: machine.id,
-                            display_name: machine.display_name,
-                            platform: machine.platform,
-                            architecture: machine.architecture,
-                            status: machine.status,
-                            fingerprint: machine.fingerprint,
+                            display_name: if local {
+                                local_machine_display_name()
+                            } else {
+                                machine.display_name
+                            },
+                            platform: if local {
+                                std::env::consts::OS.to_owned()
+                            } else {
+                                machine.platform
+                            },
+                            architecture: if local {
+                                std::env::consts::ARCH.to_owned()
+                            } else {
+                                machine.architecture
+                            },
+                            status: if local {
+                                "online".to_owned()
+                            } else {
+                                machine.status
+                            },
+                            fingerprint: if local { None } else { machine.fingerprint },
                             workspaces,
                             components,
                             capacity,
@@ -1897,6 +1935,45 @@ async fn api_machine_reconcile(
         Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }
+}
+
+async fn api_machine_reconcile_one(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+    Json(component_id): Json<crate::machine_protocol::ComponentId>,
+) -> Response {
+    let Some(component) = state
+        .desired_machine_components
+        .iter()
+        .find(|component| component.id == component_id)
+        .cloned()
+    else {
+        return (StatusCode::NOT_FOUND, "no signed update for this component").into_response();
+    };
+    let request_id = machine_request_id("reconcile-one");
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::Reconcile {
+            request_id: request_id.clone(),
+            components: vec![component],
+        },
+    ) {
+        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+fn local_machine_display_name() -> String {
+    let hostname = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "This machine".to_owned());
+    let mut chars = hostname.chars();
+    chars.next().map_or(hostname.clone(), |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 async fn api_machine_login_cancel(
