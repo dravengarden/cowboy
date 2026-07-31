@@ -15,11 +15,16 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 ## Deploy (read before deploying)
 - cowboy is a NixOS service (`services/cowboy` on hawk), consumed via a
   `git+file://` flake input from this repo. To ship: commit here, then on hawk
-  `nix flake update cowboy` + rebuild.
+  update the nested input with
+  `nix flake update hawk/cowboy --flake /home/draven/columbus/machines`, then
+  rebuild `/home/draven/columbus/machines#hawk`. The standalone `/etc/nixos`
+  checkout is not a deployment source.
 - **Deploying restarts the daemon you may be driving Codex through.** Build
-  first, then use `/etc/nixos`'s `just sys-activate ./result`: it hands activation
-  to an independent root systemd unit that survives the cowboy restart. Verify
-  its journal and `/run/current-system`; never run a direct switch from cowboy.
+  first from `/home/draven/columbus/machines/hawk/nixos`, then use its
+  `just sys-activate ./result`: it validates the canonical deployment marker and
+  hands activation to an independent root systemd unit that survives the cowboy
+  restart. Verify its journal and `/run/current-system`; never run a direct switch
+  from cowboy.
   Web/bundle changes also need a PWA hard-reload (a WS reconnect keeps stale JS).
   (memories: cowboy-switch-restarts-approval-channel, cowboy-v1-deploy)
 
