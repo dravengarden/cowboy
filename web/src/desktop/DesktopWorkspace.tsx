@@ -1,10 +1,15 @@
 import { alpha, Box, Typography } from "@mui/material";
+import { useMemo } from "react";
 import type { DesktopPane } from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
 import { MOD_LABEL } from "../platform";
 import type { TranscriptProjection } from "../explore/exploreStore";
 import { DesktopProjectionToggle } from "../explore/ProjectionToggle";
+import {
+  type DesktopCommand,
+  useDesktopCommand,
+} from "./commands/DesktopCommandProvider";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -71,6 +76,19 @@ export function DesktopWorkspace({
   projection: TranscriptProjection;
   onProjectionChange: (projection: TranscriptProjection) => void;
 }): React.JSX.Element {
+  const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
+    id: "conversation.toggleProjection",
+    title: `Switch to ${projection === "history" ? "Explore" : "History"}`,
+    description: "Toggle the Conversation between History and Explore",
+    group: "Conversation",
+    shortcut: "V",
+    contexts: ["conversation"],
+    run: () => onProjectionChange(
+      projection === "history" ? "explore" : "history",
+    ),
+  }), [onProjectionChange, projection]);
+  useDesktopCommand(toggleProjectionCommand);
+
   return (
     <Box
       sx={{

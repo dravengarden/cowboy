@@ -71,6 +71,7 @@ import {
   indexedQuestionPagePosition,
   mergeQuestionPageDirectory,
   pageContainingItemKey,
+  presentQuestionPageDirectory,
   type QuestionPage,
 } from "./questionPages";
 import {
@@ -345,8 +346,11 @@ function PageList({
   loadingPageId,
   onReachStart,
   onDismiss,
+  onVimDismiss,
   active = true,
   searchable = true,
+  descending = false,
+  vimNavigation = false,
   listElementRef,
   onAwayFromBottomChange,
 }: {
@@ -360,12 +364,16 @@ function PageList({
   loadingPageId?: string | null;
   onReachStart?: (() => void) | undefined;
   onDismiss?: (() => void) | undefined;
+  onVimDismiss?: (() => void) | undefined;
   active?: boolean;
   searchable?: boolean;
+  descending?: boolean;
+  vimNavigation?: boolean;
   listElementRef?: React.RefObject<HTMLUListElement | null>;
   onAwayFromBottomChange?: ((away: boolean) => void) | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
+  const [cursorId, setCursorId] = useState<string | null>(currentId);
   const [showEarlierLoading, setShowEarlierLoading] = useState(false);
   const selectedRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
@@ -381,6 +389,7 @@ function PageList({
     scrollTop: number;
     pageCount: number;
   } | null>(null);
+  const vimChordRef = useRef<number | null>(null);
   const ordinalById = useMemo(
     () =>
       new Map(
@@ -391,11 +400,27 @@ function PageList({
       ),
     [firstOrdinal, pages],
   );
+  const ordered = useMemo(
+    () => presentQuestionPageDirectory(pages, descending),
+    [descending, pages],
+  );
   const filtered = searchable && query.trim()
-    ? pages.filter((page) =>
+    ? ordered.filter((page) =>
       page.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
     )
-    : pages;
+    : ordered;
+
+  useEffect(() => {
+    if (active) setCursorId(currentId);
+  }, [active, currentId]);
+
+  useEffect(() => {
+    return () => {
+      if (vimChordRef.current !== null) {
+        globalThis.clearTimeout(vimChordRef.current);
+      }
+    };
+  }, []);
 
   const updateBottomAffordance = useCallback((): void => {
     const list = listRef.current;
@@ -408,8 +433,11 @@ function PageList({
     );
     // One upward approach loads one batch. Once prepending has moved the
     // viewport clear of the boundary, arm the next deliberate approach.
-    if (list.scrollTop > 120) earlierRequestArmedRef.current = true;
-  }, [onAwayFromBottomChange, onDismiss]);
+    const distanceFromOlderBoundary = descending
+      ? list.scrollHeight - list.scrollTop - list.clientHeight
+      : list.scrollTop;
+    if (distanceFromOlderBoundary > 120) earlierRequestArmedRef.current = true;
+  }, [descending, onAwayFromBottomChange, onDismiss]);
 
   useEffect(() => {
     if (!active) {
@@ -463,7 +491,7 @@ function PageList({
       setShowEarlierLoading(true);
     }
     const list = listRef.current;
-    if (list) {
+    if (list && !descending) {
       const listTop = list.getBoundingClientRect().top;
       const element = Array.from(
         list.querySelectorAll<HTMLElement>("[data-page-id]"),
@@ -477,7 +505,7 @@ function PageList({
       };
     }
     onReachStart();
-  }, [onReachStart, pages.length, showEarlierLoading]);
+  }, [descending, onReachStart, pages.length, showEarlierLoading]);
 
   useEffect(() => {
     if (loadingEarlier) {
@@ -507,6 +535,10 @@ function PageList({
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
     const list = listRef.current;
+    if (descending) {
+      prependAnchorRef.current = null;
+      return;
+    }
     if (!anchor || !list || pages.length <= anchor.pageCount) return;
     // Keep the first visible row under the user's finger. WebKit otherwise
     // performs its own scroll anchoring while this code also compensates for
@@ -526,7 +558,7 @@ function PageList({
     // user deliberately scrolls back to the top.
     earlierRequestArmedRef.current = true;
     prependAnchorRef.current = null;
-  }, [pages.length]);
+  }, [descending, pages.length]);
 
   useEffect(() => {
     const anchor = prependAnchorRef.current;
@@ -546,17 +578,145 @@ function PageList({
       },
       {
         root: list,
-        // Start fetching just before the first row reaches the sheet edge.
-        rootMargin: "72px 0px 0px",
+        // Chronological mobile lists load older rows at the top. Desktop's
+        // newest-first navigator reverses that visual order, so its older-page
+        // boundary is the bottom edge instead.
+        rootMargin: descending ? "0px 0px 72px" : "72px 0px 0px",
         threshold: 0,
       },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasEarlier, loadingEarlier, query, requestEarlier]);
+  }, [descending, hasEarlier, loadingEarlier, query, requestEarlier]);
+
+  const moveCursor = useCallback((index: number): void => {
+    const page = filtered[Math.max(0, Math.min(filtered.length - 1, index))];
+    if (!page) return;
+    setCursorId(page.id);
+    requestAnimationFrame(() => {
+      listRef.current
+        ?.querySelector<HTMLElement>(`[data-page-id="${CSS.escape(page.id)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }, [filtered]);
+
+  const onVimKeyDown = (event: React.KeyboardEvent): void => {
+    if (!vimNavigation) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (
+      target?.matches("input, textarea, [contenteditable='true']") ||
+      target?.closest("[contenteditable='true']")
+    ) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        listRef.current?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    if (event.metaKey || event.altKey) return;
+    const key = event.code === "KeyJ"
+      ? "j"
+      : event.code === "KeyK"
+      ? "k"
+      : event.code === "KeyH"
+      ? "h"
+      : event.code === "KeyL"
+      ? "l"
+      : event.code === "KeyD"
+      ? "d"
+      : event.code === "KeyU"
+      ? "u"
+      : event.code === "KeyF"
+      ? "f"
+      : event.code === "KeyB"
+      ? "b"
+      : event.code === "KeyG"
+      ? (event.shiftKey ? "G" : "g")
+      : event.code === "Slash"
+      ? "/"
+      : event.key;
+    const cursorIndex = Math.max(
+      0,
+      filtered.findIndex((page) => page.id === cursorId),
+    );
+    if (event.ctrlKey) {
+      const list = listRef.current;
+      if (!list) return;
+      const direction = key.toLowerCase() === "d" || key.toLowerCase() === "f"
+        ? 1
+        : key.toLowerCase() === "u" || key.toLowerCase() === "b"
+        ? -1
+        : 0;
+      if (direction === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const firstRow = list.querySelector<HTMLElement>("[data-page-id]");
+      const rowHeight = firstRow?.getBoundingClientRect().height ?? 52;
+      const visibleRows = Math.max(1, Math.floor(list.clientHeight / rowHeight));
+      const rowDistance =
+        key.toLowerCase() === "d" || key.toLowerCase() === "u"
+          ? Math.max(1, Math.floor(visibleRows / 2))
+          : Math.max(1, visibleRows - 1);
+      moveCursor(cursorIndex + direction * rowDistance);
+      return;
+    }
+    if (key === "j" || key === "k") {
+      event.preventDefault();
+      event.stopPropagation();
+      moveCursor(cursorIndex + (key === "j" ? 1 : -1));
+      return;
+    }
+    if (key === "g") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (vimChordRef.current !== null) {
+        globalThis.clearTimeout(vimChordRef.current);
+        vimChordRef.current = null;
+        moveCursor(0);
+      } else {
+        vimChordRef.current = globalThis.setTimeout(() => {
+          vimChordRef.current = null;
+        }, 900);
+      }
+      return;
+    }
+    if (key === "G") {
+      event.preventDefault();
+      event.stopPropagation();
+      moveCursor(filtered.length - 1);
+      return;
+    }
+    if (key === "l" || key === "Enter") {
+      const page = filtered[cursorIndex];
+      if (!page) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onSelect(page.id);
+      return;
+    }
+    if (key === "h" && onVimDismiss) {
+      event.preventDefault();
+      event.stopPropagation();
+      onVimDismiss();
+      return;
+    }
+    if (key === "/" && searchable) {
+      event.preventDefault();
+      event.stopPropagation();
+      listRef.current
+        ?.closest<HTMLElement>("[data-question-directory]")
+        ?.querySelector<HTMLInputElement>("[data-explore-page-search]")
+        ?.focus();
+    }
+  };
 
   return (
-    <Stack sx={{ minHeight: 0, height: "100%" }}>
+    <Stack
+      data-question-directory
+      onKeyDown={onVimKeyDown}
+      sx={{ minHeight: 0, height: "100%" }}
+    >
       {searchable && (
         <TextField
           inputProps={{ "data-explore-page-search": "true" }}
@@ -628,6 +788,8 @@ function PageList({
             if (listElementRef) listElementRef.current = element;
           }}
           dense={dense}
+          tabIndex={vimNavigation ? 0 : undefined}
+          autoFocus={vimNavigation}
           onScroll={updateBottomAffordance}
           sx={{
             position: "absolute",
@@ -644,7 +806,7 @@ function PageList({
             overflowAnchor: "none",
           }}
         >
-          {!query.trim() && (
+          {!query.trim() && !descending && (
             <Box
               ref={startSentinelRef}
               aria-hidden
@@ -654,12 +816,14 @@ function PageList({
           )}
           {filtered.map((page) => {
             const selected = page.id === currentId;
+            const cursor = vimNavigation && page.id === cursorId;
             return (
               <ListItemButton
                 key={page.id}
                 data-page-id={page.id}
                 ref={selected ? selectedRef : undefined}
                 selected={selected}
+                tabIndex={vimNavigation ? -1 : undefined}
                 onClick={(): void => onSelect(page.id)}
                 sx={{
                   minHeight: dense ? 44 : 52,
@@ -672,6 +836,11 @@ function PageList({
                   "&.Mui-selected": {
                     bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
                   },
+                  ...(cursor && {
+                    bgcolor: "action.hover",
+                    boxShadow: (theme) =>
+                      `inset 3px 0 0 ${theme.palette.primary.main}`,
+                  }),
                   "&:not(.Mui-selected):hover": {
                     bgcolor: "action.hover",
                   },
@@ -713,6 +882,13 @@ function PageList({
               </ListItemButton>
             );
           })}
+          {!query.trim() && descending && (
+            <Box
+              ref={startSentinelRef}
+              aria-hidden
+              sx={{ height: "1px", pointerEvents: "none" }}
+            />
+          )}
         </List>
       </Box>
     </Stack>
@@ -1072,7 +1248,7 @@ export function ExploreTranscript(
           open={desktopDirectoryOpen}
           onClose={closeDesktopDirectory}
           title="Question Navigator"
-          description={`${String(total)} questions · select one to jump`}
+          description={`${String(total)} questions · newest first · j/k move · l/Enter open`}
           icon={<ListAltOutlined color="primary" />}
           width={620}
         >
@@ -1085,6 +1261,8 @@ export function ExploreTranscript(
             <PageList
               active={desktopDirectoryOpen}
               dense
+              descending
+              vimNavigation
               pages={directoryPages}
               currentId={current?.id ?? null}
               firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
@@ -1092,6 +1270,7 @@ export function ExploreTranscript(
               loadingEarlier={pageIndex.loadingEarlier}
               loadingPageId={desktopDirectoryLoadingPageId}
               onReachStart={(): void => void pageIndex.loadEarlier()}
+              onVimDismiss={closeDesktopDirectory}
               onSelect={(id): void => {
                 if (desktopDirectoryLoadingPageId) return;
                 if (isQuestionPageLoaded(props.sessionId, id)) {

@@ -63,10 +63,13 @@ session state, not a global top-bar action. While Conversation is focused:
 
 - Page View's question navigator is transient rather than a permanent column:
   `p` opens it as a modal without resizing or covering one side of the reader,
-  focuses search, and `Escape`, choosing a question, or clicking the backdrop
-  closes it. The global status line replaces ordinary reader shortcuts with
+  presents newest questions first, and uses Vim list navigation: `j/k` moves
+  the cursor, `l`/`Enter` opens, `h`/`Escape` closes, `Ctrl-d/u` and
+  `Ctrl-f/b` scroll, `gg/G` jumps to the first/last row, and `/` focuses
+  search. The global status line replaces ordinary reader shortcuts with
   Page-specific shortcuts; the Conversation pane header does not duplicate
   them.
+- `v` toggles the Conversation projection between History and Explore.
 - `j/k` scroll down/up by one reading line;
 - `Ctrl-d/u` scroll down/up by half a page;
 - `Ctrl-f/b` scroll down/up by one page;

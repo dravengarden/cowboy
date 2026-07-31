@@ -48,6 +48,20 @@ export function mergeQuestionPageDirectory(
 }
 
 /**
+ * Project the canonical chronological directory into a visual list.
+ *
+ * Storage and mobile paging stay oldest-first. Desktop's transient navigator
+ * is a recency tool, so it reverses a copy without mutating the canonical
+ * array shared by page navigation.
+ */
+export function presentQuestionPageDirectory<T>(
+  pages: readonly T[],
+  newestFirst: boolean,
+): T[] {
+  return newestFirst ? [...pages].reverse() : [...pages];
+}
+
+/**
  * Resolve a provisional live-tail page to its durable user-message root.
  *
  * A retained timeline can begin inside a streamed answer. That temporary page

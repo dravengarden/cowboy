@@ -8,6 +8,7 @@ import {
   indexedQuestionPagePosition,
   mergeQuestionPageDirectory,
   pageContainingItemKey,
+  presentQuestionPageDirectory,
   questionTitle,
 } from "./questionPages";
 
@@ -30,6 +31,19 @@ Deno.test("question directory merges live pages and sorts oldest to newest", () 
       { id: "30", title: "Live third", ordinal: 3 },
     ],
   );
+});
+
+Deno.test("desktop question navigator presents newest first without mutating chronology", () => {
+  const chronological = [
+    { id: "1", ordinal: 1 },
+    { id: "2", ordinal: 2 },
+    { id: "3", ordinal: 3 },
+  ];
+  assertEquals(
+    presentQuestionPageDirectory(chronological, true).map((page) => page.id),
+    ["3", "2", "1"],
+  );
+  assertEquals(chronological.map((page) => page.id), ["1", "2", "3"]);
 });
 
 function user(key: string, text: string, autoResumed = false): RenderItem {
