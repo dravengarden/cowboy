@@ -167,6 +167,7 @@ import {
     setActiveSessionId,
     useActiveSessionId,
 } from "./controlPlane";
+import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -1332,7 +1333,7 @@ function NewSessionDialog({
                 active_work_items: [],
             }));
             setWorkspaces(choices);
-            setCwd(choices[0]?.value ?? "");
+            setCwd(defaultNewSessionWorkspace(choices)?.value ?? "");
             setWorkItemId("");
         }
     }, [open, machineId, machines]);
