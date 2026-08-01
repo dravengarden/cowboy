@@ -117,7 +117,7 @@ export function DesktopCommandHost({
       id: "workspace.focusPrompt",
       title: "Focus Prompt",
       group: "Workspace",
-      shortcut: "Mod+Shift+P",
+      shortcut: "Mod+P",
       allowInEditor: true,
       run: () => workspace.focusPane("prompt"),
     },

@@ -22,7 +22,7 @@ interface ShortcutRow {
 
 const NAVIGATION: ShortcutRow[] = [
   { keys: ["Mod+E"], title: "Focus Sessions / Sidebar" },
-  { keys: ["Mod+Shift+P"], title: "Focus Prompt Editor" },
+  { keys: ["Mod+P"], title: "Focus Prompt Editor" },
   { keys: ["Mod+L"], title: "Focus Conversation Log" },
   { keys: ["Mod+T"], title: "Focus Top Bar" },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
@@ -32,7 +32,7 @@ const NAVIGATION: ShortcutRow[] = [
   {
     keys: ["P / Mod+Y / Mod+D"],
     title: "Plan / Queue / Drafts inside Prompt",
-    description: "Mod+Shift+P returns to the editor; the composer keeps native Vim commands",
+    description: "Mod+P returns to the editor; the composer keeps native Vim commands",
   },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },

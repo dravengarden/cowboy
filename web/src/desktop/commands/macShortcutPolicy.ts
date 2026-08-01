@@ -5,7 +5,7 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
   ["mod+,", new Set(["settings.open"])],
   ["mod+s", new Set(["composer.saveDraft"])],
   ["mod+e", new Set(["workspace.focusSessions"])],
-  ["mod+i", new Set(["workspace.focusPrompt"])],
+  ["mod+p", new Set(["workspace.focusPrompt"])],
   ["mod+l", new Set(["workspace.focusConversation"])],
   ["mod+t", new Set(["workspace.focusTopbar"])],
   ["mod+k", new Set(["commandPalette.open"])],
