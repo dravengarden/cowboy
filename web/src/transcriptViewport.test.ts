@@ -111,8 +111,8 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
   );
 });
 
-Deno.test("history loading never repaints an active native scroll", () => {
-  assertEquals(shouldShowHistoryLoading(true, true), false);
+Deno.test("history loading remains visible during native scrolling", () => {
+  assertEquals(shouldShowHistoryLoading(true, true), true);
   assertEquals(shouldShowHistoryLoading(true, false), true);
   assertEquals(shouldShowHistoryLoading(false, false), false);
 });

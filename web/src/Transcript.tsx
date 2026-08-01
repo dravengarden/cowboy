@@ -3076,7 +3076,7 @@ export function Transcript({
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
-  const historyLoadingShowTimerRef = useRef<number | null>(null);
+  const historyLoadingHideTimerRef = useRef<number | null>(null);
   const historyLoadingRequestRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
@@ -3132,40 +3132,27 @@ export function Transcript({
   }, [backfillingViewport]);
   requestOlderPageRef.current = (): void => {
     if (!managesScrollHistoryRef.current) return;
-    if (historyLoadingShowTimerRef.current !== null) {
-      globalThis.clearTimeout(historyLoadingShowTimerRef.current);
-      historyLoadingShowTimerRef.current = null;
+    if (historyLoadingHideTimerRef.current !== null) {
+      globalThis.clearTimeout(historyLoadingHideTimerRef.current);
+      historyLoadingHideTimerRef.current = null;
     }
     const request = ++historyLoadingRequestRef.current;
-    // History pages are normally prefetched from the retained local window
-    // before the reader reaches its edge. Do not flash a spinner for those
-    // cache-speed requests: iOS scroll bounce can cross the prefetch threshold
-    // repeatedly and made the old mandatory 280 ms acknowledgement look like
-    // loading caused by ordinary scrolling. Slow radios still get feedback.
-    historyLoadingShowTimerRef.current = globalThis.setTimeout(() => {
-      historyLoadingShowTimerRef.current = null;
-      if (
-        shouldShowHistoryLoading(
-          historyLoadingRequestRef.current === request,
-          nativeScrollActiveRef.current,
-        )
-      ) {
-        setScrollbackLoading(true);
-      }
-    }, 300);
+    const shownAt = performance.now();
+    setScrollbackLoading(shouldShowHistoryLoading(
+      historyLoadingRequestRef.current === request,
+      nativeScrollActiveRef.current,
+    ));
     void loadOlder(sessionIdRef.current).finally(() => {
       if (historyLoadingRequestRef.current !== request) return;
-      if (historyLoadingShowTimerRef.current !== null) {
-        globalThis.clearTimeout(historyLoadingShowTimerRef.current);
-        historyLoadingShowTimerRef.current = null;
-      }
-      // A request that crossed the delay already produced a useful progress
-      // state. Clear it with the same request ownership so an older completion
-      // cannot hide a newer page request.
-      globalThis.requestAnimationFrame(() => {
+      // Preserve a visible acknowledgement even for a cache-speed page. The
+      // overlay is geometry-neutral and permanently mounted, so this does not
+      // alter scroll range or race WebKit's native column-reverse layer.
+      const remaining = Math.max(0, 420 - (performance.now() - shownAt));
+      historyLoadingHideTimerRef.current = globalThis.setTimeout(() => {
+        historyLoadingHideTimerRef.current = null;
         if (historyLoadingRequestRef.current !== request) return;
         setScrollbackLoading(false);
-      });
+      }, remaining);
     });
   };
   useEffect(() => {
@@ -3180,9 +3167,9 @@ export function Transcript({
     requestViewportBackfillRef.current(false);
     return () => {
       historyLoadingRequestRef.current += 1;
-      if (historyLoadingShowTimerRef.current !== null) {
-        globalThis.clearTimeout(historyLoadingShowTimerRef.current);
-        historyLoadingShowTimerRef.current = null;
+      if (historyLoadingHideTimerRef.current !== null) {
+        globalThis.clearTimeout(historyLoadingHideTimerRef.current);
+        historyLoadingHideTimerRef.current = null;
       }
     };
   }, [sessionId]);
@@ -4291,18 +4278,20 @@ export function Transcript({
           scroll flow) so it gives feedback without adding height that would
           shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
       }
-      {managesScrollHistory &&
-        !backfillingViewport &&
-        scrollbackLoading && (
+      {managesScrollHistory && !backfillingViewport && (
         <Box
           role="status"
           aria-live="polite"
           aria-label="Loading earlier messages"
+          aria-hidden={!scrollbackLoading}
+          data-transcript-history-loading={scrollbackLoading ? "visible" : "hidden"}
           sx={{
             position: "absolute",
             top: desktopNavigation ? 12 : "max(env(safe-area-inset-top), 12px)",
             left: "50%",
-            transform: "translateX(-50%)",
+            transform: scrollbackLoading
+              ? "translate(-50%, 0)"
+              : "translate(-50%, -8px)",
             zIndex: 5,
             display: "flex",
             alignItems: "center",
@@ -4318,6 +4307,13 @@ export function Transcript({
             backdropFilter: "blur(16px) saturate(1.25)",
             WebkitBackdropFilter: "blur(16px) saturate(1.25)",
             pointerEvents: "none",
+            opacity: scrollbackLoading ? 1 : 0,
+            visibility: scrollbackLoading ? "visible" : "hidden",
+            transition:
+              "opacity 140ms ease, transform 160ms ease, visibility 0s linear 160ms",
+            ...(scrollbackLoading && {
+              transition: "opacity 140ms ease, transform 160ms ease",
+            }),
           }}
         >
           <CircularProgress
