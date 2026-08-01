@@ -51,7 +51,9 @@ export function DesktopProjectionToggle({
       sx={{
         ...desktopEmbeddedControlSx({ active: shortcutActive }),
         mr: 0.75,
-        height: 30,
+        height: 34,
+        p: "3px",
+        gap: 0.25,
         display: "inline-flex",
         alignItems: "center",
         overflow: "hidden",
@@ -66,9 +68,9 @@ export function DesktopProjectionToggle({
         }}
         aria-label="Transcript view"
         sx={{
-          height: "100%",
+          height: 28,
           "& .MuiToggleButtonGroup-grouped": {
-            minWidth: 58,
+            minWidth: 62,
             px: 1.1,
             py: 0,
             border: 0,
@@ -91,7 +93,7 @@ export function DesktopProjectionToggle({
         keyLabel="V"
         variant="global"
         accent={shortcutActive}
-        sx={{ mx: 0.65, flexShrink: 0 }}
+        sx={{ mx: 0.4, flexShrink: 0 }}
       />
     </Box>
   );

@@ -51,3 +51,38 @@ export function desktopSurfaceSx({
 export function desktopEmbeddedControlSx(options: Parameters<typeof desktopSurfaceSx>[0] = {}) {
   return desktopSurfaceSx(options);
 }
+
+/** Repeated Desktop rows are intentionally quieter than standalone controls.
+ * Keep 1px geometry stable, but reveal the boundary only for selection,
+ * keyboard focus, and hover so long lists do not become a wall of capsules. */
+export function desktopListItemSx() {
+  return {
+    border: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
+    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
+    bgcolor: "transparent",
+    boxShadow: "none",
+    transition:
+      "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
+    "&:hover": {
+      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.18),
+      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.045),
+    },
+    "&.Mui-selected": {
+      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.42),
+      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.09),
+      boxShadow: (theme: Theme) =>
+        `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.72)}`,
+    },
+    "&.Mui-selected:hover": {
+      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.52),
+      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.115),
+    },
+    "&.Mui-focusVisible": {
+      borderColor: "primary.main",
+      boxShadow: (theme: Theme) =>
+        `0 0 0 2px ${alpha(theme.palette.primary.main, 0.16)}`,
+    },
+  };
+}

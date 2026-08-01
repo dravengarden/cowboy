@@ -154,7 +154,7 @@ import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
     DESKTOP_INSET_RADIUS,
     desktopEmbeddedControlSx,
-    desktopSurfaceSx,
+    desktopListItemSx,
 } from "./desktop/DesktopEmbeddedControl";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
@@ -755,10 +755,11 @@ function SessionList({
                         // (floored at 12px, but yielding to a larger safe-area
                         // inset on the notch side in landscape — ui.md §7).
                         sx={{
-                            ...(desktop && desktopSurfaceSx()),
+                            ...(desktop && desktopListItemSx()),
                             pl: "max(env(safe-area-inset-left), 12px)",
                             pr: "max(env(safe-area-inset-right), 12px)",
-                            mx: 0.5,
+                            mx: 0.75,
+                            my: 0.25,
                             "@media (pointer: fine) and (hover: hover)": {
                                 pl: 0.75,
                                 pr: 0.5,

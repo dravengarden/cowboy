@@ -40,9 +40,9 @@ export function DesktopConversationControls(
         onClick={toggle}
         sx={{
           ...desktopEmbeddedControlSx({ active: shortcutActive }),
-          height: 30,
+          height: 34,
           minWidth: 0,
-          px: 0.75,
+          px: 0.9,
           mr: 0.75,
           gap: 0.65,
           textTransform: "none",
