@@ -1757,6 +1757,12 @@ export function ReviewApp({
     const rightSameProject = sessionProject(right) === currentProject;
     return Number(rightSameProject) - Number(leftSameProject);
   });
+  const projectSessions = orderedSessions.filter((session) =>
+    sessionProject(session) === currentProject
+  );
+  const otherSessions = orderedSessions.filter((session) =>
+    sessionProject(session) !== currentProject
+  );
   const switchSession = (session: SessionMeta): void => {
     navigationHaptic();
     setActiveSessionId(session.id);
@@ -2345,10 +2351,11 @@ export function ReviewApp({
             setSessionSwitcherOpen(false);
             setSessionQuery("");
           }}
-          title="Switch Code session"
+          title="Sessions"
           forceSheet
+          cover
         >
-          <Stack spacing={1.25} sx={{ pb: 1 }}>
+          <Stack spacing={1.5} sx={{ minHeight: "100%", pb: 1 }}>
             <TextField
               fullWidth
               size="small"
@@ -2366,8 +2373,20 @@ export function ReviewApp({
                 },
               }}
             />
-            <Stack divider={<Divider flexItem />}>
-              {orderedSessions.map((session) => {
+            {[
+              { label: "Current project", sessions: projectSessions },
+              { label: "Other sessions", sessions: otherSessions },
+            ].map((section) => section.sessions.length > 0 && (
+              <Stack key={section.label} spacing={0.5}>
+                <Typography
+                  variant="overline"
+                  color="text.secondary"
+                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
+                >
+                  {section.label}
+                </Typography>
+                <Stack divider={<Divider flexItem />}>
+                  {section.sessions.map((session) => {
                 const selected = session.id === workspace?.sessionId;
                 const project = sessionProject(session);
                 return (
@@ -2376,9 +2395,9 @@ export function ReviewApp({
                     selected={selected}
                     onClick={() => switchSession(session)}
                     sx={{
-                      minHeight: 58,
+                      minHeight: 56,
                       px: 1.25,
-                      py: 1,
+                      py: 0.75,
                       borderRadius: 1.5,
                       gap: 1.25,
                     }}
@@ -2411,13 +2430,15 @@ export function ReviewApp({
                     <ChevronRight color="disabled" fontSize="small" />
                   </ListItemButton>
                 );
-              })}
-              {orderedSessions.length === 0 && (
-                <Typography color="text.secondary" variant="body2" sx={{ py: 3, textAlign: "center" }}>
-                  No matching sessions
-                </Typography>
-              )}
-            </Stack>
+                  })}
+                </Stack>
+              </Stack>
+            ))}
+            {orderedSessions.length === 0 && (
+              <Typography color="text.secondary" variant="body2" sx={{ py: 3, textAlign: "center" }}>
+                No matching sessions
+              </Typography>
+            )}
           </Stack>
         </Sheet>
       </Stack>
