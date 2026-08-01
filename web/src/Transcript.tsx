@@ -2858,6 +2858,7 @@ export function Transcript({
   visibleItemKeys,
   liveTail = true,
   shortContentAtTop = false,
+  pageFooter,
   pageId,
   restoreAnchorKey,
   onAnchorRestored,
@@ -2910,6 +2911,10 @@ export function Transcript({
    * beside the composer. In the column-reverse scroller a DOM-first flexible
    * spacer occupies the visual bottom without changing overflow behaviour. */
   shortContentAtTop?: boolean | undefined;
+  /** Page View-only navigation rendered after the page document. Because the
+   * transcript is column-reverse, this slot is DOM-first, before the flexible
+   * short-page spacer, so its visual position remains below the final row. */
+  pageFooter?: React.ReactNode;
   /** Explore's current question page. A page viewport is restored only when
    * returning to the same session and page; page navigation clears its cache. */
   pageId?: string | undefined;
@@ -4128,6 +4133,7 @@ export function Transcript({
             // item's STABLE key (first envelope seq) so prepending older history
             // doesn't re-mount/jump rows.
             <>
+              {pageFooter}
               {shortContentAtTop && (
                 <Box
                   aria-hidden

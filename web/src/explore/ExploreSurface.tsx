@@ -42,7 +42,9 @@ import {
   useDesktopCommand,
 } from "../desktop/commands/DesktopCommandProvider";
 import { DesktopModal } from "../desktop/DesktopModal";
+import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
 import { derive } from "../derive";
+import { Kbd } from "../Kbd";
 import type { Envelope, Status } from "../protocol";
 import {
   isQuestionPageLoaded,
@@ -82,6 +84,89 @@ import {
 } from "./retainedPage";
 
 const EMPTY_TIMELINE: Envelope[] = [];
+
+function PageTurnFooter({
+  currentOrdinal,
+  total,
+  previousDisabled,
+  nextDisabled,
+  loadingPrevious,
+  loadingNext,
+  onPrevious,
+  onNext,
+  desktop,
+}: {
+  currentOrdinal: number;
+  total: number;
+  previousDisabled: boolean;
+  nextDisabled: boolean;
+  loadingPrevious: boolean;
+  loadingNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  desktop: boolean;
+}): React.JSX.Element {
+  const actionSx = desktop
+    ? {
+      ...desktopEmbeddedControlSx(),
+      minHeight: 38,
+      px: 1.25,
+      textTransform: "none",
+    }
+    : {
+      minHeight: 48,
+      px: 1.5,
+      border: 1,
+      borderColor: "divider",
+      borderRadius: 1,
+      bgcolor: "action.hover",
+      textTransform: "none",
+    };
+  return (
+    <Box
+      component="nav"
+      aria-label="Page footer navigation"
+      data-page-turn-footer
+      sx={{
+        mt: 2.5,
+        mb: 0.5,
+        pt: 1.5,
+        borderTop: 1,
+        borderColor: "divider",
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+        alignItems: "center",
+        gap: 1,
+      }}
+    >
+      <Button
+        startIcon={loadingPrevious ? <CircularProgress size={16} /> : <ChevronLeft />}
+        disabled={previousDisabled || loadingPrevious || loadingNext}
+        onClick={onPrevious}
+        sx={{ ...actionSx, justifySelf: "start" }}
+      >
+        Previous
+        {desktop && <Kbd keys="[" />}
+      </Button>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}
+      >
+        {currentOrdinal} / {total}
+      </Typography>
+      <Button
+        endIcon={loadingNext ? <CircularProgress size={16} /> : <ChevronRight />}
+        disabled={nextDisabled || loadingPrevious || loadingNext}
+        onClick={onNext}
+        sx={{ ...actionSx, justifySelf: "end" }}
+      >
+        Next
+        {desktop && <Kbd keys="]" />}
+      </Button>
+    </Box>
+  );
+}
 
 interface QuestionPageSummary {
   id: string;
@@ -920,6 +1005,10 @@ export function ExploreTranscript(
     current?.id,
   );
   const indexedCurrentOrdinal = indexedPosition.ordinal;
+  const currentOrdinal = indexedCurrentOrdinal ?? Math.max(
+    1,
+    total - Math.max(0, pages.length - 1 - currentIndex),
+  );
   const atTail = indexedCurrentOrdinal === undefined
     ? currentIndex === pages.length - 1
     : indexedCurrentOrdinal === total;
@@ -932,6 +1021,33 @@ export function ExploreTranscript(
   const [desktopDirectoryLoadingPageId, setDesktopDirectoryLoadingPageId] = useState<
     string | null
   >(null);
+  const [footerLoadingPageId, setFooterLoadingPageId] = useState<string | null>(null);
+  const loadedPrevious = currentIndex > 0 ? pages[currentIndex - 1] : undefined;
+  const loadedNext = pages[currentIndex + 1];
+  const footerPreviousId = indexedPosition.previousId ?? loadedPrevious?.id ?? null;
+  const footerNextId = indexedPosition.nextId ?? loadedNext?.id ?? null;
+  const navigateFooterPage = useCallback((id: string | null): void => {
+    if (!id || footerLoadingPageId !== null) return;
+    if (isQuestionPageLoaded(props.sessionId, id)) {
+      select(id);
+      return;
+    }
+    setFooterLoadingPageId(id);
+    beginExplorePageLoading(props.sessionId);
+    void loadQuestionPage(props.sessionId, id).then((loaded) => {
+      setFooterLoadingPageId(null);
+      if (loaded) select(id);
+      else resolveExplorePageStart(props.sessionId);
+    });
+  }, [footerLoadingPageId, props.sessionId, select]);
+  const goFooterPrevious = useCallback(
+    (): void => navigateFooterPage(footerPreviousId),
+    [footerPreviousId, navigateFooterPage],
+  );
+  const goFooterNext = useCallback(
+    (): void => navigateFooterPage(footerNextId),
+    [footerNextId, navigateFooterPage],
+  );
   const desktopDirectoryReturnFocusRef = useRef<HTMLElement | null>(null);
   const closeDesktopDirectory = useCallback((restoreFocus = true): void => {
     setDesktopDirectoryOpen(false);
@@ -1177,6 +1293,10 @@ export function ExploreTranscript(
         ? "k"
         : event.code === "KeyN"
         ? "n"
+        : event.code === "BracketLeft"
+        ? "["
+        : event.code === "BracketRight"
+        ? "]"
         : event.code === "Slash"
         ? "/"
         : event.key;
@@ -1199,6 +1319,13 @@ export function ExploreTranscript(
         root.querySelector<HTMLInputElement>("[data-explore-page-search]")?.focus();
         return;
       }
+      if (key === "[" || key === "]") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (key === "[") goFooterPrevious();
+        else goFooterNext();
+        return;
+      }
       if (key === "n") {
         event.preventDefault();
         const prompt = document.querySelector<HTMLElement>(
@@ -1211,7 +1338,7 @@ export function ExploreTranscript(
     };
     root.addEventListener("keydown", onKeyDown);
     return () => root.removeEventListener("keydown", onKeyDown);
-  }, [props.desktop]);
+  }, [goFooterNext, goFooterPrevious, props.desktop]);
 
   if (!current && !props.loading) {
     return (
@@ -1338,6 +1465,21 @@ export function ExploreTranscript(
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}
               visibleItemKeys={visibleItemKeys}
+              pageFooter={current
+                ? (
+                  <PageTurnFooter
+                    currentOrdinal={currentOrdinal}
+                    total={total}
+                    previousDisabled={footerPreviousId === null}
+                    nextDisabled={footerNextId === null}
+                    loadingPrevious={footerLoadingPageId === footerPreviousId}
+                    loadingNext={footerLoadingPageId === footerNextId}
+                    onPrevious={goFooterPrevious}
+                    onNext={goFooterNext}
+                    desktop={props.desktop}
+                  />
+                )
+                : undefined}
               pageId={current?.id}
               liveTail={atTail}
               shortContentAtTop
