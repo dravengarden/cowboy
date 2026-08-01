@@ -567,6 +567,12 @@ function PageList({
       ),
     [firstOrdinal, pages],
   );
+  useEffect(() => {
+    if (!active || !vimNavigation || searchable) return undefined;
+    const frame = requestAnimationFrame(() =>
+      listRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [active, searchable, vimNavigation]);
   const ordered = useMemo(
     () => presentQuestionPageDirectory(pages, descending),
     [descending, pages],
@@ -1539,6 +1545,7 @@ export function ExploreTranscript(
             dense
             descending
             vimNavigation
+            searchable={false}
             pages={directoryPages}
             currentId={current?.id ?? null}
             firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
