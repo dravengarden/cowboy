@@ -43,6 +43,7 @@ import {
 } from "../desktop/commands/DesktopCommandProvider";
 import { DesktopModal } from "../desktop/DesktopModal";
 import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
+import { useOptionalDesktopWorkspace } from "../desktop/DesktopWorkspaceController";
 import { derive } from "../derive";
 import { Kbd } from "../Kbd";
 import type { Envelope, Status } from "../protocol";
@@ -1064,6 +1065,7 @@ function PageList({
 export function ExploreTranscript(
   props: ExploreTranscriptProps,
 ): React.JSX.Element {
+  const desktopWorkspace = useOptionalDesktopWorkspace();
   const pagination = useStoreSelector((snapshot) =>
     snapshot.pagination.get(props.sessionId)
   );
@@ -1158,6 +1160,26 @@ export function ExploreTranscript(
       : null;
     setDesktopDirectoryOpen(true);
   }, [closeDesktopDirectory, desktopDirectoryOpen]);
+  const selectDirectoryPage = useCallback((id: string, close: boolean): void => {
+    if (desktopDirectoryLoadingPageId) return;
+    if (isQuestionPageLoaded(props.sessionId, id)) {
+      select(id);
+      if (close) closeDesktopDirectory();
+      return;
+    }
+    setDesktopDirectoryLoadingPageId(id);
+    void loadQuestionPage(props.sessionId, id).then((loaded) => {
+      setDesktopDirectoryLoadingPageId(null);
+      if (!loaded) return;
+      select(id);
+      if (close) closeDesktopDirectory();
+    });
+  }, [
+    closeDesktopDirectory,
+    desktopDirectoryLoadingPageId,
+    props.sessionId,
+    select,
+  ]);
   const {
     pageId: retainedPageId,
     pageStartId,
@@ -1491,24 +1513,42 @@ export function ExploreTranscript(
               loadingPageId={desktopDirectoryLoadingPageId}
               onReachStart={(): void => void pageIndex.loadEarlier()}
               onVimDismiss={closeDesktopDirectory}
-              onSelect={(id): void => {
-                if (desktopDirectoryLoadingPageId) return;
-                if (isQuestionPageLoaded(props.sessionId, id)) {
-                  select(id);
-                  closeDesktopDirectory();
-                  return;
-                }
-                setDesktopDirectoryLoadingPageId(id);
-                void loadQuestionPage(props.sessionId, id).then((loaded) => {
-                  setDesktopDirectoryLoadingPageId(null);
-                  if (!loaded) return;
-                  select(id);
-                  closeDesktopDirectory();
-                });
-              }}
+              onSelect={(id): void => selectDirectoryPage(id, true)}
             />
           </Box>
         </DesktopModal>
+      )}
+      {props.desktop && desktopWorkspace?.productMode === "reading" &&
+        desktopWorkspace.readingSidebarOpen && pages.length > 0 && (
+        <Box
+          component="nav"
+          aria-label="Question pages"
+          data-reading-page-list
+          sx={{
+            position: "relative",
+            width: "clamp(240px, 20vw, 320px)",
+            flexShrink: 0,
+            minHeight: 0,
+            borderRight: 1,
+            borderColor: "divider",
+            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.42),
+          }}
+        >
+          <PageList
+            active
+            dense
+            descending
+            vimNavigation
+            pages={directoryPages}
+            currentId={current?.id ?? null}
+            firstOrdinal={Math.max(1, total - directoryPages.length + 1)}
+            hasEarlier={pageIndex.data?.nextBeforeSeq !== null}
+            loadingEarlier={pageIndex.loadingEarlier}
+            loadingPageId={desktopDirectoryLoadingPageId}
+            onReachStart={(): void => void pageIndex.loadEarlier()}
+            onSelect={(id): void => selectDirectoryPage(id, false)}
+          />
+        </Box>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
         {unresolvedQuestionRoot || restorePagePending

@@ -10,6 +10,7 @@ import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
 export type WorkspaceMode = "normal" | "hint" | "search" | "command";
+export type DesktopProductMode = "agent" | "reading" | "code";
 
 interface DesktopWorkspaceContextValue {
   focusedPane: DesktopPane;
@@ -21,6 +22,10 @@ interface DesktopWorkspaceContextValue {
   cycleRegion: () => void;
   mode: WorkspaceMode;
   setMode: (mode: WorkspaceMode) => void;
+  productMode: DesktopProductMode;
+  setProductMode: (mode: DesktopProductMode) => void;
+  readingSidebarOpen: boolean;
+  setReadingSidebarOpen: (open: boolean) => void;
 }
 
 const DesktopWorkspaceContext = createContext<DesktopWorkspaceContextValue | null>(null);
@@ -85,6 +90,8 @@ export function DesktopWorkspaceProvider({
   const [focusedPane, setFocusedPane] = useState<DesktopPane>("prompt");
   const [focusedRegion, setFocusedRegion] = useState<string | null>("prompt.composer");
   const [mode, setMode] = useState<WorkspaceMode>("normal");
+  const [productMode, setProductMode] = useState<DesktopProductMode>("agent");
+  const [readingSidebarOpen, setReadingSidebarOpen] = useState(false);
   const focusRegion = useCallback((region: string): void => {
     const element = document.querySelector<HTMLElement>(
       `[data-desktop-region="${CSS.escape(region)}"]`,
@@ -225,6 +232,10 @@ export function DesktopWorkspaceProvider({
     cycleRegion,
     mode,
     setMode,
+    productMode,
+    setProductMode,
+    readingSidebarOpen,
+    setReadingSidebarOpen,
   }), [
     cycleRegion,
     focusAdjacentPane,
@@ -234,6 +245,8 @@ export function DesktopWorkspaceProvider({
     focusedPane,
     focusedRegion,
     mode,
+    productMode,
+    readingSidebarOpen,
   ]);
 
   return (
@@ -247,4 +260,8 @@ export function useDesktopWorkspace(): DesktopWorkspaceContextValue {
   const value = useContext(DesktopWorkspaceContext);
   if (!value) throw new Error("useDesktopWorkspace must be used inside DesktopWorkspaceProvider");
   return value;
+}
+
+export function useOptionalDesktopWorkspace(): DesktopWorkspaceContextValue | null {
+  return useContext(DesktopWorkspaceContext);
 }

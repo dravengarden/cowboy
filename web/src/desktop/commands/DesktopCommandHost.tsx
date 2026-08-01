@@ -223,6 +223,18 @@ export function DesktopCommandHost({
       run: () => workspace.focusRegion("conversation.transcript"),
     },
     {
+      id: "conversation.enterReadingMode",
+      title: "Enter Reading Mode",
+      description: "Open the conversation in a distraction-free reading workspace",
+      group: "Conversation",
+      shortcut: "Z",
+      regions: ["conversation.transcript"],
+      run: () => {
+        workspace.setProductMode("reading");
+        requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
+      },
+    },
+    {
       id: "conversation.permissionApprove",
       title: "Allow Pending Permission",
       description: "Choose the least persistent available allow option",

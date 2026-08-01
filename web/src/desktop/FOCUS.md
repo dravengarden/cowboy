@@ -206,9 +206,16 @@ radius to a whole selectable row; changing geometry must happen in the shared
 Desktop primitive rather than in a component-local override.
 
 Session rows deliberately separate two states: the currently open session uses
-a persistent tinted fill and leading accent rail, while the transient keyboard
-cursor uses a crisp outline. When both states coincide, both signals remain
-visible. Do not reuse the same fill treatment for current state and J/K focus.
+a persistent tinted fill, while the transient keyboard cursor uses a crisp
+outline. When both states coincide, both signals remain visible. Do not add a
+heavy leading rail or reuse the same fill treatment for current state and J/K
+focus.
+
+Desktop product modes are separate command domains. Agent is the default mode;
+`Z` enters Reading only while Conversation owns focus. Reading covers the Agent
+chrome, `Esc` returns to Agent, and `P` toggles its question-page sidebar. Agent
+pane/session/queue commands must not leak into Reading. Future Code mode uses
+the same product-mode boundary rather than adding another Agent overlay.
 
 `Mod+P` enters the Prompt pane. Once Prompt owns focus, `Mod+I` always returns
 to `prompt.composer` and its Vim Normal-mode command sink, even when Plan,

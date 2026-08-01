@@ -2192,20 +2192,19 @@ export function App({
                         },
                     },
                     // The open session is persistent state; the crisp outline is
-                    // only the keyboard cursor. A filled tint + leading rail keeps
-                    // the current session identifiable even while J/K is parked
-                    // on another row.
+                    // only the keyboard cursor. A quiet persistent tint keeps the
+                    // current session identifiable without the heavy selection
+                    // rail that competed with the row border and status icon.
                     "& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']": {
                         borderColor: (t) => alpha(t.palette.primary.main, 0.28),
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.09),
-                        boxShadow: (t) =>
-                            `inset 3px 0 0 ${t.palette.primary.main}`,
+                        boxShadow: "none",
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
                         borderColor: (t) => alpha(t.palette.primary.main, 0.68),
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
                         boxShadow: (t) =>
-                            `inset 3px 0 0 ${t.palette.primary.main}, 0 0 0 2px ${alpha(t.palette.primary.main, 0.15)}`,
+                            `0 0 0 2px ${alpha(t.palette.primary.main, 0.15)}`,
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),

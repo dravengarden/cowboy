@@ -160,6 +160,69 @@ export function DesktopCommandProvider(
       // A visible configuration popover advertises and owns its own J/K/H/L
       // map. Relinquish the workspace map before it consumes those keys.
       if (desktopOverlayOwnsShortcuts(document)) return;
+      if (workspace.productMode === "reading") {
+        const key = workspaceCommandKey(event);
+        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+          if (key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            workspace.setProductMode("agent");
+            requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
+          } else if (key.toLowerCase() === "p") {
+            event.preventDefault();
+            event.stopPropagation();
+            const closing = workspace.readingSidebarOpen;
+            workspace.setReadingSidebarOpen(!closing);
+            if (closing) {
+              requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
+            }
+          }
+        }
+        const scroller = document.querySelector<HTMLElement>(
+          "[data-desktop-product-mode='reading'] [data-desktop-transcript-scroller]",
+        );
+        let readingAction: string | null = null;
+        if (!event.metaKey && !event.altKey && !isTextEditingTarget(event.target)) {
+          if (event.ctrlKey) {
+            readingAction = ({
+              d: "half-page-down",
+              u: "half-page-up",
+              f: "page-down",
+              b: "page-up",
+            } as Record<string, string>)[key.toLowerCase()] ?? null;
+          } else if (!event.shiftKey || key === "G") {
+            if (itemChord.current !== null) {
+              globalThis.clearTimeout(itemChord.current);
+              itemChord.current = null;
+              if (key === "g") readingAction = "oldest";
+            } else if (key === "g") {
+              event.preventDefault();
+              itemChord.current = globalThis.setTimeout(() => {
+                itemChord.current = null;
+              }, 900);
+              return;
+            } else {
+              readingAction = ({
+                j: "line-down",
+                k: "line-up",
+                G: "latest",
+                F: "toggle-following",
+              } as Record<string, string>)[key] ?? null;
+            }
+          }
+        }
+        if (readingAction && scroller) {
+          event.preventDefault();
+          event.stopPropagation();
+          scroller.dispatchEvent(new CustomEvent("cowboy:desktop-transcript-nav", {
+            detail: { action: readingAction },
+          }));
+        }
+        // Reading owns an isolated command domain. Unhandled keys continue to
+        // the reading surface (native selection/find/copy and Explore's [ ]
+        // paging), but never enter Agent's pane, queue, draft, or session map.
+        return;
+      }
       // Direct Vim window movement. Keep Ctrl-W + motion below for users who
       // prefer the canonical two-stroke form, while Ctrl-H/J/K/L provides the
       // fast one-stroke path between Desktop regions. Resolve through

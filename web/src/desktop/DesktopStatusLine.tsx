@@ -182,6 +182,10 @@ export function DesktopStatusLine({
       ? [{ keys: "Mod+J/K", label: "Reorder" }]
       : []),
     ...(focusedRegion === "conversation.transcript" &&
+      workspace.productMode === "agent"
+      ? [{ keys: "Z", label: "Reading" }]
+      : []),
+    ...(focusedRegion === "conversation.transcript" &&
         document.querySelector("[data-desktop-permission-action='approve']")
       ? [{ keys: "A", label: "Allow" }]
       : []),

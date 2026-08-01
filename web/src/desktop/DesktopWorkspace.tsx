@@ -1,4 +1,5 @@
-import { alpha, Box, Typography } from "@mui/material";
+import { alpha, Box, Button, Stack, Typography } from "@mui/material";
+import { ArrowBack, MenuOpen } from "@mui/icons-material";
 import { useMemo } from "react";
 import {
   type DesktopPane,
@@ -94,6 +95,90 @@ export function DesktopWorkspace({
     ),
   }), [onProjectionChange, projection]);
   useDesktopCommand(toggleProjectionCommand);
+
+  if (workspace.productMode === "reading") {
+    return (
+      <Box
+        data-desktop-product-mode="reading"
+        sx={{
+          position: "fixed",
+          inset: 0,
+          zIndex: (theme) => theme.zIndex.modal - 1,
+          display: "flex",
+          flexDirection: "column",
+          bgcolor: "background.default",
+        }}
+      >
+        <Stack
+          component="header"
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{
+            minHeight: 48,
+            px: 2,
+            borderBottom: 1,
+            borderColor: "divider",
+            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.72),
+          }}
+        >
+          <Typography variant="overline" sx={{ fontWeight: 750, letterSpacing: "0.1em" }}>
+            Reading
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {projection === "explore" ? "Question pages" : "Conversation"}
+          </Typography>
+          <Box sx={{ flex: 1 }} />
+          {projection === "explore" && (
+            <Button
+              size="small"
+              color="inherit"
+              startIcon={<MenuOpen fontSize="small" />}
+              onClick={(): void => {
+                const closing = workspace.readingSidebarOpen;
+                workspace.setReadingSidebarOpen(!closing);
+                if (closing) {
+                  requestAnimationFrame(() =>
+                    workspace.focusRegion("conversation.transcript"));
+                }
+              }}
+            >
+              {workspace.readingSidebarOpen ? "Hide pages" : "Show pages"}
+              <Typography component="span" variant="caption" sx={{ ml: 1, opacity: 0.55 }}>
+                P
+              </Typography>
+            </Button>
+          )}
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<ArrowBack fontSize="small" />}
+            onClick={(): void => workspace.setProductMode("agent")}
+          >
+            Agent
+            <Typography component="span" variant="caption" sx={{ ml: 1, opacity: 0.55 }}>
+              Esc
+            </Typography>
+          </Button>
+        </Stack>
+        <Box
+          data-desktop-pane="conversation"
+          data-desktop-pane-focused="true"
+          sx={{ flex: 1, minHeight: 0, display: "flex" }}
+        >
+          <Box
+            data-desktop-region="conversation.transcript"
+            data-desktop-navigation="scroll"
+            data-desktop-focused="true"
+            tabIndex={-1}
+            sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}
+          >
+            {conversation}
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box
