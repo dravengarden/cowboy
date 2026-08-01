@@ -14,7 +14,6 @@ import {
   KeyboardArrowDown,
   KeyboardArrowUp,
   Refresh,
-  Search,
   VisibilityOutlined,
   WrapText,
 } from "@mui/icons-material";
@@ -29,7 +28,6 @@ import {
   ListItemButton,
   Popover,
   Stack,
-  TextField,
   Toolbar,
   Typography,
 } from "@mui/material";
@@ -1170,7 +1168,7 @@ export function ReviewApp({
   const [toggleDrawerRequest, setToggleDrawerRequest] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
-  const [sessionQuery, setSessionQuery] = useState("");
+  const sessionListRef = useRef<HTMLDivElement>(null);
   const [reviewProgress, setReviewProgress] = useState<ReviewProgress>({});
   const [currentRevision, setCurrentRevision] = useState<string>();
   const [dataRevision, setDataRevision] = useState(0);
@@ -1742,33 +1740,31 @@ export function ReviewApp({
   );
   const currentProject = repositoryContext?.project ??
     (currentSession ? sessionProject(currentSession) : undefined);
-  const normalizedSessionQuery = sessionQuery.trim().toLocaleLowerCase();
-  const matchingSessions = sessions.filter((session) => {
-    if (!normalizedSessionQuery) return true;
-    return [session.title, sessionProject(session), session.cwd, session.provider]
-      .some((value) =>
-        value.toLocaleLowerCase().includes(normalizedSessionQuery)
-      );
-  });
-  const orderedSessions = [...matchingSessions].sort((left, right) => {
-    if (left.id === workspace?.sessionId) return -1;
-    if (right.id === workspace?.sessionId) return 1;
-    const leftSameProject = sessionProject(left) === currentProject;
-    const rightSameProject = sessionProject(right) === currentProject;
-    return Number(rightSameProject) - Number(leftSameProject);
-  });
-  const projectSessions = orderedSessions.filter((session) =>
+  // Match the primary mobile Sessions rail: server order is newest-first, while
+  // the physical list reads oldest-to-newest from top to bottom and opens at
+  // its live edge. Users move upward to older sessions.
+  const displayedSessions = [...sessions].reverse();
+  const projectSessions = displayedSessions.filter((session) =>
     sessionProject(session) === currentProject
   );
-  const otherSessions = orderedSessions.filter((session) =>
+  const otherSessions = displayedSessions.filter((session) =>
     sessionProject(session) !== currentProject
   );
+  useEffect(() => {
+    if (!sessionSwitcherOpen) return undefined;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const list = sessionListRef.current;
+        if (list) list.scrollTop = list.scrollHeight - list.clientHeight;
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sessionSwitcherOpen]);
   const switchSession = (session: SessionMeta): void => {
     navigationHaptic();
     setActiveSessionId(session.id);
     openSession(session.id);
     setSessionSwitcherOpen(false);
-    setSessionQuery("");
   };
 
   return (
@@ -2349,33 +2345,25 @@ export function ReviewApp({
           open={sessionSwitcherOpen}
           onClose={() => {
             setSessionSwitcherOpen(false);
-            setSessionQuery("");
           }}
           title="Sessions"
           forceSheet
           cover
         >
-          <Stack spacing={1.5} sx={{ minHeight: "100%", pb: 1 }}>
-            <TextField
-              fullWidth
-              size="small"
-              value={sessionQuery}
-              onChange={(event) => setSessionQuery(event.target.value)}
-              placeholder="Search sessions or projects"
-              slotProps={{
-                input: {
-                  startAdornment: (
-                    <Search
-                      aria-hidden
-                      sx={{ mr: 1, color: "text.secondary", fontSize: 20 }}
-                    />
-                  ),
-                },
-              }}
-            />
+          <Stack
+            ref={sessionListRef}
+            spacing={1.5}
+            sx={{
+              height: "calc(100dvh - 148px)",
+              minHeight: 0,
+              overflowY: "auto",
+              overscrollBehavior: "contain",
+              pb: "calc(88px + env(safe-area-inset-bottom, 0px))",
+            }}
+          >
             {[
-              { label: "Current project", sessions: projectSessions },
               { label: "Other sessions", sessions: otherSessions },
+              { label: "Current project", sessions: projectSessions },
             ].map((section) => section.sessions.length > 0 && (
               <Stack key={section.label} spacing={0.5}>
                 <Typography
@@ -2395,7 +2383,7 @@ export function ReviewApp({
                     selected={selected}
                     onClick={() => switchSession(session)}
                     sx={{
-                      minHeight: 56,
+                      minHeight: 68,
                       px: 1.25,
                       py: 0.75,
                       borderRadius: 1.5,
@@ -2423,9 +2411,14 @@ export function ReviewApp({
                           </Typography>
                         )}
                       </Stack>
-                      <Typography variant="caption" color="text.secondary" noWrap>
-                        {project} · {session.provider}
-                      </Typography>
+                      <Stack spacing={0.125} sx={{ mt: 0.125 }}>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {session.machine_id ?? "local"} · {session.provider} · {project}
+                        </Typography>
+                        <Typography variant="caption" color="text.disabled" noWrap>
+                          {session.cwd}
+                        </Typography>
+                      </Stack>
                     </Box>
                     <ChevronRight color="disabled" fontSize="small" />
                   </ListItemButton>
@@ -2434,7 +2427,7 @@ export function ReviewApp({
                 </Stack>
               </Stack>
             ))}
-            {orderedSessions.length === 0 && (
+            {displayedSessions.length === 0 && (
               <Typography color="text.secondary" variant="body2" sx={{ py: 3, textAlign: "center" }}>
                 No matching sessions
               </Typography>
