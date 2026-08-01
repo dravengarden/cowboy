@@ -43,7 +43,7 @@ Deno.test("common Command shortcuts require matching native semantics", () => {
 Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   for (const [commandId, shortcut] of [
     ["workspace.focusSessions", "Mod+E"],
-    ["workspace.focusPrompt", "Mod+I"],
+    ["workspace.focusPrompt", "Mod+Shift+P"],
     ["workspace.focusConversation", "Mod+L"],
     ["workspace.focusTopbar", "Mod+T"],
     ["commandPalette.open", "Mod+K"],
