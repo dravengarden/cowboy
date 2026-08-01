@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  alpha,
+  Box,
   Dialog,
   DialogContent,
   DialogTitle,
-  InputAdornment,
+  InputBase,
   List,
   ListItemButton,
   ListItemText,
-  TextField,
 } from "@mui/material";
 import { Search } from "@mui/icons-material";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
@@ -19,6 +20,7 @@ import {
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./workspaceShortcuts";
+import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -294,37 +296,64 @@ export function DesktopCommandHost({
     >
       <DialogTitle sx={{ pb: 1 }}>Command Palette</DialogTitle>
       <DialogContent sx={{ px: 1.5, pb: 1.5 }}>
-        <TextField
-          autoFocus
-          fullWidth
-          size="small"
-          value={query}
-          onChange={(event): void => setQuery(event.target.value)}
-          onKeyDown={(event): void => {
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              setSelected((value) =>
-                Math.min(value + 1, Math.max(0, available.length - 1))
-              );
-            } else if (event.key === "ArrowUp") {
-              event.preventDefault();
-              setSelected((value) => Math.max(0, value - 1));
-            } else if (event.key === "Enter") {
-              event.preventDefault();
-              runSelected();
-            }
-          }}
-          placeholder="Search commands…"
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search fontSize="small" />
-                </InputAdornment>
-              ),
+        <Box
+          sx={{
+            minHeight: 44,
+            px: 1.5,
+            display: "flex",
+            alignItems: "center",
+            gap: 1.25,
+            border: 1,
+            borderColor: (theme) => alpha(theme.palette.primary.main, 0.3),
+            borderRadius: `${DESKTOP_INSET_RADIUS}px`,
+            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.52),
+            transition: "border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease",
+            "&:focus-within": {
+              borderColor: "primary.main",
+              bgcolor: "background.paper",
+              boxShadow: (theme) =>
+                `0 0 0 2px ${alpha(theme.palette.primary.main, 0.16)}`,
             },
           }}
-        />
+        >
+          <Search
+            aria-hidden
+            sx={{ flexShrink: 0, color: "text.secondary", fontSize: "1.2rem" }}
+          />
+          <InputBase
+            autoFocus
+            fullWidth
+            value={query}
+            onChange={(event): void => setQuery(event.target.value)}
+            onKeyDown={(event): void => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setSelected((value) =>
+                  Math.min(value + 1, Math.max(0, available.length - 1))
+                );
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setSelected((value) => Math.max(0, value - 1));
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                runSelected();
+              }
+            }}
+            placeholder="Search commands…"
+            inputProps={{ "aria-label": "Search commands" }}
+            sx={{
+              minWidth: 0,
+              fontSize: "0.9rem",
+              "& .MuiInputBase-input": {
+                p: 0,
+                height: "1.5em",
+                lineHeight: 1.5,
+                caretColor: "primary.main",
+                "&::placeholder": { color: "text.secondary", opacity: 0.72 },
+              },
+            }}
+          />
+        </Box>
         <List
           dense
           sx={{ maxHeight: "min(52vh, 460px)", overflowY: "auto", pt: 1 }}

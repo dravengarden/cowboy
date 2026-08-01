@@ -1,6 +1,5 @@
 import {
     forwardRef,
-    Fragment,
     lazy,
     memo,
     startTransition,
@@ -156,7 +155,6 @@ import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "
 import { persisted } from "./_store/mod.ts";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
-    DESKTOP_INSET_RADIUS,
     desktopEmbeddedControlSx,
     desktopListItemSx,
 } from "./desktop/DesktopEmbeddedControl";
@@ -861,62 +859,6 @@ function SessionList({
                                 },
                             }}
                         />
-                        {desktop && (
-                            <Stack
-                                className="cowboy-session-context-shortcuts"
-                                direction="row"
-                                spacing={0}
-                                aria-hidden
-                                sx={{
-                                    position: "absolute",
-                                    zIndex: 2,
-                                    right: index < 10 ? 82 : 42,
-                                    top: "50%",
-                                    alignItems: "center",
-                                    border: 1,
-                                    borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
-                                    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-                                    background: (theme) =>
-                                        `linear-gradient(${alpha(theme.palette.primary.main, 0.075)}, ${alpha(theme.palette.primary.main, 0.075)}), ${theme.palette.background.paper}`,
-                                    pointerEvents: "none",
-                                    opacity: 0,
-                                    transform: "translateY(-50%) scale(.96)",
-                                    transformOrigin: "right center",
-                                    transition: "opacity 120ms ease, transform 140ms ease",
-                                }}
-                            >
-                                {(pinned ? ["J/K", "Esc"] : ["P", "H", "L"]).map((key, keyIndex) => (
-                                    <Fragment key={key}>
-                                        {keyIndex > 0 && (
-                                            <Typography
-                                                component="span"
-                                                sx={{ color: "text.disabled", fontSize: "0.58rem", lineHeight: 1 }}
-                                            >
-                                                ·
-                                            </Typography>
-                                        )}
-                                        <Typography
-                                            component="span"
-                                            sx={{
-                                                minWidth: key.length > 1 ? 25 : 14,
-                                                height: 20,
-                                                px: 0.35,
-                                                display: "grid",
-                                                placeItems: "center",
-                                                color: "primary.main",
-                                                fontFamily: "monospace",
-                                                fontSize: "0.64rem",
-                                                fontWeight: 750,
-                                                lineHeight: 1,
-                                                letterSpacing: key.length === 1 ? "0.035em" : 0,
-                                            }}
-                                        >
-                                            {key}
-                                        </Typography>
-                                    </Fragment>
-                                ))}
-                            </Stack>
-                        )}
                         {desktop && index < 10 && (
                             <Suspense fallback={null}>
                                 <DesktopSessionShortcut
@@ -2246,10 +2188,6 @@ export function App({
                         },
                         "& .cowboy-session-shortcut": {
                             opacity: "1 !important",
-                        },
-                        "& .cowboy-session-context-shortcuts": {
-                            opacity: 0.92,
-                            transform: "translateY(-50%) scale(1)",
                         },
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
