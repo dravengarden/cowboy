@@ -2,16 +2,30 @@ import { Button, Tooltip } from "@mui/material";
 import { South } from "@mui/icons-material";
 import { requestStickToBottom, setSticky, useSticky } from "../stickyStore";
 import { ShortcutKeycap } from "../ShortcutKeycap";
+import {
+  followExploreTail,
+  type TranscriptProjection,
+  useExploreAtTail,
+} from "../explore/exploreStore";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 
 export function DesktopConversationControls(
-  { sessionId, shortcutActive = false }: {
+  { sessionId, projection = "history", shortcutActive = false }: {
     sessionId: string;
+    projection?: TranscriptProjection;
     shortcutActive?: boolean;
   },
 ): React.JSX.Element {
   const following = useSticky(sessionId);
+  const exploreAtTail = useExploreAtTail(sessionId);
+  const followingCurrentView = following &&
+    (projection === "history" || exploreAtTail);
   const toggle = (): void => {
+    if (projection === "explore" && !followingCurrentView) {
+      followExploreTail(sessionId);
+      requestStickToBottom(sessionId);
+      return;
+    }
     const scroller = document.querySelector<HTMLElement>(
       "[data-desktop-transcript-scroller]",
     );
@@ -27,14 +41,14 @@ export function DesktopConversationControls(
 
   return (
     <Tooltip
-      title={following
+      title={followingCurrentView
         ? "Pause automatic transcript following (F)"
         : "Jump to the latest output and follow (F)"}
     >
       <Button
         data-desktop-conversation-follow
         size="small"
-        color={following ? "primary" : "inherit"}
+        color={followingCurrentView ? "primary" : "inherit"}
         variant="outlined"
         startIcon={<South fontSize="small" />}
         onClick={toggle}
@@ -48,14 +62,14 @@ export function DesktopConversationControls(
           textTransform: "none",
           whiteSpace: "nowrap",
           "& .MuiButton-startIcon": { mr: 0 },
-          ...(following && {
+          ...(followingCurrentView && {
             bgcolor: "action.selected",
             color: "primary.main",
             "&:hover": { bgcolor: "action.selected", boxShadow: "none" },
           }),
         }}
       >
-        {following ? "Following" : "Follow"}
+        {followingCurrentView ? "Following" : "Follow"}
         <ShortcutKeycap
           keyLabel="F"
           variant="global"

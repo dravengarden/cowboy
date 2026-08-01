@@ -212,9 +212,15 @@ focus.
 
 Desktop product modes are separate command domains. Agent is the default mode;
 `Z` enters Reading only while Conversation owns focus. Reading covers the Agent
-chrome, `Esc` returns to Agent, and `P` toggles its question-page sidebar. Agent
-pane/session/queue commands must not leak into Reading. Future Code mode uses
-the same product-mode boundary rather than adding another Agent overlay.
+chrome, `Esc` returns to Agent, `V` switches History/Page, `P` toggles one shared
+question directory, and `F` follows the live edge. The directory is available in
+both projections: History selection locates the question root in the continuous
+transcript, while Page selection opens that isolated question. Its focused Vim
+list owns `J/K`, `gg/G`, `Ctrl-D/U`, `Ctrl-F/B`, `L`/Enter and `H`; Reading-level
+`Esc/P/V/F` remain available. Following from an older Page returns to the latest
+question before resuming live output. Agent pane/session/queue commands must not
+leak into Reading. Future Code mode uses the same product-mode boundary rather
+than adding another Agent overlay.
 
 `Mod+I` always enters `prompt.composer` and its Vim Normal-mode command sink,
 even when Sessions, Conversation, Plan, Queue, or Draft currently owns focus.

@@ -9,6 +9,7 @@ interface ExploreSessionState {
   pageStartId: string | null;
   pageLoadingId: string | null;
   transitionAnchorKey: string | null;
+  followTailRequested: boolean;
   pageParents: Record<string, string>;
   pendingFollowUp: {
     targetPageId: string;
@@ -26,6 +27,7 @@ const DEFAULT_STATE: ExploreSessionState = {
   pageStartId: null,
   pageLoadingId: null,
   transitionAnchorKey: null,
+  followTailRequested: false,
   pageParents: {},
   pendingFollowUp: null,
 };
@@ -49,6 +51,7 @@ function restore(): void {
         pageStartId: null,
         pageLoadingId: null,
         transitionAnchorKey: null,
+        followTailRequested: false,
         pageParents: state.pageParents && typeof state.pageParents === "object"
           ? state.pageParents
           : {},
@@ -103,6 +106,7 @@ function update(
     current.pageStartId === next.pageStartId &&
     current.pageLoadingId === next.pageLoadingId &&
     current.transitionAnchorKey === next.transitionAnchorKey &&
+    current.followTailRequested === next.followTailRequested &&
     current.pageParents === next.pageParents &&
     current.pendingFollowUp === next.pendingFollowUp
   ) return;
@@ -119,11 +123,15 @@ export function setTranscriptProjection(
   if (projection === "explore" && get(sessionId).projection !== "explore") {
     clearTranscriptViewport(sessionId, "page");
   }
-  update(sessionId, { projection, transitionAnchorKey });
+  update(sessionId, {
+    projection,
+    transitionAnchorKey,
+    followTailRequested: false,
+  });
 }
 
 export function setExplorePage(sessionId: string, pageId: string | null): void {
-  update(sessionId, { pageId });
+  update(sessionId, { pageId, followTailRequested: false });
 }
 
 export function setExploreAtTail(sessionId: string, atTail: boolean): void {
@@ -139,6 +147,27 @@ export function navigateExplorePage(sessionId: string, pageId: string): void {
     pageId,
     pageStartId: pageId,
     pageLoadingId: pageId,
+    followTailRequested: false,
+  });
+}
+
+/** Leave an older retained page and let Page View resolve its live tail again. */
+export function followExploreTail(sessionId: string): void {
+  clearTranscriptViewport(sessionId, "page");
+  update(sessionId, {
+    pageId: null,
+    pageStartId: null,
+    pageLoadingId: null,
+    followTailRequested: true,
+  });
+}
+
+export function resolveExploreTail(sessionId: string, pageId: string): void {
+  update(sessionId, {
+    pageId,
+    pageStartId: null,
+    pageLoadingId: null,
+    followTailRequested: false,
   });
 }
 

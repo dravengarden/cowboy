@@ -40,10 +40,12 @@ export function DesktopProjectionToggle({
   projection,
   onChange,
   shortcutActive = false,
+  pageLabel = "Explore",
 }: {
   projection: TranscriptProjection;
   onChange: (projection: TranscriptProjection) => void;
   shortcutActive?: boolean;
+  pageLabel?: string;
 }): React.JSX.Element {
   return (
     <Box
@@ -87,7 +89,7 @@ export function DesktopProjectionToggle({
         }}
       >
         <ToggleButton value="history">History</ToggleButton>
-        <ToggleButton value="explore">Explore</ToggleButton>
+        <ToggleButton value="explore">{pageLabel}</ToggleButton>
       </ToggleButtonGroup>
       <ShortcutKeycap
         keyLabel="V"

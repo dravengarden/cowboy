@@ -1,5 +1,5 @@
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
-import { ArrowBack, MenuOpen } from "@mui/icons-material";
+import { ArrowBack, ListAltOutlined } from "@mui/icons-material";
 import { useMemo } from "react";
 import {
   type DesktopPane,
@@ -7,8 +7,11 @@ import {
 } from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
+import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 import { MOD_LABEL } from "../platform";
+import { ShortcutKeycap } from "../ShortcutKeycap";
 import type { TranscriptProjection } from "../explore/exploreStore";
+import { DesktopReadingQuestionDirectory } from "../explore/ExploreSurface";
 import { DesktopProjectionToggle } from "../explore/ProjectionToggle";
 import {
   type DesktopCommand,
@@ -83,17 +86,18 @@ export function DesktopWorkspace({
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const conversationShortcutsActive = workspace.focusedPane === "conversation";
+  const projectionPageName = workspace.productMode === "reading" ? "Page" : "Explore";
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleProjection",
-    title: `Switch to ${projection === "history" ? "Explore" : "History"}`,
-    description: "Toggle the Conversation between History and Explore",
+    title: `Switch to ${projection === "history" ? projectionPageName : "History"}`,
+    description: `Toggle the Conversation between History and ${projectionPageName}`,
     group: "Conversation",
     shortcut: "V",
     contexts: ["conversation"],
     run: () => onProjectionChange(
       projection === "history" ? "explore" : "history",
     ),
-  }), [onProjectionChange, projection]);
+  }), [onProjectionChange, projection, projectionPageName]);
   useDesktopCommand(toggleProjectionCommand);
 
   if (workspace.productMode === "reading") {
@@ -125,40 +129,61 @@ export function DesktopWorkspace({
           <Typography variant="overline" sx={{ fontWeight: 750, letterSpacing: "0.1em" }}>
             Reading
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {projection === "explore" ? "Question pages" : "Conversation"}
-          </Typography>
+          <DesktopProjectionToggle
+            projection={projection}
+            pageLabel="Page"
+            onChange={onProjectionChange}
+            shortcutActive
+          />
+          <Button
+            aria-pressed={workspace.readingSidebarOpen}
+            size="small"
+            color={workspace.readingSidebarOpen ? "primary" : "inherit"}
+            variant="outlined"
+            startIcon={<ListAltOutlined fontSize="small" />}
+            onClick={(): void => {
+              const closing = workspace.readingSidebarOpen;
+              workspace.setReadingSidebarOpen(!closing);
+              if (closing) {
+                requestAnimationFrame(() =>
+                  workspace.focusRegion("conversation.transcript"));
+              }
+            }}
+            sx={{
+              ...desktopEmbeddedControlSx({ active: true, open: workspace.readingSidebarOpen }),
+              height: 34,
+              px: 0.9,
+              gap: 0.65,
+              textTransform: "none",
+              "& .MuiButton-startIcon": { mr: 0 },
+            }}
+          >
+            Questions
+            <ShortcutKeycap keyLabel="P" variant="global" accent sx={{ ml: 0.15 }} />
+          </Button>
           <Box sx={{ flex: 1 }} />
-          {projection === "explore" && (
-            <Button
-              size="small"
-              color="inherit"
-              startIcon={<MenuOpen fontSize="small" />}
-              onClick={(): void => {
-                const closing = workspace.readingSidebarOpen;
-                workspace.setReadingSidebarOpen(!closing);
-                if (closing) {
-                  requestAnimationFrame(() =>
-                    workspace.focusRegion("conversation.transcript"));
-                }
-              }}
-            >
-              {workspace.readingSidebarOpen ? "Hide pages" : "Show pages"}
-              <Typography component="span" variant="caption" sx={{ ml: 1, opacity: 0.55 }}>
-                P
-              </Typography>
-            </Button>
-          )}
+          <DesktopConversationControls
+            sessionId={sessionId}
+            projection={projection}
+            shortcutActive
+          />
           <Button
             size="small"
             color="inherit"
+            variant="outlined"
             startIcon={<ArrowBack fontSize="small" />}
             onClick={(): void => workspace.setProductMode("agent")}
+            sx={{
+              ...desktopEmbeddedControlSx({ active: true }),
+              height: 34,
+              px: 0.9,
+              gap: 0.65,
+              textTransform: "none",
+              "& .MuiButton-startIcon": { mr: 0 },
+            }}
           >
             Agent
-            <Typography component="span" variant="caption" sx={{ ml: 1, opacity: 0.55 }}>
-              Esc
-            </Typography>
+            <ShortcutKeycap keyLabel="Esc" variant="global" accent sx={{ ml: 0.15 }} />
           </Button>
         </Stack>
         <Box
@@ -166,6 +191,17 @@ export function DesktopWorkspace({
           data-desktop-pane-focused="true"
           sx={{ flex: 1, minHeight: 0, display: "flex" }}
         >
+          {workspace.readingSidebarOpen && (
+            <DesktopReadingQuestionDirectory
+              sessionId={sessionId}
+              projection={projection}
+              onClose={(): void => {
+                workspace.setReadingSidebarOpen(false);
+                requestAnimationFrame(() =>
+                  workspace.focusRegion("conversation.transcript"));
+              }}
+            />
+          )}
           <Box
             data-desktop-region="conversation.transcript"
             data-desktop-navigation="scroll"
@@ -276,6 +312,7 @@ export function DesktopWorkspace({
               />
               <DesktopConversationControls
                 sessionId={sessionId}
+                projection={projection}
                 shortcutActive={conversationShortcutsActive}
               />
             </>

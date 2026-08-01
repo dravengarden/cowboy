@@ -164,6 +164,9 @@ export function DesktopCommandProvider(
       if (desktopOverlayOwnsShortcuts(document)) return;
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
+        const readingSidebarOwnsKey = Boolean(eventElement?.closest(
+          "[data-reading-question-sidebar]",
+        ));
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
           if (key === "Escape") {
             event.preventDefault();
@@ -178,8 +181,23 @@ export function DesktopCommandProvider(
             if (closing) {
               requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));
             }
+          } else if (key.toLowerCase() === "v") {
+            event.preventDefault();
+            event.stopPropagation();
+            commands.current.get("conversation.toggleProjection")?.run();
+          } else if (key.toLowerCase() === "f") {
+            event.preventDefault();
+            event.stopPropagation();
+            document.querySelector<HTMLButtonElement>(
+              "[data-desktop-product-mode='reading'] [data-desktop-conversation-follow]",
+            )?.click();
           }
         }
+        // The docked question directory is its own Vim list. Its J/K, gg/G,
+        // Ctrl-D/U, L/Enter and H bindings must reach PageList instead of
+        // scrolling the transcript behind it. Reading-level Esc/P/V/F above
+        // remain available from either side of the workspace.
+        if (readingSidebarOwnsKey) return;
         const scroller = document.querySelector<HTMLElement>(
           "[data-desktop-product-mode='reading'] [data-desktop-transcript-scroller]",
         );
@@ -208,7 +226,6 @@ export function DesktopCommandProvider(
                 j: "line-down",
                 k: "line-up",
                 G: "latest",
-                F: "toggle-following",
               } as Record<string, string>)[key] ?? null;
             }
           }
