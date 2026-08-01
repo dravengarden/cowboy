@@ -615,6 +615,7 @@ function DocumentView({
     ? (
       <Stack
         component="span"
+        data-symbol-candidate-switcher
         direction="row"
         useFlexGap
         gap={0.5}
@@ -624,8 +625,14 @@ function DocumentView({
           minWidth: 0,
           maxWidth: "100%",
           overflowX: "auto",
+          // An overflow-x scrollport clips exactly at its content box. Leave
+          // a small block-axis gutter so high-DPI WebKit does not shave the
+          // lower subpixel of outlined chip borders while horizontally
+          // scrolling long symbol names.
+          py: "2px",
           overscrollBehaviorX: "contain",
           touchAction: "pan-x",
+          WebkitOverflowScrolling: "touch",
           scrollbarWidth: "none",
           "&::-webkit-scrollbar": { display: "none" },
         }}
