@@ -909,7 +909,7 @@ export function DesktopTopBarControls({
                 <Typography variant="caption" fontWeight={650} noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                   {configSummary || "Run configuration"}
                 </Typography>
-                <ShortcutKeycap keyLabel="R" variant="global" accent={shortcutsActive} sx={{ flexShrink: 0, ml: 0.75 }} />
+                <ShortcutKeycap keyLabel="R" variant="global" accent={shortcutsActive} availability={shortcutsActive ? "available" : "inactive"} sx={{ flexShrink: 0, ml: 0.75 }} />
               </Button>
           </Tooltip>
         )}
@@ -1043,7 +1043,7 @@ export function DesktopTopBarControls({
                 {snapshot ? "Usage unavailable" : "Loading usage…"}
               </Typography>
             )}
-          <ShortcutKeycap keyLabel="U" variant="global" accent={shortcutsActive} sx={{ flexShrink: 0 }} />
+          <ShortcutKeycap keyLabel="U" variant="global" accent={shortcutsActive} availability={shortcutsActive ? "available" : "inactive"} sx={{ flexShrink: 0 }} />
         </ButtonBase>
 
       <DesktopModal
@@ -1207,7 +1207,7 @@ export function DesktopTopBarControls({
                         {contextPercent}%
                       </Typography>
                     )}
-                  <ShortcutKeycap keyLabel="C" variant="global" accent={shortcutsActive} sx={{ flexShrink: 0, ml: "auto !important" }} />
+                  <ShortcutKeycap keyLabel="C" variant="global" accent={shortcutsActive} availability={shortcutsActive ? "available" : "inactive"} sx={{ flexShrink: 0, ml: "auto !important" }} />
                 </Stack>
               </Button>
             </span>

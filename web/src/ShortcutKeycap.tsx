@@ -1,6 +1,7 @@
 import { alpha, Box, type SxProps, type Theme } from "@mui/material";
 
 export type ShortcutKeycapVariant = "default" | "global" | "context" | "modal";
+export type ShortcutKeycapAvailability = "available" | "inactive";
 
 export function displayShortcutKey(key: string): string {
   const normalized = key.trim().toLowerCase();
@@ -38,20 +39,24 @@ export function ShortcutKeycap({
   keyLabel,
   variant = "default",
   accent = false,
+  availability = "available",
   sx,
 }: {
   keyLabel: string;
   variant?: ShortcutKeycapVariant;
   accent?: boolean;
+  availability?: ShortcutKeycapAvailability;
   sx?: SxProps<Theme>;
 }): React.JSX.Element {
   const rendered = displayShortcutKey(keyLabel);
   const quiet = variant === "global";
   const compact = quiet || variant === "context" || variant === "modal";
+  const inactive = availability === "inactive";
   return (
     <Box
       component="kbd"
       aria-hidden
+      data-shortcut-state={availability}
       sx={[
         {
           display: "inline-grid",
@@ -64,6 +69,9 @@ export function ShortcutKeycap({
           borderRadius: 0.75,
           border: 1,
           borderColor: (theme) => {
+            if (inactive) {
+              return alpha(theme.palette.text.disabled, 0.32);
+            }
             if (variant === "context") {
               return alpha(
                 theme.palette.primary.main,
@@ -79,6 +87,9 @@ export function ShortcutKeycap({
             return alpha(theme.palette.divider, quiet ? 0.52 : 0.78);
           },
           bgcolor: (theme) => {
+            if (inactive) {
+              return alpha(theme.palette.action.disabledBackground, 0.28);
+            }
             if (variant === "context") {
               return alpha(
                 theme.palette.background.paper,
@@ -93,10 +104,12 @@ export function ShortcutKeycap({
             }
             return alpha(theme.palette.background.paper, quiet ? 0.24 : 0.72);
           },
-          color: variant === "context" || accent
+          color: inactive
+            ? "text.disabled"
+            : variant === "context" || accent
             ? "primary.main"
             : (quiet ? "text.disabled" : "text.secondary"),
-          boxShadow: quiet ? "none" : (theme) =>
+          boxShadow: quiet || inactive ? "none" : (theme) =>
             `0 1px 3px ${
               alpha(
                 theme.palette.common.black,
@@ -112,6 +125,10 @@ export function ShortcutKeycap({
           fontWeight: 750,
           lineHeight: 1,
           whiteSpace: "nowrap",
+          opacity: inactive ? 0.48 : 1,
+          filter: inactive ? "saturate(0.2)" : "none",
+          transition:
+            "color 120ms ease, background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, filter 120ms ease",
         },
         ...(Array.isArray(sx) ? sx : [sx]),
       ]}

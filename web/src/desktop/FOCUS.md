@@ -135,6 +135,16 @@ Shortcut hints follow one shared keycap grammar and three visibility levels:
    width and disappear when attention moves elsewhere;
 3. modal actions show their real confirmation/dismissal chord next to the label.
 
+Embedded contextual shortcuts are the persistent exception to visibility
+gating. Controls such as Top Bar Run Configuration, Usage, Compact, and Stop
+keep their one-key badge visible for discovery, but the shared keycap primitive
+must render it as `data-shortcut-state="inactive"` whenever its owning region
+is not focused. Once the region owns focus it becomes
+`data-shortcut-state="available"` and gains the normal accent treatment. Do not
+approximate these states with component-local opacity or colors; all persistent
+contextual badges must use `ShortcutKeycap` availability so enabled and inactive
+semantics remain identical across Desktop.
+
 Never invent a hint for an action that is not wired. Contextual hints anchor to
 the bottom-right of their target. Prefer one primary modifier and one positional
 or mnemonic key while retaining native semantic chords such as `Mod+S`. Put secondary Cowboy-specific actions in

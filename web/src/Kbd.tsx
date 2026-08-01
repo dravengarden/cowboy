@@ -1,6 +1,10 @@
 import type React from "react";
 import { useEffect, useRef } from "react";
-import { ShortcutKeycap, type ShortcutKeycapVariant } from "./ShortcutKeycap";
+import {
+  ShortcutKeycap,
+  type ShortcutKeycapAvailability,
+  type ShortcutKeycapVariant,
+} from "./ShortcutKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { confirmEnterIntent } from "./confirmShortcut";
 
@@ -10,10 +14,11 @@ import { confirmEnterIntent } from "./confirmShortcut";
 // must not inherit Desktop keyboard promises. `aria-hidden` because the
 // button's own label already names it.
 export function Kbd(
-  { keys, floating = false, variant = "modal" }: {
+  { keys, floating = false, variant = "modal", availability = "available" }: {
     keys: string;
     floating?: boolean;
     variant?: ShortcutKeycapVariant;
+    availability?: ShortcutKeycapAvailability;
   },
 ): React.JSX.Element {
   const surface = useSurfaceProfile();
@@ -22,6 +27,7 @@ export function Kbd(
     <ShortcutKeycap
       keyLabel={keys}
       variant={variant}
+      availability={availability}
       sx={floating
         ? { position: "absolute", right: -5, bottom: -4, zIndex: 1 }
         : { ml: 0.75 }}

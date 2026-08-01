@@ -4049,7 +4049,7 @@ export function AutoScrollAndStop({
           }}
         >
           <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
-          <ShortcutKeycap keyLabel="S" variant="global" accent={desktopShortcutActive} sx={{ flexShrink: 0, ml: 0.65 }} />
+          <ShortcutKeycap keyLabel="S" variant="global" accent={desktopShortcutActive} availability={desktopShortcutActive ? "available" : "inactive"} sx={{ flexShrink: 0, ml: 0.65 }} />
         </Button>
       )
       : null;
