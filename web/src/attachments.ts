@@ -36,6 +36,25 @@ export interface Attachment {
   block: ContentBlock;
 }
 
+/** Read every file representation exposed by a clipboard paste. iOS WebKit can
+ * expose a pasted photo through `items` while leaving `files` empty; desktop
+ * browsers commonly populate both, so dedupe by File identity. */
+export function clipboardFiles(
+  clipboard: Pick<DataTransfer, "files" | "items">,
+): File[] {
+  const files = Array.from(clipboard.files);
+  const seen = new Set(files);
+  for (const item of Array.from(clipboard.items)) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file && !seen.has(file)) {
+      seen.add(file);
+      files.push(file);
+    }
+  }
+  return files;
+}
+
 // Text-ish MIME types we embed as readable source (TextResourceContents) rather
 // than base64 blobs — so the model gets the actual characters, not bytes it has
 // to decode. Covers the common code / config / data formats.

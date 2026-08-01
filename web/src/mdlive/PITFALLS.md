@@ -559,6 +559,20 @@ here says otherwise.
     original coordinates; on restore, append each unplaced image in attachment
     order and mint a token so it rejoins the authoritative inline lifecycle.
 
+27. **Pasting the first image in compact Mobile must atomically transfer both the
+    document and native keyboard focus.** Compact starts as a native textarea,
+    but an inline-image token promotes it to CM6. Inserting asynchronously
+    converted files one-by-one reused the textarea's stale render-time value, so
+    later files could overwrite earlier tokens; unmounting that focused textarea
+    also dismissed the keyboard. Clipboard extraction must inspect both
+    `DataTransfer.files` and item-only file entries used by iOS. Register all
+    attachment bytes, insert every token in one editor transaction from the live
+    DOM value/selection, then—only for a clipboard paste—focus the newly mounted
+    CM6 once on the next frame. File-picker attachment remains intentionally
+    non-refocusing because picker dismissal owns a separate UIKit lifecycle.
+    Never repair this by externalizing inline images or feeding live React text
+    back into CM6.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

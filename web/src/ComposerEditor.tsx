@@ -43,9 +43,10 @@ import {
   inlineImageTheme,
   inlineImageTrailingLine,
   insertImageToken,
+  registerInlineAttachment,
   removeImageTokenById,
 } from "./inlineImages";
-import type { Attachment } from "./attachments";
+import { clipboardFiles, type Attachment } from "./attachments";
 import {
   fileCompletionSource,
   slashCompletionSource,
@@ -65,6 +66,9 @@ export interface ComposerEditorHandle {
   // Insert an image at the caret as an inline `![](cowboy-att:id)` token (the host
   // adds the bytes to `attachments[]`; this renders it as an inline thumbnail).
   insertImage: (a: Attachment) => void;
+  // Batch paste is one document transaction. Inserting files one-by-one can
+  // reuse a stale native-textarea value during the touch → CM6 promotion.
+  insertImages: (attachments: Attachment[]) => void;
   // Remove a specific inline image (by id) from the doc — the selection popover's
   // Delete action.
   deleteImage: (id: string) => void;
@@ -378,6 +382,23 @@ export const ComposerEditor = forwardRef<
       if (!view) return;
       insertImageToken(view, a);
     },
+    insertImages: (attachments: Attachment[]): void => {
+      const view = cmRef.current?.view;
+      if (!view || attachments.length === 0) return;
+      attachments.forEach(registerInlineAttachment);
+      const pos = view.state.selection.main.head;
+      const atLineStart = pos === view.state.doc.lineAt(pos).from;
+      const insert = attachments.map((attachment, index) => {
+        const lead = index === 0 && !atLineStart ? "\n" : "";
+        return `${lead}![${attachment.name}](cowboy-att:${attachment.id})\n`;
+      }).join("");
+      view.dispatch({
+        changes: { from: pos, insert },
+        selection: { anchor: pos + insert.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    },
     deleteImage: (id: string): void => {
       const view = cmRef.current?.view;
       if (!view) return;
@@ -628,7 +649,7 @@ export const ComposerEditor = forwardRef<
         paste: (event): boolean => {
           const cb = event.clipboardData;
           if (!cb) return false;
-          const files = Array.from(cb.files);
+          const files = clipboardFiles(cb);
           if (files.length === 0 || !onPasteFilesRef.current) return false;
           event.preventDefault();
           onPasteFilesRef.current(files);

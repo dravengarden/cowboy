@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
-import type { Attachment } from "./attachments";
+import { clipboardFiles, type Attachment } from "./attachments";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -269,6 +269,22 @@ export const ComposerTextarea = forwardRef<
       const token = `${lead}![${label}](cowboy-att:${attachment.id})\n`;
       onChange(value.slice(0, at) + token + value.slice(to));
     },
+    insertImages: (attachments: Attachment[]): void => {
+      if (attachments.length === 0) return;
+      const ta = inputRef.current;
+      // Read the live DOM value: image conversion is asynchronous and React's
+      // render-time `value` may lag text entered while the clipboard was read.
+      const current = ta?.value ?? value;
+      const at = ta?.selectionStart ?? current.length;
+      const to = ta?.selectionEnd ?? at;
+      const lineStart = current.lastIndexOf("\n", at - 1) + 1;
+      const tokens = attachments.map((attachment, index) => {
+        const lead = index === 0 && at !== lineStart ? "\n" : "";
+        const label = attachment.name.replaceAll("]", "");
+        return `${lead}![${label}](cowboy-att:${attachment.id})\n`;
+      }).join("");
+      onChange(current.slice(0, at) + tokens + current.slice(to));
+    },
     deleteImage: (): void => undefined,
     // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
     // ComposerEditor, never this textarea). No-ops here just satisfy the shared
@@ -417,7 +433,7 @@ export const ComposerTextarea = forwardRef<
         }}
         onBlur={(): void => setTrigger(null)}
         onPaste={(e): void => {
-          const files = Array.from(e.clipboardData.files);
+          const files = clipboardFiles(e.clipboardData);
           if (files.length > 0 && onPasteFiles) {
             e.preventDefault();
             onPasteFiles(files);

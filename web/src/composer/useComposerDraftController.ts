@@ -34,7 +34,7 @@ export interface ComposerDraftController {
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   initialText: React.MutableRefObject<string>;
   sendable: boolean;
-  addFiles: (files: File[]) => void;
+  addFiles: (files: File[], options?: { preserveFocus?: boolean }) => void;
   removeAttachment: (id: string) => void;
   clear: () => void;
   submit: () => boolean;
@@ -76,13 +76,22 @@ export function useComposerDraftController(
     setDraft(sessionId, { text, attachments });
   }, [sessionId, text, attachments]);
 
-  const addFiles = (files: File[]): void => {
+  const addFiles = (
+    files: File[],
+    options: { preserveFocus?: boolean } = {},
+  ): void => {
     if (files.length === 0) return;
     void filesToAttachments(files).then((added) => {
       if (added.length === 0) return;
       added.forEach(registerInlineAttachment);
       setAttachments((previous) => [...previous, ...added]);
-      added.forEach((attachment) => editorRef.current?.insertImage(attachment));
+      editorRef.current?.insertImages(added);
+      if (options.preserveFocus) {
+        // In compact touch mode, inserting the first image atomically promotes
+        // the focused native textarea to CM6. Transfer focus once after React
+        // commits that replacement so UIKit keeps the existing keyboard open.
+        requestAnimationFrame(() => editorRef.current?.focus());
+      }
     });
   };
 

@@ -1598,7 +1598,7 @@ export function ComposerWorkspace({
             // fine pointer, so this is belt-and-suspenders.
             vim={touchInput ? false : vim}
             onVimMode={setVimMode}
-            onPasteFiles={addFiles}
+            onPasteFiles={(files): void => addFiles(files, { preserveFocus: true })}
             onEscape={(): boolean => {
               // Esc cancels a running turn (via the confirm modal), but only when a
               // turn is actually in flight — otherwise leave Esc to the editor. In
@@ -2372,7 +2372,7 @@ export function ComposerWorkspace({
             setComposeFs(false);
           }}
           onAttach={(): void => fileInputRef.current?.click()}
-          onPasteFiles={addFiles}
+          onPasteFiles={(files): void => addFiles(files, { preserveFocus: true })}
           sessionId={sessionId}
           commands={(): AvailableCommand[] => availableCommands}
           placeholder={dead ? "Send to resume this session…" : "Message the agent…"}
@@ -3509,7 +3509,7 @@ function PendingRow({
         // gallery-only chip with no inline token (collapsed showed it, expanded
         // didn't — the reported "展开末尾粘贴图片还是有 bug").
         const active = overlayOpen ? overlayEditorRef : editorRef;
-        added.forEach((a) => active.current?.insertImage(a));
+        active.current?.insertImages(added);
       });
     };
     // Editing reuses the composer surface, but Desktop treats it as a transaction:

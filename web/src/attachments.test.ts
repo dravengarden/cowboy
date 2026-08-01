@@ -2,9 +2,24 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   attachmentDisplayParts,
   type Attachment,
+  clipboardFiles,
   promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
 } from "./attachments.ts";
+
+Deno.test("clipboard files include iOS item-only images without duplicates", () => {
+  const direct = new File(["direct"], "direct.png", { type: "image/png" });
+  const itemOnly = new File(["item"], "item.png", { type: "image/png" });
+  const clipboard = {
+    files: [direct],
+    items: [
+      { kind: "file", getAsFile: () => direct },
+      { kind: "file", getAsFile: () => itemOnly },
+      { kind: "string", getAsFile: () => null },
+    ],
+  } as unknown as Pick<DataTransfer, "files" | "items">;
+  assertEquals(clipboardFiles(clipboard), [direct, itemOnly]);
+});
 
 function attachment(id: string, isImage: boolean): Attachment {
   return {
