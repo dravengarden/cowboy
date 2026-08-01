@@ -178,82 +178,32 @@ function TranscriptSkeleton({
     return () => globalThis.clearTimeout(timer);
   }, []);
 
-  if (!desktop) {
-    const agent = provider === "claude-code"
-      ? "Claude Code"
-      : provider === "gemini"
-      ? "Gemini"
-      : "Codex";
-    return (
-      <Stack
-        aria-busy="true"
-        aria-label="Loading chat history"
-        sx={{
-          minHeight: "100%",
-          px: 3,
-          py: 8,
-          alignItems: "center",
-          justifyContent: "center",
-          textAlign: "center",
-          color: "text.secondary",
-        }}
-      >
-        <Box
-          sx={{
-            position: "relative",
-            width: 38,
-            height: 38,
-            mb: 1.75,
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          <CircularProgress
-            size={38}
-            thickness={3}
-            aria-hidden
-            sx={{
-              position: "absolute",
-              inset: 0,
-              color: "primary.main",
-              opacity: 0.72,
-            }}
-          />
-          <Terminal aria-hidden sx={{ fontSize: 17, color: "primary.main" }} />
-        </Box>
-        <Typography
-          variant="body2"
-          sx={{ color: "text.primary", fontWeight: 650 }}
-        >
-          Restoring conversation
-        </Typography>
-        <Typography
-          variant="caption"
-          sx={{ mt: 0.5, maxWidth: 280, lineHeight: 1.55 }}
-        >
-          Loading recent messages and {agent} context…
-        </Typography>
-        {stalled && (
-          <Button
-            size="small"
-            variant="text"
-            onClick={(): void => globalThis.location.reload()}
-            sx={{ mt: 1.5, minHeight: 36, textTransform: "none" }}
-          >
-            Taking a while — reload
-          </Button>
-        )}
-      </Stack>
-    );
-  }
+  const agent = provider === "claude-code"
+    ? "Claude Code"
+    : provider === "gemini"
+    ? "Gemini"
+    : "Codex";
 
   return (
     <Stack
-      spacing={3}
-      sx={{ py: 2 }}
+      data-transcript-switch-skeleton
+      spacing={desktop ? 3 : 2.25}
+      sx={{
+        minHeight: desktop ? undefined : "100%",
+        py: desktop ? 2 : { xs: 2, sm: 3 },
+        justifyContent: desktop ? undefined : { xs: "flex-end", sm: "flex-start" },
+      }}
       aria-busy="true"
       aria-label="Loading chat history"
     >
+      {!desktop && (
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ color: "text.secondary" }}>
+          <CircularProgress size={14} thickness={4} color="inherit" aria-hidden />
+          <Typography variant="caption" sx={{ fontWeight: 650 }}>
+            Restoring {agent} conversation…
+          </Typography>
+        </Stack>
+      )}
       {SKELETON_TURNS.map((turn, i) => (
         <Stack
           // Static placeholder list — index keys are fine (no reordering).
@@ -284,6 +234,16 @@ function TranscriptSkeleton({
             )}
         </Stack>
       ))}
+      {stalled && (
+        <Button
+          size="small"
+          variant="text"
+          onClick={(): void => globalThis.location.reload()}
+          sx={{ alignSelf: "flex-start", minHeight: 36, textTransform: "none" }}
+        >
+          Taking a while — reload
+        </Button>
+      )}
     </Stack>
   );
 }

@@ -1964,17 +1964,17 @@ export function App({
         globalThis.dispatchEvent(
             new CustomEvent("cowboy:transcript-save-viewport"),
         );
+        // Selection is navigation, so acknowledge it in the same input frame.
+        // The target shell (session identity, status and composer) can render
+        // immediately while its independently-hydrated transcript shows its own
+        // structural loading state. Delaying this until the drawer's settle
+        // callback made a successful tap look ignored, then changed everything
+        // at once after the motion had finished.
+        openSession(id);
+        setActiveId(id);
         if (mobile && settleMobileDrawerRef.current) {
-            // Keep the current transcript raster stable during close. Switching
-            // the large active timeline mid-transform was the principal fast-
-            // swipe frame drop and visible content flash.
-            settleMobileDrawerRef.current(false, 0, () => {
-                requestAnimationFrame(() => {
-                    startTransition(() => setActiveId(id));
-                });
-            });
+            settleMobileDrawerRef.current(false);
         } else {
-            setActiveId(id);
             setDrawerOpen(false);
         }
     }
