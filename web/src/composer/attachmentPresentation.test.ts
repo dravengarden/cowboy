@@ -15,14 +15,16 @@ function attachment(id: string, isImage: boolean): Attachment {
   };
 }
 
-Deno.test("native composer exposes every staged image in its tray", () => {
-  const image = attachment("image", true);
+Deno.test("compact composer keeps token-backed images inline", () => {
+  const placed = attachment("placed", true);
+  const staged = attachment("staged", true);
   const file = attachment("file", false);
   assertEquals(
-    attachmentTrayForSurface([image, file], "", "native-compact").map((a) =>
-      a.id
-    ),
-    ["image", "file"],
+    attachmentTrayForSurface(
+      [placed, staged, file],
+      "before ![shot](cowboy-att:placed) after",
+    ).map((a) => a.id),
+    ["staged", "file"],
   );
 });
 
@@ -34,7 +36,6 @@ Deno.test("fullscreen keeps only images without CM inline tokens in its tray", (
     attachmentTrayForSurface(
       [placed, staged, file],
       "before ![shot](cowboy-att:placed) after",
-      "cm-fullscreen",
     ).map((a) => a.id),
     ["staged", "file"],
   );

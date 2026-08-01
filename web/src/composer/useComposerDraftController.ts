@@ -1,6 +1,5 @@
 import {
   type RefObject,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -9,7 +8,6 @@ import {
   type Attachment,
   filesToAttachments,
   reconcileDeletedInlineImages,
-  stripImageTokens,
 } from "../attachments";
 import { getDraft, setDraft } from "../draftStore";
 import {
@@ -37,7 +35,6 @@ export interface ComposerDraftController {
   sendable: boolean;
   addFiles: (files: File[]) => void;
   removeAttachment: (id: string) => void;
-  demoteInlineImages: () => string;
   clear: () => void;
   submit: () => boolean;
   force: () => boolean;
@@ -91,19 +88,6 @@ export function useComposerDraftController(
     );
   };
 
-  // A native textarea cannot render CM6 image decorations. When returning from
-  // fullscreen (or restoring a compact Mobile draft), remove only the visual
-  // placement tokens while retaining every attachment byte. The legacy
-  // no-token content path still sends those images before the prompt text.
-  const demoteInlineImages = useCallback((): string => {
-    const next = stripImageTokens(textRef.current);
-    if (next === textRef.current) return next;
-    textRef.current = next;
-    initialText.current = next;
-    setTextState(next);
-    return next;
-  }, []);
-
   const clear = (): void => {
     // ComposerEditor is intentionally uncontrolled. Clearing React state alone
     // would leave its document visible and feeding `value` back would break IME.
@@ -140,7 +124,6 @@ export function useComposerDraftController(
     sendable,
     addFiles,
     removeAttachment,
-    demoteInlineImages,
     clear,
     submit: () =>
       commit(() => submitPrompt(sessionId, preparedText(), attachments)),

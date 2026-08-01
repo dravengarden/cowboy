@@ -541,6 +541,18 @@ here says otherwise.
     cold sequence: keyboard hidden → rotate → first focus, in both directions,
     plus split and floating keyboard regressions.
 
+26. **Mobile compact and fullscreen composers must preserve the same inline-image
+    tokens.** Replacing compact CM6 with a native textarea made long-press text
+    interaction reliable, but the follow-up workaround stripped
+    `![name](cowboy-att:id)` tokens and rendered every image in an external tray.
+    That destroyed document position, so expanding could not restore the image
+    inline. Keep `PlatformComposerEditor` on CM6 for both Mobile sizes, keep Vim
+    disabled on touch, and treat the token as the placement authority across
+    compact → fullscreen → compact remounts. The attachment tray is only for
+    ordinary files and legacy images without a token. If iOS caret, IME, or
+    long-press interaction regresses, repair the CM6/native-shell interaction;
+    never delete placement tokens or move token-backed images out of the editor.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

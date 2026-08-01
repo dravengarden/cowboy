@@ -772,7 +772,6 @@ export function ComposerWorkspace({
     sendable,
     addFiles,
     removeAttachment,
-    demoteInlineImages,
     submit,
     force: forceCurrentPrompt,
     jumpToFront: jumpCurrentPromptToFront,
@@ -1040,25 +1039,16 @@ export function ComposerWorkspace({
     doc.body.style.cursor = "ns-resize";
     doc.body.style.userSelect = "none";
   }, [expanded, composerHeight]);
-  // Touch → native textarea (correct IME); desktop → CodeMirror (vim + inline
-  // completion). See ComposerTextarea for the why.
+  // Touch and Desktop share CM6 document semantics. Touch keeps Vim disabled,
+  // while preserving inline image tokens across compact/fullscreen handoff.
   const touchInput = useTouchComposer();
-  useEffect(() => {
-    if (touchInput) demoteInlineImages();
-  }, [demoteInlineImages, sessionId, touchInput]);
-  // A native textarea cannot host CM6's inline-image decorations. Keep those
-  // staged images visible and removable in the compact Mobile attachment tray.
-  // When the user expands into CM6, only images that still lack an inline token
-  // remain in that tray, so an image is never rendered twice.
   const compactTrayAttachments = attachmentTrayForSurface(
     attachments,
     text,
-    touchInput ? "native-compact" : "cm-compact",
   );
   const fullscreenTrayAttachments = attachmentTrayForSurface(
     attachments,
     text,
-    "cm-fullscreen",
   );
 
   // --- Long-press → force-push ------------------------------------------------
@@ -1427,8 +1417,8 @@ export function ComposerWorkspace({
           )}
         </Box>
       )}
-      {/* The native Mobile textarea cannot host inline decorations, so its tray
-          shows every staged image/file. CM6 keeps token-backed images inline. */}
+      {/* CM6 renders token-backed images at their document position. The tray is
+          reserved for files and legacy images that have no placement token. */}
       {compactTrayAttachments.length > 0 && (
         <AttachmentPreviews
           attachments={compactTrayAttachments}
@@ -1578,10 +1568,9 @@ export function ComposerWorkspace({
           <PlatformComposerEditor
             ref={editorRef}
             autoFocus={autoFocus}
-            // CM6 is seeded once and owns its document. The compact touch path
-            // is a controlled native textarea so UIKit can own long-press Paste;
-            // keep that value synchronized with the composer state.
-            value={touchInput ? text : initialDraftText.current}
+            // CM6 is seeded once and owns its document on every surface. Feeding
+            // live React state back here would bounce the caret and corrupt IME.
+            value={initialDraftText.current}
             onChange={setText}
             onSubmit={submitAndNotify}
             onSaveDraft={saveDraft}
@@ -2383,9 +2372,7 @@ export function ComposerWorkspace({
             // current text first, else closing reverts to the pre-expand text
             // ("展开/收缩 state 不同步"). Can't feed `text` as the inline value: it'd
             // re-apply on every keystroke and bounce the iOS caret (see line ~500).
-            initialDraftText.current = touchInput
-              ? demoteInlineImages()
-              : text;
+            initialDraftText.current = text;
             setComposeFs(false);
           }}
           onAttach={(): void => fileInputRef.current?.click()}

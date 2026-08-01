@@ -5,7 +5,6 @@ import {
   useState,
 } from "react";
 import { ComposerEditor, type ComposerEditorHandle } from "../ComposerEditor";
-import { ComposerTextarea } from "../ComposerTextarea";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
   isDesktopVimRuntimeLoaded,
@@ -58,31 +57,6 @@ export const PlatformComposerEditor = forwardRef<
     runtimeState === "ready",
     runtimeState === "failed",
   );
-  // Compact touch composition deliberately uses a real textarea. iOS owns its
-  // caret, selection, and edit menu end-to-end, so a long press on an empty
-  // prompt reliably exposes Paste/AutoFill instead of going through WKWebView's
-  // incomplete contenteditable interaction path. Fullscreen/fill editors keep
-  // CM6 because they need the markdown toolbar and inline widgets.
-  if (surface.kind !== "desktop" && !props.expanded && !props.fill) {
-    return (
-      <ComposerTextarea
-        ref={ref}
-        value={props.value}
-        onChange={props.onChange}
-        onSubmit={props.onSubmit}
-        sessionId={props.sessionId}
-        commands={props.commands}
-        {...(props.onSaveDraft ? { onSaveDraft: props.onSaveDraft } : {})}
-        {...(props.placeholder ? { placeholder: props.placeholder } : {})}
-        {...(props.disabled ? { disabled: true } : {})}
-        {...(props.autoFocus ? { autoFocus: true } : {})}
-        {...(props.onEscape ? { onEscape: props.onEscape } : {})}
-        {...(props.onPasteFiles ? { onPasteFiles: props.onPasteFiles } : {})}
-        {...(props.endInset !== undefined ? { endInset: props.endInset } : {})}
-        {...(props.borderless !== undefined ? { borderless: props.borderless } : {})}
-      />
-    );
-  }
   return (
     <ComposerEditor
       {...props}
