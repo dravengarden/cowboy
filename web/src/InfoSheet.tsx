@@ -338,7 +338,10 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
           />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={closeResetDialog} disabled={resetBusy}>Cancel</Button>
+          <Button onClick={closeResetDialog} disabled={resetBusy}>
+            Cancel
+            <Kbd keys="Esc" availability={resetBusy ? "inactive" : "available"} />
+          </Button>
           <Button
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
@@ -346,7 +349,12 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
             onClick={() => void submitReset()}
           >
             {resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            <Kbd
+              keys={`${MOD_LABEL}${ENTER_LABEL}`}
+              availability={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)
+                ? "inactive"
+                : "available"}
+            />
           </Button>
         </DialogActions>
       </Dialog>

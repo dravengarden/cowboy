@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   alpha,
   Box,
-  Dialog,
-  DialogContent,
-  DialogTitle,
   InputBase,
   List,
   ListItemButton,
@@ -24,6 +21,7 @@ import {
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
 } from "./workspaceShortcuts";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
+import { DesktopModal } from "../DesktopModal";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -45,6 +43,12 @@ export function DesktopCommandHost({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const paletteInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!paletteOpen) return undefined;
+    const frame = requestAnimationFrame(() => paletteInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [paletteOpen]);
   const clickFocusedItemAction = (action: "default" | "edit"): void => {
     const item = document.activeElement instanceof HTMLElement
       ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
@@ -281,6 +285,9 @@ export function DesktopCommandHost({
     if (!command) return;
     if (registry.execute(command.id)) setPaletteOpen(false);
   };
+  const selectedCommand = available[selected];
+  const selectedAvailable = selectedCommand !== undefined &&
+    selectedCommand.when?.() !== false;
 
   return (
     <>
@@ -291,15 +298,37 @@ export function DesktopCommandHost({
         open={shortcutsOpen}
         onClose={(): void => setShortcutsOpen(false)}
       />
-      <Dialog
-      open={paletteOpen}
-      onClose={(): void => setPaletteOpen(false)}
-      fullWidth
-      maxWidth="sm"
-      slotProps={{ paper: { sx: { alignSelf: "flex-start", mt: "12vh" } } }}
-    >
-      <DialogTitle sx={{ pb: 1 }}>Command Palette</DialogTitle>
-      <DialogContent sx={{ px: 1.5, pb: 1.5 }}>
+      <DesktopModal
+        open={paletteOpen}
+        onClose={(): void => setPaletteOpen(false)}
+        title="Command Palette"
+        description="Search and run every registered Desktop command."
+        width={680}
+        shortcutGroups={[
+          {
+            slots: [
+              { shortcut: "Mod+K", label: "Palette", availability: "active" },
+            ],
+          },
+          {
+            label: "Navigate",
+            slots: [
+              {
+                shortcut: "↑/↓",
+                label: "Move",
+                availability: available.length > 0 ? "available" : "inactive",
+              },
+              {
+                shortcut: "Enter",
+                label: "Run",
+                availability: selectedAvailable ? "available" : "inactive",
+              },
+            ],
+          },
+          { slots: [{ shortcut: "Esc", label: "Close" }] },
+        ]}
+      >
+      <Box sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>
         <Box
           sx={{
             minHeight: 44,
@@ -325,6 +354,7 @@ export function DesktopCommandHost({
             sx={{ flexShrink: 0, color: "text.secondary", fontSize: "1.2rem" }}
           />
           <InputBase
+            inputRef={paletteInputRef}
             autoFocus
             fullWidth
             value={query}
@@ -382,13 +412,16 @@ export function DesktopCommandHost({
                   : command.description ?? command.id}
               />
               {command.shortcut && (
-                <DesktopShortcut shortcut={command.shortcut} />
+                <DesktopShortcut
+                  shortcut={command.shortcut}
+                  availability={command.when?.() === false ? "inactive" : "available"}
+                />
               )}
             </ListItemButton>
           ))}
         </List>
-      </DialogContent>
-      </Dialog>
+      </Box>
+      </DesktopModal>
     </>
   );
 }

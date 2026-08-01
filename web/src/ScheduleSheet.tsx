@@ -164,7 +164,10 @@ export function ScheduleSheet({
             sx={{ textTransform: "none", borderRadius: 2, minWidth: 96 }}
           >
             {editing ? "更新" : "定时发送"}
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            <Kbd
+              keys={`${MOD_LABEL}${ENTER_LABEL}`}
+              availability={valid ? "available" : "inactive"}
+            />
           </Button>
         </Stack>
       </Stack>

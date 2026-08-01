@@ -41,6 +41,7 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "../desktop/commands/DesktopCommandProvider";
+import { sequentialShortcutAvailability } from "../desktop/commands/shortcutAvailability";
 import { DesktopModal } from "../desktop/DesktopModal";
 import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "../desktop/desktopScrollbar";
@@ -137,6 +138,7 @@ function PageTurnFooter({
     direction: "previous" | "next",
     question: string | null,
     loading: boolean,
+    unavailable: boolean,
   ): React.JSX.Element => {
     const previous = direction === "previous";
     return (
@@ -193,7 +195,11 @@ function PageTurnFooter({
               "& kbd": { ml: "0 !important" },
             }}
           >
-            <Kbd keys={previous ? "[" : "]"} variant="global" />
+            <Kbd
+              keys={previous ? "[" : "]"}
+              variant="global"
+              availability={unavailable ? "inactive" : "available"}
+            />
           </Box>
         )}
         {!previous && (loading
@@ -228,7 +234,12 @@ function PageTurnFooter({
             onClick={onPrevious}
             sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
           >
-            {directionLabel("previous", previousQuestion, loadingPrevious)}
+            {directionLabel(
+              "previous",
+              previousQuestion,
+              loadingPrevious,
+              loadingPrevious || loadingNext,
+            )}
           </Button>
         )}
       <Typography
@@ -247,7 +258,12 @@ function PageTurnFooter({
             onClick={onNext}
             sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
           >
-            {directionLabel("next", nextQuestion, loadingNext)}
+            {directionLabel(
+              "next",
+              nextQuestion,
+              loadingNext,
+              loadingPrevious || loadingNext,
+            )}
           </Button>
         )}
     </Box>
@@ -533,6 +549,8 @@ function PageList({
   vimNavigation = false,
   listElementRef,
   onAwayFromBottomChange,
+  onVimPrefixChange,
+  onSearchFocusChange,
 }: {
   pages: Array<{ id: string; title: string; ordinal?: number }>;
   currentId: string | null;
@@ -551,6 +569,8 @@ function PageList({
   vimNavigation?: boolean;
   listElementRef?: React.RefObject<HTMLUListElement | null>;
   onAwayFromBottomChange?: ((away: boolean) => void) | undefined;
+  onVimPrefixChange?: ((armed: boolean) => void) | undefined;
+  onSearchFocusChange?: ((focused: boolean) => void) | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [cursorId, setCursorId] = useState<string | null>(currentId);
@@ -570,6 +590,13 @@ function PageList({
     pageCount: number;
   } | null>(null);
   const vimChordRef = useRef<number | null>(null);
+  const clearVimChord = useCallback((): void => {
+    if (vimChordRef.current !== null) {
+      globalThis.clearTimeout(vimChordRef.current);
+      vimChordRef.current = null;
+    }
+    onVimPrefixChange?.(false);
+  }, [onVimPrefixChange]);
   const ordinalById = useMemo(
     () =>
       new Map(
@@ -581,11 +608,11 @@ function PageList({
     [firstOrdinal, pages],
   );
   useEffect(() => {
-    if (!active || !vimNavigation || searchable) return undefined;
+    if (!active || !vimNavigation) return undefined;
     const frame = requestAnimationFrame(() =>
       listRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
-  }, [active, searchable, vimNavigation]);
+  }, [active, vimNavigation]);
   const ordered = useMemo(
     () => presentQuestionPageDirectory(pages, descending),
     [descending, pages],
@@ -601,12 +628,9 @@ function PageList({
   }, [active, currentId]);
 
   useEffect(() => {
-    return () => {
-      if (vimChordRef.current !== null) {
-        globalThis.clearTimeout(vimChordRef.current);
-      }
-    };
-  }, []);
+    if (!active) clearVimChord();
+    return clearVimChord;
+  }, [active, clearVimChord]);
 
   const updateBottomAffordance = useCallback((): void => {
     const list = listRef.current;
@@ -800,7 +824,10 @@ function PageList({
       }
       return;
     }
-    if (event.metaKey || event.altKey) return;
+    if (event.metaKey || event.altKey) {
+      clearVimChord();
+      return;
+    }
     const key = event.code === "KeyJ"
       ? "j"
       : event.code === "KeyK"
@@ -826,6 +853,22 @@ function PageList({
       0,
       filtered.findIndex((page) => page.id === cursorId),
     );
+    if (event.repeat && key === "g") {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (vimChordRef.current !== null) {
+      if (event.ctrlKey) {
+        clearVimChord();
+      } else {
+        event.preventDefault();
+        event.stopPropagation();
+        clearVimChord();
+        if (key === "g") moveCursor(0);
+        return;
+      }
+    }
     if (event.ctrlKey) {
       const list = listRef.current;
       if (!list) return;
@@ -856,15 +899,11 @@ function PageList({
     if (key === "g") {
       event.preventDefault();
       event.stopPropagation();
-      if (vimChordRef.current !== null) {
-        globalThis.clearTimeout(vimChordRef.current);
+      onVimPrefixChange?.(true);
+      vimChordRef.current = globalThis.setTimeout(() => {
         vimChordRef.current = null;
-        moveCursor(0);
-      } else {
-        vimChordRef.current = globalThis.setTimeout(() => {
-          vimChordRef.current = null;
-        }, 900);
-      }
+        onVimPrefixChange?.(false);
+      }, 1200);
       return;
     }
     if (key === "G") {
@@ -909,6 +948,11 @@ function PageList({
           size="small"
           value={query}
           onChange={(event): void => setQuery(event.target.value)}
+          onFocus={(): void => {
+            clearVimChord();
+            onSearchFocusChange?.(true);
+          }}
+          onBlur={(): void => onSearchFocusChange?.(false)}
           placeholder="Search questions"
           slotProps={{
             input: {
@@ -1332,6 +1376,8 @@ export function ExploreTranscript(
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const [desktopDirectoryOpen, setDesktopDirectoryOpen] = useState(false);
+  const [desktopDirectoryPrefixArmed, setDesktopDirectoryPrefixArmed] = useState(false);
+  const [desktopDirectorySearchFocused, setDesktopDirectorySearchFocused] = useState(false);
   const [desktopDirectoryLoadingPageId, setDesktopDirectoryLoadingPageId] = useState<
     string | null
   >(null);
@@ -1371,6 +1417,8 @@ export function ExploreTranscript(
   const desktopDirectoryReturnFocusRef = useRef<HTMLElement | null>(null);
   const closeDesktopDirectory = useCallback((restoreFocus = true): void => {
     setDesktopDirectoryOpen(false);
+    setDesktopDirectoryPrefixArmed(false);
+    setDesktopDirectorySearchFocused(false);
     const returnFocus = desktopDirectoryReturnFocusRef.current;
     desktopDirectoryReturnFocusRef.current = null;
     if (!restoreFocus) return;
@@ -1387,6 +1435,7 @@ export function ExploreTranscript(
     desktopDirectoryReturnFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
+    setDesktopDirectorySearchFocused(false);
     setDesktopDirectoryOpen(true);
   }, [closeDesktopDirectory, desktopDirectoryOpen]);
   const selectDirectoryPage = useCallback((id: string, close: boolean): void => {
@@ -1532,18 +1581,10 @@ export function ExploreTranscript(
 
   useEffect(() => {
     setDesktopDirectoryOpen(false);
+    setDesktopDirectoryPrefixArmed(false);
+    setDesktopDirectorySearchFocused(false);
     desktopDirectoryReturnFocusRef.current = null;
   }, [props.sessionId]);
-
-  useEffect(() => {
-    if (!desktopDirectoryOpen) return undefined;
-    const frame = requestAnimationFrame(() => {
-      rootRef.current
-        ?.querySelector<HTMLInputElement>("[data-explore-page-search]")
-        ?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [desktopDirectoryOpen]);
 
   useEffect(() => {
     if (!unresolvedQuestionRoot) {
@@ -1771,6 +1812,93 @@ export function ExploreTranscript(
           description={`${String(total)} questions · newest first · j/k move · l/Enter open`}
           icon={<ListAltOutlined color="primary" />}
           width={620}
+          shortcutGroups={[
+            {
+              label: "Navigate",
+              slots: [
+                {
+                  shortcut: "J/K",
+                  label: "Move",
+                  availability: desktopDirectoryPrefixArmed || desktopDirectorySearchFocused
+                    ? "inactive"
+                    : "available",
+                },
+                {
+                  shortcut: "L/Enter",
+                  label: "Open",
+                  availability: desktopDirectoryPrefixArmed || desktopDirectorySearchFocused
+                    ? "inactive"
+                    : "available",
+                },
+              ],
+            },
+            {
+              label: "Page",
+              slots: [
+                {
+                  shortcut: "Ctrl+D/U",
+                  label: "Half",
+                  availability: desktopDirectorySearchFocused ? "inactive" : "available",
+                },
+                {
+                  shortcut: "Ctrl+F/B",
+                  label: "Full",
+                  availability: desktopDirectorySearchFocused ? "inactive" : "available",
+                },
+              ],
+            },
+            {
+              label: "Go",
+              slots: [
+                {
+                  shortcut: "G",
+                  label: "Prefix",
+                  availability: sequentialShortcutAvailability({
+                    scopeAvailable: !desktopDirectorySearchFocused,
+                    armed: desktopDirectoryPrefixArmed,
+                    prefix: true,
+                  }),
+                },
+                {
+                  shortcut: "G",
+                  label: "First",
+                  availability: sequentialShortcutAvailability({
+                    scopeAvailable: !desktopDirectorySearchFocused,
+                    armed: desktopDirectoryPrefixArmed,
+                    prefix: false,
+                  }),
+                },
+                {
+                  shortcut: "Shift+G",
+                  label: "Last",
+                  availability: desktopDirectoryPrefixArmed || desktopDirectorySearchFocused
+                    ? "inactive"
+                    : "available",
+                },
+              ],
+            },
+            {
+              slots: [
+                {
+                  shortcut: "/",
+                  label: "Search",
+                  availability: desktopDirectorySearchFocused
+                    ? "active"
+                    : desktopDirectoryPrefixArmed
+                    ? "inactive"
+                    : "available",
+                },
+                {
+                  shortcut: "Esc",
+                  label: desktopDirectoryPrefixArmed
+                    ? "Cancel prefix"
+                    : desktopDirectorySearchFocused
+                    ? "Leave search"
+                    : "Close",
+                },
+              ],
+            },
+          ]}
         >
           <Box
             component="nav"
@@ -1791,6 +1919,8 @@ export function ExploreTranscript(
               loadingPageId={desktopDirectoryLoadingPageId}
               onReachStart={(): void => void pageIndex.loadEarlier()}
               onVimDismiss={closeDesktopDirectory}
+              onVimPrefixChange={setDesktopDirectoryPrefixArmed}
+              onSearchFocusChange={setDesktopDirectorySearchFocused}
               onSelect={(id): void => selectDirectoryPage(id, true)}
             />
           </Box>

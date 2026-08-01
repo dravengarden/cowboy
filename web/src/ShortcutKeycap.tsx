@@ -1,7 +1,8 @@
 import { alpha, Box, type SxProps, type Theme } from "@mui/material";
+import type { ShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 
 export type ShortcutKeycapVariant = "default" | "global" | "context" | "modal";
-export type ShortcutKeycapAvailability = "available" | "inactive";
+export type ShortcutKeycapAvailability = ShortcutAvailability;
 
 export function displayShortcutKey(key: string): string {
   const normalized = key.trim().toLowerCase();
@@ -52,6 +53,7 @@ export function ShortcutKeycap({
   const quiet = variant === "global";
   const compact = quiet || variant === "context" || variant === "modal";
   const inactive = availability === "inactive";
+  const active = availability === "active";
   return (
     <Box
       component="kbd"
@@ -72,6 +74,7 @@ export function ShortcutKeycap({
             if (inactive) {
               return alpha(theme.palette.text.disabled, 0.18);
             }
+            if (active) return alpha(theme.palette.primary.main, 0.72);
             if (variant === "context") {
               return alpha(
                 theme.palette.primary.main,
@@ -90,6 +93,7 @@ export function ShortcutKeycap({
             if (inactive) {
               return alpha(theme.palette.action.disabledBackground, 0.12);
             }
+            if (active) return alpha(theme.palette.primary.main, 0.18);
             if (variant === "context") {
               return alpha(
                 theme.palette.background.paper,
@@ -106,23 +110,32 @@ export function ShortcutKeycap({
           },
           color: inactive
             ? "text.disabled"
+            : active
+            ? "primary.main"
             : variant === "context" || accent
             ? "primary.main"
             : (quiet ? "text.disabled" : "text.secondary"),
-          boxShadow: quiet || inactive ? "none" : (theme) =>
-            `0 1px 3px ${
-              alpha(
-                theme.palette.common.black,
-                theme.palette.mode === "dark" ? 0.22 : 0.09,
-              )
-            }`,
+          boxShadow: inactive
+            ? "none"
+            : active
+            ? (theme) =>
+              `0 0 0 2px ${alpha(theme.palette.primary.main, 0.13)}, inset 0 0 0 1px ${alpha(theme.palette.common.white, 0.12)}`
+            : quiet
+            ? "none"
+            : (theme) =>
+              `0 1px 3px ${
+                alpha(
+                  theme.palette.common.black,
+                  theme.palette.mode === "dark" ? 0.22 : 0.09,
+                )
+              }`,
           backdropFilter: quiet ? "none" : "blur(8px)",
           pointerEvents: "none",
           userSelect: "none",
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
           fontSize: variant === "context" ? "0.5625rem" : "0.625rem",
-          fontWeight: 750,
+          fontWeight: active ? 820 : 750,
           lineHeight: 1,
           whiteSpace: "nowrap",
           opacity: inactive ? 0.32 : 1,

@@ -155,6 +155,7 @@ import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
+import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
     desktopEmbeddedControlSx,
     desktopListItemSx,
@@ -167,6 +168,8 @@ import {
     useActiveSessionId,
 } from "./controlPlane";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
+import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
+import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
 
 const DesktopCommandHost = lazy(async () => {
     const module = await import("./desktop/commands/DesktopCommandHost");
@@ -200,7 +203,6 @@ const DesktopContextShortcut = lazy(async () => {
     const module = await import("./desktop/commands/DesktopContextShortcut");
     return { default: module.DesktopContextShortcut };
 });
-
 // Desktop sidebar width: a user-draggable pixel width (VSCode-style divider),
 // persisted in localStorage. The bounds keep both panes usable — 240px floor
 // (a list row stays readable), 480px ceiling (wider and the list looks empty
@@ -1034,51 +1036,53 @@ function SessionList({
                     <ListItemText primary="Delete" />
                 </MenuItem>
             </Menu>
-            <Dialog
-                open={desktop && !!menuAnchor}
-                onClose={(): void => setMenuAnchor(null)}
-                onKeyDown={(event): void => {
-                    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-                    const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
-                    const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
-                        `[data-session-shortcut="${key}"]`,
-                    );
-                    if (directAction) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        directAction.click();
-                        return;
-                    }
-                    if (key !== "j" && key !== "k") return;
-                    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                        "[data-desktop-session-actions] button:not(:disabled)",
-                    )];
-                    if (items.length === 0) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    const current = items.indexOf(document.activeElement as HTMLButtonElement);
-                    const next = current < 0
-                        ? 0
-                        : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
-                    items[next]?.focus();
-                }}
-                fullWidth
-                maxWidth="md"
-                slotProps={{
-                    paper: {
-                        sx: { borderRadius: 2.5, overflow: "hidden" },
-                    },
-                }}
-            >
-                <DialogTitle sx={{ pb: 1 }}>
-                    <Typography variant="subtitle1" fontWeight={780}>Session</Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap>
-                        {menuAnchor?.row.title} · {menuAnchor?.row.cwd}
-                    </Typography>
-                </DialogTitle>
-                <Divider />
-                <DialogContent sx={{ p: 2 }}>
-                    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(280px, 0.8fr)", gap: 2.5 }}>
+            {desktop && (
+                <DesktopModalShell
+                        open={!!menuAnchor}
+                        onClose={(): void => setMenuAnchor(null)}
+                        title="Session"
+                        description={`${menuAnchor?.row.title ?? ""} · ${menuAnchor?.row.cwd ?? ""}`}
+                        width={920}
+                        shortcutGroups={[
+                            {
+                                label: "Navigate",
+                                slots: [
+                                    { shortcut: "J/K", label: "Move" },
+                                    { shortcut: "Enter", label: "Select" },
+                                ],
+                            },
+                            { slots: [{ shortcut: "Esc", label: "Close" }] },
+                        ]}
+                    >
+                        <Box
+                            onKeyDown={(event): void => {
+                            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+                            const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
+                            const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
+                                `[data-session-shortcut="${key}"]`,
+                            );
+                            if (directAction) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                directAction.click();
+                                return;
+                            }
+                            if (key !== "j" && key !== "k") return;
+                            const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                                "[data-desktop-session-actions] button:not(:disabled)",
+                            )];
+                            if (items.length === 0) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                            const next = current < 0
+                                ? 0
+                                : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
+                            items[next]?.focus();
+                            }}
+                            sx={{ p: 2 }}
+                        >
+                            <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(280px, 0.8fr)", gap: 2.5 }}>
                         <DesktopSessionInfoPanel session={menuAnchor?.row ?? null} />
                         <Stack
                             data-desktop-session-actions
@@ -1116,15 +1120,10 @@ function SessionList({
                                 <Kbd keys="X" />
                             </Button>
                         </Stack>
-                    </Box>
-                </DialogContent>
-                <Divider />
-                <Stack direction="row" justifyContent="flex-end" spacing={2} sx={{ px: 2, py: 1, color: "text.secondary" }}>
-                    <Stack direction="row" spacing={0.5}><Kbd keys="J/K" /><Typography variant="caption">Move</Typography></Stack>
-                    <Stack direction="row" spacing={0.5}><Kbd keys="Enter" /><Typography variant="caption">Select</Typography></Stack>
-                    <Stack direction="row" spacing={0.5}><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
-                </Stack>
-            </Dialog>
+                            </Box>
+                        </Box>
+                </DesktopModalShell>
+            )}
         </Stack>
     );
 }
@@ -2835,6 +2834,7 @@ export function App({
                                             shortcut={`${MOD_LABEL}, · Settings`}
                                             placement="inline"
                                             alwaysVisible
+                                            active={settingsOpen}
                                         >
                                             <IconButton
                                                 data-desktop-item="topbar-settings"
@@ -3213,7 +3213,10 @@ function DesktopSettingsChoice({
                 overflow: "hidden",
                 transition: "background-color 120ms ease, border-color 120ms ease",
                 "&:hover": { bgcolor: "action.hover", borderColor: "primary.light" },
-                "&:focus-visible": desktopFocusBoundary,
+                "&:focus-visible": {
+                    outline: (theme) => `2px solid ${desktopFocusBoundary(theme)}`,
+                    outlineOffset: 2,
+                },
             }}
         >
             {children}
@@ -3223,11 +3226,13 @@ function DesktopSettingsChoice({
 
 function DesktopSettingsRow({
     shortcut,
+    shortcutAvailable = true,
     label,
     description,
     children,
 }: {
     shortcut: string;
+    shortcutAvailable?: boolean;
     label: string;
     description: string;
     children: React.ReactNode;
@@ -3254,7 +3259,10 @@ function DesktopSettingsRow({
             }}
         >
             <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ minWidth: 0 }}>
-                <Kbd keys={shortcut.toUpperCase()} />
+                <Kbd
+                    keys={shortcut.toUpperCase()}
+                    availability={shortcutAvailable ? "available" : "inactive"}
+                />
                 <Box sx={{ minWidth: 0 }}>
                     <Typography variant="body2" fontWeight={700}>{label}</Typography>
                     <Typography variant="caption" color="text.secondary">{description}</Typography>
@@ -3273,6 +3281,7 @@ function DesktopModalBlock({
     label,
     title,
     shortcut,
+    shortcutAvailable = true,
     section,
     children,
     sx,
@@ -3280,13 +3289,15 @@ function DesktopModalBlock({
     label: string;
     title?: string;
     shortcut?: string;
-    section?: "info" | "logs";
+    shortcutAvailable?: boolean;
+    section?: "machines" | "info" | "logs";
     children: React.ReactNode;
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
     const focusable = section !== undefined;
     return (
         <Box
+            {...(section === "machines" ? { "data-settings-machines": true } : {})}
             {...(section === "info" ? { "data-settings-info": true } : {})}
             {...(section === "logs" ? { "data-settings-logs": true } : {})}
             tabIndex={focusable ? 0 : undefined}
@@ -3299,7 +3310,10 @@ function DesktopModalBlock({
                     borderRadius: 2,
                     p: section ? 2 : 1,
                     scrollMarginTop: 76,
-                    "&:focus-visible": desktopFocusBoundary,
+                    "&:focus-visible": {
+                        outline: (theme) => `2px solid ${desktopFocusBoundary(theme)}`,
+                        outlineOffset: 2,
+                    },
                 },
                 ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
             ]}
@@ -3309,7 +3323,12 @@ function DesktopModalBlock({
                     <Typography variant="overline" color="text.secondary">{label}</Typography>
                     {title && <Typography variant="body2" fontWeight={750}>{title}</Typography>}
                 </Box>
-                {shortcut && <Kbd keys={shortcut} />}
+                {shortcut && (
+                    <Kbd
+                        keys={shortcut}
+                        availability={shortcutAvailable ? "available" : "inactive"}
+                    />
+                )}
             </Stack>
             {children}
         </Box>
@@ -3319,9 +3338,11 @@ function DesktopModalBlock({
 function DesktopSettingsContent({
     themeMode,
     onSetThemeMode,
+    shortcutsAvailable,
 }: {
     themeMode: ThemeMode;
     onSetThemeMode: (mode: ThemeMode) => void;
+    shortcutsAvailable: boolean;
 }): React.JSX.Element {
     const vim = useVimSetting();
     const notify = useNotifySetting();
@@ -3343,7 +3364,7 @@ function DesktopSettingsContent({
             }}
         >
             <DesktopModalBlock label="Appearance">
-                <DesktopSettingsRow shortcut="T" label="Theme" description="Follow the system or pin a palette">
+                <DesktopSettingsRow shortcut="T" shortcutAvailable={shortcutsAvailable} label="Theme" description="Follow the system or pin a palette">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
                         {(["system", "light", "dark"] as const).map((mode) => (
                             <DesktopSettingsChoice key={mode} active={themeMode === mode} onClick={() => onSetThemeMode(mode)} ariaLabel={`${mode} theme`}>
@@ -3352,7 +3373,7 @@ function DesktopSettingsContent({
                         ))}
                     </Box>
                 </DesktopSettingsRow>
-                <DesktopSettingsRow shortcut="F" label="Reading font" description="Typeface used for transcript prose">
+                <DesktopSettingsRow shortcut="F" shortcutAvailable={shortcutsAvailable} label="Reading font" description="Typeface used for transcript prose">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 0.75 }}>
                         {FONT_PRESETS.map((preset) => (
                             <DesktopSettingsChoice key={preset.id} active={reading.fontVariant === preset.id} onClick={() => setFontVariant(preset.id)} ariaLabel={`${preset.label} reading font`}>
@@ -3380,17 +3401,17 @@ function DesktopSettingsContent({
                 </Box>
             </DesktopModalBlock>
             <DesktopModalBlock label="Density">
-                <DesktopSettingsRow shortcut="Z" label="Font size" description="Scale application text">
+                <DesktopSettingsRow shortcut="Z" shortcutAvailable={shortcutsAvailable} label="Font size" description="Scale application text">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
                         {FONT_SCALE_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.fontScale, FONT_SCALE_PRESETS) === value} onClick={() => setFontScale(value)} ariaLabel={`${Math.round(value * 100)} percent font size`}>{Math.round(value * 100)}%</DesktopSettingsChoice>)}
                     </Box>
                 </DesktopSettingsRow>
-                <DesktopSettingsRow shortcut="P" label="Padding" description="Transcript and composer side gutter">
+                <DesktopSettingsRow shortcut="P" shortcutAvailable={shortcutsAvailable} label="Padding" description="Transcript and composer side gutter">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
                         {PADDING_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.padding, PADDING_PRESETS) === value} onClick={() => setPadding(value)} ariaLabel={`${value} pixel padding`}>{value}px</DesktopSettingsChoice>)}
                     </Box>
                 </DesktopSettingsRow>
-                <DesktopSettingsRow shortcut="R" label="Line height" description="Vertical rhythm for long output">
+                <DesktopSettingsRow shortcut="R" shortcutAvailable={shortcutsAvailable} label="Line height" description="Vertical rhythm for long output">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 0.75 }}>
                         {LINE_HEIGHT_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.lineHeight, LINE_HEIGHT_PRESETS) === value} onClick={() => setLineHeight(value)} ariaLabel={`${value.toFixed(1)} line height`}>{value.toFixed(1)}</DesktopSettingsChoice>)}
                     </Box>
@@ -3410,16 +3431,16 @@ function DesktopSettingsContent({
                         },
                     }}
                 >
-                    <DesktopSettingsRow shortcut="S" label="Sound alert" description="Chime when an agent needs you">
+                    <DesktopSettingsRow shortcut="S" shortcutAvailable={shortcutsAvailable} label="Sound alert" description="Chime when an agent needs you">
                         <DesktopSettingsChoice active={notify} onClick={() => setNotifySetting(!notify)} ariaLabel="Toggle sound alerts">{notify ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
-                    <DesktopSettingsRow shortcut="V" label="Vibration alert" description="Native haptic notification">
+                    <DesktopSettingsRow shortcut="V" shortcutAvailable={shortcutsAvailable} label="Vibration alert" description="Native haptic notification">
                         <DesktopSettingsChoice active={vibrate} onClick={() => setVibrateSetting(!vibrate)} ariaLabel="Toggle vibration alerts">{vibrate ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
-                    <DesktopSettingsRow shortcut="M" label="Vim keybindings" description="Modal editing in the composer">
+                    <DesktopSettingsRow shortcut="M" shortcutAvailable={shortcutsAvailable} label="Vim keybindings" description="Modal editing in the composer">
                         <DesktopSettingsChoice active={vim} onClick={() => setVimSetting(!vim)} ariaLabel="Toggle Vim keybindings">{vim ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
-                    <DesktopSettingsRow shortcut="A" label="Auto-resume" description="Continue interrupted turns after restart">
+                    <DesktopSettingsRow shortcut="A" shortcutAvailable={shortcutsAvailable} label="Auto-resume" description="Continue interrupted turns after restart">
                         <DesktopSettingsChoice active={autoResume} onClick={() => setSetting(AUTO_RESUME_DEFAULT_KEY, !autoResume)} ariaLabel="Toggle automatic turn resume">{autoResume ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
                 </Box>
@@ -3714,6 +3735,16 @@ function MachinesContent(): React.JSX.Element {
         }
         command(machine.id, "components/reconcile");
     };
+    const confirmMachineUpdate = (): void => {
+        const pending = updateConfirmation;
+        if (!pending) return;
+        setUpdateConfirmation(null);
+        const component = pending.components[0];
+        if (pending.action === "npm" && component) updateNpm(pending.machineId, component);
+        else if (pending.action === "reconcile-one" && component) updateOne(pending.machineId, component);
+        else if (pending.action === "reconcile-all") command(pending.machineId, "components/reconcile");
+    };
+    useConfirmEnter(updateConfirmation !== null, confirmMachineUpdate);
     return (
         <Stack spacing={2}>
             <Box>
@@ -4133,25 +4164,44 @@ function MachinesContent(): React.JSX.Element {
                                 Current turns will finish first. Cowboy will then replace affected workers gradually. Each session may be briefly unavailable while it reconnects; its transcript and agent session are preserved. Machine host or runtime updates may also reconnect the Machine service.
                             </Alert>
                             <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>Cancel</Button>
+                                <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>
+                                    Cancel
+                                    <Kbd keys="Esc" />
+                                </Button>
                                 <Button
                                     variant="contained"
                                     color="warning"
-                                    onClick={() => {
-                                        const pending = updateConfirmation;
-                                        setUpdateConfirmation(null);
-                                        const component = pending.components[0];
-                                        if (pending.action === "npm" && component) updateNpm(pending.machineId, component);
-                                        else if (pending.action === "reconcile-one" && component) updateOne(pending.machineId, component);
-                                        else if (pending.action === "reconcile-all") command(pending.machineId, "components/reconcile");
-                                    }}
-                                >Update and roll out</Button>
+                                    onClick={confirmMachineUpdate}
+                                >
+                                    Update and roll out
+                                    <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                                </Button>
                             </Stack>
                         </Stack>
                     )}
                 </DialogContent>
             </Dialog>
         </Stack>
+    );
+}
+
+function closestScrollableSettingsSurface(panel: HTMLElement): HTMLElement {
+    let candidate: HTMLElement | null = panel;
+    while (candidate) {
+        const style = getComputedStyle(candidate);
+        if (
+            /(auto|scroll)/.test(style.overflowY) &&
+            candidate.scrollHeight > candidate.clientHeight
+        ) return candidate;
+        candidate = candidate.parentElement;
+    }
+    return panel;
+}
+
+function isSettingsEditableTarget(target: EventTarget | null): target is HTMLElement {
+    return target instanceof HTMLElement && (
+        target.matches("input, textarea, select, [contenteditable='true']") ||
+        target.closest("[contenteditable='true']") !== null
     );
 }
 
@@ -4211,32 +4261,105 @@ function SettingsShell({
     // toggle only appears where a physical keyboard exists.
     const desktop = useMediaQuery("(pointer: fine) and (hover: hover)");
     const settingsPanelRef = useRef<HTMLDivElement>(null);
+    const [settingsGoPrefix, setSettingsGoPrefix] = useState(false);
+    const [settingsEditableFocus, setSettingsEditableFocus] = useState(false);
     useEffect(() => {
         if (!open || !desktop) return undefined;
+        let goPending = false;
+        let goTimer: number | null = null;
+        const setGoPending = (pending: boolean): void => {
+            goPending = pending;
+            setSettingsGoPrefix(pending);
+            if (goTimer !== null) globalThis.clearTimeout(goTimer);
+            goTimer = pending
+                ? globalThis.setTimeout(() => {
+                    goPending = false;
+                    setSettingsGoPrefix(false);
+                }, 1200)
+                : null;
+        };
         const focusFirst = requestAnimationFrame(() => {
-            settingsPanelRef.current?.querySelector<HTMLElement>("[data-settings-choice]")?.focus();
+            settingsPanelRef.current?.querySelector<HTMLElement>(
+                "[data-settings-choice]",
+            )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (event.metaKey || event.ctrlKey || event.altKey) return;
+            if (isImeKeyEvent(event)) return;
             const target = event.target;
-            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
+            if (isSettingsEditableTarget(target)) {
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    target.blur();
+                    const returnTarget = target.closest<HTMLElement>(
+                        "[data-settings-row], [data-settings-machines], [data-settings-info], [data-settings-logs]",
+                    );
+                    requestAnimationFrame(() =>
+                        (returnTarget ?? settingsPanelRef.current)?.focus({ preventScroll: true }));
+                }
+                return;
+            }
             const key = workspaceCommandKey(event).toLowerCase();
             const tabs = ["settings", "machines", "info", "logs"] as const;
+            const panel = settingsPanelRef.current;
+            if (!panel) return;
+            const scrollSurface = closestScrollableSettingsSurface(panel);
+            if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && ["d", "u", "f", "b"].includes(key)) {
+                event.preventDefault();
+                event.stopPropagation();
+                setGoPending(false);
+                const direction = key === "d" || key === "f" ? 1 : -1;
+                const distance = scrollSurface.clientHeight * (key === "d" || key === "u" ? 0.5 : 0.92);
+                scrollSurface.scrollBy({ top: direction * distance, behavior: "auto" });
+                return;
+            }
+            if (event.metaKey || event.ctrlKey || event.altKey) {
+                setGoPending(false);
+                return;
+            }
+            if (event.repeat && key === "g") {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            if (goPending) {
+                event.preventDefault();
+                event.stopPropagation();
+                const goTop = !event.shiftKey && key === "g";
+                setGoPending(false);
+                if (goTop) scrollSurface.scrollTo({ top: 0, behavior: "auto" });
+                return;
+            }
+            if (event.shiftKey && key === "g") {
+                event.preventDefault();
+                event.stopPropagation();
+                setGoPending(false);
+                scrollSurface.scrollTo({ top: scrollSurface.scrollHeight, behavior: "auto" });
+                return;
+            }
+            if (!event.shiftKey && key === "g") {
+                event.preventDefault();
+                event.stopPropagation();
+                setGoPending(true);
+                return;
+            }
             if (!desktop && (key === "[" || key === "]")) {
                 event.preventDefault();
                 const index = tabs.indexOf(tab);
                 setTab(tabs[(index + (key === "]" ? 1 : tabs.length - 1)) % tabs.length] ?? "settings");
                 return;
             }
-            const panel = settingsPanelRef.current;
-            if (!panel) return;
-            if (desktop && (key === "i" || key === "g")) {
+            if (desktop && ["n", "i", "o"].includes(key)) {
                 const section = panel.querySelector<HTMLElement>(
-                    key === "i" ? "[data-settings-info]" : "[data-settings-logs]",
+                    key === "n"
+                        ? "[data-settings-machines]"
+                        : key === "i"
+                        ? "[data-settings-info]"
+                        : "[data-settings-logs]",
                 );
                 if (section) {
                     event.preventDefault();
-                    section.scrollIntoView({ block: "start", behavior: "smooth" });
+                    section.scrollIntoView({ block: "start", behavior: "auto" });
                     section.focus({ preventScroll: true });
                 }
                 return;
@@ -4282,12 +4405,25 @@ function SettingsShell({
             const next = choices[Math.max(0, Math.min(choices.length - 1, choiceIndex + (key === "l" ? 1 : -1)))];
             next?.focus();
         };
+        const onFocusIn = (event: FocusEvent): void => {
+            const panel = settingsPanelRef.current;
+            if (
+                panel?.contains(event.target as Node) &&
+                isSettingsEditableTarget(event.target)
+            ) setGoPending(false);
+        };
         globalThis.addEventListener("keydown", onKeyDown, true);
+        globalThis.addEventListener("focusin", onFocusIn, true);
         return () => {
             cancelAnimationFrame(focusFirst);
+            if (goTimer !== null) globalThis.clearTimeout(goTimer);
             globalThis.removeEventListener("keydown", onKeyDown, true);
+            globalThis.removeEventListener("focusin", onFocusIn, true);
+            setSettingsGoPrefix(false);
+            setSettingsEditableFocus(false);
         };
     }, [desktop, open, tab]);
+    const settingsShortcutsAvailable = !settingsGoPrefix && !settingsEditableFocus;
     return (
         <Sheet
             open={open}
@@ -4351,7 +4487,11 @@ function SettingsShell({
                         <IconButton aria-label="close settings" onClick={onClose} sx={{ width: 36, height: 36 }}>
                             <CloseIcon fontSize="small" />
                         </IconButton>
-                        <Kbd keys="Esc" floating />
+                        <Kbd
+                            keys="Esc"
+                            floating
+                            availability={settingsShortcutsAvailable ? "available" : "inactive"}
+                        />
                     </Box>
                 </Box>}
             </Box>
@@ -4360,23 +4500,63 @@ function SettingsShell({
                 <Box
                     ref={settingsPanelRef}
                     data-desktop-settings-workbench
+                    tabIndex={-1}
+                    onFocusCapture={(event): void => {
+                        setSettingsEditableFocus(isSettingsEditableTarget(event.target));
+                    }}
+                    onBlurCapture={(): void => {
+                        requestAnimationFrame(() => {
+                            const panel = settingsPanelRef.current;
+                            setSettingsEditableFocus(
+                                panel !== null && panel.contains(document.activeElement) &&
+                                isSettingsEditableTarget(document.activeElement),
+                            );
+                        });
+                    }}
                     sx={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflowY: "auto",
                         display: "grid",
                         gridTemplateColumns: "minmax(0, 1fr)",
                         gap: 2,
                         alignItems: "start",
+                        pr: 0.75,
+                        pb: 2,
                         "@media (max-width: 1279px)": { gridTemplateColumns: "1fr" },
                     }}
                 >
-                    <DesktopSettingsContent themeMode={themeMode} onSetThemeMode={onSetThemeMode} />
-                    <DesktopModalBlock label="Remote runtimes & credentials" title="Machines" shortcut="M">
+                    <DesktopSettingsContent
+                        themeMode={themeMode}
+                        onSetThemeMode={onSetThemeMode}
+                        shortcutsAvailable={settingsShortcutsAvailable}
+                    />
+                    <DesktopModalBlock
+                        label="Remote runtimes & credentials"
+                        title="Machines"
+                        shortcut="N"
+                        shortcutAvailable={settingsShortcutsAvailable}
+                        section="machines"
+                    >
                         <MachinesContent />
                     </DesktopModalBlock>
-                    <DesktopModalBlock label="Runtime, usage & audit" title="Info" shortcut="I" section="info">
+                    <DesktopModalBlock
+                        label="Runtime, usage & audit"
+                        title="Info"
+                        shortcut="I"
+                        shortcutAvailable={settingsShortcutsAvailable}
+                        section="info"
+                    >
                         <InfoContent
                             desktop
                             aside={
-                                <DesktopModalBlock label="Audit trail" title="Logs" shortcut="G" section="logs">
+                                <DesktopModalBlock
+                                    label="Audit trail"
+                                    title="Logs"
+                                    shortcut="O"
+                                    shortcutAvailable={settingsShortcutsAvailable}
+                                    section="logs"
+                                >
                                     <UsageLogs dense />
                                 </DesktopModalBlock>
                             }
@@ -4662,46 +4842,75 @@ function SettingsShell({
             </Stack>
             )}
             {desktop && (
-                <Box
-                    alignItems="center"
-                    sx={{
-                        position: "sticky",
-                        bottom: 0,
-                        zIndex: 5,
-                        mt: 2,
-                        mx: -1,
-                        px: 2,
-                        py: 1,
-                        borderTop: 1,
-                        borderColor: "divider",
-                        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
-                        backdropFilter: "blur(16px)",
-                        display: "flex",
-                        width: "calc(100% + 16px)",
-                    }}
-                >
-                    <Stack
-                        direction="row"
-                        alignItems="center"
-                        justifyContent="space-between"
-                        sx={{ color: "text.secondary", minWidth: 0, width: "100%" }}
-                    >
-                        <Stack direction="row" spacing={1.25} alignItems="center">
-                            <Typography variant="overline" sx={{ opacity: 0.7, mr: 0.25 }}>Navigate</Typography>
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="J/K" /><Typography variant="caption">Move</Typography></Stack>
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Apply</Typography></Stack>
-                        </Stack>
-                        <Stack direction="row" spacing={0.75} alignItems="center">
-                            <Typography variant="overline" sx={{ opacity: 0.7 }}>Jump</Typography>
-                            <Kbd keys="T F Z P R S V M A" />
-                        </Stack>
-                        <Stack direction="row" spacing={1.25} alignItems="center">
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="I" /><Typography variant="caption">Info</Typography></Stack>
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="G" /><Typography variant="caption">Logs</Typography></Stack>
-                            <Stack direction="row" spacing={0.5} alignItems="center"><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
-                        </Stack>
-                    </Stack>
+                <Box sx={{ flex: "0 0 auto", mx: -3 }}>
+                    <DesktopShortcutBar
+                            groups={[
+                                {
+                                    label: "Navigate",
+                                    slots: [
+                                        { shortcut: "J/K", label: "Field", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: "H/L", label: "Choice", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: ENTER_LABEL, label: "Apply", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                    ],
+                                },
+                                {
+                                    label: "Page",
+                                    slots: [
+                                        { shortcut: "Ctrl+D/U", label: "Half", availability: settingsEditableFocus ? "inactive" : "available" },
+                                        { shortcut: "Ctrl+F/B", label: "Full", availability: settingsEditableFocus ? "inactive" : "available" },
+                                        {
+                                            shortcut: "G",
+                                            label: "Go",
+                                            availability: sequentialShortcutAvailability({
+                                                scopeAvailable: !settingsEditableFocus,
+                                                armed: settingsGoPrefix,
+                                                prefix: true,
+                                            }),
+                                        },
+                                        {
+                                            shortcut: "G",
+                                            label: "Top",
+                                            availability: sequentialShortcutAvailability({
+                                                scopeAvailable: !settingsEditableFocus,
+                                                armed: settingsGoPrefix,
+                                                prefix: false,
+                                            }),
+                                        },
+                                        { shortcut: "Shift+G", label: "Bottom", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                    ],
+                                },
+                                {
+                                    label: "Jump",
+                                    slots: ([
+                                            ["T", "Theme"], ["F", "Reading font"],
+                                            ["Z", "Font size"], ["P", "Padding"],
+                                            ["R", "Line height"], ["S", "Sound"],
+                                            ["V", "Vibration"], ["M", "Vim"],
+                                            ["A", "Auto-resume"],
+                                        ] as const).map(([shortcut, title]) => ({
+                                            shortcut,
+                                            title,
+                                            availability: settingsShortcutsAvailable ? "available" as const : "inactive" as const,
+                                        })),
+                                },
+                                {
+                                    label: "Sections",
+                                    slots: [
+                                        { shortcut: "N", label: "Machines", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: "I", label: "Info", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        { shortcut: "O", label: "Logs", availability: settingsShortcutsAvailable ? "available" : "inactive" },
+                                        {
+                                            shortcut: "Esc",
+                                            label: settingsGoPrefix
+                                                ? "Cancel prefix"
+                                                : settingsEditableFocus
+                                                ? "Leave field"
+                                                : "Close",
+                                        },
+                                    ],
+                                },
+                            ]}
+                    />
                 </Box>
             )}
         </Sheet>
@@ -4896,7 +5105,10 @@ function RenameSessionShell({
                         disabled={!canSave}
                     >
                         Save
-                        <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+                        <Kbd
+                            keys={`${MOD_LABEL}${ENTER_LABEL}`}
+                            availability={canSave ? "available" : "inactive"}
+                        />
                     </Button>
                 </>
             }

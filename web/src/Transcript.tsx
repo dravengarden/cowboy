@@ -39,6 +39,7 @@ import { alpha } from "@mui/material/styles";
 import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
   Bedtime,
@@ -123,10 +124,10 @@ import {
   saveTranscriptViewport,
 } from "./transcriptViewportStore";
 import { FloatingActionIsland, ImageLightbox } from "./_shell";
-import { Kbd } from "./Kbd";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
@@ -1879,6 +1880,7 @@ function ToolDetailsBrowser({
   const historyRef = useRef<HTMLElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
   const navigationChord = useRef<number | null>(null);
+  const [navigationPrefixArmed, setNavigationPrefixArmed] = useState(false);
   const rawOnly = item
     ? toolUsesRawOnly({
       kind: item.toolKind,
@@ -1950,12 +1952,30 @@ function ToolDetailsBrowser({
 
   useEffect(() => {
     if (!desktop || !item) return undefined;
+    const clearNavigationChord = (): void => {
+      if (navigationChord.current !== null) {
+        globalThis.clearTimeout(navigationChord.current);
+        navigationChord.current = null;
+      }
+      setNavigationPrefixArmed(false);
+    };
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        clearNavigationChord();
+        return;
+      }
       const target = event.target instanceof Element ? event.target : null;
       if (target?.matches("input, textarea, [contenteditable='true']")) return;
       const key = workspaceCommandKey(event);
+      if (navigationChord.current !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        clearNavigationChord();
+        if (key === "g") select(runs[0]?.tools[0]);
+        return;
+      }
       if (key === "Escape") {
         event.preventDefault();
         onClose();
@@ -1977,18 +1997,15 @@ function ToolDetailsBrowser({
       } else if (key === "Enter") {
         event.preventDefault();
         onLocate(item.key);
-      } else if (navigationChord.current !== null) {
-        globalThis.clearTimeout(navigationChord.current);
-        navigationChord.current = null;
-        if (key === "g") {
-          event.preventDefault();
-          select(runs[0]?.tools[0]);
-        }
       } else if (key === "g") {
         event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        setNavigationPrefixArmed(true);
         navigationChord.current = globalThis.setTimeout(() => {
           navigationChord.current = null;
-        }, 900);
+          setNavigationPrefixArmed(false);
+        }, 1200);
       } else if (key === "G") {
         event.preventDefault();
         select(runs.at(-1)?.tools.at(-1));
@@ -1997,10 +2014,7 @@ function ToolDetailsBrowser({
     globalThis.addEventListener("keydown", onKeyDown, true);
     return () => {
       globalThis.removeEventListener("keydown", onKeyDown, true);
-      if (navigationChord.current !== null) {
-        globalThis.clearTimeout(navigationChord.current);
-        navigationChord.current = null;
-      }
+      clearNavigationChord();
     };
   }, [desktop, runIndex, item, rawOnly, runs, onClose, onLocate]);
 
@@ -2444,28 +2458,66 @@ function ToolDetailsBrowser({
                 {details}
               </DialogContent>
             </Box>
-            <Box
-              aria-label="Tool history keyboard shortcuts"
-              sx={{
-                minHeight: 46,
-                px: 2.5,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "flex-end",
-                gap: 2.25,
-                borderTop: 1,
-                borderColor: "divider",
-                bgcolor: "background.paper",
-                color: "text.secondary",
-                userSelect: "none",
-              }}
-            >
-              <Stack direction="row" alignItems="center"><Kbd keys="J/K" /> <Typography variant="caption">Run</Typography></Stack>
-              {!rawOnly && <Stack direction="row" alignItems="center"><Kbd keys="H/L" /> <Typography variant="caption">View</Typography></Stack>}
-              <Stack direction="row" alignItems="center"><Kbd keys="GG/G" /> <Typography variant="caption">Oldest/latest</Typography></Stack>
-              <Stack direction="row" alignItems="center"><Kbd keys="↵" /> <Typography variant="caption">Locate</Typography></Stack>
-              <Stack direction="row" alignItems="center"><Kbd keys="Esc" /> <Typography variant="caption">Close</Typography></Stack>
-            </Box>
+            <DesktopShortcutBar
+                groups={[
+                  {
+                    label: "Navigate",
+                    slots: [
+                      {
+                        shortcut: "J/K",
+                        label: "Run",
+                        availability: navigationPrefixArmed ? "inactive" : "available",
+                      },
+                      {
+                        shortcut: "H/L",
+                        label: "View",
+                        availability: rawOnly || navigationPrefixArmed
+                          ? "inactive"
+                          : "available",
+                      },
+                      {
+                        shortcut: "Enter",
+                        label: "Locate",
+                        availability: navigationPrefixArmed ? "inactive" : "available",
+                      },
+                    ],
+                  },
+                  {
+                    label: "Go",
+                    slots: [
+                      {
+                        shortcut: "G",
+                        label: "Prefix",
+                        availability: sequentialShortcutAvailability({
+                          scopeAvailable: true,
+                          armed: navigationPrefixArmed,
+                          prefix: true,
+                        }),
+                      },
+                      {
+                        shortcut: "G",
+                        label: "Oldest",
+                        availability: sequentialShortcutAvailability({
+                          scopeAvailable: true,
+                          armed: navigationPrefixArmed,
+                          prefix: false,
+                        }),
+                      },
+                      {
+                        shortcut: "Shift+G",
+                        label: "Latest",
+                        availability: navigationPrefixArmed ? "inactive" : "available",
+                      },
+                    ],
+                  },
+                  {
+                    slots: [{
+                      shortcut: "Esc",
+                      label: navigationPrefixArmed ? "Cancel prefix" : "Close",
+                    }],
+                  },
+                ]}
+            />
           </Box>
         </Dialog>
       )

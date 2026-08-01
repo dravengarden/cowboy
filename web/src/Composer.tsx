@@ -128,6 +128,7 @@ import {
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
 } from "./desktop/commands/workspaceShortcuts";
 import { listJumpKey } from "./desktop/commands/listNavigation";
+import { shortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import {
   type Attachment,
   filesToAttachments,
@@ -486,10 +487,11 @@ function ComposeBar(
     child: ReactNode,
     badge: string,
     shortcut: string,
+    enabled = true,
   ): ReactNode => desktop
     ? (
       <Suspense fallback={child}>
-        <DesktopContextShortcut badge={badge} shortcut={shortcut}>
+        <DesktopContextShortcut badge={badge} shortcut={shortcut} enabled={enabled}>
           {child}
         </DesktopContextShortcut>
       </Suspense>
@@ -546,7 +548,7 @@ function ComposeBar(
               >
                 /
               </Box>
-            </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`)}
+            </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`, !dead)}
           </span>
         </Tooltip>
         <Tooltip title="Reference a file (@)">
@@ -558,7 +560,7 @@ function ComposeBar(
               onClick={(): void => onTrigger("@")}
             >
               <AlternateEmail />
-            </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`)}
+            </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`, !dead)}
           </span>
         </Tooltip>
         {onAttach && (
@@ -571,7 +573,7 @@ function ComposeBar(
                 onClick={onAttach}
               >
                 <AttachFile />
-              </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`)}
+              </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`, !dead)}
             </span>
           </Tooltip>
         )}
@@ -662,7 +664,7 @@ function ComposeBar(
               onClick={onSend}
             >
               {submitIcon ?? <Send />}
-            </IconButton>, `${MOD_LABEL}↵`, `${MOD_LABEL}Enter · ${submitLabel}`)}
+            </IconButton>, `${MOD_LABEL}↵`, `${MOD_LABEL}Enter · ${submitLabel}`, sendable)}
           </span>
         </Tooltip>
         {onCollapse && (
@@ -767,10 +769,11 @@ export function ComposerWorkspace({
     child: ReactNode,
     badge: string,
     shortcut: string,
+    enabled = true,
   ): ReactNode => desktop
     ? (
       <Suspense fallback={child}>
-        <DesktopContextShortcut badge={badge} shortcut={shortcut}>
+        <DesktopContextShortcut badge={badge} shortcut={shortcut} enabled={enabled}>
           {child}
         </DesktopContextShortcut>
       </Suspense>
@@ -1718,7 +1721,7 @@ export function ComposerWorkspace({
                   onClick={(): void => editorRef.current?.insertTrigger("/")}
                 >
                   <Box component="span" sx={{ fontSize: "1.1rem", fontWeight: 700, lineHeight: 1 }}>/</Box>
-                </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`)}
+                </IconButton>, `${ALT_LABEL}/`, `${ALT_LABEL}/ · slash command`, !dead)}
               </span>
             </Tooltip>
             <Tooltip title="Reference a file (@)">
@@ -1730,7 +1733,7 @@ export function ComposerWorkspace({
                   onClick={(): void => editorRef.current?.insertTrigger("@")}
                 >
                   <AlternateEmail fontSize="small" />
-                </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`)}
+                </IconButton>, `${ALT_LABEL}R`, `${ALT_LABEL}R · reference a file`, !dead)}
               </span>
             </Tooltip>
             <Tooltip title="Attach image or file">
@@ -1742,7 +1745,7 @@ export function ComposerWorkspace({
                   onClick={(): void => fileInputRef.current?.click()}
                 >
                   <AttachFile fontSize="small" />
-                </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`)}
+                </IconButton>, `${ALT_LABEL}A`, `${ALT_LABEL}A · attach file`, !dead)}
               </span>
             </Tooltip>
             <Box sx={{ flex: 1 }} />
@@ -1758,7 +1761,7 @@ export function ComposerWorkspace({
                       onClick={saveDraft}
                     >
                       <EditNoteOutlined fontSize="small" />
-                    </IconButton>, `${MOD_LABEL}S`, `${MOD_LABEL}S · save as draft`)}
+                    </IconButton>, `${MOD_LABEL}S`, `${MOD_LABEL}S · save as draft`, sendable)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Schedule send">
@@ -1770,7 +1773,7 @@ export function ComposerWorkspace({
                       onClick={(): void => setScheduleTarget({ id: undefined, initial: null })}
                     >
                       <Schedule fontSize="small" />
-                    </IconButton>, `${ALT_LABEL}S`, `${ALT_LABEL}S · schedule prompt`)}
+                    </IconButton>, `${ALT_LABEL}S`, `${ALT_LABEL}S · schedule prompt`, sendable)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Jump to front of queue">
@@ -1782,7 +1785,7 @@ export function ComposerWorkspace({
                       onClick={jumpToFront}
                     >
                       <VerticalAlignTop fontSize="small" />
-                    </IconButton>, `${MOD_LABEL}J`, `${MOD_LABEL}J · jump to front`)}
+                    </IconButton>, `${MOD_LABEL}J`, `${MOD_LABEL}J · jump to front`, sendable && queue.length > 0)}
                   </span>
                 </Tooltip>
                 <Tooltip title="Force push">
@@ -1795,7 +1798,7 @@ export function ComposerWorkspace({
                       onClick={(e): void => setForceAnchor(e.currentTarget)}
                     >
                       <Bolt fontSize="small" />
-                    </IconButton>, `${ALT_LABEL}↵`, `${ALT_LABEL}Enter · force push`)}
+                    </IconButton>, `${ALT_LABEL}↵`, `${ALT_LABEL}Enter · force push`, sendable && (busy || starting || paused))}
                   </span>
                 </Tooltip>
               </>
@@ -1905,7 +1908,7 @@ export function ComposerWorkspace({
               }}
             >
               {busy || starting ? "Queue" : "Send"}
-            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`)}
+            </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`, sendable)}
             </Stack>
           </>
         ) : (
@@ -3828,6 +3831,8 @@ function PendingRow({
   // row Sends now when the session's free, else Force-pushes (confirm popover).
   // Built as a statement to avoid a nested ternary in the JSX.
   let primary: React.JSX.Element;
+  const primaryEnabled = kind === "draft" || dispatchable ||
+    (connected && status === "busy");
   if (kind === "draft") {
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
@@ -3892,6 +3897,7 @@ function PendingRow({
           badge="S"
           shortcut="S · send focused item"
           itemScoped
+          enabled={primaryEnabled}
           placement="corner"
         >
           {primaryControl}
@@ -4204,7 +4210,13 @@ export function AutoScrollAndStop({
           }}
         >
           <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
-          <ShortcutKeycap keyLabel="S" variant="global" accent={desktopShortcutActive} availability={desktopShortcutActive ? "available" : "inactive"} sx={{ flexShrink: 0, ml: 0.65 }} />
+          <ShortcutKeycap
+            keyLabel="S"
+            variant="global"
+            accent={desktopShortcutActive || cancelOpen}
+            availability={shortcutAvailability(Boolean(desktopShortcutActive), cancelOpen)}
+            sx={{ flexShrink: 0, ml: 0.65 }}
+          />
         </Button>
       )
       : null;

@@ -16,6 +16,97 @@ DOM integration uses `data-desktop-pane`, `data-desktop-region`, and
 `data-desktop-focus-default`. Mouse focus and keyboard navigation update the
 same controller state.
 
+## Core interaction laws
+
+These rules are the canonical Desktop-mode primitive contract. New controls,
+modals, product modes, and shortcut hints must reuse them rather than creating
+component-local keyboard semantics.
+
+### One truthful shortcut state machine
+
+Every live shortcut slot uses `ShortcutKeycap` and exactly one state:
+
+- `inactive`: the chord will not execute now because its focus scope does not
+  own input or its action is currently unavailable;
+- `available`: pressing the displayed chord now executes the advertised action;
+- `active`: a transient command owner is engaged, such as an armed prefix, an
+  open overlay's launcher, or another pending keyboard mode.
+
+`active` is not a synonym for selected, pressed, current, or focused. Tabs,
+segmented choices, selected rows, and toggles communicate those states through
+their own MUI semantics while their usable shortcut remains `available`.
+Business-disabled controls keep their native disabled treatment and explanation;
+their keycap becomes `inactive` because the chord cannot execute. The DOM must
+expose the same truth through `data-shortcut-state`; opacity or color alone is
+never the state model.
+
+Global shortcuts are available without first focusing a region and stay visible
+as quiet embedded slots. Context shortcuts become available only when their
+owning region or modal owns keyboard input. Opening an overlay may make its
+launcher `active`, but commands underneath that exclusive overlay become
+inactive even if they were previously focused.
+
+Availability must come from the same focus and business predicates used by the
+dispatcher; visibility, hover, and selection are not substitutes. A live slot
+must update on focus transfer, editor entry, pending async work, and overlay
+ownership in the same render that changes command execution. Shortcut-guide
+tables are explicitly reference material (`data-shortcut-reference`), not live
+slots, and must not be copied into an action surface as an availability claim.
+
+### Activation, confirmation, and escape
+
+- `Enter` opens, selects, or activates the focused non-destructive item.
+- `Mod+Enter` commits a mutating edit or confirms a consequential action. A
+  confirmation must never also accept plain Enter.
+- `Esc` unwinds exactly one innermost transient state: pending chord, Vim Insert
+  or reorder mode, popover, modal, then product mode. It does not skip levels.
+- Leaving a dirty transactional edit may ask for discard confirmation, but only
+  after editor-owned modes have returned to plain Normal. Confirm discard still
+  uses `Mod+Enter`; `Esc` keeps editing.
+
+### Vim motion and focus ownership
+
+Within a keyboard workbench, `J/K` moves vertically between fields or items and
+`H/L` moves horizontally between choices or adjacent panes. Reader-like
+surfaces add `Ctrl-D/U` for half-page motion, `Ctrl-F/B` for full-page motion,
+and `gg/G` for the two ends. A visible shortcut bar is a live legend for these
+surface-owned motions. Text inputs, CodeMirror, native selection, and active IME
+composition always own their native keys before workspace navigation.
+While an editable field owns focus, the workbench motions become inactive and
+the field/search owner may become active. `Esc` first returns focus to the
+workbench; a second `Esc` may close it.
+
+### Shortcut slots and bars
+
+Every keyboard-capable action has one discoverable slot. Fixed controls embed
+the slot in the component; contextual item actions anchor it to that action;
+navigation-rich workspaces and modals use the shared `DesktopShortcutBar` at
+their bottom edge. A simple two-action confirmation keeps `Esc` and `Mod+Enter`
+beside the buttons instead of adding a redundant bar. Dense repeated lists may
+hide item action slots until that item owns focus, but their header/prefix slots
+remain present with truthful inactive states.
+
+A shortcut bar describes only bindings implemented by the surface that owns
+it. Do not advertise browser defaults, reference-only examples, or a command
+handled by a layer underneath the current modal. Its groups should follow task
+order—Navigate, Page, Jump, Commit/Close—and may scroll horizontally instead of
+wrapping into a second toolbar.
+
+### Sequential chords
+
+A sequence such as `G` then `1…0` has a three-state transition:
+
+1. outside its scope, prefix and continuations are `inactive`;
+2. in scope, the prefix is `available` and continuations remain `inactive`;
+3. after the prefix, it becomes `active` and valid continuations become
+   `available` for 1.2 seconds.
+
+A valid continuation executes and clears the sequence. `Esc`, timeout, focus or
+mode change, and any unrelated unmodified continuation cancel it; the unrelated
+key is consumed so it cannot trigger a row action accidentally. A modified
+global chord cancels the sequence and continues normally. Auto-repeat must not
+turn one held prefix into a completed double-key command.
+
 ## Navigation
 
 - `Ctrl-w h/l`: adjacent pane.
@@ -125,14 +216,16 @@ when dialogs mutate, so the same mechanism covers the workspace, Tool History
 inspector, menus, and modal actions without every control needing a bespoke
 shortcut.
 
-Shortcut hints follow one shared keycap grammar and three visibility levels:
+Shortcut hints implement the core state machine above with three discovery
+levels:
 
 1. global shortcuts are always visible but quiet (`Mod+E/I/L/T`, `Mod+N`,
    `Mod+,`) because they work without first focusing a region;
 2. contextual shortcuts float over their action only while the owning region is
    focused (Prompt subregions and list item actions), so they add no layout
    width and disappear when attention moves elsewhere;
-3. modal actions show their real confirmation/dismissal chord next to the label.
+3. modal actions use their surface-owned shortcut bar, while simple
+   confirmations show the real confirmation/dismissal chord next to the button.
 
 Embedded contextual shortcuts are the persistent exception to visibility
 gating. Controls such as Top Bar Run Configuration, Usage, Compact, and Stop
@@ -144,17 +237,13 @@ approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
 semantics remain identical across Desktop.
 
-Sequential list chords use the same persistent states. Queue and Draft headers
-show the `G` prefix and their first ten visible rows show `1` through `9`, then
-`0`; all are `inactive` at rest so the list remains quiet. Pressing `G` while
-the list owns Normal-mode focus changes the prefix and all visible slot keycaps
-to `available` for 1.2 seconds. A valid slot focuses that exact row. A second
-`G` focuses the first row. Escape, an unavailable slot, any unrelated second
-key, changing regions, entering an editor, or timeout cancels the chord and
-restores every badge to `inactive`. The cancelling key is consumed while the
-list still owns the chord so it cannot fall through to an item action. Modified
-global chords cancel the prefix but continue normally, so `Mod+I` still returns
-to Composer immediately.
+Queue and Draft headers show their sequential `G` prefix and their first ten
+visible rows show `1` through `9`, then `0`. Outside the list all are inactive;
+while the list owns Normal-mode focus, `G` is available and the numeric slots
+remain inactive. Pressing `G` makes the prefix active and numeric slots
+available. A valid slot focuses that exact row and a second `G` focuses the
+first row. Cancellation follows the shared sequential-chord law, so a modified
+global command such as `Mod+I` still returns to Composer immediately.
 
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the

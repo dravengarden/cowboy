@@ -1,9 +1,6 @@
 import {
   alpha,
   Box,
-  Dialog,
-  DialogContent,
-  DialogTitle,
   Divider,
   Stack,
   Typography,
@@ -17,6 +14,7 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
 } from "./workspaceShortcuts";
+import { DesktopModal } from "../DesktopModal";
 
 interface ShortcutRow {
   keys: string[];
@@ -83,7 +81,14 @@ const CONVERSATION: ShortcutRow[] = [
 
 function KeySequence({ keys }: { keys: string[] }): React.JSX.Element {
   return (
-    <Stack direction="row" spacing={0.4} alignItems="center" flexWrap="wrap" useFlexGap>
+    <Stack
+      data-shortcut-reference
+      direction="row"
+      spacing={0.4}
+      alignItems="center"
+      flexWrap="wrap"
+      useFlexGap
+    >
       {keys.map((key, index) =>
         key.includes("+")
           ? <DesktopShortcut key={`${key}-${String(index)}`} shortcut={key} />
@@ -181,60 +186,42 @@ export function DesktopShortcutsDialog({
       })), [registry.commands, workspace.focusedPane, workspace.focusedRegion]);
 
   return (
-    <Dialog
+    <DesktopModal
       open={open}
       onClose={onClose}
-      fullWidth
-      maxWidth="md"
-      aria-labelledby="desktop-shortcuts-title"
-      slotProps={{
-        paper: {
-          sx: {
-            maxHeight: "min(82vh, 760px)",
-            borderRadius: 3,
-            border: 1,
-            borderColor: (theme) => alpha(theme.palette.primary.main, 0.22),
-            backgroundImage: "none",
-          },
+      title="Keyboard shortcuts"
+      description={`Vim-first navigation · ${workspace.focusedRegion ?? workspace.focusedPane}`}
+      icon={<Keyboard color="primary" />}
+      width={920}
+      shortcutGroups={[
+        {
+          slots: [{ shortcut: "Mod+/", label: "Guide", availability: "active" }],
         },
-      }}
+        { slots: [{ shortcut: "Esc", label: "Close" }] },
+      ]}
     >
-      <DialogTitle id="desktop-shortcuts-title" sx={{ pb: 1.25 }}>
-        <Stack direction="row" spacing={1.25} alignItems="center">
-          <Keyboard color="primary" />
-          <Box>
-            <Typography variant="h6" fontWeight={750}>Keyboard shortcuts</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Vim-first navigation · {workspace.focusedRegion ?? workspace.focusedPane}
-            </Typography>
-          </Box>
-          <Box sx={{ flex: 1 }} />
-          <DesktopShortcut shortcut="Mod+/" />
-        </Stack>
-      </DialogTitle>
-      <DialogContent dividers sx={{ p: 1.5 }}>
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: 1.25,
-            "@media (max-width: 760px)": { gridTemplateColumns: "1fr" },
-          }}
-        >
-          <ShortcutSection title="Workspace navigation" rows={NAVIGATION} active />
-          <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
-          {workspace.focusedRegion === "conversation.transcript" && (
-            <ShortcutSection title="Conversation reading" rows={CONVERSATION} active />
-          )}
-          {paneCommands.length > 0 && (
-            <ShortcutSection
-              title={`${workspace.focusedRegion ?? workspace.focusedPane} commands`}
-              rows={paneCommands}
-              active
-            />
-          )}
-        </Box>
-      </DialogContent>
-    </Dialog>
+      <Box
+        sx={{
+          p: 1.5,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 1.25,
+          "@media (max-width: 760px)": { gridTemplateColumns: "1fr" },
+        }}
+      >
+        <ShortcutSection title="Workspace navigation" rows={NAVIGATION} active />
+        <ShortcutSection title="Discovery and commands" rows={DISCOVERY} />
+        {workspace.focusedRegion === "conversation.transcript" && (
+          <ShortcutSection title="Conversation reading" rows={CONVERSATION} active />
+        )}
+        {paneCommands.length > 0 && (
+          <ShortcutSection
+            title={`${workspace.focusedRegion ?? workspace.focusedPane} commands`}
+            rows={paneCommands}
+            active
+          />
+        )}
+      </Box>
+    </DesktopModal>
   );
 }

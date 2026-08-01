@@ -68,6 +68,7 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
+import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
   desktopTopBarTimelineSlice,
   sameDesktopTopBarTimelineSlice,
@@ -93,6 +94,16 @@ function optionLabel(option: ConfigOption): string {
   }
   if (name.includes("fast")) return "Fast mode";
   return option.name;
+}
+
+function optionShortcut(option: ConfigOption): string | undefined {
+  const label = optionLabel(option);
+  if (label === "Agent mode") return "A";
+  if (label === "Model") return "M";
+  if (label === "Reasoning effort") return "E";
+  if (label === "Collaboration mode") return "C";
+  if (label === "Fast mode") return "F";
+  return undefined;
 }
 
 function currentOptionName(option: ConfigOption): string {
@@ -384,7 +395,10 @@ function DesktopUsageExtras(
           {resetError && <Typography color="error.main" variant="body2" sx={{ mt: 1 }}>{resetError}</Typography>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={closeResetDialog} disabled={resetBusy}>Cancel</Button>
+          <Button onClick={closeResetDialog} disabled={resetBusy}>
+            Cancel
+            <Kbd keys="Esc" availability={resetBusy ? "inactive" : "available"} />
+          </Button>
           <Button
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
@@ -392,7 +406,12 @@ function DesktopUsageExtras(
             onClick={() => void submitReset()}
           >
             {resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            <Kbd
+              keys={`${MOD_LABEL}${ENTER_LABEL}`}
+              availability={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)
+                ? "inactive"
+                : "available"}
+            />
           </Button>
         </DialogActions>
       </Dialog>
@@ -408,17 +427,7 @@ function ConfigOptionControl({
   sessionId: string;
 }): React.JSX.Element {
   const label = optionLabel(option);
-  const shortcut = label === "Agent mode"
-    ? "A"
-    : label === "Model"
-    ? "M"
-    : label === "Reasoning effort"
-    ? "E"
-    : label === "Collaboration mode"
-    ? "C"
-    : label === "Fast mode"
-    ? "F"
-    : undefined;
+  const shortcut = optionShortcut(option);
   const setValue = (value: string): void => {
     const selected = option.options.find((candidate) =>
       String(candidate.value) === value
@@ -624,6 +633,11 @@ export function DesktopTopBarControls({
   }, []);
   useEffect(() => {
     if (configAnchor === null) return undefined;
+    const focusFirst = requestAnimationFrame(() => {
+      configPanelRef.current?.querySelector<HTMLElement>(
+        "[data-config-choice]:not(:disabled):not([aria-disabled='true'])",
+      )?.focus();
+    });
     const onKeyDown = (event: KeyboardEvent): void => {
       if (desktopImeOwnsKey(event)) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -684,7 +698,10 @@ export function DesktopTopBarControls({
       nextChoice?.focus();
     };
     globalThis.addEventListener("keydown", onKeyDown, true);
-    return (): void => globalThis.removeEventListener("keydown", onKeyDown, true);
+    return (): void => {
+      cancelAnimationFrame(focusFirst);
+      globalThis.removeEventListener("keydown", onKeyDown, true);
+    };
   }, [configAnchor]);
   useEffect(() => {
     if (usageAnchor === null) return undefined;
@@ -904,7 +921,16 @@ export function DesktopTopBarControls({
                 <Typography variant="caption" fontWeight={650} noWrap sx={{ flex: 1, minWidth: 0, textAlign: "left" }}>
                   {configSummary || "Run configuration"}
                 </Typography>
-                <ShortcutKeycap keyLabel="R" variant="global" accent={shortcutsActive} availability={shortcutsActive ? "available" : "inactive"} sx={{ flexShrink: 0, ml: 0.75 }} />
+                <ShortcutKeycap
+                  keyLabel="R"
+                  variant="global"
+                  accent={shortcutsActive || configAnchor !== null}
+                  availability={shortcutAvailability(
+                    shortcutsActive && !dead && options.length > 0,
+                    configAnchor !== null,
+                  )}
+                  sx={{ flexShrink: 0, ml: 0.75 }}
+                />
               </Button>
           </Tooltip>
         )}
@@ -916,14 +942,14 @@ export function DesktopTopBarControls({
         description="Changes apply immediately to this session."
         icon={<Tune sx={{ color: "primary.main" }} />}
         width={900}
-        footer={
-          <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={2} sx={{ px: 2.25, py: 1, color: "text.secondary" }}>
-            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="J/K" /><Typography variant="caption">Field</Typography></Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="H/L" /><Typography variant="caption">Choice</Typography></Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys={ENTER_LABEL} /><Typography variant="caption">Select</Typography></Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}><Kbd keys="Esc" /><Typography variant="caption">Close</Typography></Stack>
-          </Stack>
-        }
+        shortcutGroups={[{
+          label: "Navigate",
+          slots: [
+            { shortcut: "J/K", label: "Field" },
+            { shortcut: "H/L", label: "Choice" },
+            { shortcut: ENTER_LABEL, label: "Select" },
+          ],
+        }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
         <Box ref={configPanelRef} data-desktop-shortcut-scope="exclusive">
           <Box sx={{ px: 2.25, py: 1.75, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1.25 }}>
@@ -1038,7 +1064,13 @@ export function DesktopTopBarControls({
                 {snapshot ? "Usage unavailable" : "Loading usage…"}
               </Typography>
             )}
-          <ShortcutKeycap keyLabel="U" variant="global" accent={shortcutsActive} availability={shortcutsActive ? "available" : "inactive"} sx={{ flexShrink: 0 }} />
+          <ShortcutKeycap
+            keyLabel="U"
+            variant="global"
+            accent={shortcutsActive || usageAnchor !== null}
+            availability={shortcutAvailability(shortcutsActive, usageAnchor !== null)}
+            sx={{ flexShrink: 0 }}
+          />
         </ButtonBase>
 
       <DesktopModal
@@ -1047,6 +1079,13 @@ export function DesktopTopBarControls({
         title="Usage and activity"
         description={`${session?.provider ?? "Provider"} · ${usage?.source ?? usage?.status ?? "unavailable"} · Updated ${updatedAgo}`}
         width={760}
+        shortcutGroups={[{
+          label: "Navigate",
+          slots: [
+            { shortcut: "J/K", label: "Move" },
+            { shortcut: "H/L", label: "Tab" },
+          ],
+        }, { slots: [{ shortcut: "Esc", label: "Close" }] }]}
       >
         <Stack
           ref={usagePanelRef}
@@ -1083,7 +1122,7 @@ export function DesktopTopBarControls({
               sx={{ textTransform: "none" }}
             >
               Refresh
-              <Kbd keys="R" />
+              <Kbd keys="R" availability={refreshing ? "inactive" : "available"} />
             </Button>}
           </Stack>
           <Divider />
@@ -1123,26 +1162,6 @@ export function DesktopTopBarControls({
             />
           )}
           </>}
-          <Divider />
-          <Stack
-            direction="row"
-            justifyContent="flex-end"
-            spacing={1.25}
-            sx={{ color: "text.secondary" }}
-          >
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys="J/K" />
-              <Typography variant="caption">Move</Typography>
-            </Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys="H/L" />
-              <Typography variant="caption">Tab</Typography>
-            </Stack>
-            <Stack direction="row" alignItems="center" spacing={0.35}>
-              <Kbd keys="Esc" />
-              <Typography variant="caption">Close</Typography>
-            </Stack>
-          </Stack>
         </Stack>
       </DesktopModal>
 
@@ -1202,7 +1221,16 @@ export function DesktopTopBarControls({
                         {contextPercent}%
                       </Typography>
                     )}
-                  <ShortcutKeycap keyLabel="C" variant="global" accent={shortcutsActive} availability={shortcutsActive ? "available" : "inactive"} sx={{ flexShrink: 0, ml: "auto !important" }} />
+                  <ShortcutKeycap
+                    keyLabel="C"
+                    variant="global"
+                    accent={shortcutsActive || compactConfirm}
+                    availability={shortcutAvailability(
+                      shortcutsActive && !dead && !compacting,
+                      compactConfirm,
+                    )}
+                    sx={{ flexShrink: 0, ml: "auto !important" }}
+                  />
                 </Stack>
               </Button>
             </span>

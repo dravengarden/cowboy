@@ -32,10 +32,21 @@ export function Sheet(
           },
         }}
       >
-        {/* Desktop workbenches own a sticky command rail as their final child.
-            Remove MUI's trailing content inset so that rail can terminate at
-            the dialog edge instead of leaving a false empty footer below it. */}
-        <DialogContent sx={{ pb: 0 }}>{props.children}</DialogContent>
+        {/* Desktop workbenches own a fixed command rail as their final child.
+            The workbench's middle child scrolls; keeping the DialogContent
+            itself out of the scroll chain makes the rail visible from the
+            moment the modal opens. */}
+        <DialogContent
+          sx={{
+            pb: 0,
+            minHeight: 0,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {props.children}
+        </DialogContent>
       </Dialog>
     );
   }

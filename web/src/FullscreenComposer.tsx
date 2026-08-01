@@ -349,7 +349,10 @@ export function FullscreenComposer({
         <DialogTitle>Ignore modifications?</DialogTitle>
         <DialogContent>Your unsaved changes will be discarded.</DialogContent>
         <DialogActions>
-          <Button onClick={(): void => setDiscardOpen(false)}>Keep editing</Button>
+          <Button onClick={(): void => setDiscardOpen(false)}>
+            Keep editing
+            <Kbd keys="Esc" />
+          </Button>
           <Button color="error" onClick={onDiscard}>
             Ignore modifications
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />

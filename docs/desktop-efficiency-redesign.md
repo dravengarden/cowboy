@@ -1,6 +1,7 @@
 # Desktop efficiency redesign
 
-Status: design approved in principle; implementation is staged below.
+Status: architectural direction; the live interaction contract in
+[`web/src/desktop/FOCUS.md`](../web/src/desktop/FOCUS.md) is normative.
 
 ## Product boundary
 
@@ -18,7 +19,7 @@ Cowboy Desktop and Cowboy Mobile are separate products.
 - Desktop visual primitives should use MUI semantics and theme tokens wherever
   MUI already has the right interaction model. Custom UI is reserved for
   editor/workspace primitives that MUI does not provide: splitters, Vim status,
-  leader/which-key, and Vimium target hints.
+  shortcut bars, sequential-chord state, and Vimium target hints.
 
 ## Current architectural debt
 
@@ -29,8 +30,8 @@ The current split is nominal rather than structural:
 - Desktop layout, top bar, status bar, session rail, settings, and pane decisions
   remain embedded in `App.tsx`.
 - Desktop composer actions remain embedded in the shared `Composer.tsx`.
-- The command registry understands single shortcuts but has no focus context,
-  multi-key sequences, leader tree, or visible target hints.
+- The command registry understands single shortcuts but still needs complete
+  focus-context coverage, shared sequential commands, and visible target hints.
 - Vim mode is editor-local; the workspace does not have a coherent mode/focus
   model.
 
@@ -46,7 +47,7 @@ The redesign must move ownership, not add more `surface === "desktop"` branches.
 │          │ queue / drafts / plan        │ tool and thought navigation     │
 │          │ visible send actions         │                                 │
 ├──────────┴───────────────────────────────┴─────────────────────────────────┤
-│ NORMAL  PROMPT  cowboy  GPT-5.6-Sol  medium  61%  connected   SPC  f  : │
+│ NORMAL  PROMPT  cowboy  GPT-5.6-Sol  medium  61%  connected   g·  ⌘K  ⌘/ │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,30 +82,30 @@ Each focused pane implements the same semantic motions where applicable:
 Prompt Insert/Visual/Operator-pending modes always belong to CodeMirror Vim.
 Workspace bindings must not steal valid editor Vim sequences.
 
-### Leader board
+### Direct discovery and sequential commands
 
-`Space` in workspace Normal mode opens a LazyVim-style which-key board at the
-bottom. It is a command tree and a learning surface, not a list of shortcuts the
-user must memorize.
+Cowboy does not add a Space leader layer. Basic Vim motion, a small stable
+global `Mod+letter` map, contextual key slots, `Mod+K` Command Palette, and
+`Mod+/` shortcut guide are faster here and remain visible without another mode.
 
-```text
-SPC
-  s  Session      p  Prompt       c  Conversation
-  w  Workspace    a  Actions      g  Go
-  f  Find         o  Open         x  Stop / cancel
-  ,  Settings     ?  All commands
-```
+Every live key slot uses one state machine:
 
-Rules:
+- `inactive`: the displayed action cannot execute in the current scope/state;
+- `available`: the chord executes now;
+- `active`: a transient command owner or prefix is engaged.
 
-- The board appears immediately after a valid prefix.
-- Entries show key, icon, action name, availability, and optional explanation.
-- Every entry is mouse-clickable.
-- The tree is generated from the same command registry as the palette and hints.
-- Invalid continuations remain visible with a short reason; they never fail
-  silently.
-- Dangerous operations open confirmation and never complete from one accidental
-  key.
+Selection and focus use their own control styling; they are never represented
+as an active keycap. `Enter` activates a focused item, `Mod+Enter` confirms or
+commits a mutation, and `Esc` unwinds one innermost transient layer. Navigation-
+rich surfaces use one shared bottom shortcut bar; simple confirmations keep
+their two chords beside the actions.
+
+Sequential commands such as `G` then `1…0` keep the prefix available and the
+continuations inactive at rest. Pressing the prefix makes it active and exposes
+only valid continuations as available. A valid continuation executes; `Esc`, an
+invalid unmodified continuation, timeout, or focus change cancels. Modified
+global commands cancel the prefix but keep executing. The executable details
+and accessibility contract live in `web/src/desktop/FOCUS.md`.
 
 ### Vimium hint mode
 
@@ -119,7 +120,7 @@ tool cards, transcript folds, composer actions, tabs, and dialog buttons.
   unavailable.
 - The same target metadata supplies accessible names and command-palette entries.
 - Prompt Vim keeps native `f<char>`; workspace hint mode is active outside the
-  editor or via Leader `SPC f` while the editor owns Normal mode.
+  editor and remains discoverable through the Command Palette.
 
 ### Persistent key badges
 
@@ -147,8 +148,8 @@ Desktop should expose frequently changed session options inline:
 - Stop
 
 Controls are compact select buttons or segmented values, not mobile sheets. They
-support mouse selection, arrow-key selection, command execution, leader entries,
-and hint targets. Settings retains only low-frequency application preferences and
+support mouse selection, arrow-key selection, command execution, contextual
+shortcut slots, and hint targets. Settings retains only low-frequency application preferences and
 diagnostics.
 
 ## Focus and mode state
@@ -157,7 +158,7 @@ Introduce one Desktop workspace controller with:
 
 ```ts
 type DesktopPane = "sessions" | "prompt" | "conversation";
-type WorkspaceMode = "normal" | "leader" | "hint" | "search" | "command";
+type WorkspaceMode = "normal" | "sequence" | "hint" | "search" | "command";
 ```
 
 Editor Vim mode is separate (`normal`, `insert`, `visual`, and so on). The
@@ -171,7 +172,7 @@ The status line is always present and shows:
 - active session/provider/model/effort;
 - context usage;
 - connection and worker state;
-- pending key prefix and the next discovery affordance (`SPC`, `f`, or `:`).
+- pending key prefix and the next discovery affordance (`g·`, `⌘K`, or `⌘/`).
 
 ## Command platform
 
@@ -183,7 +184,6 @@ interface DesktopCommand {
   title: string;
   group: string[];
   icon?: ReactNode;
-  leader?: string;
   shortcut?: string;
   contexts?: DesktopPane[];
   danger?: "confirm" | "destructive";
@@ -195,7 +195,7 @@ interface DesktopCommand {
 One registry powers:
 
 - direct shortcuts;
-- leader/which-key;
+- direct and sequential shortcuts;
 - command palette and `:` command line;
 - persistent badges;
 - Vimium hint actions;
@@ -217,7 +217,7 @@ desktop/
   commands/
     registry.tsx
     keyResolver.ts
-    leaderTree.ts
+    shortcutAvailability.ts
     CommandPalette.tsx
     CommandLine.tsx
   hints/
@@ -273,13 +273,15 @@ Mobile screenshots and bundle contents are unchanged.
 Acceptance: the primary Desktop workflow is possible without a pointer and basic
 Vim keys behave consistently.
 
-### Phase 3: command unification and leader
+### Phase 3: command unification and shortcut grammar
 
 - Replace the fixed shortcut-only host with contextual command registration.
-- Build the leader tree and which-key board from that registry.
+- Build shared inactive/available/active key slots and shortcut bars from that
+  registry.
 - Move every existing Desktop toolbar/menu action into the registry.
 
-Acceptance: every fixed Desktop action is available from both UI and leader;
+Acceptance: every fixed Desktop action is available from both UI and Command
+Palette/status discovery;
 disabled actions explain why.
 
 ### Phase 4: Vimium hints
@@ -305,7 +307,7 @@ prompt sending, queue operations, and stop are keyboard-complete.
 ### Phase 6: hard isolation
 
 - Delete obsolete Desktop branches from shared `App.tsx` and `Composer.tsx`.
-- Verify Mobile chunks contain no Desktop leader, hint, or command code.
+- Verify Mobile chunks contain no Desktop shortcut-bar, hint, or command code.
 - Keep duplicated UI code where ownership differs.
 
 Acceptance: Desktop and Mobile can change layout independently with no shared

@@ -1,5 +1,9 @@
 import { Box } from "@mui/material";
+import { useLayoutEffect, useRef, useState } from "react";
 import { ShortcutKeycap } from "../../ShortcutKeycap";
+import { useOptionalDesktopWorkspace } from "../DesktopWorkspaceController";
+import { useDesktopListJumpChord } from "./DesktopCommandProvider";
+import { shortcutAvailability } from "./shortcutAvailability";
 
 /**
  * A Desktop-only action wrapper. Pane controls use contextual floating hints;
@@ -12,6 +16,8 @@ export function DesktopContextShortcut({
   showBadge = true,
   alwaysVisible = false,
   itemScoped = false,
+  enabled = true,
+  active = false,
   placement = "below",
   children,
 }: {
@@ -22,12 +28,29 @@ export function DesktopContextShortcut({
   alwaysVisible?: boolean;
   /** Reveal only for the focused list item, not every row in a focused region. */
   itemScoped?: boolean;
+  /** Whether the underlying action can execute in its current business state. */
+  enabled?: boolean;
+  /** A pending prefix, open overlay, or engaged transient command. */
+  active?: boolean;
   placement?: "below" | "corner" | "toolbar" | "inline";
   children: React.ReactNode;
 }): React.JSX.Element {
   const corner = placement === "corner";
   const toolbar = placement === "toolbar";
   const inline = placement === "inline";
+  const workspace = useOptionalDesktopWorkspace();
+  const ownerRef = useRef<HTMLSpanElement>(null);
+  const [ownerRegion, setOwnerRegion] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    setOwnerRegion(
+      ownerRef.current?.closest<HTMLElement>("[data-desktop-region]")?.dataset
+        .desktopRegion ?? null,
+    );
+  }, []);
+  const listJumpArmed = useDesktopListJumpChord(ownerRegion ?? "");
+  const scopeAvailable = enabled && !listJumpArmed && (alwaysVisible ||
+    (!!ownerRegion && workspace?.focusedRegion === ownerRegion));
+  const availability = shortcutAvailability(scopeAvailable, active);
   const restingTransform = inline
     ? "none"
     : corner
@@ -45,6 +68,7 @@ export function DesktopContextShortcut({
   return (
     <Box
       component="span"
+      ref={ownerRef}
       title={shortcut}
       sx={{
         position: "relative",
@@ -98,7 +122,7 @@ export function DesktopContextShortcut({
             left: corner || toolbar ? "auto" : inline ? "auto" : "50%",
             display: "inline-flex",
             overflow: "visible",
-            opacity: inline ? 0.72 : 0,
+            opacity: inline ? 0.72 : itemScoped ? 0 : 0.28,
             transform: restingTransform,
             transition: "opacity 120ms ease, transform 120ms ease",
             pointerEvents: "none",
@@ -107,7 +131,8 @@ export function DesktopContextShortcut({
           <ShortcutKeycap
             keyLabel={badge}
             variant={inline ? "global" : "context"}
-            accent={inline}
+            accent={availability !== "inactive"}
+            availability={availability}
           />
         </Box>
       )}

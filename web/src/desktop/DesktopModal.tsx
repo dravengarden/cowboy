@@ -1,7 +1,20 @@
-import { alpha, Box, Dialog, Divider, Stack, Typography } from "@mui/material";
+import {
+  alpha,
+  Box,
+  Dialog,
+  Divider,
+  IconButton,
+  Stack,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import { Close } from "@mui/icons-material";
 import type { ReactNode } from "react";
-import { Kbd } from "../Kbd";
 import { DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
+import {
+  DesktopShortcutBar,
+  type DesktopShortcutGroup,
+} from "./DesktopShortcutBar";
 
 export function DesktopModal({
   open,
@@ -11,6 +24,7 @@ export function DesktopModal({
   icon,
   children,
   footer,
+  shortcutGroups,
   width = 920,
 }: {
   open: boolean;
@@ -20,6 +34,7 @@ export function DesktopModal({
   icon?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  shortcutGroups?: readonly DesktopShortcutGroup[];
   width?: number;
 }): React.JSX.Element {
   return (
@@ -61,14 +76,18 @@ export function DesktopModal({
           {description && <Typography variant="caption" color="text.secondary">{description}</Typography>}
         </Box>
         <Box sx={{ flex: 1 }} />
-        <Stack direction="row" alignItems="center" spacing={0.5} color="text.secondary">
-          <Kbd keys="Esc" />
-          <Typography variant="caption">Close</Typography>
-        </Stack>
+        <Tooltip title="Close · Esc">
+          <IconButton aria-label={`Close ${title}`} onClick={onClose} size="small">
+            <Close fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Stack>
       <Divider />
       <Box sx={{ minHeight: 0, overflow: "auto" }}>{children}</Box>
       {footer && <><Divider />{footer}</>}
+      <DesktopShortcutBar
+        groups={shortcutGroups ?? [{ slots: [{ shortcut: "Esc", label: "Close" }] }]}
+      />
     </Dialog>
   );
 }
