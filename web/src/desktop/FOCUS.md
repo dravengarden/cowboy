@@ -145,6 +145,11 @@ approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
 semantics remain identical across Desktop.
 
+List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
+only on the current `[data-desktop-item]`, never on every row merely because the
+region owns focus. A badge must describe an actual binding; `L`/`Enter` belongs
+on the focused row's Edit action, while unbound pointer actions stay unlabelled.
+
 Never invent a hint for an action that is not wired. Contextual hints anchor to
 the bottom-right of their target. Prefer one primary modifier and one positional
 or mnemonic key while retaining native semantic chords such as `Mod+S`. Put secondary Cowboy-specific actions in

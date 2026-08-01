@@ -11,6 +11,7 @@ export function DesktopContextShortcut({
   shortcut,
   showBadge = true,
   alwaysVisible = false,
+  itemScoped = false,
   placement = "below",
   children,
 }: {
@@ -19,6 +20,8 @@ export function DesktopContextShortcut({
   showBadge?: boolean;
   /** Keep global shortcuts visible even when their region does not own focus. */
   alwaysVisible?: boolean;
+  /** Reveal only for the focused list item, not every row in a focused region. */
+  itemScoped?: boolean;
   placement?: "below" | "corner" | "toolbar" | "inline";
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -62,10 +65,18 @@ export function DesktopContextShortcut({
               transform: visibleTransform,
             },
         }),
-        "[data-desktop-focused='true'] & .cowboy-context-shortcut": {
-          opacity: inline ? 0.78 : 0.82,
-          transform: visibleTransform,
-        },
+        ...(!itemScoped && {
+          "[data-desktop-focused='true'] & .cowboy-context-shortcut": {
+            opacity: inline ? 0.78 : 0.82,
+            transform: visibleTransform,
+          },
+        }),
+        ...(itemScoped && {
+          "[data-desktop-item]:focus & .cowboy-context-shortcut": {
+            opacity: inline ? 0.78 : 0.88,
+            transform: visibleTransform,
+          },
+        }),
         ...(alwaysVisible && {
           "& .cowboy-context-shortcut": {
             opacity: 0.72,

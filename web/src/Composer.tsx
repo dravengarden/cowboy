@@ -3865,14 +3865,47 @@ function PendingRow({
         >
           {secondary.map((a) => (
             <Tooltip key={a.key} title={a.label}>
-              <IconButton
-                size="small"
-                aria-label={a.label}
-                data-desktop-item-action={a.key === "edit" ? "edit" : undefined}
-                onClick={a.onClick}
-              >
-                {a.icon}
-              </IconButton>
+              <Box component="span" sx={{ display: "inline-flex" }}>
+                {desktop && a.key === "edit"
+                  ? (
+                    <Suspense fallback={
+                      <IconButton
+                        size="small"
+                        aria-label={a.label}
+                        data-desktop-item-action="edit"
+                        onClick={a.onClick}
+                      >
+                        {a.icon}
+                      </IconButton>
+                    }>
+                      <DesktopContextShortcut
+                        badge="L"
+                        shortcut="L / Enter · edit focused item"
+                        itemScoped
+                        placement="corner"
+                      >
+                        <IconButton
+                          size="small"
+                          aria-label={a.label}
+                          data-desktop-item-action="edit"
+                          onClick={a.onClick}
+                        >
+                          {a.icon}
+                        </IconButton>
+                      </DesktopContextShortcut>
+                    </Suspense>
+                  )
+                  : (
+                    <IconButton
+                      size="small"
+                      aria-label={a.label}
+                      data-desktop-item-action={a.key === "edit" ? "edit" : undefined}
+                      onClick={a.onClick}
+                    >
+                      {a.icon}
+                    </IconButton>
+                  )}
+              </Box>
             </Tooltip>
           ))}
         </Stack>
