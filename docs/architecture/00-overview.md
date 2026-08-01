@@ -42,8 +42,8 @@ flowchart TB
     ACPF --> HUB
     HUB["Hub<br/>seq · fan-out"] --> SUP["Remote Supervisor"]
     HUB --> PG[("Postgres")]
-    SUP --> AD["agentd<br/>UDS broker"]
-    AD --> AG["detached worker + agent<br/>per session"]
+    SUP --> MH["cowboy-machine<br/>host + broker"]
+    MH --> AG["detached worker + agent<br/>per session"]
 
     style HUB fill:#eef2ff,stroke:#6366f1
     style SUP fill:#dcfce7,stroke:#16a34a
@@ -53,7 +53,7 @@ flowchart TB
 The **Hub** is the single source of truth. Every surface (WebSocket clients, the
 ACP server face) is a subscriber to the Hub's broadcast channel, so "new session
 shows everywhere" and "an approval reflects everywhere" are just internal
-broadcasts. In production the **Supervisor** talks to agentd. Per-session
+broadcasts. The **Supervisor** talks to the selected Machine runtime. Per-session
 worker units own ACP threads and subprocesses, survive daemon/broker restarts,
 and replay unacked events when the control plane reconnects.
 
@@ -64,7 +64,7 @@ and replay unacked events when the control plane reconnects.
 | Entry / CLI | `src/main.rs`, `src/cli.rs` | clap dispatch: `serve`, `serve-acp`, `try-agent` |
 | Core / bus | `src/core.rs` | `Hub`, `Event`/`Inbound`/`Outbound`, `seq`, fan-out |
 | Transport | `src/acp.rs` | the **only** module touching `agent-client-protocol` |
-| Lifetime | `src/supervisor.rs`, `src/agentd.rs`, `src/worker.rs` | route / detach / drain / resume / rollback |
+| Lifetime | `src/supervisor.rs`, `src/machine_broker.rs`, `src/worker.rs` | route / detach / drain / resume / rollback |
 | Runtime IPC | `src/runtime_wire.rs`, `src/remote_runtime.rs` | version negotiation, fencing, replay, idempotency |
 | Providers | `src/provider/*` | launch specs + per-provider confirm rules |
 | Server | `src/server.rs` | axum REST + WS + runtime static-file root |

@@ -322,4 +322,4 @@ Each phase must pass:
 - No horizontal overflow at persisted minimum/maximum pane widths.
 - No shortcut handling during IME composition.
 - Mobile 390 px and touch-tablet regression checks; no Desktop chunks loaded.
-- Web-only deployment with unchanged core, agentd, and ACP worker PIDs.
+- Web-only deployment with unchanged core, Machine broker, and ACP worker PIDs.

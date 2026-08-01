@@ -1,6 +1,4 @@
-//! Shared CLI for the stable Machine host and its `cowboy-agentd` transition
-//! alias. Provider and Zed lifecycle subcommands join this surface without
-//! copying the ACP broker implementation.
+//! CLI for the stable Machine host.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -15,8 +13,8 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::agentd::{AgentdArgs, SpawnMode};
 use crate::machine_auth::MachineIdentity;
+use crate::machine_broker::{MachineBrokerArgs, SpawnMode};
 use crate::machine_components::ComponentStore;
 use crate::machine_protocol::{
     AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
@@ -60,6 +58,7 @@ enum CliSpawnMode {
 #[derive(Debug, Parser)]
 #[command(version)]
 pub struct Args {
+    // Keep this stable path for detached workers that survive Machine upgrades.
     #[arg(long, default_value = "/run/user/1000/cowboy/agentd.sock")]
     socket: PathBuf,
     #[arg(long, default_value = "cowboy-acp-worker")]
@@ -75,9 +74,9 @@ pub struct Args {
     // the Machine host never kills the legitimate retry path prematurely.
     #[arg(long, default_value_t = 135)]
     worker_ready_timeout_seconds: u64,
-    /// Cowboy controller base URL. Omit for the existing local-only broker.
+    /// Cowboy controller base URL.
     #[arg(long, env = "COWBOY_MACHINE_CONTROLLER_URL")]
-    controller_url: Option<String>,
+    controller_url: String,
     #[arg(long, env = "COWBOY_MACHINE_ID", default_value = "local")]
     machine_id: String,
     #[arg(long, env = "COWBOY_MACHINE_DISPLAY_NAME")]
@@ -178,7 +177,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let worker_command =
         active_acp.map_or_else(|| args.worker_command.clone(), |(_, executable)| executable);
     let worker_environment = managed_provider_environment(&components)?;
-    let agentd = AgentdArgs {
+    let broker = MachineBrokerArgs {
         socket: args.socket,
         worker_command,
         desired_generation,
@@ -189,9 +188,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         worker_environment,
         worker_ready_timeout: std::time::Duration::from_secs(args.worker_ready_timeout_seconds),
     };
-    let Some(controller_url) = args.controller_url else {
-        return crate::agentd::run(agentd).await;
-    };
+    let controller_url = args.controller_url;
     validate_controller_url(&controller_url)?;
     let identity = MachineIdentity::load_or_create(&args.state_dir)?;
     let display_name = args.display_name.unwrap_or_else(default_display_name);
@@ -242,7 +239,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         args.state_dir.join("zed"),
     );
     tokio::try_join!(
-        crate::agentd::run(agentd),
+        crate::machine_broker::run(broker),
         controller,
         code_adapter,
         zed_adapter
@@ -579,7 +576,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         .await
         .with_context(|| {
             format!(
-                "connecting agentd socket {}",
+                "connecting Machine broker socket {}",
                 config.runtime_socket.display()
             )
         })?;
@@ -633,7 +630,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             }
             frame = crate::runtime_wire::read_frame(&mut runtime_reader) => {
                 let Some(frame) = frame? else {
-                    bail!("agentd runtime tunnel closed");
+                    bail!("Machine broker runtime tunnel closed");
                 };
                 send_frame(&mut socket, &MachineFrame::Runtime { frame }).await?;
             }

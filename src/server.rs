@@ -11,7 +11,6 @@
 //! protocol negotiation.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::Write as _;
 use std::io::Read as _;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -47,7 +46,6 @@ use crate::persistence::EventReducer;
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
 use crate::runtime_router::RuntimeRouter;
-use crate::runtime_wire::StartSession;
 use crate::store::Store;
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
@@ -63,8 +61,7 @@ struct AppState {
     persistence_health: Option<Arc<PersistenceHealth>>,
     shutdown: watch::Receiver<bool>,
     runtime_health: Arc<RuntimeHealth>,
-    remote_runtime: Option<Arc<RemoteRuntime>>,
-    runtime_router: Option<Arc<RuntimeRouter>>,
+    runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
@@ -134,21 +131,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             }
         }
     });
-    // Acquire the controller lease before restoring Hub state. Its worker
-    // snapshot is the authority for whether a persisted Busy turn actually
-    // survived this control-plane restart.
-    let mut runtime_bootstrap = match args.runtime_socket.clone() {
-        Some(socket) => Some(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                RemoteBootstrap::connect(socket),
-            )
-            .await
-            .context("timed out connecting detached agent runtime")??,
-        ),
-        None => None,
-    };
-
     // Phase 2: when --postgres-url is supplied, hook in the persistent store.
     // Migrations run on every start (sqlx tracks applied versions, so it's
     // idempotent); the in-memory Hub is then warmed from the DB before WS
@@ -195,10 +177,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Ok(entries) => hub.load_settings(entries),
                 Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
             }
-            match runtime_bootstrap.as_ref() {
-                Some(runtime) => hub.restore_with_workers(restored, runtime.workers()),
-                None => hub.restore(restored),
-            }
+            hub.restore(restored);
             tracing::info!(
                 postgres = url,
                 restored = restored_count,
@@ -239,22 +218,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --postgres-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
-    let remote_runtime = runtime_bootstrap.as_ref().map(|bootstrap| {
-        RemoteRuntime::new(
-            hub.clone(),
-            bootstrap,
-            args.worker_generation.clone(),
-            args.runtime_worker_command
-                .as_ref()
-                .map(|path| path.display().to_string()),
-        )
-    });
     let runtime_router = RuntimeRouter::new();
-    // Explicit development compatibility only. Production does not pass a
-    // runtime socket; every deployed runtime arrives through Machine hello.
-    if let Some(runtime) = remote_runtime.as_ref() {
-        runtime_router.install("local".to_owned(), Arc::clone(runtime));
-    }
     // Reset credits belong to the Codex account, not a session. Restore one
     // shared provider-level timer and keep it independent from session queues.
     if let Some(store) = store.as_ref() {
@@ -390,27 +354,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             }
         })
     };
-    if let Some(runtime) = &remote_runtime {
-        // Re-declare every adopted worker's launch metadata. This is
-        // idempotent, and lets a newly restarted agentd reconstruct sessions
-        // even when an older compatible worker snapshot lacks the additive
-        // launch-spec field.
-        for meta in hub.session_list() {
-            if runtime.has_worker(&meta.id) {
-                runtime.adopt(StartSession {
-                    session_id: meta.id,
-                    provider: meta.provider,
-                    cwd: meta.cwd,
-                    agent_session_id: meta.agent_session_id,
-                    system: meta.system,
-                    generation: String::new(),
-                    fallback_for: None,
-                    adopt_only: true,
-                });
-            }
-        }
-    }
-    let supervisor = Arc::new(Supervisor::new_routed(
+    let supervisor = Arc::new(Supervisor::new(
         hub.clone(),
         args.workspace_root.clone(),
         session_id_floor,
@@ -487,13 +431,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // now-restored in-memory sessions. An overdue one fires immediately (catch-up).
     hub.rearm_scheduled_drafts();
 
-    // Start replay only after scheduler/dispatcher sinks exist; otherwise a
-    // ScheduleWakeup event buffered during the deploy could be ACKed while its
-    // side effect was still unwired.
-    if let (Some(runtime), Some(bootstrap)) = (&remote_runtime, runtime_bootstrap.take()) {
-        runtime.start(bootstrap);
-    }
-
     // Headless auto-resume. A turn cut off by THIS restart had its continuation
     // enqueued + the session marked Interrupted during `hub.restore` above — but
     // that continuation only drains once the agent revives, which used to wait for
@@ -538,8 +475,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             persistence_health,
             shutdown: shutdown_rx,
             runtime_health,
-            remote_runtime: remote_runtime.clone(),
-            runtime_router: Some(runtime_router),
+            runtime_router,
             machine_control: Arc::new(MachineControl::default()),
             desired_machine_components: Arc::new(desired_machine_components),
             web_root: args.web_root,
@@ -561,11 +497,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::error!("dispatcher did not drain within shutdown deadline");
             dispatcher_task.abort();
         }
-    }
-    if let Some(runtime) = &remote_runtime {
-        runtime
-            .graceful_shutdown(std::time::Duration::from_secs(10))
-            .await;
     }
     if let Some(task) = purge_task {
         task.abort();
@@ -1136,16 +1067,6 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Response {
         .is_some_and(|health| !health.is_healthy())
     {
         (StatusCode::SERVICE_UNAVAILABLE, "persistence degraded").into_response()
-    } else if state
-        .remote_runtime
-        .as_ref()
-        .is_some_and(|runtime| !runtime.connected())
-    {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "agent runtime disconnected",
-        )
-            .into_response()
     } else {
         "ok".into_response()
     }
@@ -1233,11 +1154,7 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         Some(s) => s.storage_metrics().await.unwrap_or((0, 0, 0)),
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
-    let runtime = state
-        .remote_runtime
-        .as_ref()
-        .map(|runtime| runtime.stats())
-        .unwrap_or_default();
+    let runtime = state.runtime_router.stats();
     let code_cache = state.code_cache.metrics();
     Json(Metrics {
         db_bytes,
@@ -1255,10 +1172,7 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
             .persistence_health
             .as_ref()
             .and_then(|h| h.last_error()),
-        runtime_connected: state
-            .remote_runtime
-            .as_ref()
-            .is_none_or(|runtime| runtime.connected()),
+        runtime_connected: state.runtime_router.has_connected_runtime(),
         runtime_workers: runtime.workers,
         runtime_busy_workers: runtime.busy_workers,
         runtime_draining_workers: runtime.draining_workers,
@@ -1479,16 +1393,9 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
         None => (0, i64::try_from(state.hub.event_total()).unwrap_or(0), 0),
     };
     let health = state.persistence_health.as_ref();
-    let runtime = state
-        .remote_runtime
-        .as_ref()
-        .map(|runtime| runtime.stats())
-        .unwrap_or_default();
-    let runtime_connected = state
-        .remote_runtime
-        .as_ref()
-        .is_none_or(|runtime| runtime.connected());
-    let mut body = format!(
+    let runtime = state.runtime_router.stats();
+    let runtime_connected = state.runtime_router.has_connected_runtime();
+    let body = format!(
         "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n# TYPE cowboy_runtime_connected gauge\ncowboy_runtime_connected {}\n# TYPE cowboy_runtime_workers gauge\ncowboy_runtime_workers {}\n# TYPE cowboy_runtime_busy_workers gauge\ncowboy_runtime_busy_workers {}\n# TYPE cowboy_runtime_draining_workers gauge\ncowboy_runtime_draining_workers {}\n# TYPE cowboy_runtime_handoff_workers gauge\ncowboy_runtime_handoff_workers {}\n# TYPE cowboy_runtime_pending_commands gauge\ncowboy_runtime_pending_commands {}\n",
         u8::from(state.runtime_health.is_healthy(state.store.is_some()) && runtime_connected),
         daemon_rss_bytes(),
@@ -1503,16 +1410,6 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
         runtime.handoff_workers,
         runtime.pending_commands,
     );
-    body.push_str("# TYPE cowboy_agent_memory_bytes gauge\n# TYPE cowboy_agent_pids gauge\n# TYPE cowboy_agent_cpu_seconds_total counter\n");
-    for (session, stats) in state.supervisor.resource_stats() {
-        let seconds = stats.cpu_usage_usec / 1_000_000;
-        let micros = stats.cpu_usage_usec % 1_000_000;
-        let _ = writeln!(
-            body,
-            "cowboy_agent_memory_bytes{{session=\"{session}\"}} {}\ncowboy_agent_pids{{session=\"{session}\"}} {}\ncowboy_agent_cpu_seconds_total{{session=\"{session}\"}} {seconds}.{micros:06}",
-            stats.memory_bytes, stats.pids,
-        );
-    }
     (
         [(
             header::CONTENT_TYPE,
@@ -1743,10 +1640,7 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             })
                             .map(|desired| desired.id.clone())
                             .collect();
-                        let schedulable = state
-                            .runtime_router
-                            .as_ref()
-                            .is_some_and(|router| router.connected(&machine.id))
+                        let schedulable = state.runtime_router.connected(&machine.id)
                             && !workspaces.is_empty()
                             && !capacity.draining
                             && active_sessions < capacity.max_sessions;
@@ -2237,7 +2131,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     };
     let (mut runtime_reader, mut runtime_writer) = runtime_tunnel.into_split();
     let (runtime_tx, mut runtime_rx) = tokio::sync::oneshot::channel();
-    if let Some(router) = state.runtime_router.clone() {
+    {
+        let router = Arc::clone(&state.runtime_router);
         let hub = state.hub.clone();
         let machine_id = hello.machine_id.clone();
         let generation = hello
@@ -2382,8 +2277,10 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             break;
         }
     }
-    if let (Some(router), Some(runtime)) = (&state.runtime_router, connected_runtime.as_ref()) {
-        router.remove_if_current(&hello.machine_id, runtime);
+    if let Some(runtime) = connected_runtime.as_ref() {
+        state
+            .runtime_router
+            .remove_if_current(&hello.machine_id, runtime);
     }
     state
         .machine_control
@@ -4906,7 +4803,7 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // 2. Destructively clear the old in-memory + durable transcript.
             // 3. Drop the new timeline boundary marker.
             // 4. Atomically fence + replace the worker. This must not use the
-            //    permanent delete path: agentd retains delete tombstones to
+            //    permanent delete path: the Machine broker retains delete tombstones to
             //    reject stale launches for genuinely deleted sessions.
             state.hub.prepare_context_reset(&session_id);
             state.hub.clear_transcript(&session_id);

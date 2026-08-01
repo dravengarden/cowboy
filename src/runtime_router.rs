@@ -34,6 +34,33 @@ impl RuntimeRouter {
             .is_some_and(|runtime| runtime.connected())
     }
 
+    #[must_use]
+    pub fn has_connected_runtime(&self) -> bool {
+        self.runtimes
+            .read()
+            .values()
+            .any(|runtime| runtime.connected())
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> crate::remote_runtime::RemoteRuntimeStats {
+        self.runtimes
+            .read()
+            .values()
+            .map(|runtime| runtime.stats())
+            .fold(
+                crate::remote_runtime::RemoteRuntimeStats::default(),
+                |mut total, stats| {
+                    total.workers += stats.workers;
+                    total.busy_workers += stats.busy_workers;
+                    total.draining_workers += stats.draining_workers;
+                    total.handoff_workers += stats.handoff_workers;
+                    total.pending_commands += stats.pending_commands;
+                    total
+                },
+            )
+    }
+
     pub fn install(&self, machine_id: String, runtime: Arc<RemoteRuntime>) {
         if let Some(previous) = self.runtimes.write().insert(machine_id, runtime) {
             previous.disconnect();

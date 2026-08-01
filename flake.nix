@@ -32,23 +32,22 @@
         ];
       };
 
-      # Agentd has a deliberately tiny source closure and is packaged
+      # Machine has a deliberately tiny source closure and is packaged
       # separately. Ordinary API, SPA, ACP, or worker edits therefore leave
       # its ExecStart path unchanged.
-      agentd-src = pkgs.lib.fileset.toSource {
+      machine-src = pkgs.lib.fileset.toSource {
         root = ./.;
         fileset = pkgs.lib.fileset.unions [
           ./Cargo.toml
           ./Cargo.lock
           ./src/lib.rs
-          ./src/agentd.rs
+          ./src/machine_broker.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
           ./src/machine_components.rs
           ./src/machine_install.rs
           ./src/machine_protocol.rs
           ./src/runtime_wire.rs
-          ./src/bin/cowboy-agentd.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
         ];
@@ -139,15 +138,15 @@
         };
       };
 
-      cowboy-agentd = pkgs.rustPlatform.buildRustPackage {
-        pname = "cowboy-agentd";
+      cowboy-machine = pkgs.rustPlatform.buildRustPackage {
+        pname = "cowboy-machine";
         version = "0.1.0";
-        src = agentd-src;
+        src = machine-src;
         cargoDeps = cowboy-cargo-deps;
         cargoBuildFlags = [
           "--no-default-features"
-          "--bin"
-          "cowboy-agentd"
+          "--features"
+          "machine-host"
           "--bin"
           "cowboy-machine"
           "--bin"
@@ -160,8 +159,8 @@
         '';
         doCheck = false;
         meta = {
-          description = "Stable local broker for detached Cowboy ACP workers";
-          mainProgram = "cowboy-agentd";
+          description = "Stable Cowboy Machine host for detached ACP workers";
+          mainProgram = "cowboy-machine";
         };
       };
 
@@ -211,6 +210,10 @@
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
         test -e ${cowboy-src}/web/src/protocol.ts
+        test ! -e ${cowboy}/bin/cowboy-machine
+        test ! -e ${cowboy}/bin/cowboy-machine-install
+        test -x ${cowboy-machine}/bin/cowboy-machine
+        test -x ${cowboy-machine}/bin/cowboy-machine-install
         touch "$out"
       '';
 
@@ -260,7 +263,7 @@
       packages.${system} = {
         default = cowboy;
         cowboy = cowboy;
-        cowboy-agentd = cowboy-agentd;
+        cowboy-machine = cowboy-machine;
         cowboy-zed-adapter = cowboy-zed-adapter;
         cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
@@ -270,7 +273,7 @@
       # build runs TypeScript checking before Vite. Developer lint/test policy is
       # additionally enforced by `just check` in CI.
       checks.${system} = {
-        inherit cowboy cowboy-agentd cowboy-source-boundary cowboy-web
+        inherit cowboy cowboy-machine cowboy-source-boundary cowboy-web
           cowboy-zed-integration
           cowboy-zed-adapter cowboy-zed-server;
       };

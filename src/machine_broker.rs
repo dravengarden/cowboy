@@ -1,6 +1,6 @@
-//! Stable local broker for detached ACP workers.
+//! Stable Machine-local broker for detached ACP workers.
 //!
-//! Agentd deliberately contains no Cowboy business state and no ACP parsing.
+//! The broker deliberately contains no Cowboy business state and no ACP parsing.
 //! It grants one controller lease, routes commands, starts session workers, and
 //! lets workers replay their unacknowledged outboxes after either side restarts.
 
@@ -29,19 +29,19 @@ const TRANSIENT_UNIT_COLLECT_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnMode {
     /// Child process mode for development and hermetic tests. Production uses
-    /// user-systemd so worker units are siblings and survive agentd restarts.
+    /// user-systemd so worker units are siblings and survive Machine broker restarts.
     Direct,
     SystemdUser,
 }
 
 #[derive(Debug, Clone)]
-pub struct AgentdArgs {
+pub struct MachineBrokerArgs {
     pub socket: PathBuf,
     pub worker_command: PathBuf,
     pub desired_generation: String,
     pub spawn_mode: SpawnMode,
     /// Environment owned by the Machine component resolver and injected into
-    /// every worker. The local compatibility daemon leaves this empty.
+    /// every worker.
     pub worker_environment: BTreeMap<String, String>,
     pub worker_ready_timeout: Duration,
 }
@@ -72,7 +72,7 @@ struct WorkerRegistration {
 }
 
 struct Broker {
-    args: AgentdArgs,
+    args: MachineBrokerArgs,
     controller: Mutex<Option<Controller>>,
     workers: Mutex<HashMap<String, WorkerPeer>>,
     pending_commands: Mutex<HashMap<String, VecDeque<WorkerCommand>>>,
@@ -102,7 +102,7 @@ struct Broker {
 }
 
 impl Broker {
-    fn new(args: AgentdArgs) -> Self {
+    fn new(args: MachineBrokerArgs) -> Self {
         let mut generation_commands = HashMap::new();
         if !args.desired_generation.is_empty() {
             generation_commands
@@ -1328,10 +1328,10 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
     }
 }
 
-pub async fn run(args: AgentdArgs) -> Result<()> {
+pub async fn run(args: MachineBrokerArgs) -> Result<()> {
     let listener = match inherited_systemd_listener()? {
         Some(listener) => {
-            tracing::info!(socket = %args.socket.display(), "cowboy agentd using systemd socket");
+            tracing::info!(socket = %args.socket.display(), "cowboy Machine broker using systemd socket");
             listener
         }
         None => {
@@ -1341,9 +1341,10 @@ pub async fn run(args: AgentdArgs) -> Result<()> {
                     .with_context(|| format!("creating runtime socket dir {}", parent.display()))?;
             }
             remove_stale_socket(&args.socket).await?;
-            let listener = UnixListener::bind(&args.socket)
-                .with_context(|| format!("binding agentd socket {}", args.socket.display()))?;
-            tracing::info!(socket = %args.socket.display(), "cowboy agentd listening");
+            let listener = UnixListener::bind(&args.socket).with_context(|| {
+                format!("binding Machine broker socket {}", args.socket.display())
+            })?;
+            tracing::info!(socket = %args.socket.display(), "cowboy Machine broker listening");
             listener
         }
     };
@@ -1361,7 +1362,7 @@ pub async fn run(args: AgentdArgs) -> Result<()> {
 }
 
 /// Adopt fd 3 when launched by a systemd `.socket` unit. Socket ownership then
-/// stays outside agentd, so connections queue while the broker binary rolls.
+/// stays outside Machine broker, so connections queue while the broker binary rolls.
 #[allow(
     unsafe_code,
     reason = "systemd transfers ownership of the inherited socket descriptor"
@@ -1385,10 +1386,10 @@ fn inherited_systemd_listener() -> Result<Option<UnixListener>> {
     let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(3) };
     listener
         .set_nonblocking(true)
-        .context("setting inherited agentd socket nonblocking")?;
+        .context("setting inherited Machine broker socket nonblocking")?;
     UnixListener::from_std(listener)
         .map(Some)
-        .context("adopting inherited agentd socket")
+        .context("adopting inherited Machine broker socket")
 }
 
 async fn monitor_workers(broker: Arc<Broker>) {
@@ -1470,7 +1471,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
             &mut writer,
             &Frame::Reject {
                 reason: format!(
-                    "no protocol overlap: agentd {MIN_PROTOCOL_VERSION}..={PROTOCOL_VERSION}, peer {min_protocol}..={max_protocol}"
+                    "no protocol overlap: Machine broker {MIN_PROTOCOL_VERSION}..={PROTOCOL_VERSION}, peer {min_protocol}..={max_protocol}"
                 ),
             },
         )
@@ -1803,7 +1804,7 @@ mod tests {
 
     fn test_socket() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "cowboy-agentd-test-{}-{}.sock",
+            "cowboy-machine-broker-test-{}-{}.sock",
             std::process::id(),
             broker_nonce()
         ))
@@ -1858,7 +1859,7 @@ mod tests {
 
     #[test]
     fn generation_rollout_drains_then_stops_only_an_idle_worker() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
@@ -1950,7 +1951,7 @@ mod tests {
 
     #[test]
     fn provider_rollout_drains_and_replaces_matching_idle_workers() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
@@ -2015,7 +2016,7 @@ mod tests {
 
     #[test]
     fn reconnecting_worker_rebuilds_broker_launch_state() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: String::new(),
@@ -2070,7 +2071,7 @@ mod tests {
 
     #[test]
     fn healthy_fallback_is_not_redrained_until_next_rollout() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: String::new(),
@@ -2108,7 +2109,7 @@ mod tests {
 
     #[test]
     fn healthy_generation_releases_matching_provider_fallbacks() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
@@ -2222,7 +2223,7 @@ mod tests {
 
     #[test]
     fn broker_snapshot_preserves_launch_and_held_prompt_without_worker() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
@@ -2266,7 +2267,7 @@ mod tests {
 
     #[tokio::test]
     async fn adopt_only_rebuilds_registry_without_spawning_an_owner() {
-        let broker = Arc::new(Broker::new(AgentdArgs {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
@@ -2296,7 +2297,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_reset_revokes_delete_tombstone_before_relaunch() {
-        let broker = Arc::new(Broker::new(AgentdArgs {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),
@@ -2338,7 +2339,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleted_launch_does_not_quarantine_the_worker_generation() {
-        let broker = Broker::new(AgentdArgs {
+        let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
@@ -2376,7 +2377,7 @@ mod tests {
 
     #[tokio::test]
     async fn deletion_retracts_only_its_generation_failure() {
-        let broker = Arc::new(Broker::new(AgentdArgs {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-2".to_owned(),
@@ -2411,7 +2412,7 @@ mod tests {
     #[tokio::test]
     async fn controller_reconnect_requests_unacked_worker_replay() {
         let socket = test_socket();
-        let task = tokio::spawn(run(AgentdArgs {
+        let task = tokio::spawn(run(MachineBrokerArgs {
             socket: socket.clone(),
             worker_command: PathBuf::from("/bin/false"),
             desired_generation: "gen-1".to_owned(),

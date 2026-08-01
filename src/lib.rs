@@ -13,7 +13,6 @@ mod acp_bridge;
 mod agent_model;
 #[cfg(feature = "full")]
 mod agent_sink;
-pub mod agentd;
 #[cfg(feature = "full")]
 mod artifacts;
 #[cfg(feature = "full")]
@@ -35,10 +34,15 @@ mod files;
 #[cfg(feature = "full")]
 mod inference;
 pub mod machine_auth;
+#[cfg(feature = "machine-host")]
+mod machine_broker;
+#[cfg(feature = "machine-host")]
 pub mod machine_cli;
+#[cfg(feature = "machine-host")]
 mod machine_components;
 #[cfg(feature = "full")]
 mod machine_control;
+#[cfg(feature = "machine-host")]
 pub mod machine_install;
 pub mod machine_protocol;
 #[cfg(feature = "full")]

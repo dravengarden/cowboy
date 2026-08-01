@@ -47,9 +47,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::agent_model::{AUTO_CONTINUE_PREFIX, Event, SCHED_PREFIX, Status, WAKEUP_PREFIX};
-use crate::agent_sink::{AgentSink, HubAgentSink};
+use crate::agent_sink::AgentSink;
 use crate::cgroup;
-use crate::core::Hub;
 use crate::provider::LaunchSpec;
 
 /// How long the ACP handshake (`initialize` + optional `session/load` +
@@ -298,25 +297,6 @@ struct ClientState {
     /// re-pushing it would duplicate every message. `load_session` is used
     /// purely to re-warm the agent's internal context, not to rebuild ours.
     suppress_updates: AtomicBool,
-}
-
-/// OS-thread entry point: run one agent session to completion on a
-/// current-thread runtime. A failure marks the session crashed.
-///
-/// `resume` carries the downstream agent's own session id when this is a
-/// revive of a session whose prior agent process is gone: if the agent
-/// supports it, the conversation is re-attached via `session/load` instead of
-/// a blank `session/new`. `None` ⇒ a brand-new session.
-pub fn run_agent(
-    spec: &LaunchSpec,
-    session_id: &str,
-    cwd: PathBuf,
-    resume: Option<String>,
-    cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
-    hub: &Hub,
-) {
-    let sink: Arc<dyn AgentSink> = Arc::new(HubAgentSink::new(hub.clone()));
-    run_agent_with_sink(spec, session_id, cwd, resume, cmd_rx, &sink);
 }
 
 /// Detached-worker entry point. The ACP connection and all pending request

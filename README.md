@@ -44,8 +44,8 @@ incrementally paged transcript, and a CodeMirror 6 composer with vim support.
 - **Providers**: pluggable (trait + registry), all over ACP; Claude Code and
   Codex use maintained ACP adapters, while Gemini uses its native ACP mode.
 - **Storage**: service-private Postgres (sessions, canonical events, settings, secrets).
-- **Deploy**: NixOS systemd units: system `cowboy`, socket-activated user
-  `cowboy-agentd`, and transient per-session workers. See
+- **Deploy**: NixOS systemd units: system `cowboy`, user `cowboy-machine`, and
+  transient per-session workers. See
   [zero-interruption rolling updates](docs/architecture/12-rolling-updates.md).
 
 ## Two subcommands, one source of truth (design §13a)

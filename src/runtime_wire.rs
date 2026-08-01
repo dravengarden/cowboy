@@ -1,4 +1,4 @@
-//! Versioned local IPC contract between Cowboy, `cowboy-agentd`, and workers.
+//! Versioned local IPC contract between `cowboy-machine` and workers.
 //!
 //! This protocol is deliberately independent from ACP. ACP is the downstream
 //! worker-to-agent protocol; this is Cowboy's stable process boundary. Every
@@ -45,12 +45,12 @@ pub struct WorkerSnapshot {
     pub session_id: String,
     pub worker_epoch: String,
     pub generation: String,
-    /// Concrete executable for this generation. Agentd retains it so a failed
-    /// new generation can be rolled back even after agentd itself restarted.
+    /// Concrete executable for this generation. Machine broker retains it so a failed
+    /// new generation can be rolled back even after Machine broker itself restarted.
     #[serde(default)]
     pub executable: Option<String>,
     /// Full relaunch specification, self-reported by the worker so a freshly
-    /// restarted agentd can reconstruct its session registry before the next
+    /// restarted Machine broker can reconstruct its session registry before the next
     /// generation handoff.
     #[serde(default)]
     pub launch: Option<StartSession>,
@@ -69,7 +69,7 @@ pub struct WorkerSnapshot {
     pub context_used: Option<u64>,
     #[serde(default)]
     pub context_size: Option<u64>,
-    /// Prompts accepted by agentd but intentionally held until a worker is
+    /// Prompts accepted by Machine broker but intentionally held until a worker is
     /// ready (for example during generation drain).
     #[serde(default)]
     pub pending_prompt_count: u64,
@@ -90,7 +90,7 @@ pub struct StartSession {
     /// Desired generation this session is temporarily falling back from.
     #[serde(default)]
     pub fallback_for: Option<String>,
-    /// Rebuild agentd's launch registry without spawning a missing worker.
+    /// Rebuild Machine broker's launch registry without spawning a missing worker.
     /// Cowboy sends this on broker reconnect while surviving workers are still
     /// converging; a later real `EnsureSession` may start one if it never returns.
     #[serde(default)]
@@ -313,7 +313,7 @@ pub enum Frame {
     },
     /// Ask a worker to replay every still-unacknowledged event after this
     /// sequence. Used whenever a new Cowboy controller takes the lease while
-    /// the worker-to-agentd connection itself stayed up.
+    /// the worker-to-Machine broker connection itself stayed up.
     Replay {
         session_id: String,
         worker_epoch: String,

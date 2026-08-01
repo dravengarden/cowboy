@@ -1,10 +1,9 @@
 # Supervisor & lifetime
 
 `src/supervisor.rs` is the Hub-facing lifetime API, decoupled from any client
-connection. It has two backends: a local sender map for development/tests, and
-the production `RemoteRuntime`, which routes through agentd to detached
-per-session workers. The supervisor also holds the shared Hub, workspace root,
-and monotonic id counter.
+connection. It always routes through a connected `cowboy-machine` runtime to
+detached per-session workers. The supervisor also holds the shared Hub,
+workspace root, and monotonic id counter.
 
 The guiding rule: **a client disconnecting never stops the agent.** Close the
 phone, the agent keeps running. In production, restarting the HTTP daemon does
@@ -15,11 +14,10 @@ not restart a live agent.
 | Method | What it does |
 |---|---|
 | `new_session(provider, cwd, origin, system)` | create the session in the Hub, then `spawn_agent()` |
-| `spawn_agent(session_id, spec, cwd, resume)` | local mode starts an OS thread; remote mode sends an idempotent `EnsureSession` |
-| `send(session_id, cmd)` | local mode forwards to a channel; remote mode emits an idempotent runtime command |
+| `spawn_agent(session_id, spec, cwd, resume)` | send an idempotent `EnsureSession` to the session's Machine runtime |
+| `send(session_id, cmd)` | emit an idempotent command through the Machine runtime |
 | `ensure_alive(session_id)` | revive **without** sending a turn — warm the agent on open/reconnect |
-| `revive(session_id)` | spawn a fresh agent for a restored session, passing its prior `agent_session_id` for `session/load` |
-| `delete_session(session_id)` | best-effort `Cancel`, then drop the sender so the loop terminates |
+| `delete_session(session_id)` | stop the detached worker through its Machine runtime |
 
 Session ids are `sess-N`, with `N` seeded **past any restored session's max** so
 a fresh daemon never collides on the storage primary key.

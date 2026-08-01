@@ -75,7 +75,7 @@ routinely breaks another.
    `depsHash` with `nix build .#cowboy-web --option sandbox false` (DNS fails
    under the nix sandbox on hawk — see columbus memory `deno-vite-fod-dns-sandbox`).
 4. A web-only host switch atomically retargets `/run/cowboy-web`; it does not
-   restart Cowboy, agentd, or session workers. Verify the new `/version` and
+   restart Cowboy, Machine, or session workers. Verify the new `/version` and
    `sw.js`; the PWA foreground update check performs the reload.
 5. Desktop also has a pre-module recovery guard in `index.html`. Keep it before
    `/src/main.tsx`: it is the only layer that can recover an installed Desktop

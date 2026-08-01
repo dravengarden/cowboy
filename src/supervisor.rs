@@ -9,15 +9,12 @@
 #![warn(clippy::pedantic)]
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::sync::mpsc;
-
-use crate::acp::{self, AgentCommand};
+use crate::acp::AgentCommand;
 use crate::core::{Hub, SessionOrigin, SessionRegistration, Status};
 use crate::provider::{self, LaunchSpec};
 use crate::remote_runtime::RemoteRuntime;
@@ -27,19 +24,11 @@ use crate::workspace::{
     current_project_checkout, resolve_session_workspace, session_belongs_to_project,
 };
 
-enum Backend {
-    // Explicit in-process development/test mode. Deployed controllers always
-    // construct the routed backend and never own agent processes.
-    #[allow(dead_code)]
-    Local(Mutex<HashMap<String, mpsc::UnboundedSender<AgentCommand>>>),
-    Remote(Arc<RuntimeRouter>),
-}
-
 /// Spawns and tracks agent sessions; routes commands to their threads.
 pub struct Supervisor {
     hub: Hub,
     workspace_root: PathBuf,
-    backend: Backend,
+    router: Arc<RuntimeRouter>,
     counter: AtomicU64,
     lifecycle: Mutex<()>,
 }
@@ -60,27 +49,6 @@ fn initial_counter(hub: &Hub, persistent_floor: u64, clock_floor: u64) -> u64 {
 
 impl Supervisor {
     #[must_use]
-    #[allow(dead_code)]
-    pub fn new(hub: Hub, workspace_root: PathBuf, persistent_floor: u64) -> Self {
-        // The wall-clock floor prevents reuse even after old tombstones are
-        // purged. `persistent_floor` covers clock rollback and, critically,
-        // includes soft-deleted rows that Hub::restore does not load.
-        let clock_floor = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|duration| u64::try_from(duration.as_millis()).ok())
-            .unwrap_or(1);
-        let initial = initial_counter(&hub, persistent_floor, clock_floor);
-        Self {
-            hub,
-            workspace_root,
-            backend: Backend::Local(Mutex::new(HashMap::new())),
-            counter: AtomicU64::new(initial),
-            lifecycle: Mutex::new(()),
-        }
-    }
-
-    #[must_use]
     #[cfg(test)]
     pub fn new_remote(
         hub: Hub,
@@ -90,11 +58,11 @@ impl Supervisor {
     ) -> Self {
         let router = RuntimeRouter::new();
         router.install("local".to_owned(), runtime);
-        Self::new_routed(hub, workspace_root, persistent_floor, router)
+        Self::new(hub, workspace_root, persistent_floor, router)
     }
 
     #[must_use]
-    pub fn new_routed(
+    pub fn new(
         hub: Hub,
         workspace_root: PathBuf,
         persistent_floor: u64,
@@ -109,7 +77,7 @@ impl Supervisor {
         Self {
             hub,
             workspace_root,
-            backend: Backend::Remote(router),
+            router,
             counter: AtomicU64::new(initial),
             lifecycle: Mutex::new(()),
         }
@@ -121,21 +89,6 @@ impl Supervisor {
     #[must_use]
     pub fn workspace_root(&self) -> &std::path::Path {
         &self.workspace_root
-    }
-
-    #[must_use]
-    pub fn resource_stats(&self) -> Vec<(String, crate::cgroup::Stats)> {
-        match &self.backend {
-            Backend::Local(senders) => senders
-                .lock()
-                .keys()
-                .filter_map(|id| crate::cgroup::stats(id).map(|stats| (id.clone(), stats)))
-                .collect(),
-            // Detached worker cgroups are sibling user units. Agentd exports
-            // their resource telemetry separately; the legacy in-process path
-            // remains available for dev/tests.
-            Backend::Remote(_) => Vec::new(),
-        }
     }
 
     /// Create a new session for `provider`, optionally rooted at `cwd`
@@ -165,12 +118,7 @@ impl Supervisor {
         system: bool,
         machine_id: &str,
     ) -> Result<String, String> {
-        if let Backend::Remote(router) = &self.backend
-            && !router.connected(machine_id)
-        {
-            return Err(format!("machine {machine_id:?} is not connected"));
-        }
-        if matches!(self.backend, Backend::Local(_)) && machine_id != "local" {
+        if !self.router.connected(machine_id) {
             return Err(format!("machine {machine_id:?} is not connected"));
         }
         let spec =
@@ -208,60 +156,32 @@ impl Supervisor {
         });
 
         // Fresh session — no agent id to resume.
-        self.spawn_agent(&id, &spec, cwd, None)?;
+        self.ensure_worker(&id, &spec, &cwd, None)?;
         Ok(id)
     }
 
-    /// Spawn an agent thread for `session_id` and register its command sender.
-    /// The single place that starts an [`acp::run_agent`] OS thread — both the
-    /// fresh [`Self::new_session`] path and the [`Self::revive`] path go
-    /// through here, differing only in `resume` (the agent's prior id to
-    /// re-attach via `session/load`, or `None` for a blank session).
-    ///
-    /// Idempotent: if a live sender already exists (a concurrent caller won the
-    /// race), this is a no-op. The Hub session must already exist.
+    /// Ensure the selected Machine owns a detached worker for `session_id`.
     ///
     /// # Errors
-    /// If the OS thread cannot be spawned.
-    fn spawn_agent(
+    /// If the Machine runtime is disconnected.
+    fn ensure_worker(
         &self,
         session_id: &str,
         spec: &LaunchSpec,
-        cwd: PathBuf,
+        cwd: &std::path::Path,
         resume: Option<String>,
     ) -> Result<(), String> {
-        let Backend::Local(senders) = &self.backend else {
-            let Backend::Remote(router) = &self.backend else {
-                unreachable!();
-            };
-            let runtime = self.runtime_for_session(router, session_id)?;
-            runtime.ensure(StartSession {
-                session_id: session_id.to_owned(),
-                provider: spec.id.to_owned(),
-                cwd: cwd.display().to_string(),
-                agent_session_id: resume,
-                system: self.hub.session_is_system(session_id),
-                generation: String::new(),
-                fallback_for: None,
-                adopt_only: false,
-            });
-            return Ok(());
-        };
-        let mut senders = senders.lock();
-        if senders.contains_key(session_id) {
-            return Ok(()); // already live
-        }
-        // One in-flight turn per session is enforced by Hub, so this channel is
-        // logically bounded even though Tokio's transport is unbounded.
-        let (tx, rx) = mpsc::unbounded_channel();
-        let hub = self.hub.clone();
-        let spec = spec.clone();
-        let thread_id = session_id.to_owned();
-        std::thread::Builder::new()
-            .name(format!("agent-{session_id}"))
-            .spawn(move || acp::run_agent(&spec, &thread_id, cwd, resume, rx, &hub))
-            .map_err(|e| format!("spawning agent thread: {e}"))?;
-        senders.insert(session_id.to_owned(), tx);
+        let runtime = self.runtime_for_session(session_id)?;
+        runtime.ensure(StartSession {
+            session_id: session_id.to_owned(),
+            provider: spec.id.to_owned(),
+            cwd: cwd.display().to_string(),
+            agent_session_id: resume,
+            system: self.hub.session_is_system(session_id),
+            generation: String::new(),
+            fallback_for: None,
+            adopt_only: false,
+        });
         Ok(())
     }
 
@@ -289,157 +209,55 @@ impl Supervisor {
     pub fn send(&self, session_id: &str, command: AgentCommand) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         self.prepare_session_inner(session_id)?;
-        if let Backend::Remote(router) = &self.backend {
-            let runtime = self.runtime_for_session(router, session_id)?;
-            if !self
-                .hub
-                .session_list()
-                .iter()
-                .any(|meta| meta.id == session_id)
-            {
-                return Err(format!("unknown session {session_id:?}"));
-            }
-            match command {
-                AgentCommand::Prompt(blocks, cmid, completion) => {
-                    if let Some(completion) = completion {
-                        let _ = completion.send(Err(
-                            "direct completion capture is unavailable through detached runtime"
-                                .to_owned(),
-                        ));
-                        return Err(
-                            "detached runtime does not support completion capture".to_owned()
-                        );
-                    }
-                    let content = blocks
-                        .into_iter()
-                        .map(|block| serde_json::to_value(block).unwrap_or(serde_json::Value::Null))
-                        .collect();
-                    runtime.ensure(self.start_session(session_id)?);
-                    runtime.prompt(session_id, content, cmid);
+        let runtime = self.runtime_for_session(session_id)?;
+        match command {
+            AgentCommand::Prompt(blocks, cmid, completion) => {
+                if let Some(completion) = completion {
+                    let _ = completion.send(Err(
+                        "direct completion capture is unavailable through detached runtime"
+                            .to_owned(),
+                    ));
+                    return Err("detached runtime does not support completion capture".to_owned());
                 }
-                AgentCommand::Cancel => runtime.cancel(session_id),
-                AgentCommand::Permission {
-                    request_id,
-                    option_id,
-                } => runtime.permission(session_id, request_id, option_id),
-                AgentCommand::SetConfigOption { config_id, value } => {
-                    runtime.set_config_option(session_id, config_id, value);
-                }
+                let content = blocks
+                    .into_iter()
+                    .map(|block| serde_json::to_value(block).unwrap_or(serde_json::Value::Null))
+                    .collect();
+                runtime.ensure(self.start_session(session_id)?);
+                runtime.prompt(session_id, content, cmid);
             }
-            return Ok(());
+            AgentCommand::Cancel => runtime.cancel(session_id),
+            AgentCommand::Permission {
+                request_id,
+                option_id,
+            } => runtime.permission(session_id, request_id, option_id),
+            AgentCommand::SetConfigOption { config_id, value } => {
+                runtime.set_config_option(session_id, config_id, value);
+            }
         }
-        let Backend::Local(senders) = &self.backend else {
-            unreachable!();
-        };
-        // A failed `send` means the receiver (agent thread) is gone: drop the
-        // stale sender and fall through to revive, recovering the command from
-        // the `SendError` so we needn't require `AgentCommand: Clone`.
-        let command = {
-            let mut senders = senders.lock();
-            match senders.get(session_id) {
-                Some(tx) => match tx.send(command) {
-                    Ok(()) => return Ok(()),
-                    Err(error) => {
-                        senders.remove(session_id);
-                        error.0
-                    }
-                },
-                None => command,
-            }
-        };
-        self.revive(session_id)?;
-        let Backend::Local(senders) = &self.backend else {
-            unreachable!();
-        };
-        senders
-            .lock()
-            .get(session_id)
-            .ok_or_else(|| format!("unknown session {session_id:?}"))?
-            .send(command)
-            .map_err(|_| "session ended".to_owned())
+        Ok(())
     }
 
-    /// Ensure a session has a live agent **without sending a turn** — the
-    /// "revive on open" path (design §7). Called when a client selects/opens a
-    /// session: revives one whose agent died with a daemon restart (handing it
-    /// the prior `agent_session_id` for `session/load` resume), so it's already
-    /// warming up before the user types. Idempotent and cheap: a no-op when a
-    /// sender is already registered (the steady-state case — agents outlive
-    /// client connections), so it's safe to call on every open / reconnect.
-    ///
-    /// A stale sender left by a crashed-but-not-deleted agent is NOT detected
-    /// here (we don't probe by sending); that rarer case is still recovered by
-    /// the next [`Self::send`], which drops the dead sender and revives.
+    /// Ensure a session has a live detached worker without sending a turn.
     ///
     /// Returns `true` if it revived, `false` if the agent was already alive.
     ///
     /// # Errors
-    /// If the session is unknown to the Hub, its provider is no longer
-    /// registered, or the agent thread cannot be spawned.
+    /// If the session is unknown or its Machine runtime is disconnected.
     pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
         if self.prepare_session_inner(session_id)? {
             return Ok(true);
         }
-        match &self.backend {
-            Backend::Remote(router) => {
-                let runtime = self.runtime_for_session(router, session_id)?;
-                if runtime.has_worker(session_id) {
-                    return Ok(false);
-                }
-                runtime.ensure(self.start_session(session_id)?);
-                return Ok(true);
-            }
-            Backend::Local(senders) if senders.lock().contains_key(session_id) => return Ok(false),
-            Backend::Local(_) => {}
+        let runtime = self.runtime_for_session(session_id)?;
+        if runtime.has_worker(session_id) {
+            return Ok(false);
         }
-        self.revive(session_id)?;
+        runtime.ensure(self.start_session(session_id)?);
         Ok(true)
     }
 
-    /// Spawn an agent thread for a session that exists in the Hub but has no
-    /// live sender (one restored after a restart, or whose agent crashed).
-    /// Reuses the persisted provider + cwd, and hands the agent its prior
-    /// `agent_session_id` so it resumes the conversation via `session/load`
-    /// (design §7) — the prior context is restored, not dropped, when the
-    /// provider supports it. Idempotent: a no-op if a concurrent caller
-    /// revived it first.
-    ///
-    /// # Errors
-    /// If the session id is unknown to the Hub, the provider is no longer
-    /// registered, or the OS thread cannot be spawned.
-    fn revive(&self, session_id: &str) -> Result<(), String> {
-        self.resolve_and_persist_cwd(session_id)?;
-        let meta = self
-            .hub
-            .session_list()
-            .into_iter()
-            .find(|m| m.id == session_id)
-            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        let spec = provider::lookup(&meta.provider)
-            .ok_or_else(|| format!("unknown provider {:?}", meta.provider))?;
-        let cwd = PathBuf::from(&meta.cwd);
-
-        // Reflect the reconnect immediately so the UI shows "starting" rather
-        // than a stale "exited" while the agent re-handshakes (a few seconds).
-        self.hub.set_status(session_id, Status::Starting, None);
-        let resume = self.hub.agent_session_id_for_resume(session_id);
-        if meta.agent_session_id.is_some() && resume.is_none() {
-            tracing::warn!(
-                session = session_id,
-                native_thread = ?meta.agent_session_id,
-                "starting a fresh native thread because the current context has no user turn"
-            );
-        }
-        self.spawn_agent(session_id, &spec, cwd, resume.clone())?;
-        tracing::info!(
-            session = session_id,
-            resume = ?resume,
-            "revived session (session/load when the agent's prior id is known)"
-        );
-        Ok(())
-    }
-
+    /// Build the idempotent worker launch declaration for a persisted session.
     fn start_session(&self, session_id: &str) -> Result<StartSession, String> {
         let meta = self
             .hub
@@ -459,35 +277,17 @@ impl Supervisor {
         })
     }
 
-    /// Tear down a session's agent thread. Sends `Cancel` (best-effort, so an
-    /// in-flight turn returns to its caller cleanly), then drops the tx so
-    /// the agent's command loop terminates on next poll. Hub state is the
-    /// caller's responsibility — pair with [`Hub::delete_session`].
+    /// Tear down a session's detached worker. Hub state is the caller's
+    /// responsibility — pair with [`Hub::delete_session`].
     ///
-    /// Returns `true` if the session had a live sender (= the thread was
-    /// alive). Unknown / already-torn-down sessions are a no-op and return
-    /// `false`.
+    /// Returns `true` if the session had a live worker.
     pub fn delete_session(&self, session_id: &str) -> bool {
-        if let Backend::Remote(router) = &self.backend {
-            let Ok(runtime) = self.runtime_for_session(router, session_id) else {
-                return false;
-            };
-            let existed = runtime.has_worker(session_id);
-            runtime.stop(session_id);
-            return existed;
-        }
-        let Backend::Local(senders) = &self.backend else {
-            unreachable!();
+        let Ok(runtime) = self.runtime_for_session(session_id) else {
+            return false;
         };
-        let tx = senders.lock().remove(session_id);
-        match tx {
-            Some(tx) => {
-                let _ = tx.send(AgentCommand::Cancel);
-                drop(tx);
-                true
-            }
-            None => false,
-        }
+        let existed = runtime.has_worker(session_id);
+        runtime.stop(session_id);
+        existed
     }
 
     /// Replace a session's agent with a fresh context without deleting the
@@ -626,25 +426,13 @@ impl Supervisor {
     }
 
     fn recycle_session_inner(&self, session_id: &str) -> Result<(), String> {
-        match &self.backend {
-            Backend::Remote(router) => {
-                let runtime = self.runtime_for_session(router, session_id)?;
-                self.hub.set_status(session_id, Status::Starting, None);
-                runtime.reset(self.start_session(session_id)?);
-                Ok(())
-            }
-            Backend::Local(_) => {
-                self.delete_session(session_id);
-                self.revive(session_id)
-            }
-        }
+        let runtime = self.runtime_for_session(session_id)?;
+        self.hub.set_status(session_id, Status::Starting, None);
+        runtime.reset(self.start_session(session_id)?);
+        Ok(())
     }
 
-    fn runtime_for_session(
-        &self,
-        router: &RuntimeRouter,
-        session_id: &str,
-    ) -> Result<Arc<RemoteRuntime>, String> {
+    fn runtime_for_session(&self, session_id: &str) -> Result<Arc<RemoteRuntime>, String> {
         let machine_id = self
             .hub
             .session_list()
@@ -652,7 +440,7 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .map(|meta| meta.machine_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        router
+        self.router
             .runtime(&machine_id)
             .ok_or_else(|| format!("machine {machine_id:?} is not connected"))
     }
@@ -852,7 +640,7 @@ mod tests {
             false,
         );
         hub.set_status("s", Status::Busy, None);
-        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0);
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, RuntimeRouter::new());
 
         let error = supervisor
             .reconcile_project_sessions("corsair", true)

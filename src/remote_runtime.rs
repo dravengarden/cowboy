@@ -1,4 +1,4 @@
-//! Cowboy-side client for the stable agentd runtime broker.
+//! Cowboy-side client for the stable Machine runtime broker.
 
 #![warn(clippy::pedantic)]
 
@@ -29,29 +29,7 @@ pub struct RemoteBootstrap {
 }
 
 impl RemoteBootstrap {
-    pub async fn connect(socket: PathBuf) -> Result<Self> {
-        let mut backoff = Duration::from_millis(50);
-        loop {
-            match connect_settled(&socket).await {
-                Ok((reader, writer, workers, buffered)) => {
-                    return Ok(Self {
-                        socket,
-                        reader,
-                        writer,
-                        workers,
-                        buffered,
-                    });
-                }
-                Err(error) => {
-                    tracing::debug!(%error, socket = %socket.display(), "waiting for agentd bootstrap");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(Duration::from_secs(1));
-                }
-            }
-        }
-    }
-
-    /// Acquire the agentd controller lease through an already-authenticated
+    /// Acquire the Machine broker controller lease through an authenticated
     /// transport, such as a Machine WebSocket tunnel.
     pub async fn from_stream(socket: PathBuf, stream: UnixStream) -> Result<Self> {
         let (reader, writer, workers, buffered) = connect_settled_stream(stream).await?;
@@ -63,11 +41,6 @@ impl RemoteBootstrap {
             buffered,
         })
     }
-
-    #[must_use]
-    pub fn workers(&self) -> &[WorkerSnapshot] {
-        &self.workers
-    }
 }
 
 struct Shared {
@@ -76,7 +49,7 @@ struct Shared {
     pending: Mutex<HashMap<String, CoreCommand>>,
     sent: Mutex<HashSet<String>>,
     /// Launch metadata re-declared after every broker reconnect. These are
-    /// registry claims, not pending commands: absence never authorizes agentd
+    /// registry claims, not pending commands: absence never authorizes Machine broker
     /// to spawn while surviving workers are still converging.
     declarations: Mutex<HashMap<String, StartSession>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
@@ -106,7 +79,7 @@ pub struct RemoteRuntimeStats {
     pub busy_workers: usize,
     pub draining_workers: usize,
     /// Non-busy generation handoffs that still depend on broker-local
-    /// readiness/fallback state. Agentd updates wait for this to reach zero.
+    /// readiness/fallback state. Machine broker updates wait for this to reach zero.
     pub handoff_workers: usize,
     pub pending_commands: usize,
 }
@@ -163,7 +136,7 @@ impl RemoteRuntime {
         let (left, _right) = UnixStream::pair().expect("test runtime socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers,
@@ -253,32 +226,6 @@ impl RemoteRuntime {
         self.queue(key, CoreCommand::EnsureSession { session });
     }
 
-    /// Rebuild agentd's session registry without treating a temporarily absent
-    /// worker as permission to start another owner. Used at core/broker
-    /// deployment boundaries; normal user-driven revival uses [`Self::ensure`].
-    pub fn adopt(&self, mut session: StartSession) {
-        if let Some(worker) = self.shared.workers.lock().get(&session.session_id) {
-            if let Some(launch) = worker.launch.clone() {
-                session = launch;
-            } else {
-                session.generation.clone_from(&worker.generation);
-                session
-                    .agent_session_id
-                    .clone_from(&worker.agent_session_id);
-            }
-        }
-        if session.generation.is_empty() {
-            session
-                .generation
-                .clone_from(&self.shared.desired_generation);
-        }
-        session.adopt_only = true;
-        self.shared
-            .declarations
-            .lock()
-            .insert(session.session_id.clone(), session);
-    }
-
     pub fn prompt(
         &self,
         session_id: &str,
@@ -363,7 +310,7 @@ impl RemoteRuntime {
             .lock()
             .insert(session_id.clone(), session.clone());
         // Re-declare the replacement metadata before the reset-flavoured stop.
-        // `send_pending` orders EnsureSession first, so agentd can atomically
+        // `send_pending` orders EnsureSession first, so Machine broker can atomically
         // fence the old worker and relaunch from this fresh specification while
         // preserving the existing v1 wire contract and worker generation.
         let ensure_key = format!("ensure:{session_id}");
@@ -382,6 +329,7 @@ impl RemoteRuntime {
     /// handed off by the Hub has been acknowledged by its worker. If the
     /// runtime stays unavailable through the deadline, return prompts to the
     /// durable Hub queue before the Postgres writer is closed.
+    #[cfg(test)]
     pub async fn graceful_shutdown(&self, timeout: Duration) {
         let deadline = tokio::time::Instant::now() + timeout;
         while !self.shared.pending.lock().is_empty() && tokio::time::Instant::now() < deadline {
@@ -455,7 +403,7 @@ async fn connect_once(
 )> {
     let stream = UnixStream::connect(socket)
         .await
-        .with_context(|| format!("connecting agentd socket {}", socket.display()))?;
+        .with_context(|| format!("connecting Machine broker socket {}", socket.display()))?;
     let (mut reader, mut writer) = stream.into_split();
     write_frame(
         &mut writer,
@@ -474,9 +422,9 @@ async fn connect_once(
     .await?;
     match read_frame(&mut reader).await? {
         Some(Frame::Welcome { workers, .. }) => Ok((FrameReader::new(reader), writer, workers)),
-        Some(Frame::Reject { reason }) => anyhow::bail!("agentd rejected Cowboy: {reason}"),
-        Some(other) => anyhow::bail!("unexpected agentd handshake frame: {other:?}"),
-        None => anyhow::bail!("agentd closed during handshake"),
+        Some(Frame::Reject { reason }) => anyhow::bail!("Machine broker rejected Cowboy: {reason}"),
+        Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
+        None => anyhow::bail!("Machine broker closed during handshake"),
     }
 }
 
@@ -505,15 +453,15 @@ async fn connect_once_stream(
     .await?;
     match read_frame(&mut reader).await? {
         Some(Frame::Welcome { workers, .. }) => Ok((FrameReader::new(reader), writer, workers)),
-        Some(Frame::Reject { reason }) => anyhow::bail!("agentd rejected Cowboy: {reason}"),
-        Some(other) => anyhow::bail!("unexpected agentd handshake frame: {other:?}"),
-        None => anyhow::bail!("agentd closed during handshake"),
+        Some(Frame::Reject { reason }) => anyhow::bail!("Machine broker rejected Cowboy: {reason}"),
+        Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
+        None => anyhow::bail!("Machine broker closed during handshake"),
     }
 }
 
 /// Let surviving workers converge around every new broker connection, not only
 /// process startup. Until this settles, `Shared.workers` intentionally keeps its
-/// last snapshot so an agentd restart cannot race an `EnsureSession` into
+/// last snapshot so a Machine broker restart cannot race an `EnsureSession` into
 /// spawning a duplicate owner for a still-running turn.
 async fn connect_settled(
     socket: &Path,
@@ -548,7 +496,7 @@ async fn connect_settled(
                 }
                 buffered.push(frame);
             }
-            Ok(Ok(None)) => anyhow::bail!("agentd closed during runtime settle"),
+            Ok(Ok(None)) => anyhow::bail!("Machine broker closed during runtime settle"),
             Ok(Err(error)) => return Err(error.into()),
             Err(_) if tokio::time::Instant::now() < minimum_settle => {}
             Err(_) => break,
@@ -590,7 +538,7 @@ async fn connect_settled_stream(
                 }
                 buffered.push(frame);
             }
-            Ok(Ok(None)) => anyhow::bail!("agentd closed during runtime settle"),
+            Ok(Ok(None)) => anyhow::bail!("Machine broker closed during runtime settle"),
             Ok(Err(error)) => return Err(error.into()),
             Err(_) if tokio::time::Instant::now() < minimum_settle => {}
             Err(_) => break,
@@ -623,7 +571,7 @@ async fn connection_manager(
             Ok(connection) => connection,
             Err(error) => {
                 shared.connected.store(false, Ordering::Release);
-                tracing::warn!(error = %error, "agentd unavailable; Cowboy queues runtime commands");
+                tracing::warn!(error = %error, "Machine broker unavailable; Cowboy queues runtime commands");
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(5));
                 continue;
@@ -633,7 +581,7 @@ async fn connection_manager(
         shared.connected.store(true, Ordering::Release);
         shared.sent.lock().clear();
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
-            tracing::warn!(error = %error, "agentd connection dropped; reconnecting");
+            tracing::warn!(error = %error, "Machine broker connection dropped; reconnecting");
         }
         shared.connected.store(false, Ordering::Release);
         if shared.shutdown.load(Ordering::Acquire) {
@@ -670,7 +618,7 @@ async fn connected(
     loop {
         tokio::select! {
             incoming = reader.next() => {
-                let Some(frame) = incoming? else { anyhow::bail!("agentd closed") };
+                let Some(frame) = incoming? else { anyhow::bail!("Machine broker closed") };
                 last_broker_frame = tokio::time::Instant::now();
                 handle_frame(shared, frame, &mut writer).await?;
             }
@@ -685,7 +633,7 @@ async fn connected(
             }
             _ = heartbeat.tick() => {
                 if last_broker_frame.elapsed() > Duration::from_secs(35) {
-                    anyhow::bail!("agentd heartbeat timed out");
+                    anyhow::bail!("Machine broker heartbeat timed out");
                 }
                 write_frame(&mut writer, &Frame::Heartbeat).await?;
             }
@@ -715,7 +663,7 @@ fn command_priority(command: &CoreCommand) -> u8 {
     match command {
         CoreCommand::EnsureSession { .. } => 0,
         CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-") => 1,
-        // Agentd handles a reset stop synchronously. Prompts sent after it are
+        // Machine broker handles a reset stop synchronously. Prompts sent after it are
         // queued for the replacement worker instead of reaching the old worker
         // and being cleared by reset_session.
         _ => 2,
@@ -871,8 +819,8 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         }
         Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
         Frame::Heartbeat => {}
-        Frame::Reject { reason } => anyhow::bail!("agentd rejected controller: {reason}"),
-        other => tracing::debug!(?other, "ignoring unrelated agentd frame"),
+        Frame::Reject { reason } => anyhow::bail!("Machine broker rejected controller: {reason}"),
+        other => tracing::debug!(?other, "ignoring unrelated Machine broker frame"),
     }
     Ok(())
 }
@@ -1309,7 +1257,7 @@ mod tests {
         let (left, _right) = UnixStream::pair().expect("socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers: vec![snapshot("s")],
@@ -1368,7 +1316,7 @@ mod tests {
         let (left, _right) = UnixStream::pair().expect("socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers: vec![snapshot("s")],
@@ -1474,7 +1422,7 @@ mod tests {
         let (left, _right) = UnixStream::pair().expect("socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers: vec![snapshot("s")],
@@ -1562,7 +1510,7 @@ mod tests {
         let (left, _right) = UnixStream::pair().expect("socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers: vec![snapshot("s")],
@@ -1662,7 +1610,7 @@ mod tests {
         let (left, _right) = UnixStream::pair().expect("socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers: Vec::new(),
@@ -1697,7 +1645,7 @@ mod tests {
         let (left, _right) = UnixStream::pair().expect("socket pair");
         let (reader, writer) = left.into_split();
         let bootstrap = RemoteBootstrap {
-            socket: PathBuf::from("/tmp/unused-agentd.sock"),
+            socket: PathBuf::from("/tmp/unused-machine-broker.sock"),
             reader: FrameReader::new(reader),
             writer,
             workers: Vec::new(),

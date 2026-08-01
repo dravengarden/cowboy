@@ -1,7 +1,7 @@
 //! Detached per-session ACP worker.
 //!
 //! A worker owns exactly one ACP client connection and its adapter subtree. It
-//! connects *out* to agentd, so Cowboy and agentd may restart while the worker
+//! connects *out* to Machine broker, so Cowboy and Machine broker may restart while the worker
 //! keeps an in-flight prompt and pending permission responders alive.
 
 use std::collections::{BTreeMap, HashSet};
@@ -381,7 +381,7 @@ async fn connection_loop(
         let stream = match UnixStream::connect(socket).await {
             Ok(stream) => stream,
             Err(error) => {
-                tracing::warn!(error = %error, socket = %socket.display(), "agentd unavailable; worker keeps running");
+                tracing::warn!(error = %error, socket = %socket.display(), "Machine broker unavailable; worker keeps running");
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(5));
                 continue;
@@ -399,7 +399,9 @@ async fn connection_loop(
         {
             Ok(ConnectedExit::WorkerDrained) => return Ok(()),
             Ok(ConnectedExit::Disconnected) => {}
-            Err(error) => tracing::warn!(error = %error, "agentd connection lost; reconnecting"),
+            Err(error) => {
+                tracing::warn!(error = %error, "Machine broker connection lost; reconnecting")
+            }
         }
     }
 }
@@ -434,8 +436,8 @@ async fn connected(
     .await?;
     match read_frame(&mut reader).await? {
         Some(Frame::Welcome { .. }) => {}
-        Some(Frame::Reject { reason }) => anyhow::bail!("agentd rejected worker: {reason}"),
-        Some(other) => anyhow::bail!("unexpected agentd handshake frame: {other:?}"),
+        Some(Frame::Reject { reason }) => anyhow::bail!("Machine broker rejected worker: {reason}"),
+        Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
         None => return Ok(ConnectedExit::Disconnected),
     }
     write_frame(
@@ -461,7 +463,7 @@ async fn connected(
                         let ack = handle_command(&shared, cmd_tx, command);
                         // Publish state transitions (especially TurnStarted)
                         // before ACKing acceptance. Once Cowboy drops a pending
-                        // command, agentd's snapshot is therefore already
+                        // command, Machine broker's snapshot is therefore already
                         // authoritative across an immediate core restart.
                         send_outbox(&shared, &mut writer, &mut last_sent).await?;
                         write_frame(&mut writer, &ack).await?;
@@ -479,7 +481,7 @@ async fn connected(
                         send_outbox(&shared, &mut writer, &mut last_sent).await?;
                     }
                     Frame::Heartbeat => {}
-                    Frame::Reject { reason } => anyhow::bail!("agentd rejected live worker: {reason}"),
+                    Frame::Reject { reason } => anyhow::bail!("Machine broker rejected live worker: {reason}"),
                     other => tracing::debug!(?other, "ignoring unrelated runtime frame"),
                 }
             }

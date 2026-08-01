@@ -107,13 +107,6 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_WEB_ROOT", default_value = "web/dist")]
     pub web_root: PathBuf,
 
-    /// Unix socket of the detached agent runtime broker. When omitted Cowboy
-    /// keeps the legacy in-process supervisor (useful for local development and
-    /// tests). Production sets this so API/Web redeploys do not own agent
-    /// process lifetime.
-    #[arg(long, env = "COWBOY_RUNTIME_SOCKET")]
-    pub runtime_socket: Option<PathBuf>,
-
     /// Unix socket of Cowboy's isolated Zed protocol adapter. When omitted,
     /// code review remains available but language intelligence is reported as
     /// unavailable.
@@ -127,22 +120,6 @@ pub struct ServeArgs {
         default_value_t = 2 * 1024 * 1024 * 1024_u64
     )]
     pub code_cache_bytes: u64,
-
-    /// Desired detached worker generation. Agentd uses this for new sessions;
-    /// workers already serving a turn remain on their current generation until
-    /// the rollout reaches a safe boundary.
-    #[arg(
-        long,
-        env = "COWBOY_WORKER_GENERATION",
-        default_value = env!("CARGO_PKG_VERSION")
-    )]
-    pub worker_generation: String,
-
-    /// Worker executable associated with `--worker-generation`. Production
-    /// supplies its immutable Nix store path so agentd can launch and roll back
-    /// exact generations; local development may use agentd's default.
-    #[arg(long, env = "COWBOY_RUNTIME_WORKER_COMMAND")]
-    pub runtime_worker_command: Option<PathBuf>,
 
     /// Controller-owned signed desired-component manifest sent to every
     /// authenticated Machine. The browser can request reconciliation but

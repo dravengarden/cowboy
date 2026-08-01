@@ -1,7 +1,7 @@
 # Build & deploy
 
 cowboy ships as three independent Nix artifacts: the HTTP/control-plane + worker
-package, a narrowly sourced stable agentd package, and the React SPA. This keeps
+package, a narrowly sourced stable Machine package, and the React SPA. This keeps
 frontend, broker, and session-runtime update frequency independent.
 
 ## The build graph
@@ -11,12 +11,12 @@ flowchart TB
     SRC["web/src + deno.lock"] --> DEPS["deps FOD<br/>(vendored npm cache)"]
     DEPS --> WEB["cowboy-web<br/>buildDenoViteApp → dist"]
     RS["Rust source<br/>(web excluded)"] --> BIN["cowboy + worker<br/>buildRustPackage"]
-    ADS["agentd source subset"] --> AD["cowboy-agentd<br/>no-default-features"]
+    MS["Machine source subset"] --> MH["cowboy-machine<br/>no-default-features"]
     WEB --> LINK["atomic /run/cowboy-web symlink"]
 
     style WEB fill:#eef2ff,stroke:#6366f1
     style BIN fill:#dcfce7,stroke:#16a34a
-    style AD fill:#fef9c3,stroke:#ca8a04
+    style MH fill:#fef9c3,stroke:#ca8a04
 ```
 
 - **`cowboy-web`** uses the shared `buildDenoViteApp` builder from the
@@ -29,8 +29,10 @@ flowchart TB
   It pins crates via **`cargoHash` / `fetchCargoVendor`** (not
   `cargoLock`): crates.io now 403s the download endpoint for requests with no
   User-Agent, and the plain-fetchurl `cargoLock` path sends none.
-- **`cowboy-agentd`** uses a source fileset containing only the broker, runtime
-  wire contract, and entry point. It builds with `--no-default-features`, so an
+- **`cowboy-machine`** uses a source fileset containing only the Machine host,
+  broker, runtime wire contract, installer, and entry point. It builds with
+  `--no-default-features --features machine-host`; the control-plane package
+  does not compile or install Machine-host entry points, so an
   ordinary Cowboy code change does not alter the broker's store path.
 - **`cowboy-web`** is switched by atomically replacing `/run/cowboy-web`; the
   backend reads assets at request time and computes ETags/version IDs from their
@@ -66,9 +68,6 @@ the cleared same-path target took 16.41s with 282 Rust cache hits. The hermetic
 | `--workspace-root` | `.` | root the session pickers scope to |
 | `--postgres-url` | — | enable persistence ([Storage](05-storage.md)); in-memory if absent |
 | `--web-root` | `web/dist` | separately deployed SPA directory |
-| `--runtime-socket` | — | enable detached production runtime; omit for local in-process mode |
-| `--worker-generation` | crate version | desired session-worker generation |
-| `--runtime-worker-command` | — | immutable executable associated with that generation |
 Other subcommands: `serve-acp` (the ACP server face for Zed), `try-agent`
 (one-shot provider smoke test).
 
@@ -111,7 +110,7 @@ cowboy is consumed by the hawk config via a `git+file://` flake input from this
 repo. To ship a change: commit here, then on hawk `nix flake update cowboy` +
 `nixos-rebuild`. The system `cowboy.service` runs **as the human SSH user** (so
 the API and Zed-over-SSH share one identity). A lingered user manager owns
-`cowboy-agentd.socket`, `cowboy-agentd.service`, `cowboy-agents.slice`, and the
+`cowboy-machine.service`, `cowboy-agents.slice`, and the
 transient per-session workers. Agent-owned local state remains in the user's
 normal tool-managed home.
 

@@ -9,9 +9,19 @@ rust-version = "1.95.0"
 
 [features]
 default = ["full"]
-# The stable broker is built as a small, separately versioned package with
-# `--no-default-features`; every other Cowboy binary uses the complete stack.
+# The control plane and Machine host are separate compile-time boundaries.
 full = []
+machine-host = []
+
+[[bin]]
+name = "cowboy-machine"
+path = "src/bin/cowboy-machine.rs"
+required-features = ["machine-host"]
+
+[[bin]]
+name = "cowboy-machine-install"
+path = "src/bin/cowboy-machine-install.rs"
+required-features = ["machine-host"]
 
 [dependencies]
 agent-client-protocol = "2"
