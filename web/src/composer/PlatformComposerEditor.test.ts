@@ -3,7 +3,10 @@ import {
   desktopVimMountPolicy,
   shouldPreloadDesktopVim,
 } from "./desktopVimMountPolicy";
-import { shouldUseNativeCompactEditor } from "./mobileCompactEditorPolicy";
+import {
+  composerEditorMountSeed,
+  shouldUseNativeCompactEditor,
+} from "./mobileCompactEditorPolicy";
 
 Deno.test("only a pending Desktop Vim runtime starts the preload promise", () => {
   assertEquals(shouldPreloadDesktopVim("desktop", true, "pending"), true);
@@ -51,4 +54,14 @@ Deno.test("inline images and expanded touch composers stay on CM6", () => {
   assertEquals(shouldUseNativeCompactEditor("mobile", false, false, token), false);
   assertEquals(shouldUseNativeCompactEditor("mobile", true, false, "hello"), false);
   assertEquals(shouldUseNativeCompactEditor("tablet", false, true, "hello"), false);
+});
+
+Deno.test("native to CM6 promotion freezes the token-bearing live document", () => {
+  const frozen = "old mount seed";
+  const promoted = "live text\n![shot](cowboy-att:image-1)\n";
+  assertEquals(composerEditorMountSeed(true, false, frozen, promoted), promoted);
+  assertEquals(
+    composerEditorMountSeed(false, false, promoted, "later React echo"),
+    promoted,
+  );
 });

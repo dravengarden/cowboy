@@ -2,6 +2,7 @@ import {
   type ComponentPropsWithoutRef,
   forwardRef,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { ComposerEditor, type ComposerEditorHandle } from "../ComposerEditor";
@@ -16,7 +17,10 @@ import {
   desktopVimMountPolicy,
   shouldPreloadDesktopVim,
 } from "./desktopVimMountPolicy";
-import { shouldUseNativeCompactEditor } from "./mobileCompactEditorPolicy";
+import {
+  composerEditorMountSeed,
+  shouldUseNativeCompactEditor,
+} from "./mobileCompactEditorPolicy";
 
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
 
@@ -52,6 +56,15 @@ export const PlatformComposerEditor = forwardRef<
     props.fill ?? false,
     touchValue,
   );
+  const wasNativeCompactRef = useRef(nativeCompact);
+  const cmSeedRef = useRef(props.value);
+  cmSeedRef.current = composerEditorMountSeed(
+    wasNativeCompactRef.current,
+    nativeCompact,
+    cmSeedRef.current,
+    touchValue,
+  );
+  wasNativeCompactRef.current = nativeCompact;
   const [runtimeState, setRuntimeState] = useState<DesktopVimRuntimeState>(
     () => isDesktopVimRuntimeLoaded() ? "ready" : "pending",
   );
@@ -97,6 +110,7 @@ export const PlatformComposerEditor = forwardRef<
   return (
     <ComposerEditor
       {...props}
+      value={cmSeedRef.current}
       // The loading editor is deliberately a separate, non-interactive CM6
       // lifetime. The real editor mounts only after Vim can be included in its
       // initial EditorState, so native IME composition never spans reconfigure.

@@ -15,3 +15,16 @@ export function shouldUseNativeCompactEditor(
   return surfaceKind !== "desktop" && !expanded && !fill &&
     imageTokensInText(value).length === 0;
 }
+
+/** Freeze the document used to mount uncontrolled CM6. While native is active,
+ * track its live controlled text; on the one native → CM6 promotion render,
+ * capture the just-inserted image token. Once CM6 owns the editor, never follow
+ * later React text updates or IME/caret reconciliation regresses. */
+export function composerEditorMountSeed(
+  wasNative: boolean,
+  nativeNow: boolean,
+  frozenSeed: string,
+  touchValue: string,
+): string {
+  return wasNative || nativeNow ? touchValue : frozenSeed;
+}

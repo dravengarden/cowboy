@@ -567,8 +567,9 @@ here says otherwise.
     also dismissed the keyboard. Clipboard extraction must inspect both
     `DataTransfer.files` and item-only file entries used by iOS. Register all
     attachment bytes, insert every token in one editor transaction from the live
-    DOM value/selection, then—only for a clipboard paste—focus the newly mounted
-    CM6 once on the next frame. File-picker attachment remains intentionally
+    DOM value/selection, freeze that token-bearing live document as CM6's one-shot
+    promotion seed, then—only for a clipboard paste—focus the newly mounted CM6
+    once on the next frame. File-picker attachment remains intentionally
     non-refocusing because picker dismissal owns a separate UIKit lifecycle.
     Never repair this by externalizing inline images or feeding live React text
     back into CM6.
