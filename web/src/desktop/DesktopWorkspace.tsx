@@ -1,6 +1,9 @@
 import { alpha, Box, Typography } from "@mui/material";
 import { useMemo } from "react";
-import type { DesktopPane } from "./DesktopWorkspaceController";
+import {
+  type DesktopPane,
+  useDesktopWorkspace,
+} from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
 import { MOD_LABEL } from "../platform";
@@ -76,6 +79,8 @@ export function DesktopWorkspace({
   projection: TranscriptProjection;
   onProjectionChange: (projection: TranscriptProjection) => void;
 }): React.JSX.Element {
+  const workspace = useDesktopWorkspace();
+  const conversationShortcutsActive = workspace.focusedPane === "conversation";
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleProjection",
     title: `Switch to ${projection === "history" ? "Explore" : "History"}`,
@@ -178,8 +183,12 @@ export function DesktopWorkspace({
               <DesktopProjectionToggle
                 projection={projection}
                 onChange={onProjectionChange}
+                shortcutActive={conversationShortcutsActive}
               />
-              <DesktopConversationControls sessionId={sessionId} />
+              <DesktopConversationControls
+                sessionId={sessionId}
+                shortcutActive={conversationShortcutsActive}
+              />
             </>
           )}
         >
