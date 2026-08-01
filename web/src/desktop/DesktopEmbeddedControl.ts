@@ -70,14 +70,14 @@ export function desktopListItemSx() {
       bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.045),
     },
     "&.Mui-selected": {
-      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.42),
-      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.09),
+      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.34),
+      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.065),
       boxShadow: (theme: Theme) =>
-        `inset 3px 0 0 ${alpha(theme.palette.primary.main, 0.72)}`,
+        `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.07)}`,
     },
     "&.Mui-selected:hover": {
-      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.52),
-      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.115),
+      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.44),
+      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.09),
     },
     "&.Mui-focusVisible": {
       borderColor: "primary.main",

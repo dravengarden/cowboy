@@ -728,7 +728,7 @@ function SessionList({
                             height: 32,
                         },
                         "& .cowboy-session-grip .MuiSvgIcon-root, & .cowboy-session-actions .MuiSvgIcon-root": {
-                            fontSize: 18,
+                            fontSize: "1.125rem",
                         },
                     },
                 }}
@@ -768,11 +768,8 @@ function SessionList({
                         }}
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
-                            (Apple HIG touch min) with a FIXED 24px glyph: the icon
-                            is otherwise rem-based, so the reading font-scale (e.g.
-                            85% → root 13.6px) shrank it to ~16px and the affordance
-                            read as tiny. Pin it in px so this touch target stays
-                            standard-MUI-sized regardless of reading prefs.
+                            keeps the Apple HIG touch target stable while the
+                            1.5rem glyph follows the global font-size preference.
                             stopPropagation in handleProps keeps a row tap (select)
                             and the sheet's drag separate from a reorder. */}
                         <Box
@@ -791,7 +788,7 @@ function SessionList({
                                 aria-label="Drag to reorder"
                                 sx={{ width: 44, height: 44, color: "text.disabled" }}
                             >
-                                <DragIndicator sx={{ fontSize: 24 }} />
+                                <DragIndicator sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
                         </Box>
                         <StatusDot status={s.status} sx={{ mr: 1 }} />
@@ -930,15 +927,11 @@ function SessionList({
                                 e.stopPropagation();
                                 setMenuAnchor({ row: s, el: e.currentTarget });
                             }}
-                            // 44px tap target (Apple HIG min) with a FIXED 24px
-                            // glyph. The icon is rem-based, so the reading
-                            // font-scale (85% → root 13.6px) shrank it to ~19px;
-                            // pin it in px so it stays standard-MUI-sized. (Was
-                            // size="small" + edge="end" — tiny + edge-flush, mis-
-                            // tap-prone on touch.)
+                            // Keep the 44px Apple-HIG tap target fixed, but let the
+                            // 1.5rem glyph track the global font-size preference.
                             sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0 }}
                         >
-                            <MoreVert sx={{ fontSize: 24 }} />
+                            <MoreVert sx={{ fontSize: "1.5rem" }} />
                         </IconButton>
                     </ReliableListItemButton>
                     );
