@@ -1525,6 +1525,15 @@ export function ReviewApp({
   const modeTabs = mode === "files"
     ? tabs.filter((tab) => tab.kind === "source")
     : gitTabs;
+  const activateOrCollapseTab = (tab: ReviewTab): void => {
+    if (reviewTabKey(tab) === activeTabKey) {
+      navigationHaptic();
+      if (tab.kind === "source") setSourceTarget(undefined);
+      else setDiffTarget(undefined);
+      return;
+    }
+    activateTab(tab);
+  };
   useEffect(() => {
     const changedKeys = new Set(
       gitQueue.map((entry) =>
@@ -1740,21 +1749,11 @@ export function ReviewApp({
             alignItems="center"
             sx={{
               minHeight: 44,
-              px: 0.5,
+              px: 2,
               borderBottom: 1,
               borderColor: "divider",
             }}
           >
-            <IconButton
-              aria-label={mode === "files" ? "Back to files" : "Back to changes"}
-              onClick={() => {
-                if (mode === "files") {
-                  setSourceTarget(undefined);
-                } else setDiffTarget(undefined);
-              }}
-            >
-              <ArrowBack />
-            </IconButton>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography
                 variant="body2"
@@ -1970,7 +1969,7 @@ export function ReviewApp({
           <ReviewTabStrip
             tabs={modeTabs}
             activeKey={activeTabKey}
-            onActivate={activateTab}
+            onActivate={activateOrCollapseTab}
             onClose={requestCloseTab}
             onCloseOthers={(key, anchor) => {
               navigationHaptic();
