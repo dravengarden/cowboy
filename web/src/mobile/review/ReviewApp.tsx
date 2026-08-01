@@ -75,7 +75,7 @@ import {
 import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { type ReviewProgress, revisionMatches } from "./reviewProgress";
-import { ReviewChanges } from "./ReviewChanges";
+import { ReviewRepository } from "./ReviewRepository";
 import type {
   CodeInspectCandidate,
   CodeRevealRange,
@@ -1784,13 +1784,13 @@ export function ReviewApp({
           />
         )
         : (
-          <ReviewChanges
+          <ReviewRepository
             key={`${workspace?.sessionId ?? "none"}:${dataRevision}`}
             sessionId={workspace?.sessionId}
+            machineLabel={currentSession?.machine_id ?? "hawk"}
             onOpenDiff={openDiff}
             reviewed={new Set(Object.keys(reviewProgress))}
             onRevision={adoptManifestRevision}
-            drawer
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
           />

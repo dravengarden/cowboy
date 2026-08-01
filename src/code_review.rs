@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
 const MAX_CHANGES: usize = 1_000;
+const MAX_HISTORY_COMMITS: usize = 128;
+const MAX_COMMIT_FILES: usize = 1_000;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 const FILE_PAGE_BYTES: usize = 256 * 1024;
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
@@ -86,6 +88,59 @@ pub struct WorktreeManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitSummary {
+    pub oid: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub authored_at: String,
+    pub subject: String,
+    pub decorations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitWorktreeSummary {
+    pub path: String,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+    pub bare: bool,
+    pub detached: bool,
+    pub locked: Option<String>,
+    pub prunable: Option<String>,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepositorySnapshot {
+    pub commits: Vec<GitCommitSummary>,
+    pub history_truncated: bool,
+    pub worktrees: Vec<GitWorktreeSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: ChangeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitDetail {
+    pub oid: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub author_email: String,
+    pub authored_at: String,
+    pub message: String,
+    pub files: Vec<GitCommitFile>,
+    pub files_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeTreeEntry {
     pub name: String,
     pub path: String,
@@ -104,6 +159,9 @@ pub trait CodeProvider {
     fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String>;
     fn search(&self, query: &str, limit: usize) -> Vec<String>;
     fn changes(&self) -> Result<ChangeList, String>;
+    fn repository(&self) -> Result<GitRepositorySnapshot, String>;
+    fn commit(&self, oid: &str) -> Result<GitCommitDetail, String>;
+    fn commit_diff(&self, oid: &str, relative: &str) -> Result<DiffDocument, String>;
     fn diff_snapshot(
         &self,
         relative: &str,
@@ -305,6 +363,129 @@ impl CodeProvider for LocalCodeProvider {
             revision: Self::worktree_revision(head.as_deref(), &output),
             head,
             changes,
+            truncated,
+        })
+    }
+
+    fn repository(&self) -> Result<GitRepositorySnapshot, String> {
+        ensure_git_worktree(&self.root)?;
+        let log = git_output(
+            &self.root,
+            &[
+                "log",
+                "--all",
+                "--topo-order",
+                "--date=iso-strict",
+                &format!("--max-count={}", MAX_HISTORY_COMMITS + 1),
+                "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x1e",
+            ],
+            4 * 1024 * 1024,
+        )?;
+        let mut commits = parse_git_history(&log);
+        let history_truncated = commits.len() > MAX_HISTORY_COMMITS;
+        commits.truncate(MAX_HISTORY_COMMITS);
+        let worktree_bytes = git_output(
+            &self.root,
+            &["worktree", "list", "--porcelain"],
+            1024 * 1024,
+        )?;
+        let current = self
+            .root
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        Ok(GitRepositorySnapshot {
+            commits,
+            history_truncated,
+            worktrees: parse_git_worktrees(&worktree_bytes, &current),
+        })
+    }
+
+    fn commit(&self, oid: &str) -> Result<GitCommitDetail, String> {
+        ensure_git_worktree(&self.root)?;
+        let oid = safe_oid(oid)?;
+        let metadata = git_output(
+            &self.root,
+            &[
+                "show",
+                "-s",
+                "--date=iso-strict",
+                "--format=%H%x00%P%x00%an%x00%ae%x00%aI%x00%B",
+                oid,
+            ],
+            256 * 1024,
+        )?;
+        let mut fields = metadata.splitn(6, |byte| *byte == 0);
+        let resolved_oid = utf8_field(fields.next(), "commit oid")?;
+        let parents = utf8_field(fields.next(), "commit parents")?
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        let author = utf8_field(fields.next(), "commit author")?;
+        let author_email = utf8_field(fields.next(), "commit author email")?;
+        let authored_at = utf8_field(fields.next(), "commit date")?;
+        let message = String::from_utf8_lossy(fields.next().unwrap_or_default())
+            .trim_end()
+            .to_owned();
+        let changed = git_output(
+            &self.root,
+            &[
+                "show",
+                "--root",
+                "--first-parent",
+                "--format=",
+                "--name-status",
+                "-z",
+                "-M",
+                oid,
+                "--",
+            ],
+            4 * 1024 * 1024,
+        )?;
+        let mut files = parse_commit_files(&changed);
+        let files_truncated = files.len() > MAX_COMMIT_FILES;
+        files.truncate(MAX_COMMIT_FILES);
+        Ok(GitCommitDetail {
+            oid: resolved_oid,
+            parents,
+            author,
+            author_email,
+            authored_at,
+            message,
+            files,
+            files_truncated,
+        })
+    }
+
+    fn commit_diff(&self, oid: &str, relative: &str) -> Result<DiffDocument, String> {
+        ensure_git_worktree(&self.root)?;
+        let oid = safe_oid(oid)?;
+        let relative = safe_relative(relative)?;
+        let display = relative.to_string_lossy().replace('\\', "/");
+        let bytes = git_output(
+            &self.root,
+            &[
+                "show",
+                "--first-parent",
+                "--format=",
+                "--no-ext-diff",
+                "--no-color",
+                "--find-renames",
+                "--unified=3",
+                oid,
+                "--",
+                &display,
+            ],
+            MAX_DIFF_SNAPSHOT_BYTES + 1,
+        )?;
+        let truncated = bytes.len() > MAX_DIFF_SNAPSHOT_BYTES;
+        let text =
+            String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_DIFF_SNAPSHOT_BYTES)]).to_string();
+        let (added, removed) = count_diff_lines(&text);
+        Ok(DiffDocument {
+            path: display,
+            text,
+            added,
+            removed,
             truncated,
         })
     }
@@ -533,6 +714,135 @@ fn classify_status(xy: &[u8]) -> ChangeStatus {
     }
 }
 
+fn utf8_field(field: Option<&[u8]>, name: &str) -> Result<String, String> {
+    let field = field.ok_or_else(|| format!("missing {name}"))?;
+    String::from_utf8(field.to_vec()).map_err(|_| format!("invalid {name}"))
+}
+
+fn safe_oid(oid: &str) -> Result<&str, String> {
+    if (7..=64).contains(&oid.len()) && oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(oid)
+    } else {
+        Err("invalid commit oid".to_owned())
+    }
+}
+
+fn parse_git_history(bytes: &[u8]) -> Vec<GitCommitSummary> {
+    bytes
+        .split(|byte| *byte == 0x1e)
+        .filter_map(|record| {
+            let record = record.strip_prefix(b"\n").unwrap_or(record);
+            if record.is_empty() {
+                return None;
+            }
+            let mut fields = record.splitn(6, |byte| *byte == 0x1f);
+            let oid = String::from_utf8_lossy(fields.next()?).trim().to_owned();
+            let parents = String::from_utf8_lossy(fields.next()?)
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            let author = String::from_utf8_lossy(fields.next()?).to_string();
+            let authored_at = String::from_utf8_lossy(fields.next()?).to_string();
+            let subject = String::from_utf8_lossy(fields.next()?).to_string();
+            let decorations = String::from_utf8_lossy(fields.next()?)
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect();
+            Some(GitCommitSummary {
+                oid,
+                parents,
+                author,
+                authored_at,
+                subject,
+                decorations,
+            })
+        })
+        .collect()
+}
+
+fn parse_git_worktrees(bytes: &[u8], current: &Path) -> Vec<GitWorktreeSummary> {
+    String::from_utf8_lossy(bytes)
+        .split("\n\n")
+        .filter_map(|record| {
+            let mut worktree = GitWorktreeSummary {
+                path: String::new(),
+                head: None,
+                branch: None,
+                bare: false,
+                detached: false,
+                locked: None,
+                prunable: None,
+                current: false,
+            };
+            for line in record.lines() {
+                let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+                match key {
+                    "worktree" => worktree.path = value.to_owned(),
+                    "HEAD" => worktree.head = Some(value.to_owned()),
+                    "branch" => {
+                        worktree.branch = Some(
+                            value
+                                .strip_prefix("refs/heads/")
+                                .unwrap_or(value)
+                                .to_owned(),
+                        );
+                    }
+                    "bare" => worktree.bare = true,
+                    "detached" => worktree.detached = true,
+                    "locked" => worktree.locked = Some(value.to_owned()),
+                    "prunable" => worktree.prunable = Some(value.to_owned()),
+                    _ => {}
+                }
+            }
+            if worktree.path.is_empty() {
+                return None;
+            }
+            worktree.current = Path::new(&worktree.path)
+                .canonicalize()
+                .is_ok_and(|path| path == current);
+            Some(worktree)
+        })
+        .collect()
+}
+
+fn parse_commit_files(bytes: &[u8]) -> Vec<GitCommitFile> {
+    let mut fields = bytes
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    let mut files = Vec::new();
+    while let Some(raw_status) = fields.next() {
+        let status_code = raw_status.first().copied().unwrap_or(b'M');
+        let Some(first_path) = fields.next() else {
+            break;
+        };
+        let (old_path, path) = if matches!(status_code, b'R' | b'C') {
+            let Some(next_path) = fields.next() else {
+                break;
+            };
+            (
+                Some(String::from_utf8_lossy(first_path).to_string()),
+                String::from_utf8_lossy(next_path).to_string(),
+            )
+        } else {
+            (None, String::from_utf8_lossy(first_path).to_string())
+        };
+        let status = match status_code {
+            b'A' => ChangeStatus::Added,
+            b'D' => ChangeStatus::Deleted,
+            b'R' | b'C' => ChangeStatus::Renamed,
+            _ => ChangeStatus::Modified,
+        };
+        files.push(GitCommitFile {
+            path,
+            old_path,
+            status,
+        });
+    }
+    files
+}
+
 fn safe_relative(relative: &str) -> Result<PathBuf, String> {
     let path = Path::new(relative);
     if relative.is_empty()
@@ -710,6 +1020,68 @@ mod tests {
             .diff_snapshot("new.txt", 3, true, DiffScope::Unstaged)
             .unwrap();
         assert!(untracked.text.contains("+hello"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn repository_history_commit_detail_and_worktrees_are_read_only() {
+        let dir = scratch("repository");
+        fs::write(dir.join("tracked.rs"), "fn second() {}\n").unwrap();
+        Command::new("git")
+            .args(["add", "tracked.rs"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-qm", "second commit"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        let linked = dir.with_extension("linked");
+        let _ = fs::remove_dir_all(&linked);
+        Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD~1",
+            ])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+
+        let provider = LocalCodeProvider::new(&dir);
+        let repository = provider.repository().unwrap();
+        assert_eq!(repository.commits[0].subject, "second commit");
+        assert!(repository.commits[0].parents.len() == 1);
+        assert_eq!(repository.worktrees.len(), 2);
+        assert!(repository.worktrees.iter().any(|worktree| worktree.current));
+        assert!(repository.worktrees.iter().any(|worktree| {
+            worktree.path == linked.display().to_string() && worktree.detached
+        }));
+
+        let commit = provider.commit(&repository.commits[0].oid).unwrap();
+        assert!(commit.message.starts_with("second commit"));
+        assert_eq!(commit.files.len(), 1);
+        assert_eq!(commit.files[0].path, "tracked.rs");
+        let diff = provider
+            .commit_diff(&repository.commits[0].oid, "tracked.rs")
+            .unwrap();
+        assert!(diff.text.contains("-fn old() {}"));
+        assert!(diff.text.contains("+fn second() {}"));
+        assert!(provider.commit("--all").is_err());
+        assert!(
+            provider
+                .commit_diff(&repository.commits[0].oid, "../tracked.rs")
+                .is_err()
+        );
+
+        Command::new("git")
+            .args(["worktree", "remove", "--force", linked.to_str().unwrap()])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
 

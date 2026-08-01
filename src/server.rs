@@ -1002,6 +1002,15 @@ async fn serve_axum(
         .route("/api/code/sessions/{id}/search", get(api_code_search))
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
+        .route(
+            "/api/code/sessions/{id}/repository",
+            get(api_code_repository),
+        )
+        .route("/api/code/sessions/{id}/commit", get(api_code_commit))
+        .route(
+            "/api/code/sessions/{id}/commit-diff",
+            get(api_code_commit_diff),
+        )
         .route("/api/code/sessions/{id}/diff", get(api_code_diff))
         .route("/api/code/sessions/{id}/file", get(api_code_file))
         .route("/api/code/sessions/{id}/language", get(api_code_language))
@@ -2804,6 +2813,34 @@ struct CodeChangesResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct CodeRepositoryResponse {
+    api_version: u8,
+    commits: Vec<crate::code_review::GitCommitSummary>,
+    history_truncated: bool,
+    worktrees: Vec<crate::code_review::GitWorktreeSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeCommitResponse {
+    api_version: u8,
+    #[serde(flatten)]
+    commit: crate::code_review::GitCommitDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeCommitQuery {
+    oid: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeCommitDiffQuery {
+    oid: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CodeManifestResponse {
     api_version: u8,
     provider: String,
@@ -3551,6 +3588,135 @@ async fn api_code_changes(
             })
             .collect(),
         truncated: result.truncated,
+    })
+    .into_response()
+}
+
+async fn api_code_repository(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let result = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "repository" }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Repository(repository))) => repository,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote git history unavailable").into_response();
+        }
+        Ok(None) => {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).repository()
+            })
+            .await;
+            let Ok(Ok(repository)) = result else {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "git history unavailable")
+                    .into_response();
+            };
+            repository
+        }
+    };
+    Json(CodeRepositoryResponse {
+        api_version: 1,
+        commits: result.commits,
+        history_truncated: result.history_truncated,
+        worktrees: result.worktrees,
+    })
+    .into_response()
+}
+
+async fn api_code_commit(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeCommitQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let oid = query.oid;
+    let result = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "commit", "oid": oid.clone() }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::Commit(commit))) => commit,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote commit unavailable").into_response();
+        }
+        Ok(None) => {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).commit(&oid)
+            })
+            .await;
+            let Ok(Ok(commit)) = result else {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "commit unavailable").into_response();
+            };
+            commit
+        }
+    };
+    Json(CodeCommitResponse {
+        api_version: 1,
+        commit: result,
+    })
+    .into_response()
+}
+
+async fn api_code_commit_diff(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<CodeCommitDiffQuery>,
+) -> Response {
+    let Some(cwd) = session_cwd(&state, &session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let oid = query.oid;
+    let path = query.path;
+    let result = match remote_code_request(
+        &state,
+        &session_id,
+        &cwd,
+        serde_json::json!({ "type": "commit_diff", "oid": oid.clone(), "path": path.clone() }),
+    )
+    .await
+    {
+        Ok(Some(crate::code_adapter::CodeAdapterResponse::CommitDiff(diff))) => diff,
+        Ok(Some(_)) | Err(_) => {
+            return (StatusCode::BAD_GATEWAY, "remote commit diff unavailable").into_response();
+        }
+        Ok(None) => {
+            let commit_oid = oid.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                    .commit_diff(&commit_oid, &path)
+            })
+            .await;
+            let Ok(Ok(diff)) = result else {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "commit diff unavailable")
+                    .into_response();
+            };
+            diff
+        }
+    };
+    Json(CodeDiffResponse {
+        api_version: 1,
+        path: result.path,
+        revision: oid,
+        text: result.text,
+        added: result.added,
+        removed: result.removed,
+        truncated: result.truncated,
+        next_cursor: None,
+        limited: result.truncated,
     })
     .into_response()
 }

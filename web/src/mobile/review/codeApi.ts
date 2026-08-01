@@ -51,6 +51,51 @@ export interface CodeManifest {
   language: CodeLanguageCapabilities;
 }
 
+export interface GitCommitSummary {
+  oid: string;
+  parents: string[];
+  author: string;
+  authoredAt: string;
+  subject: string;
+  decorations: string[];
+}
+
+export interface GitWorktreeSummary {
+  path: string;
+  head?: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  locked?: string;
+  prunable?: string;
+  current: boolean;
+}
+
+export interface GitRepositorySnapshot {
+  apiVersion: 1;
+  commits: GitCommitSummary[];
+  historyTruncated: boolean;
+  worktrees: GitWorktreeSummary[];
+}
+
+export interface GitCommitFile {
+  path: string;
+  oldPath?: string;
+  status: Exclude<CodeChangeStatus, "untracked" | "conflicted">;
+}
+
+export interface GitCommitDetail {
+  apiVersion: 1;
+  oid: string;
+  parents: string[];
+  author: string;
+  authorEmail: string;
+  authoredAt: string;
+  message: string;
+  files: GitCommitFile[];
+  filesTruncated: boolean;
+}
+
 export interface CodeLanguageCapabilities {
   provider: string;
   state: "restricted" | "warming" | "ready" | "unavailable" | "failed";
@@ -375,6 +420,44 @@ export function fetchCodeDiff(
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
     signal,
+  );
+}
+
+export function fetchGitRepository(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<GitRepositorySnapshot> {
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/repository`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchGitCommit(
+  sessionId: string,
+  oid: string,
+  signal?: AbortSignal,
+): Promise<GitCommitDetail> {
+  const query = new URLSearchParams({ oid });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/commit?${query}`,
+    signal,
+    "no-store",
+  );
+}
+
+export function fetchGitCommitDiff(
+  sessionId: string,
+  oid: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<CodeDocument & { added: number; removed: number }> {
+  const query = new URLSearchParams({ oid, path });
+  return codeFetch(
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/commit-diff?${query}`,
+    signal,
+    "no-store",
   );
 }
 

@@ -29,6 +29,14 @@ pub enum CodeOperation {
         limit: usize,
     },
     Changes,
+    Repository,
+    Commit {
+        oid: String,
+    },
+    CommitDiff {
+        oid: String,
+        path: String,
+    },
     Diff {
         path: String,
         context: usize,
@@ -48,6 +56,9 @@ pub enum CodeAdapterResponse {
     Directory(crate::code_review::CodeTreePage),
     Search(Vec<String>),
     Changes(crate::code_review::ChangeList),
+    Repository(crate::code_review::GitRepositorySnapshot),
+    Commit(crate::code_review::GitCommitDetail),
+    CommitDiff(crate::code_review::DiffDocument),
     Diff(crate::code_review::DiffDocument),
     File(crate::code_review::FileDocument),
 }
@@ -122,6 +133,17 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
         CodeOperation::Changes => {
             CodeAdapterResponse::Changes(provider.changes().map_err(anyhow::Error::msg)?)
         }
+        CodeOperation::Repository => {
+            CodeAdapterResponse::Repository(provider.repository().map_err(anyhow::Error::msg)?)
+        }
+        CodeOperation::Commit { oid } => {
+            CodeAdapterResponse::Commit(provider.commit(&oid).map_err(anyhow::Error::msg)?)
+        }
+        CodeOperation::CommitDiff { oid, path } => CodeAdapterResponse::CommitDiff(
+            provider
+                .commit_diff(&oid, &path)
+                .map_err(anyhow::Error::msg)?,
+        ),
         CodeOperation::Diff {
             path,
             context,
