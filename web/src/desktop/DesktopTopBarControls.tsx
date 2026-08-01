@@ -63,6 +63,7 @@ import {
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
 import { DesktopModal } from "./DesktopModal";
+import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
@@ -886,6 +887,10 @@ export function DesktopTopBarControls({
                 disabled={dead || options.length === 0}
                 onClick={(event): void => setConfigAnchor(event.currentTarget)}
                 sx={{
+                  ...desktopEmbeddedControlSx({
+                    active: shortcutsActive,
+                    open: configAnchor !== null,
+                  }),
                   width: "clamp(190px, 18vw, 260px)",
                   height: 34,
                   px: 1.15,
@@ -893,34 +898,7 @@ export function DesktopTopBarControls({
                   textTransform: "none",
                   flexShrink: 0,
                   minWidth: 170,
-                  borderRadius: 1.5,
                   color: "text.primary",
-                  borderColor: (theme) =>
-                    alpha(
-                      theme.palette.primary.main,
-                      configAnchor ? 0.68 : 0.3,
-                    ),
-                  bgcolor: (theme) =>
-                    alpha(
-                      theme.palette.background.paper,
-                      configAnchor
-                        ? (theme.palette.mode === "dark" ? 0.78 : 0.82)
-                        : 0.46,
-                    ),
-                  boxShadow: configAnchor
-                    ? (theme) =>
-                      `0 0 0 2px ${alpha(theme.palette.primary.main, 0.1)}`
-                    : "none",
-                  "&:hover": {
-                    borderColor: (theme) =>
-                      alpha(theme.palette.primary.main, 0.52),
-                    bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
-                  },
-                  "&.Mui-focusVisible": {
-                    borderColor: "primary.main",
-                    boxShadow: (theme) =>
-                      `0 0 0 3px ${alpha(theme.palette.primary.main, 0.18)}`,
-                  },
                   "& .MuiButton-startIcon": { mr: 0.8 },
                   "& .MuiButton-endIcon": { ml: "auto" },
                 }}
@@ -968,12 +946,14 @@ export function DesktopTopBarControls({
           data-desktop-quota
           onClick={(event): void => setUsageAnchor(event.currentTarget)}
           sx={{
+            ...desktopEmbeddedControlSx({
+              active: shortcutsActive,
+              open: usageAnchor !== null,
+            }),
             height: 38,
             px: 0.75,
             gap: 0.65,
-            borderRadius: 1.25,
             flexShrink: 0,
-            "&:hover": { bgcolor: "action.hover" },
           }}
         >
           {visibleLimits.length > 0
@@ -1192,12 +1172,12 @@ export function DesktopTopBarControls({
                 disabled={dead || compacting}
                 onClick={(): void => setCompactConfirm(true)}
                 sx={{
+                  ...desktopEmbeddedControlSx({ active: shortcutsActive }),
                   height: 36,
                   px: 1.1,
                   minWidth: 126,
                   flexShrink: 0,
                   textTransform: "none",
-                  borderColor: "divider",
                   "& .MuiButton-startIcon": { mr: 0.75 },
                 }}
               >

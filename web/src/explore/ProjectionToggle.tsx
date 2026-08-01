@@ -1,6 +1,5 @@
 import { AutoStoriesOutlined, HistoryOutlined } from "@mui/icons-material";
 import {
-  alpha,
   Box,
   IconButton,
   ToggleButton,
@@ -9,6 +8,7 @@ import {
 } from "@mui/material";
 import type { TranscriptProjection } from "./exploreStore";
 import { ShortcutKeycap } from "../ShortcutKeycap";
+import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
 
 export function MobileProjectionToggle({
   projection,
@@ -46,15 +46,12 @@ export function DesktopProjectionToggle({
     <Box
       data-desktop-conversation-projection
       sx={{
+        ...desktopEmbeddedControlSx({ active: shortcutActive }),
         mr: 0.75,
         height: 30,
         display: "inline-flex",
         alignItems: "center",
         overflow: "hidden",
-        border: 1,
-        borderColor: (theme) => alpha(theme.palette.divider, 0.78),
-        borderRadius: 999,
-        bgcolor: (theme) => alpha(theme.palette.background.paper, 0.34),
       }}
     >
       <ToggleButtonGroup

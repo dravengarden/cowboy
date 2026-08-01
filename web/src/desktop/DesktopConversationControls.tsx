@@ -1,7 +1,8 @@
-import { alpha, Button, Tooltip } from "@mui/material";
+import { Button, Tooltip } from "@mui/material";
 import { South } from "@mui/icons-material";
 import { requestStickToBottom, setSticky, useSticky } from "../stickyStore";
 import { ShortcutKeycap } from "../ShortcutKeycap";
+import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 
 export function DesktopConversationControls(
   { sessionId, shortcutActive = false }: {
@@ -38,16 +39,13 @@ export function DesktopConversationControls(
         startIcon={<South fontSize="small" />}
         onClick={toggle}
         sx={{
+          ...desktopEmbeddedControlSx({ active: shortcutActive }),
           height: 30,
           minWidth: 0,
           px: 0.75,
           mr: 0.75,
           gap: 0.65,
-          borderRadius: 999,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.78),
-          bgcolor: (theme) => alpha(theme.palette.background.paper, 0.34),
           textTransform: "none",
-          boxShadow: "none",
           whiteSpace: "nowrap",
           "& .MuiButton-startIcon": { mr: 0 },
           ...(following && {
