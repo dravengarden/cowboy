@@ -93,6 +93,10 @@ import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ShortcutKeycap } from "./ShortcutKeycap";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
+import {
+  mobileComposerPanelFrameSx,
+  mobileComposerPanelHeaderMinHeight,
+} from "./mobileComposerPrimitives";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
 import { PermissionOverlay } from "./PermissionOverlay";
 import {
@@ -3067,9 +3071,8 @@ function PendingPanel({
         // margin on either). Drafts read a touch more "staging" than the live queue.
         ...(desktop
           ? desktopSurfaceSx({ interactive: false, focusWithin: true })
-          : { border: 1, borderColor: "divider", borderRadius: 1 }),
+          : mobileComposerPanelFrameSx),
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
-        overflow: "hidden",
         ...(desktop && {
           flexShrink: 0,
         }),
@@ -3089,7 +3092,11 @@ function PendingPanel({
         // `MuiInputBase-root` minHeight) so the "N Drafts" bar and the message box
         // read as the same-height pair. `py: 0` drops the old extra 8px that made
         // the bar (a 44px icon button + padding) taller than the input.
-        sx={{ pr: 0.75, py: 0, minHeight: 44 }}
+        sx={{
+          pr: 0.75,
+          py: 0,
+          minHeight: mobileComposerPanelHeaderMinHeight,
+        }}
       >
         {/* Match PlanDock: the whole summary area is one disclosure button, not
             just the chevron/label. Bulk and reorder actions stay separate sibling

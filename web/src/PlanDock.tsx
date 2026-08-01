@@ -15,6 +15,10 @@ import { memo, type ReactNode } from "react";
 import { persisted, useStore } from "./_store/mod.ts";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { desktopSurfaceSx } from "./desktop/DesktopEmbeddedControl";
+import {
+  mobileComposerPanelFrameSx,
+  mobileComposerPanelHeaderMinHeight,
+} from "./mobileComposerPrimitives";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
 // update), docked above the message queue so the task's progress stays in view
@@ -68,10 +72,9 @@ export const PlanDock = memo(function PlanDock({
       sx={{
         ...(desktop
           ? desktopSurfaceSx({ interactive: false, focusWithin: true })
-          : { border: 1, borderColor: "divider", borderRadius: 1.5 }),
+          : mobileComposerPanelFrameSx),
         mb: desktop ? 1 : 0,
         bgcolor: "background.default",
-        overflow: "hidden",
         ...(desktop && {
           transition: "background-color 120ms ease, border-color 120ms ease",
         }),
@@ -92,8 +95,10 @@ export const PlanDock = memo(function PlanDock({
             textAlign: "left",
             px: 1,
             py: 0.5,
-            minHeight: 40,
-            "@media (pointer: coarse)": { minHeight: 44 },
+            minHeight: desktop ? 40 : mobileComposerPanelHeaderMinHeight,
+            "@media (pointer: coarse)": {
+              minHeight: mobileComposerPanelHeaderMinHeight,
+            },
             touchAction: "manipulation",
           }}
         >
