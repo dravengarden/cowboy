@@ -186,3 +186,8 @@ outlines at pane, region and item levels.
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region
 background, accent rail, or focus ring.
+
+`Ctrl-K` and `Ctrl-J` move vertically between the active pane and
+`topbar.controls`. Prompt Plan, Queue, and Draft are auxiliary panels rather
+than Vim windows; enter them through their dedicated commands, so vertical
+window movement never collapses or selects them as an intermediate stop.

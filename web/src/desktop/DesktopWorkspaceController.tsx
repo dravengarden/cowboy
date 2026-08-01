@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
 
 export type DesktopPane = "sessions" | "prompt" | "conversation";
 export type WorkspaceMode = "normal" | "hint" | "search" | "command";
@@ -115,16 +116,10 @@ export function DesktopWorkspaceProvider({
     focusPane(available[(current + delta + available.length) % available.length] as DesktopPane);
   }, [focusPane, focusedPane]);
   const focusAdjacentRegion = useCallback((delta: -1 | 1): void => {
-    const pane = document.querySelector<HTMLElement>(`[data-desktop-pane="${focusedPane}"]`);
-    const regions = [...(pane?.querySelectorAll<HTMLElement>("[data-desktop-region]") ?? [])]
-      .filter((element) => element.offsetParent !== null);
-    if (regions.length === 0) return;
-    const current = Math.max(
-      0,
-      regions.findIndex((element) => element.dataset.desktopRegion === focusedRegion),
-    );
-    const next = regions[(current + delta + regions.length) % regions.length];
-    if (next?.dataset.desktopRegion) focusRegion(next.dataset.desktopRegion);
+    const next = verticalWorkspaceRegion(focusedPane, focusedRegion, delta);
+    if (next && document.querySelector(`[data-desktop-region="${CSS.escape(next)}"]`)) {
+      focusRegion(next);
+    }
   }, [focusRegion, focusedPane, focusedRegion]);
   const cycleRegion = useCallback((): void => {
     const regions = [...document.querySelectorAll<HTMLElement>("[data-desktop-region]")]
