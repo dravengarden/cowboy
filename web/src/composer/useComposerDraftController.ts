@@ -7,6 +7,7 @@ import {
 import {
   type Attachment,
   filesToAttachments,
+  promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
 } from "../attachments";
 import { getDraft, setDraft } from "../draftStore";
@@ -51,9 +52,12 @@ export function useComposerDraftController(
   editorRef: RefObject<ComposerEditorHandle | null>,
 ): ComposerDraftController {
   const seed = useRef(getDraft(sessionId)).current;
-  const [text, setTextState] = useState(seed.text);
-  const textRef = useRef(seed.text);
-  const initialText = useRef(seed.text);
+  const seededText = useRef(
+    promoteUnplacedImageTokens(seed.text, seed.attachments),
+  ).current;
+  const [text, setTextState] = useState(seededText);
+  const textRef = useRef(seededText);
+  const initialText = useRef(seededText);
   const [attachments, setAttachments] = useState<Attachment[]>(() => {
     seedInlineAttachments(seed.attachments);
     return seed.attachments;

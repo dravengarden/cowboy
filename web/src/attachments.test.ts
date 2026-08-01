@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   attachmentDisplayParts,
   type Attachment,
+  promoteUnplacedImageTokens,
   reconcileDeletedInlineImages,
 } from "./attachments.ts";
 
@@ -33,6 +34,20 @@ Deno.test("an image attachment remains while any matching token remains", () => 
   const next = "![two](cowboy-att:inline)";
 
   assertEquals(reconcileDeletedInlineImages(previous, next, [inline]), [inline]);
+});
+
+Deno.test("legacy unplaced images regain deterministic inline positions", () => {
+  const placed = attachment("placed", true);
+  const legacy = attachment("legacy", true);
+  const file = attachment("notes", false);
+  assertEquals(
+    promoteUnplacedImageTokens(
+      "before\n![placed.png](cowboy-att:placed)\nafter",
+      [placed, legacy, file],
+    ),
+    "before\n![placed.png](cowboy-att:placed)\nafter\n" +
+      "![legacy.png](cowboy-att:legacy)\n",
+  );
 });
 
 Deno.test("local message display keeps image bytes at their inline position", () => {

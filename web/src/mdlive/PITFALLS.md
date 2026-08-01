@@ -552,6 +552,9 @@ here says otherwise.
     ordinary files and legacy images without a token. If iOS caret, IME, or
     long-press interaction regresses, repair the CM6/native-shell interaction;
     never delete placement tokens or move token-backed images out of the editor.
+    Drafts already damaged by the retired demotion path cannot recover their
+    original coordinates; on restore, append each unplaced image in attachment
+    order and mint a token so it rejoins the authoritative inline lifecycle.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

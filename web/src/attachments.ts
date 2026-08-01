@@ -327,6 +327,25 @@ export function imageTokensInText(
   return out;
 }
 
+/** Recover images whose placement token was removed by the retired Mobile
+ * textarea fallback. Their original position is unknowable, so append them in
+ * attachment order and make that deterministic position authoritative again. */
+export function promoteUnplacedImageTokens(
+  text: string,
+  attachments: readonly Attachment[],
+): string {
+  const placed = new Set(imageTokensInText(text).map((token) => token.id));
+  const blocks = attachments
+    .filter((attachment) => attachment.isImage && !placed.has(attachment.id))
+    .map((attachment) => {
+      const label = attachment.name.replaceAll("]", "");
+      return `![${label}](cowboy-att:${attachment.id})`;
+    });
+  if (blocks.length === 0) return text;
+  const base = text.trimEnd();
+  return `${base ? `${base}\n` : ""}${blocks.join("\n")}\n`;
+}
+
 /**
  * Keep attachment bytes in lockstep with inline-image token deletion.
  *
