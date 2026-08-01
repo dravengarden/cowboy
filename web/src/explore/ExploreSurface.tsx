@@ -109,7 +109,8 @@ function PageTurnFooter({
   onPrevious: () => void;
   onNext: () => void;
   desktop: boolean;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (previousDisabled && nextDisabled) return null;
   const actionSx = desktop
     ? {
       ...desktopEmbeddedControlSx(),
@@ -123,17 +124,16 @@ function PageTurnFooter({
       border: 1,
       borderColor: "divider",
       borderRadius: 1,
-      bgcolor: "action.hover",
+      bgcolor: "transparent",
       textTransform: "none",
+      "&:active": { bgcolor: "action.selected" },
     };
   const directionLabel = (
     direction: "previous" | "next",
     question: string | null,
-    disabled: boolean,
     loading: boolean,
   ): React.JSX.Element => {
     const previous = direction === "previous";
-    const boundary = previous ? "First question" : "Latest question";
     return (
       <Stack
         direction="row"
@@ -141,7 +141,7 @@ function PageTurnFooter({
         alignItems="center"
         sx={{ minWidth: 0, width: "100%" }}
       >
-        {previous && !disabled && (loading
+        {previous && (loading
           ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
           : <ChevronLeft sx={{ flexShrink: 0 }} />)}
         <Box sx={{ minWidth: 0, flex: 1, textAlign: previous ? "left" : "right" }}>
@@ -151,13 +151,13 @@ function PageTurnFooter({
             sx={{ display: "block", fontWeight: 700, lineHeight: 1.2 }}
           >
             {previous ? "Previous" : "Next"}
-            {desktop && !disabled && <Kbd keys={previous ? "[" : "]"} />}
+            {desktop && <Kbd keys={previous ? "[" : "]"} />}
           </Typography>
           <Typography
             component="span"
             variant="caption"
             color="text.secondary"
-            title={question ?? boundary}
+            title={question ?? "Untitled question"}
             sx={{
               display: "-webkit-box",
               overflow: "hidden",
@@ -167,10 +167,10 @@ function PageTurnFooter({
               lineHeight: 1.25,
             }}
           >
-            {disabled ? boundary : question}
+            {question ?? "Untitled question"}
           </Typography>
         </Box>
-        {!previous && !disabled && (loading
+        {!previous && (loading
           ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
           : <ChevronRight sx={{ flexShrink: 0 }} />)}
       </Stack>
@@ -193,16 +193,18 @@ function PageTurnFooter({
         gap: 1,
       }}
     >
-      <Button
-        aria-label={previousDisabled
-          ? "Already at the first question"
-          : `Previous question: ${previousQuestion ?? "Untitled question"}`}
-        disabled={previousDisabled || loadingPrevious || loadingNext}
-        onClick={onPrevious}
-        sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
-      >
-        {directionLabel("previous", previousQuestion, previousDisabled, loadingPrevious)}
-      </Button>
+      {previousDisabled
+        ? <Box aria-hidden />
+        : (
+          <Button
+            aria-label={`Previous question: ${previousQuestion ?? "Untitled question"}`}
+            disabled={loadingPrevious || loadingNext}
+            onClick={onPrevious}
+            sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
+          >
+            {directionLabel("previous", previousQuestion, loadingPrevious)}
+          </Button>
+        )}
       <Typography
         variant="caption"
         color="text.secondary"
@@ -210,16 +212,18 @@ function PageTurnFooter({
       >
         {currentOrdinal} / {total}
       </Typography>
-      <Button
-        aria-label={nextDisabled
-          ? "Already at the latest question"
-          : `Next question: ${nextQuestion ?? "Untitled question"}`}
-        disabled={nextDisabled || loadingPrevious || loadingNext}
-        onClick={onNext}
-        sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
-      >
-        {directionLabel("next", nextQuestion, nextDisabled, loadingNext)}
-      </Button>
+      {nextDisabled
+        ? <Box aria-hidden />
+        : (
+          <Button
+            aria-label={`Next question: ${nextQuestion ?? "Untitled question"}`}
+            disabled={loadingPrevious || loadingNext}
+            onClick={onNext}
+            sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
+          >
+            {directionLabel("next", nextQuestion, loadingNext)}
+          </Button>
+        )}
     </Box>
   );
 }
