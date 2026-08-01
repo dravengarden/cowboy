@@ -4,7 +4,7 @@ import {
   macShortcutConflict,
 } from "./macShortcutPolicy";
 import {
-  DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT,
+  DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
 } from "./workspaceShortcuts";
 
@@ -48,7 +48,7 @@ Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   for (const [commandId, shortcut] of [
     ["workspace.focusSessions", "Mod+E"],
     ["workspace.focusPrompt", DESKTOP_FOCUS_PROMPT_SHORTCUT],
-    ["prompt.focusEditor", DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT],
+    ["prompt.focusPlan", DESKTOP_FOCUS_PLAN_SHORTCUT],
     ["workspace.focusConversation", "Mod+L"],
     ["workspace.focusTopbar", "Mod+T"],
     ["commandPalette.open", "Mod+K"],

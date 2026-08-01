@@ -20,7 +20,7 @@ import {
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
 import {
-  DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT,
+  DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
 } from "./workspaceShortcuts";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
@@ -121,19 +121,10 @@ export function DesktopCommandHost({
     },
     {
       id: "workspace.focusPrompt",
-      title: "Focus Prompt",
+      title: "Focus Message the Agent",
+      description: "Return to the Prompt editor in Vim Normal mode",
       group: "Workspace",
       shortcut: DESKTOP_FOCUS_PROMPT_SHORTCUT,
-      allowInEditor: true,
-      run: () => workspace.focusPane("prompt"),
-    },
-    {
-      id: "prompt.focusEditor",
-      title: "Focus Prompt Editor",
-      description: "Return to Message the agent in Vim Normal mode",
-      group: "Prompt",
-      shortcut: DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT,
-      contexts: ["prompt"],
       allowInEditor: true,
       run: () => workspace.focusRegion("prompt.composer"),
     },
@@ -150,25 +141,13 @@ export function DesktopCommandHost({
       title: "Focus Plan",
       description: "Move keyboard focus to the current task plan",
       group: "Prompt",
-      shortcut: "P",
-      contexts: ["prompt"],
-      // Preserve Vim paste once the editor has a document. On an empty Normal
-      // canvas, the visible P hint may safely move focus to the task plan. The
-      // command sink is the authoritative Normal-mode fact; React's mode and
-      // preference stores can trail a native focus event by one render.
-      allowInEditor: (target) => {
-        const element = target instanceof Element ? target : null;
-        const composer = element?.closest<HTMLElement>(
-          "[data-desktop-region='prompt.composer'][data-desktop-editor-empty='true']",
-        );
-        return composer !== null &&
-          (element?.matches("[data-vim-command-sink]") === true ||
-            element?.closest(".cm-editor")?.classList.contains(
-              "cm-vim-command-focused",
-            ) === true);
-      },
+      shortcut: DESKTOP_FOCUS_PLAN_SHORTCUT,
+      allowInEditor: true,
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
+      // Mod+P is Cowboy's global Plan command. Consume it while Plan is absent
+      // so the same chord never falls through to the browser's Print action.
+      consumeWhenDisabled: true,
       run: () => workspace.focusRegion("prompt.plan"),
     },
     {

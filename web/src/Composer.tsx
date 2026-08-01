@@ -123,7 +123,10 @@ import {
   desktopListItemSx,
   desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
-import { DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
+import {
+  DESKTOP_FOCUS_PLAN_SHORTCUT,
+  DESKTOP_FOCUS_PROMPT_SHORTCUT,
+} from "./desktop/commands/workspaceShortcuts";
 import {
   type Attachment,
   filesToAttachments,
@@ -1238,10 +1241,9 @@ export function ComposerWorkspace({
               ? (
                 <Suspense fallback={null}>
                   <DesktopRegionShortcut
-                    shortcut="P"
+                    shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT}
                     title="Focus Plan"
-                    normalOnly
-                    availableInComposer={text.length === 0 && attachments.length === 0}
+                    singleKeycap={`${MOD_LABEL}P`}
                   />
                 </Suspense>
               )
@@ -1467,9 +1469,6 @@ export function ComposerWorkspace({
           ? {
             "data-desktop-region": "prompt.composer",
             "data-desktop-focus-default": true,
-            "data-desktop-editor-empty": text.length === 0 && attachments.length === 0
-              ? "true"
-              : "false",
             tabIndex: -1,
           }
           : {})}
@@ -1500,7 +1499,7 @@ export function ComposerWorkspace({
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
-              shortcut={DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT}
+              shortcut={DESKTOP_FOCUS_PROMPT_SHORTCUT}
               title="Focus prompt editor"
               showWhenPane="prompt"
               hideWhenRegion="prompt.composer"

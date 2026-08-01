@@ -33,6 +33,8 @@ export interface DesktopCommand {
   allowInEditor?: boolean | ((target: EventTarget | null) => boolean);
   when?: () => boolean;
   disabledReason?: string | (() => string);
+  /** Reserve a shortcut even while its target is temporarily unavailable. */
+  consumeWhenDisabled?: boolean;
   run: () => void;
 }
 
@@ -615,7 +617,7 @@ export function DesktopCommandProvider(
         Number(Boolean(left.regions || left.contexts))
       );
       for (const command of rankedCommands) {
-        if (!command.shortcut || command.when?.() === false) continue;
+        if (!command.shortcut) continue;
         if (
           command.contexts && !command.contexts.includes(workspace.focusedPane)
         ) continue;
@@ -644,8 +646,10 @@ export function DesktopCommandProvider(
         ) {
           continue;
         }
+        const disabled = command.when?.() === false;
+        if (disabled && !command.consumeWhenDisabled) continue;
         event.preventDefault();
-        command.run();
+        if (!disabled) command.run();
         return;
       }
     };

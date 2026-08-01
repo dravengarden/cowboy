@@ -9,7 +9,10 @@ import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { useVimMacroRecording } from "./vim/macroStatusStore";
-import { DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT } from "./commands/workspaceShortcuts";
+import {
+  DESKTOP_FOCUS_PLAN_SHORTCUT,
+  DESKTOP_FOCUS_PROMPT_SHORTCUT,
+} from "./commands/workspaceShortcuts";
 
 function Segment({
   label,
@@ -165,10 +168,10 @@ export function DesktopStatusLine({
       focusedRegion?.startsWith("prompt.") === true &&
       focusedRegion !== "prompt.composer"
     ? [
-      { keys: "P", label: "Plan" },
-      { keys: "O", label: "Queue" },
-      { keys: "D", label: "Drafts" },
-      { keys: DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT, label: "Editor" },
+      { keys: DESKTOP_FOCUS_PLAN_SHORTCUT, label: "Plan" },
+      { keys: "Mod+Y", label: "Queue" },
+      { keys: "Mod+D", label: "Drafts" },
+      { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },
     ]
     : [];
   const hints = [

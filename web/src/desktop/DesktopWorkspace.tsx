@@ -214,7 +214,10 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="prompt"
-          shortcut={{ value: DESKTOP_FOCUS_PROMPT_SHORTCUT, title: "Focus Prompt" }}
+          shortcut={{
+            value: DESKTOP_FOCUS_PROMPT_SHORTCUT,
+            title: "Focus Message the agent",
+          }}
         >
           Prompt
         </PaneHeader>

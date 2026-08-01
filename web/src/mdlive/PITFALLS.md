@@ -406,18 +406,9 @@ here says otherwise.
     only upstream's macro-recording dialog and publish it to the Desktop status
     line as `REC @x · Q Stop`; all other Vim search/command dialogs retain their
     upstream behavior. This runtime remains dynamically imported by Desktop
-    only; Mobile receives neither the focus reset nor the macro UI. Prompt's
-    bare `P/O/D/I` region shortcuts must also yield while the command sink owns
-    focus, or they shadow native Vim paste, macro, delete, and motion commands.
-    The sole narrow exception is `P` on a completely empty main composer in
-    Normal mode: there is no document-relative paste target, so the visible Plan
-    hint may move focus to Plan. As soon as text or an attachment exists, `p/P`
-    belongs to Vim again and the Plan hint is hidden.
-    The exception must follow the actual focused `[data-vim-command-sink]`, not
-    React's asynchronously mirrored Vim-mode store. With a CJK input source,
-    that sink may receive `event.key=Process` / keyCode 229 even though it cannot
-    compose; match the physical `KeyP` there. Never enable physical bare-key
-    matching on `.cm-content`, where it would steal real Insert-mode text.
+    only; Mobile receives neither the focus reset nor the macro UI. Prompt
+    region shortcuts use modified global chords (`Mod+P/I/Y/D`) so bare Vim
+    paste, macro, delete, and motion commands always remain editor-owned.
     The same CJK input source can mark any physical Normal-mode keydown on the
     non-editable sink as `isComposing`/229 even though no marked-text transaction
     exists there. Do not discard those events: route the complete letter,
@@ -621,8 +612,7 @@ Desktop Vim + IME checks:
 - [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
 - [ ] Composition text is accepted with a visible, focused caret after the switch.
 - [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.
-- [ ] With an empty Normal-mode composer and a visible Plan, physical `p` focuses
-      and expands Plan even while a CJK input source reports `Process` / 229;
-      after text or an attachment exists, `p/P` remains native Vim paste.
+- [ ] `Mod+P` focuses and expands a visible Plan from any Agent region;
+      bare `p/P` remains native Vim paste in every composer state.
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.

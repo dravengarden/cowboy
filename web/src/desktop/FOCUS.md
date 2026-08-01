@@ -36,11 +36,10 @@ same controller state.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 - `Alt-b/p/c/t`: jump directly to Sessions, Prompt, Conversation or Top Bar.
-- `p`, `Mod-y`, and `Mod-d` jump to Plan, Queue, and Drafts after Prompt owns
-  focus. `Mod-i` returns to the Composer in Normal mode from anywhere. The
-  composer keeps native Vim letter commands. One scoped exception keeps the
-  visible Plan hint honest: `p` may leave a completely empty Normal-mode
-  composer for Plan; once the editor has text or attachments, it is Vim paste.
+- `Mod-p` focuses Plan from anywhere and `Mod-i` focuses Message the agent in
+  Vim Normal mode from anywhere. Each global chord has one stable meaning;
+  bare `p/P` always remains native Vim paste. `Mod-y` and `Mod-d` jump to Queue
+  and Drafts after Prompt owns focus.
 - `Mod-y` is also the Queue disclosure action: from another Prompt region it
   expands and focuses Queue; from Queue it collapses the panel and returns to
   the Composer in Normal mode.
@@ -217,9 +216,10 @@ chrome, `Esc` returns to Agent, and `P` toggles its question-page sidebar. Agent
 pane/session/queue commands must not leak into Reading. Future Code mode uses
 the same product-mode boundary rather than adding another Agent overlay.
 
-`Mod+P` enters the Prompt pane. Once Prompt owns focus, `Mod+I` always returns
-to `prompt.composer` and its Vim Normal-mode command sink, even when Plan,
-Queue, or Draft currently owns focus.
+`Mod+I` always enters `prompt.composer` and its Vim Normal-mode command sink,
+even when Sessions, Conversation, Plan, Queue, or Draft currently owns focus.
+`Mod+P` always enters Plan. When no Plan exists the command remains reserved
+and disabled, rather than falling through to the browser's Print action.
 
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region
