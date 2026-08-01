@@ -2908,13 +2908,26 @@ function PendingPanel({
   useEffect(() => {
     if (count < 2 && reordering) setReordering(false);
   }, [count, reordering]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = scrollRef.current;
     const region = list?.closest<HTMLElement>(`[data-desktop-region='prompt.${kind}']`);
     if (!desktop || !list || !region) return undefined;
     region.dataset.desktopReordering = reordering ? "true" : "false";
-    const onToggle = (): void => setReordering((current) => !current);
-    const onRelease = (): void => setReordering(false);
+    return undefined;
+  }, [desktop, kind, reordering]);
+  useEffect(() => {
+    const list = scrollRef.current;
+    const region = list?.closest<HTMLElement>(`[data-desktop-region='prompt.${kind}']`);
+    if (!desktop || !list || !region) return undefined;
+    const onToggle = (): void => {
+      const next = region.dataset.desktopReordering !== "true";
+      region.dataset.desktopReordering = next ? "true" : "false";
+      setReordering(next);
+    };
+    const onRelease = (): void => {
+      region.dataset.desktopReordering = "false";
+      setReordering(false);
+    };
     list.addEventListener("cowboy:desktop-toggle-reorder", onToggle);
     list.addEventListener("cowboy:desktop-release-reorder", onRelease);
     return () => {
@@ -2922,7 +2935,7 @@ function PendingPanel({
       list.removeEventListener("cowboy:desktop-toggle-reorder", onToggle);
       list.removeEventListener("cowboy:desktop-release-reorder", onRelease);
     };
-  }, [desktop, kind, reordering]);
+  }, [desktop, kind]);
   // Bridge the locally-edited QUEUED message id to the store so the auto-drain
   // holds that message (and everything behind it) until the edit finishes.
   // Drafts don't drain, so they need no hold. Clears on unmount / session switch.
