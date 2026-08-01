@@ -1677,7 +1677,7 @@ export function ComposerWorkspace({
                 canAttach={!dead}
                 canJumpFront={queue.length > 0}
                 canForce={busy || starting || paused}
-                canMore={!desktopActionsExpanded || clearAction !== null}
+                canMore={!desktopActionsExpanded}
                 onSlash={(): void => editorRef.current?.insertTrigger("/")}
                 onReference={(): void => editorRef.current?.insertTrigger("@")}
                 onAttach={(): void => fileInputRef.current?.click()}
@@ -1789,13 +1789,13 @@ export function ComposerWorkspace({
               </>
             )}
 
-            {(!desktopActionsExpanded || clearAction) && (
-              <Tooltip title={!desktopActionsExpanded ? "More delivery options" : "More actions"}>
+            {!desktopActionsExpanded && (
+              <Tooltip title="More delivery options">
                 <span>
                   {desktopShortcut(<IconButton
                     ref={desktopMoreButtonRef}
                     size="small"
-                    aria-label={!desktopActionsExpanded ? "more delivery options" : "more actions"}
+                    aria-label="more delivery options"
                     aria-controls={desktopMoreAnchor ? "desktop-composer-more" : undefined}
                     aria-expanded={desktopMoreAnchor ? "true" : undefined}
                     onClick={(e): void => setDesktopMoreAnchor(e.currentTarget)}
@@ -1854,20 +1854,26 @@ export function ComposerWorkspace({
                 <Bolt fontSize="small" color="warning" sx={{ mr: 1.25 }} />
                 Force push…
               </MenuItem>}
-              {!desktopActionsExpanded && clearAction && <Divider />}
-              {clearAction && (
-                <MenuItem
-                  disabled={dead}
-                  onClick={(): void => {
-                    setDesktopMoreAnchor(null);
-                    setCmdConfirm(clearAction);
-                  }}
-                >
-                  <CleaningServices fontSize="small" sx={{ mr: 1.25 }} />
-                  Clear conversation…
-                </MenuItem>
-              )}
             </Menu>
+
+            {clearAction && (
+              <Tooltip title="Clear conversation">
+                <span>
+                  <IconButton
+                    size="small"
+                    aria-label="clear conversation"
+                    disabled={dead}
+                    onClick={(): void => setCmdConfirm(clearAction)}
+                    sx={{
+                      color: "text.secondary",
+                      "&:hover": { color: "error.main" },
+                    }}
+                  >
+                    <CleaningServices fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
 
             {desktopShortcut(<Button
               ref={queueBtnRef}
@@ -3395,6 +3401,7 @@ function PendingRow({
   // Per-row delete confirm. Dropping a queued message / draft is irreversible, so
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmDiscardEdit, setConfirmDiscardEdit] = useState(false);
   const doRemove = (): void => {
     importantHaptic();
     if (kind === "draft") removeDraft(sessionId, message.id);
@@ -3437,12 +3444,15 @@ function PendingRow({
     onEdit();
   };
   const discardEdit = (): void => {
+    setConfirmDiscardEdit(false);
     setDraft(message.text);
     editTextRef.current = message.text;
     setEditAttachments(message.attachments);
     setOverlayOpen(false);
     onEditDone();
   };
+  const requestDiscardEdit = (): void => setConfirmDiscardEdit(true);
+  useConfirmEnter(confirmDiscardEdit, discardEdit);
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;
     if (touchInput) {
@@ -3555,7 +3565,7 @@ function PendingRow({
               if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
               event.preventDefault();
               event.stopPropagation();
-              discardEdit();
+              requestDiscardEdit();
             }
             : undefined}
         >
@@ -3592,7 +3602,7 @@ function PendingRow({
               placeholder="Edit message…"
               onPasteFiles={addEditFiles}
               onEscape={(): boolean => {
-                if (desktop) discardEdit();
+                if (desktop) requestDiscardEdit();
                 else save();
                 return true;
               }}
@@ -3633,17 +3643,7 @@ function PendingRow({
             submitIcon={<Check />}
             vim={vim}
             onVimMode={setVimMode}
-            {...(touchInput
-              ? {
-                onDiscard: (): void => {
-                  setDraft(message.text);
-                  editTextRef.current = message.text;
-                  setEditAttachments(message.attachments);
-                  setOverlayOpen(false);
-                  onEditDone();
-                },
-              }
-              : {})}
+            onDiscard={discardEdit}
             attachmentsSlot={editAttachments.some((a) => !a.isImage)
               ? (
                 <AttachmentPreviews
@@ -3655,6 +3655,29 @@ function PendingRow({
               : undefined}
           />
         )}
+        <Dialog
+          open={confirmDiscardEdit}
+          onClose={(): void => setConfirmDiscardEdit(false)}
+          fullWidth
+          maxWidth="xs"
+        >
+          <DialogTitle>Discard message edits?</DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              Your unsaved changes to this {kind === "queued" ? "queued message" : "draft"} will be lost.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={(): void => setConfirmDiscardEdit(false)}>
+              Keep editing
+              <Kbd keys="Esc" />
+            </Button>
+            <Button color="error" onClick={discardEdit}>
+              Discard changes
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </DialogActions>
+        </Dialog>
       </>
     );
   }

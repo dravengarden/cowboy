@@ -2180,15 +2180,32 @@ export function App({
                     // the Sessions region owns focus.
                     "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.065),
+                        borderColor: (t) => alpha(t.palette.primary.main, 0.62),
+                        bgcolor: "transparent",
                         boxShadow: (t) =>
-                            `inset 0 0 0 1px ${alpha(t.palette.primary.main, 0.3)}, 0 2px 10px ${alpha(t.palette.primary.main, 0.055)}`,
+                            `0 0 0 2px ${alpha(t.palette.primary.main, 0.14)}`,
                         "& .cowboy-session-grip": {
                             color: "primary.main",
                         },
                         "& .cowboy-session-shortcut": {
                             opacity: "1 !important",
                         },
+                    },
+                    // The open session is persistent state; the crisp outline is
+                    // only the keyboard cursor. A filled tint + leading rail keeps
+                    // the current session identifiable even while J/K is parked
+                    // on another row.
+                    "& [data-desktop-region='sessions.list'] [data-desktop-item][data-desktop-current='true']": {
+                        borderColor: (t) => alpha(t.palette.primary.main, 0.28),
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.09),
+                        boxShadow: (t) =>
+                            `inset 3px 0 0 ${t.palette.primary.main}`,
+                    },
+                    "& [data-desktop-region='sessions.list'][data-desktop-focused='true'] [data-desktop-item][data-desktop-current='true']:focus": {
+                        borderColor: (t) => alpha(t.palette.primary.main, 0.68),
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
+                        boxShadow: (t) =>
+                            `inset 3px 0 0 ${t.palette.primary.main}, 0 0 0 2px ${alpha(t.palette.primary.main, 0.15)}`,
                     },
                     "& [data-desktop-region='sessions.list'][data-desktop-pinned='true'] [data-desktop-item][data-desktop-pin-active='true']:focus": {
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),

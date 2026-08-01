@@ -205,6 +205,14 @@ nested inside those surfaces use `DESKTOP_INSET_RADIUS`. Never apply the inset
 radius to a whole selectable row; changing geometry must happen in the shared
 Desktop primitive rather than in a component-local override.
 
+Session rows deliberately separate two states: the currently open session uses
+a persistent tinted fill and leading accent rail, while the transient keyboard
+cursor uses a crisp outline. When both states coincide, both signals remain
+visible. Do not reuse the same fill treatment for current state and J/K focus.
+
+`Mod+I` always returns to `prompt.composer` and its Vim Normal-mode command
+sink, even when Prompt currently owns Plan, Queue, or Draft focus.
+
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region
 background, accent rail, or focus ring.

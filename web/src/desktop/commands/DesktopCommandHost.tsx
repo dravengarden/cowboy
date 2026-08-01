@@ -118,11 +118,11 @@ export function DesktopCommandHost({
     },
     {
       id: "workspace.focusPrompt",
-      title: "Focus Prompt",
+      title: "Focus Prompt Editor",
       group: "Workspace",
       shortcut: DESKTOP_FOCUS_PROMPT_SHORTCUT,
       allowInEditor: true,
-      run: () => workspace.focusPane("prompt"),
+      run: () => workspace.focusRegion("prompt.composer"),
     },
     {
       id: "workspace.focusConversation",

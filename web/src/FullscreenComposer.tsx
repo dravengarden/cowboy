@@ -256,7 +256,8 @@ export function FullscreenComposer({
           vim={vim}
           {...(onVimMode ? { onVimMode } : {})}
           onEscape={(): boolean => {
-            onCollapse();
+            if (onDiscard) setDiscardOpen(true);
+            else onCollapse();
             return true;
           }}
         />

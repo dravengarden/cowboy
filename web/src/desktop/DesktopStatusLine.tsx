@@ -9,6 +9,7 @@ import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { useVimMacroRecording } from "./vim/macroStatusStore";
+import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./commands/workspaceShortcuts";
 
 function Segment({
   label,
@@ -167,7 +168,7 @@ export function DesktopStatusLine({
       { keys: "P", label: "Plan" },
       { keys: "O", label: "Queue" },
       { keys: "D", label: "Drafts" },
-      { keys: "I", label: "Editor" },
+      { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Editor" },
     ]
     : [];
   const hints = [
