@@ -1,6 +1,7 @@
 import { alpha, Box, Dialog, Divider, Stack, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 import { Kbd } from "../Kbd";
+import { DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
 
 export function DesktopModal({
   open,
@@ -34,7 +35,7 @@ export function DesktopModal({
             maxHeight: "min(860px, calc(100vh - 64px))",
             m: 4,
             overflow: "hidden",
-            borderRadius: 2.5,
+            borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
             border: 1,
             borderColor: (theme) => alpha(theme.palette.primary.main, 0.22),
             bgcolor: (theme) => alpha(theme.palette.background.paper, 0.96),

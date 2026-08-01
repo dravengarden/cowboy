@@ -63,7 +63,10 @@ import {
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
 import { DesktopModal } from "./DesktopModal";
-import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
+import {
+  DESKTOP_INSET_RADIUS,
+  desktopEmbeddedControlSx,
+} from "./DesktopEmbeddedControl";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import {
   type DesktopCommand,
@@ -968,7 +971,7 @@ export function DesktopTopBarControls({
                       px: 0.65,
                       py: 0.25,
                       textAlign: "left",
-                      borderRadius: 1,
+                      borderRadius: `${DESKTOP_INSET_RADIUS}px`,
                       bgcolor: "action.hover",
                     }}
                   >
@@ -1012,7 +1015,7 @@ export function DesktopTopBarControls({
                     width: 58,
                     px: 0.5,
                     py: 0.25,
-                    borderRadius: 1,
+                    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
                     bgcolor: "action.hover",
                     textAlign: "left",
                   }}

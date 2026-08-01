@@ -151,6 +151,11 @@ import { JudgeInspectorHost } from "./JudgeInspector";
 import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
 import { persisted } from "./_store/mod.ts";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
+import {
+    DESKTOP_INSET_RADIUS,
+    desktopEmbeddedControlSx,
+    desktopSurfaceSx,
+} from "./desktop/DesktopEmbeddedControl";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
     controlPlaneConnection,
@@ -651,10 +656,17 @@ function SessionList({
         >
             {!mobileDrawer && <Box sx={{ p: 1 }}>
                 <Button
+                    data-desktop-new-session={desktop ? "true" : undefined}
                     fullWidth
                     variant="outlined"
                     startIcon={<Add />}
                     onClick={onNew}
+                    sx={desktop ? {
+                        ...desktopEmbeddedControlSx(),
+                        minHeight: 48,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                    } : undefined}
                 >
                     New session
                     {desktop && <Kbd keys={`${MOD_LABEL}N`} variant="global" />}
@@ -728,6 +740,7 @@ function SessionList({
                     <ReliableListItemButton
                         key={s.id}
                         data-desktop-item={s.id}
+                        data-desktop-session-row={desktop ? "true" : undefined}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
                         data-desktop-pin-active={desktop && pinned ? "true" : undefined}
                         ref={sortable.registerItem(s.id)}
@@ -742,9 +755,9 @@ function SessionList({
                         // (floored at 12px, but yielding to a larger safe-area
                         // inset on the notch side in landscape — ui.md §7).
                         sx={{
+                            ...(desktop && desktopSurfaceSx()),
                             pl: "max(env(safe-area-inset-left), 12px)",
                             pr: "max(env(safe-area-inset-right), 12px)",
-                            borderRadius: 1.5,
                             mx: 0.5,
                             "@media (pointer: fine) and (hover: hover)": {
                                 pl: 0.75,
@@ -858,7 +871,7 @@ function SessionList({
                                     alignItems: "center",
                                     border: 1,
                                     borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
-                                    borderRadius: "999px",
+                                    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
                                     background: (theme) =>
                                         `linear-gradient(${alpha(theme.palette.primary.main, 0.075)}, ${alpha(theme.palette.primary.main, 0.075)}), ${theme.palette.background.paper}`,
                                     pointerEvents: "none",

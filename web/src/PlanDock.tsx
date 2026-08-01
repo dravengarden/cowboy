@@ -14,6 +14,7 @@ import type { PlanEntry } from "./protocol";
 import { memo, type ReactNode } from "react";
 import { persisted, useStore } from "./_store/mod.ts";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { desktopSurfaceSx } from "./desktop/DesktopEmbeddedControl";
 
 // A collapsible, always-visible summary of the agent's current plan (ACP `plan`
 // update), docked above the message queue so the task's progress stays in view
@@ -65,9 +66,9 @@ export const PlanDock = memo(function PlanDock({
     <Box
       data-desktop-plan-surface={desktop ? "true" : undefined}
       sx={{
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1.5,
+        ...(desktop
+          ? desktopSurfaceSx({ interactive: false, focusWithin: true })
+          : { border: 1, borderColor: "divider", borderRadius: 1.5 }),
         mb: desktop ? 1 : 0,
         bgcolor: "background.default",
         overflow: "hidden",

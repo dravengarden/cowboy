@@ -120,6 +120,11 @@ import {
 } from "./explore/exploreStore";
 import { desktopFocusBoundary, desktopFocusFill } from "./theme";
 import {
+  DESKTOP_INSET_RADIUS,
+  desktopEmbeddedControlSx,
+  desktopSurfaceSx,
+} from "./desktop/DesktopEmbeddedControl";
+import {
   type Attachment,
   filesToAttachments,
   reconcileDeletedInlineImages,
@@ -1475,14 +1480,7 @@ export function ComposerWorkspace({
           display: "flex",
           flexDirection: "column",
           ...(surface === "desktop" && {
-            // Match the Queue/Draft focus boundary without tinting this very
-            // large writing canvas. Keep the same 1px geometry at rest and in
-            // focus so neither the editor nor its caret shifts by a pixel.
-            transition: "border-color 120ms ease",
-            "&:focus-within": {
-              borderColor: desktopFocusBoundary,
-              bgcolor: desktopFocusFill,
-            },
+            ...desktopSurfaceSx({ interactive: false, focusWithin: true }),
           }),
           bgcolor: column
             ? (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.18 : 0.34)
@@ -1492,7 +1490,6 @@ export function ComposerWorkspace({
           ...(column && {
             flex: 1,
             minHeight: 0,
-            borderRadius: 2,
             overflow: "hidden",
           }),
         }}
@@ -2989,9 +2986,9 @@ function PendingPanel({
         // composer's content gutter — exactly where the input box's outer border is
         // — so the panel frame and the message box line up edge-to-edge (no horizontal
         // margin on either). Drafts read a touch more "staging" than the live queue.
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1,
+        ...(desktop
+          ? desktopSurfaceSx({ interactive: false, focusWithin: true })
+          : { border: 1, borderColor: "divider", borderRadius: 1 }),
         bgcolor: kind === "draft" ? "action.selected" : "action.hover",
         overflow: "hidden",
         ...(desktop && {
@@ -3213,7 +3210,7 @@ function PendingPanel({
                 spacing={0.5}
                 sx={desktop
                   ? {
-                    borderRadius: 1,
+                    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
                     outline: "2px solid transparent",
                     outlineOffset: -2,
                     transition: "background-color 120ms ease, outline-color 120ms ease",
@@ -4047,7 +4044,14 @@ export function AutoScrollAndStop({
           variant="text"
           startIcon={<Stop fontSize="small" />}
           onClick={(): void => setCancelOpen(true)}
-          sx={{ minWidth: 78, textTransform: "none", whiteSpace: "nowrap", "& .MuiButton-startIcon": { mr: 0.65 } }}
+          sx={{
+            ...desktopEmbeddedControlSx({ active: desktopShortcutActive }),
+            minWidth: 92,
+            minHeight: 36,
+            textTransform: "none",
+            whiteSpace: "nowrap",
+            "& .MuiButton-startIcon": { mr: 0.65 },
+          }}
         >
           <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Stop</Box>
           <ShortcutKeycap keyLabel="S" variant="global" accent={desktopShortcutActive} sx={{ flexShrink: 0, ml: 0.65 }} />

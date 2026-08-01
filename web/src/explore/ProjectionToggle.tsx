@@ -8,7 +8,10 @@ import {
 } from "@mui/material";
 import type { TranscriptProjection } from "./exploreStore";
 import { ShortcutKeycap } from "../ShortcutKeycap";
-import { desktopEmbeddedControlSx } from "../desktop/DesktopEmbeddedControl";
+import {
+  DESKTOP_INSET_RADIUS,
+  desktopEmbeddedControlSx,
+} from "../desktop/DesktopEmbeddedControl";
 
 export function MobileProjectionToggle({
   projection,
@@ -69,7 +72,7 @@ export function DesktopProjectionToggle({
             px: 1.1,
             py: 0,
             border: 0,
-            borderRadius: "999px !important",
+            borderRadius: `${DESKTOP_INSET_RADIUS}px !important`,
             textTransform: "none",
             fontSize: "0.72rem",
             color: "text.secondary",
