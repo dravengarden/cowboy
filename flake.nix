@@ -53,6 +53,19 @@
         ];
       };
 
+      code-adapter-src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./src/lib.rs
+          ./src/code_adapter.rs
+          ./src/code_review.rs
+          ./src/files.rs
+          ./src/bin/cowboy-code-adapter.rs
+        ];
+      };
+
       zed-adapter-src = pkgs.lib.cleanSource ./zed-adapter;
 
       # Only behavior that runs inside a detached session contributes to the
@@ -164,6 +177,25 @@
         };
       };
 
+      cowboy-code-adapter = pkgs.rustPlatform.buildRustPackage {
+        pname = "cowboy-code-adapter";
+        version = "0.1.0";
+        src = code-adapter-src;
+        cargoDeps = cowboy-cargo-deps;
+        cargoBuildFlags = [
+          "--no-default-features"
+          "--features"
+          "code-adapter"
+          "--bin"
+          "cowboy-code-adapter"
+        ];
+        doCheck = false;
+        meta = {
+          description = "Filesystem and Git adapter for Cowboy Machine";
+          mainProgram = "cowboy-code-adapter";
+        };
+      };
+
       cowboy-zed-adapter = pkgs.rustPlatform.buildRustPackage {
         pname = "cowboy-zed-adapter";
         version = "0.1.0";
@@ -214,6 +246,7 @@
         test ! -e ${cowboy}/bin/cowboy-machine-install
         test -x ${cowboy-machine}/bin/cowboy-machine
         test -x ${cowboy-machine}/bin/cowboy-machine-install
+        test -x ${cowboy-code-adapter}/bin/cowboy-code-adapter
         touch "$out"
       '';
 
@@ -264,6 +297,7 @@
         default = cowboy;
         cowboy = cowboy;
         cowboy-machine = cowboy-machine;
+        cowboy-code-adapter = cowboy-code-adapter;
         cowboy-zed-adapter = cowboy-zed-adapter;
         cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
@@ -273,7 +307,7 @@
       # build runs TypeScript checking before Vite. Developer lint/test policy is
       # additionally enforced by `just check` in CI.
       checks.${system} = {
-        inherit cowboy cowboy-machine cowboy-source-boundary cowboy-web
+        inherit cowboy cowboy-machine cowboy-code-adapter cowboy-source-boundary cowboy-web
           cowboy-zed-integration
           cowboy-zed-adapter cowboy-zed-server;
       };

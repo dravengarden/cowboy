@@ -12,6 +12,7 @@ default = ["full"]
 # The control plane and Machine host are separate compile-time boundaries.
 full = []
 machine-host = []
+code-adapter = []
 
 [[bin]]
 name = "cowboy-machine"
@@ -22,6 +23,11 @@ required-features = ["machine-host"]
 name = "cowboy-machine-install"
 path = "src/bin/cowboy-machine-install.rs"
 required-features = ["machine-host"]
+
+[[bin]]
+name = "cowboy-code-adapter"
+path = "src/bin/cowboy-code-adapter.rs"
+required-features = ["code-adapter"]
 
 [dependencies]
 agent-client-protocol = "2"

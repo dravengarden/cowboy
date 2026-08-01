@@ -19,20 +19,21 @@ mod artifacts;
 mod cgroup;
 #[cfg(feature = "full")]
 pub mod cli;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_adapter;
 #[cfg(feature = "full")]
 mod code_cache;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_review;
 #[cfg(feature = "full")]
 mod core;
 #[cfg(feature = "full")]
 mod diff_snapshot;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
 #[cfg(feature = "full")]
 mod inference;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_auth;
 #[cfg(feature = "machine-host")]
 mod machine_broker;
@@ -44,6 +45,7 @@ mod machine_components;
 mod machine_control;
 #[cfg(feature = "machine-host")]
 pub mod machine_install;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
 #[cfg(feature = "full")]
 mod persistence;
@@ -55,6 +57,7 @@ mod remote_runtime;
 mod runtime;
 #[cfg(feature = "full")]
 mod runtime_router;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod runtime_wire;
 #[cfg(feature = "full")]
 mod scheduler;

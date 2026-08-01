@@ -445,6 +445,7 @@ fn file_revision(relative: &Path, metadata: &std::fs::Metadata) -> String {
     format!("{:x}", digest.finalize())
 }
 
+#[cfg(feature = "full")]
 pub(crate) fn cached_file_page(
     relative: &str,
     bytes: Vec<u8>,
