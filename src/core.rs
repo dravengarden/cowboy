@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::persistence::EventReducer;
 use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 /// How many recent events a fresh client gets over WS (the live tail). Older
@@ -41,10 +42,69 @@ pub const HISTORY_MAX_BYTES: usize = 512 * 1024;
 /// Postgres and are fetched by `/api/history`.
 pub const HOT_TAIL: usize = 1_000;
 const HOT_TAIL_TRIM_BATCH: usize = 200;
+/// Soft heap budget for one persisted session's canonical hot tail. A count
+/// limit alone is ineffective for screenshots and multi-megabyte tool results.
+/// Keep at least the newest event so the cursor always advances.
+const HOT_TAIL_MAX_BYTES: usize = 8 * 1024 * 1024;
 const BROADCAST_CAPACITY: usize = 1_024;
 /// Event-count ceiling for the cursor-based HTTP history route. The byte budget
 /// above is the primary bound; this limits render work for many tiny events.
 pub const HISTORY_PAGE: usize = 64;
+
+fn estimated_json_bytes(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Null => 4,
+        serde_json::Value::Bool(_) => 5,
+        serde_json::Value::Number(_) => 24,
+        serde_json::Value::String(value) => value.len().saturating_add(2),
+        serde_json::Value::Array(values) => values.iter().fold(2usize, |size, value| {
+            size.saturating_add(estimated_json_bytes(value))
+                .saturating_add(1)
+        }),
+        serde_json::Value::Object(values) => values.iter().fold(2usize, |size, (key, value)| {
+            size.saturating_add(key.len())
+                .saturating_add(estimated_json_bytes(value))
+                .saturating_add(4)
+        }),
+    }
+}
+
+/// A cheap soft estimate used only for retention. Walking a JSON string is O(1)
+/// (`String::len`), unlike serializing the ever-growing text on every token.
+fn estimated_envelope_bytes(envelope: &Envelope) -> usize {
+    let base = envelope
+        .session_id
+        .len()
+        .saturating_add(envelope.cmid.as_deref().map_or(0, str::len))
+        .saturating_add(64);
+    match &envelope.event {
+        Event::Update { update } => base.saturating_add(estimated_json_bytes(update)),
+        _ => base
+            .saturating_add(serde_json::to_vec(&envelope.event).map_or(256, |bytes| bytes.len())),
+    }
+}
+
+fn trim_hot_log(log: &mut Vec<Envelope>, log_bytes: &mut usize, trim_count_batch: bool) -> bool {
+    let mut drop_count = if trim_count_batch && log.len() > HOT_TAIL + HOT_TAIL_TRIM_BATCH {
+        HOT_TAIL_TRIM_BATCH.min(log.len().saturating_sub(1))
+    } else {
+        0
+    };
+    let mut retained_bytes = *log_bytes;
+    for envelope in &log[..drop_count] {
+        retained_bytes = retained_bytes.saturating_sub(estimated_envelope_bytes(envelope));
+    }
+    while retained_bytes > HOT_TAIL_MAX_BYTES && drop_count + 1 < log.len() {
+        retained_bytes = retained_bytes.saturating_sub(estimated_envelope_bytes(&log[drop_count]));
+        drop_count += 1;
+    }
+    if drop_count == 0 {
+        return false;
+    }
+    log.drain(..drop_count);
+    *log_bytes = retained_bytes;
+    true
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct QuestionPageSummary {
@@ -622,6 +682,9 @@ struct Session {
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
+    /// Soft heap estimate for `log`, maintained alongside canonical upserts so
+    /// large tool payloads are bounded without serializing every text chunk.
+    log_bytes: usize,
     event_count: u64,
     reached_start: bool,
     next_seq: u64,
@@ -1389,6 +1452,10 @@ pub struct Hub {
 
 struct HubInner {
     sessions: Mutex<HashMap<String, Session>>,
+    /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
+    /// writer owns a separate reducer because it consumes the same raw stream
+    /// asynchronously; live WebSocket subscribers continue to receive raw frames.
+    history_reducer: Mutex<EventReducer>,
     /// Insertion order of session ids, so the list view is stable.
     order: Mutex<Vec<String>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
@@ -1447,6 +1514,7 @@ impl Hub {
         Self {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
+                history_reducer: Mutex::new(EventReducer::default()),
                 order: Mutex::new(Vec::new()),
                 tx,
                 store_tx,
@@ -1648,12 +1716,13 @@ impl Hub {
         {
             let mut sessions_lock = self.inner.sessions.lock();
             let mut order = self.inner.order.lock();
+            let mut history_reducer = self.inner.history_reducer.lock();
             for r in sessions {
                 let RestoredSession {
                     mut meta,
-                    log,
+                    mut log,
                     event_count,
-                    reached_start,
+                    mut reached_start,
                     next_seq,
                     mut queue,
                     mut drafts,
@@ -1703,11 +1772,21 @@ impl Hub {
                 if healed {
                     reid_dirty.push(id.clone());
                 }
+                let mut log_bytes = log.iter().fold(0usize, |size, envelope| {
+                    size.saturating_add(estimated_envelope_bytes(envelope))
+                });
+                if self.inner.store_tx.is_some() && trim_hot_log(&mut log, &mut log_bytes, false) {
+                    reached_start = false;
+                }
+                for envelope in &log {
+                    let _ = history_reducer.reduce(envelope.clone());
+                }
                 sessions_lock.insert(
                     id.clone(),
                     Session {
                         meta,
                         log,
+                        log_bytes,
                         event_count,
                         reached_start,
                         next_seq,
@@ -2049,6 +2128,7 @@ impl Hub {
                 Session {
                     meta: meta.clone(),
                     log: Vec::new(),
+                    log_bytes: 0,
                     event_count: 0,
                     reached_start: true,
                     next_seq: 0,
@@ -2083,6 +2163,9 @@ impl Hub {
             let mut order = self.inner.order.lock();
             let removed = sessions.remove(session_id).is_some();
             order.retain(|id| id != session_id);
+            if removed {
+                self.inner.history_reducer.lock().clear_session(session_id);
+            }
             removed
         };
         if removed {
@@ -3215,8 +3298,10 @@ impl Hub {
                 return;
             };
             session.log.clear();
+            session.log_bytes = 0;
             session.event_count = 0;
             session.reached_start = true;
+            self.inner.history_reducer.lock().clear_session(session_id);
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ClearEvents {
@@ -3358,10 +3443,32 @@ impl Hub {
                 event,
                 cmid,
             };
-            s.log.push(envelope.clone());
-            s.event_count = s.event_count.saturating_add(1);
-            if self.inner.store_tx.is_some() && s.log.len() > HOT_TAIL + HOT_TAIL_TRIM_BATCH {
-                s.log.drain(..HOT_TAIL_TRIM_BATCH);
+            if let Some(canonical) = self.inner.history_reducer.lock().reduce(envelope.clone()) {
+                match s
+                    .log
+                    .binary_search_by_key(&canonical.seq, |entry| entry.seq)
+                {
+                    Ok(index) => {
+                        s.log_bytes = s
+                            .log_bytes
+                            .saturating_sub(estimated_envelope_bytes(&s.log[index]))
+                            .saturating_add(estimated_envelope_bytes(&canonical));
+                        s.log[index] = canonical;
+                    }
+                    Err(_) if canonical.seq == seq => {
+                        s.log_bytes = s
+                            .log_bytes
+                            .saturating_add(estimated_envelope_bytes(&canonical));
+                        s.log.push(canonical);
+                        s.event_count = s.event_count.saturating_add(1);
+                    }
+                    // The canonical row was already trimmed from the hot tail.
+                    // Its durable UPSERT still lands below, but re-inserting an
+                    // old seq here would break the tail's sorted cursor contract.
+                    Err(_) => {}
+                }
+            }
+            if self.inner.store_tx.is_some() && trim_hot_log(&mut s.log, &mut s.log_bytes, true) {
                 s.reached_start = false;
             }
             let durable_agent_session_id = is_user_message_chunk(&envelope)
@@ -4955,6 +5062,78 @@ mod confirm_hold_tests {
         let (snapshot, reached_start) = hub.snapshot("bounded").expect("session snapshot");
         assert_eq!(snapshot.len(), SNAPSHOT_TAIL);
         assert!(!reached_start);
+    }
+
+    #[test]
+    fn hub_hot_history_reduces_stream_chunks_but_broadcasts_raw_frames() {
+        let hub = hub_with_session("canonical-hot-tail");
+        let mut live = hub.subscribe();
+        for (seq, text) in ["hello ", "world"].into_iter().enumerate() {
+            hub.push(
+                "canonical-hot-tail",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "answer",
+                        "content": {"type": "text", "text": text},
+                    }),
+                },
+            );
+            let Outbound::Event { envelope } = live.try_recv().expect("raw live frame") else {
+                panic!("expected event");
+            };
+            assert_eq!(envelope.seq, u64::try_from(seq).unwrap());
+        }
+
+        let (snapshot, reached_start) = hub.snapshot("canonical-hot-tail").expect("snapshot");
+        assert!(reached_start);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].seq, 0);
+        let Event::Update { update } = &snapshot[0].event else {
+            panic!("expected canonical update");
+        };
+        assert_eq!(
+            update
+                .pointer("/content/text")
+                .and_then(serde_json::Value::as_str),
+            Some("hello world")
+        );
+        assert_eq!(hub.event_total(), 1);
+    }
+
+    #[test]
+    fn persisted_hub_bounds_canonical_hot_history_by_payload_bytes() {
+        let (tx, _rx) = mpsc::channel(32);
+        let health = std::sync::Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        hub.create_local_session(
+            "byte-hot-tail".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "byte-hot-tail".to_owned(),
+            SessionOrigin::Api,
+            false,
+        );
+        let payload = "x".repeat(1024 * 1024);
+        for n in 0..12 {
+            hub.push(
+                "byte-hot-tail",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "plan",
+                        "n": n,
+                        "payload": payload,
+                    }),
+                },
+            );
+        }
+
+        let sessions = hub.inner.sessions.lock();
+        let session = sessions.get("byte-hot-tail").expect("session");
+        assert!(session.log.len() < 12);
+        assert!(session.log_bytes <= HOT_TAIL_MAX_BYTES);
+        assert!(!session.reached_start);
+        assert_eq!(session.event_count, 12);
     }
 
     #[test]

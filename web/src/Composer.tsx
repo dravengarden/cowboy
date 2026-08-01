@@ -211,6 +211,7 @@ const DesktopRegionShortcut = lazy(async () => {
 });
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
+const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
 // Per-panel-kind collapse pref (app-level, per-device, never synced). One
 // persisted store per key ("cowboy:<kind>-collapsed"), "1"/"0" legacy format
@@ -789,8 +790,12 @@ export function ComposerWorkspace({
     return submitted;
   }, [onSubmitted, submit]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const drafts = useStoreSelector((snapshot) => snapshot.drafts);
-  const queues = useStoreSelector((snapshot) => snapshot.queues);
+  const draftList = useStoreSelector((snapshot) =>
+    snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
+  );
+  const queue = useStoreSelector((snapshot) =>
+    snapshot.queues.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
+  );
   const sessionState = useStoreSelector(
     (snapshot) => composerSessionSlice(snapshot.sessions, sessionId),
     sameComposerSessionSlice,
@@ -802,8 +807,6 @@ export function ComposerWorkspace({
   // `queues`/`drafts` already merge the server rows with this device's optimistic
   // (sending/failed) rows via the queue sync client (commitQueue) — server rows
   // first, optimistic rebased after, reconciled out the instant their cmid lands.
-  const queue = queues.get(sessionId) ?? [];
-  const draftList = drafts.get(sessionId) ?? [];
   // The agent's current plan, pinned above the queue as a collapsible dock so
   // task progress stays in view without scrolling the transcript. null = no plan.
   const plan = timelineState.plan;

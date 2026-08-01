@@ -24,8 +24,9 @@ impl EventReducer {
     }
 
     /// Convert the high-frequency ACP event stream into stable history rows.
-    /// Live WS clients still receive every raw event; only durable history is
-    /// reduced. A returned envelope may reuse an earlier seq, causing an UPSERT.
+    /// Live WS clients still receive every raw event; durable history and the
+    /// Hub's hot replay tail both use this canonical form. A returned envelope
+    /// may reuse an earlier seq, causing an UPSERT or in-memory replacement.
     pub(crate) fn reduce(&mut self, env: Envelope) -> Option<Envelope> {
         let sid = env.session_id.clone();
         let Event::Update { update } = &env.event else {

@@ -35,14 +35,10 @@ import { AutoScrollAndStop, CompactIcon, compactTooltip } from "../Composer";
 import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import { ShortcutKeycap } from "../ShortcutKeycap";
-import {
-  latestAvailableCommands,
-  resolveSessionAction,
-} from "../agentCommands";
-import { isCompactingTail, latestCompactionCompletionSeq } from "../derive";
+import { resolveSessionAction } from "../agentCommands";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
-import type { ConfigOption, Envelope, Status } from "../protocol";
+import type { ConfigOption, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import {
@@ -72,6 +68,10 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
+import {
+  desktopTopBarTimelineSlice,
+  sameDesktopTopBarTimelineSlice,
+} from "./desktopTopBarTimelineSlice";
 
 const OPTION_RANK: Record<string, number> = {
   mode: 0,
@@ -82,10 +82,7 @@ const OPTION_RANK: Record<string, number> = {
   fast_mode: 3,
 };
 
-// useSyncExternalStore selectors must return a referentially stable snapshot.
-// A fresh `[]` while a newly selected session has no timeline yet causes React
-// error #185 (infinite render), taking the whole Desktop input surface down.
-const EMPTY_TIMELINE: Envelope[] = [];
+const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 
 function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();
@@ -576,14 +573,15 @@ export function DesktopTopBarControls({
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const shortcutsActive = workspace.focusedRegion === "topbar.controls";
-  const optionsBySession = useStoreSelector((snapshot) =>
-    snapshot.configOptions
+  const rawOptions = useStoreSelector((snapshot) =>
+    snapshot.configOptions.get(sessionId) ?? EMPTY_CONFIG_OPTIONS
   );
   const session = useStoreSelector((snapshot) =>
     snapshot.sessions.find((candidate) => candidate.id === sessionId)
   );
-  const timeline = useStoreSelector((snapshot) =>
-    snapshot.timelines.get(sessionId) ?? EMPTY_TIMELINE
+  const timelineState = useStoreSelector(
+    (snapshot) => desktopTopBarTimelineSlice(snapshot.timelines.get(sessionId)),
+    sameDesktopTopBarTimelineSlice,
   );
   const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null);
   const [usageAnchor, setUsageAnchor] = useState<HTMLElement | null>(null);
@@ -597,14 +595,13 @@ export function DesktopTopBarControls({
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
   const options = useMemo(() => {
-    const raw = optionsBySession.get(sessionId) ?? [];
-    return [...raw].sort((left, right) => {
+    return [...rawOptions].sort((left, right) => {
       const leftIndex = OPTION_RANK[left.id] ?? Number.MAX_SAFE_INTEGER;
       const rightIndex = OPTION_RANK[right.id] ?? Number.MAX_SAFE_INTEGER;
       if (leftIndex === rightIndex) return left.name.localeCompare(right.name);
       return leftIndex - rightIndex;
     });
-  }, [optionsBySession, sessionId]);
+  }, [rawOptions]);
   const configSummary = options.map(compactOptionName).join(" · ");
   const loadUsage = useCallback(async (manual: boolean): Promise<void> => {
     if (refreshing) return;
@@ -747,9 +744,7 @@ export function DesktopTopBarControls({
   const limits = useMemo(() => usageLimits(usage), [usage]);
   const visibleLimits = useMemo(() => topBarUsageLimits(usage), [usage]);
   const updatedAgo = relativeUpdateTime(snapshot?.refreshed_at_ms ?? 0, clock);
-  const availableCommands = useMemo(() => latestAvailableCommands(timeline), [
-    timeline,
-  ]);
+  const availableCommands = timelineState.availableCommands;
   const compactAction = useMemo(
     () =>
       resolveSessionAction(
@@ -759,7 +754,7 @@ export function DesktopTopBarControls({
       ),
     [availableCommands, session?.provider],
   );
-  const compacting = status === "busy" && isCompactingTail(timeline);
+  const compacting = status === "busy" && timelineState.compactingTail;
   const serverContextUsed = session?.context_used ?? 0;
   const serverContextSize = session?.context_size ?? 0;
   const compactContext = useCompactionContext({
@@ -767,7 +762,7 @@ export function DesktopTopBarControls({
     status,
     serverUsed: serverContextUsed,
     serverSize: serverContextSize,
-    completionSeq: latestCompactionCompletionSeq(timeline),
+    completionSeq: timelineState.completionSeq,
   });
   const contextUsed = compactContext.used;
   const contextSize = compactContext.size;

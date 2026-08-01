@@ -44,6 +44,10 @@ import type {
 import { mergeCanonicalTimeline } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
+import {
+  retainTranscriptSessionCache,
+  touchTranscriptSessionCache,
+} from "./transcriptSessionCache";
 
 /// One notification slot — the App's snackbar shows the latest. We monotonically
 /// bump `seq` even on repeat messages so the UI can re-trigger the open
@@ -189,6 +193,64 @@ interface SessionHydration {
   controller: AbortController;
 }
 const sessionHydrations = new Map<string, SessionHydration>();
+// Transcript payloads are the dominant long-lived browser allocation (tool
+// results and inline images can be megabytes). Keep only a small MRU working
+// set; session metadata, queues, drafts, and persisted history remain intact.
+let transcriptSessionCache: string[] = [];
+
+function transcriptIsCached(sessionId: string): boolean {
+  return transcriptSessionCache.includes(sessionId);
+}
+
+function evictTranscriptSessions(sessionIds: readonly string[]): void {
+  if (sessionIds.length === 0) return;
+  const evicted = new Set(sessionIds);
+  for (const sessionId of evicted) {
+    sessionHydrations.get(sessionId)?.controller.abort();
+    sessionHydrations.delete(sessionId);
+    completeQuestionPages.delete(sessionId);
+    transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
+  }
+
+  const timelines = new Map(state.timelines);
+  const hydrated = new Set(state.hydrated);
+  const pagination = new Map(state.pagination);
+  const judgeRuns = { ...state.judgeRuns };
+  const judgeResults = { ...state.judgeResults };
+  let changed = false;
+  for (const sessionId of evicted) {
+    changed = timelines.delete(sessionId) || changed;
+    changed = hydrated.delete(sessionId) || changed;
+    changed = pagination.delete(sessionId) || changed;
+    if (sessionId in judgeRuns) {
+      delete judgeRuns[sessionId];
+      changed = true;
+    }
+    if (sessionId in judgeResults) {
+      delete judgeResults[sessionId];
+      changed = true;
+    }
+  }
+  if (changed) {
+    setState({ ...state, timelines, hydrated, pagination, judgeRuns, judgeResults });
+  }
+}
+
+function touchTranscriptSession(sessionId: string): void {
+  const update = touchTranscriptSessionCache(transcriptSessionCache, sessionId);
+  transcriptSessionCache = update.order;
+  evictTranscriptSessions(update.evicted);
+}
+
+function retainTranscriptSessions(valid: ReadonlySet<string>): void {
+  const update = retainTranscriptSessionCache(transcriptSessionCache, valid);
+  transcriptSessionCache = update.order;
+  const removed = new Set(update.evicted);
+  for (const sessionId of state.timelines.keys()) {
+    if (!valid.has(sessionId)) removed.add(sessionId);
+  }
+  evictTranscriptSessions([...removed]);
+}
 
 // --- Reconnect bookkeeping --------------------------------------------------
 // The banner + version-probe + outage/reconnect-flash policy now live in `conn`
@@ -690,6 +752,7 @@ export function isQuestionPageLoaded(sessionId: string, pageId: string): boolean
 }
 
 const INACTIVE_HISTORY_TAIL = 800;
+const INACTIVE_HISTORY_HIGH_WATER = 1_000;
 // The open transcript used to grow forever between page reloads. Keep a smaller
 // recent window once a following reader crosses this batched high-water mark.
 // The complete log remains in Postgres and `loadOlder` pages it back on demand.
@@ -782,10 +845,16 @@ function handle(msg: Outbound): void {
       // The list is authoritative: drop composer drafts for sessions that no
       // longer exist (deleted here or on another terminal). Tolerant + off the
       // input path.
-      pruneDrafts(new Set(msg.sessions.map((s) => s.id)));
+      const validSessions = new Set(msg.sessions.map((s) => s.id));
+      pruneDrafts(validSessions);
+      retainTranscriptSessions(validSessions);
       break;
     }
     case "snapshot": {
+      // A hydration response can race an LRU eviction. Reopening the session
+      // starts a fresh bootstrap; retaining this stale response would defeat the
+      // cache bound and can overwrite a newer transcript epoch.
+      if (!transcriptIsCached(msg.session_id)) break;
       const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
       // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
       // "history loaded" signal. Reconnects re-send snapshots but the flag stays
@@ -859,13 +928,23 @@ function handle(msg: Outbound): void {
       }
       setState({
         ...state,
-        timelines: applyEnvelope(state.timelines, env),
+        // Live fan-out covers every running session. Only the MRU working set
+        // owns transcript payloads; inactive evictions rehydrate on demand.
+        timelines: transcriptIsCached(env.session_id)
+          ? applyEnvelope(state.timelines, env)
+          : state.timelines,
         pagination,
         optimisticMessages,
         ...(cmid !== undefined && {
           optimisticMessages: reconcileOptimistic(state.optimisticMessages, env.session_id, new Set([cmid])),
         }),
       });
+      if (
+        env.session_id !== openedSessionId &&
+        (state.timelines.get(env.session_id)?.length ?? 0) > INACTIVE_HISTORY_HIGH_WATER
+      ) {
+        releaseHistoryTail(env.session_id, INACTIVE_HISTORY_TAIL);
+      }
       break;
     }
     case "config_options": {
@@ -919,7 +998,9 @@ function handle(msg: Outbound): void {
       break;
     }
     case "judge_history": {
-      setState({ ...state, judgeRuns: { ...state.judgeRuns, [msg.session_id]: msg.runs } });
+      if (transcriptIsCached(msg.session_id)) {
+        setState({ ...state, judgeRuns: { ...state.judgeRuns, [msg.session_id]: msg.runs } });
+      }
       break;
     }
     case "error": {
@@ -1790,6 +1871,7 @@ function optimisticMessage(sessionId: string, text: string, attachments: Attachm
 // every navigation.
 export function openSession(id: string): void {
   openedSessionId = id;
+  touchTranscriptSession(id);
   send({ type: "open_session", session_id: id });
   void hydrateSession(id);
 }
