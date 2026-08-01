@@ -18,6 +18,7 @@ import {
   ButtonBase,
   Chip,
   CircularProgress,
+  ClickAwayListener,
   Collapse,
   Dialog,
   DialogActions,
@@ -35,6 +36,7 @@ import {
   MenuItem,
   Paper,
   Popover,
+  Popper,
   Snackbar,
   Stack,
   Switch,
@@ -261,6 +263,19 @@ const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
 const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
+} as const;
+
+// MUI's Button start-icon selector assigns a fixed px size with more
+// specificity than an SvgIcon's own sx prop. Own the glyph size at the button
+// primitive so both image actions follow the root rem scale truthfully.
+const INLINE_IMAGE_ACTION_BUTTON_SX = {
+  textTransform: "none",
+  fontWeight: 600,
+  gap: 0.5,
+  px: 1.75,
+  py: 1,
+  borderRadius: 0,
+  "& .MuiButton-startIcon > *": { fontSize: "1.125rem" },
 } as const;
 
 // Compact "K/M" token count for the context tooltip (48436 → "48K", 1_000_000 → "1M").
@@ -866,12 +881,12 @@ export function ComposerWorkspace({
   const [imgSel, setImgSel] = useState<
     { id: string; el: HTMLElement; x: number; y: number } | null
   >(null);
-  const closeImgSel = (): void => {
+  const closeImgSel = useCallback((): void => {
     setImgSel((cur) => {
       cur?.el.classList.remove("cm-inline-image-selected");
       return null;
     });
-  };
+  }, []);
   useEffect(() => {
     setImageTapHandler((id, el, x, y) => {
       setImgSel((prev) => {
@@ -882,6 +897,17 @@ export function ComposerWorkspace({
     });
     return (): void => setImageTapHandler(null);
   }, []);
+  useEffect(() => {
+    if (imgSel === null) return undefined;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeImgSel();
+    };
+    globalThis.addEventListener("keydown", closeOnEscape, true);
+    return (): void => globalThis.removeEventListener("keydown", closeOnEscape, true);
+  }, [closeImgSel, imgSel]);
   // The expand tap transfers focus synchronously below. Never refocus from an
   // effect: a later programmatic focus replaces iOS's user-armed text
   // interaction and suppresses long-press Paste/Select.
@@ -2222,24 +2248,26 @@ export function ComposerWorkspace({
           </Stack>
         </Box>
       </Popover>
-      {/* Inline-image selection popover: Preview (lightbox) / Delete. Anchored to
-          the tapped <img>, which is ringed via .cm-inline-image-selected. */}
-      <Popover
+      {/* Inline-image actions are deliberately non-modal. MUI Popover is built on
+          Modal/FocusTrap, which steals CM6 focus and closes the iOS keyboard as
+          soon as the image is tapped. Popper keeps the active editor and native
+          selection alive while still positioning this toolbar by the image. */}
+      <Popper
         open={imgSel !== null}
-        anchorReference="anchorPosition"
-        anchorPosition={imgSel !== null
-          ? { top: imgSel.y, left: imgSel.x }
-          : undefined}
-        onClose={closeImgSel}
-        anchorOrigin={{ vertical: "center", horizontal: "center" }}
-        transformOrigin={{ vertical: "center", horizontal: "center" }}
-        slotProps={{
-          paper: {
-            // A floating frosted PILL — matches the app's glass chrome instead of a
-            // flat white box. backgroundImage:none kills MUI Paper's elevation
-            // gradient so the translucent fill reads cleanly through the blur.
-            sx: {
-              mt: 0.5,
+        anchorEl={imgSel?.el ?? null}
+        placement="top"
+        modifiers={[
+          { name: "offset", options: { offset: [0, 8] } },
+          { name: "flip", options: { fallbackPlacements: ["bottom", "right", "left"] } },
+          { name: "preventOverflow", options: { padding: 8 } },
+        ]}
+        sx={{ zIndex: (t) => t.zIndex.tooltip }}
+      >
+        <ClickAwayListener onClickAway={closeImgSel}>
+          <Paper
+            role="toolbar"
+            aria-label="Image actions"
+            sx={{
               borderRadius: 999,
               overflow: "hidden",
               border: 1,
@@ -2250,49 +2278,51 @@ export function ComposerWorkspace({
                 alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.74 : 0.82),
               backdropFilter: "blur(16px) saturate(180%)",
               WebkitBackdropFilter: "blur(16px) saturate(180%)",
-            },
-          },
-        }}
-      >
-        <Stack
-          direction="row"
-          alignItems="stretch"
-          divider={<Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />}
-        >
-          <Button
-            color="inherit"
-            startIcon={<Visibility sx={{ fontSize: 18 }} />}
-            onClick={(): void => {
-              // Resolve from the INLINE-IMAGE REGISTRY (all surfaces register there),
-              // not the local `attachments` — otherwise Preview no-ops in the
-              // expanded/overlay editor whose image lives in editAttachments (the
-              // reported "展开页面无法预览"). Fall back to the local array just in case.
-              const id = imgSel?.id;
-              const att = (id ? getInlineAttachment(id) : undefined) ??
-                attachments.find((a) => a.id === id);
-              if (att) openLightbox([att], 0);
-              closeImgSel();
             }}
-            sx={{ textTransform: "none", fontWeight: 600, gap: 0.5, px: 1.75, py: 1, borderRadius: 0 }}
           >
-            Preview
-          </Button>
-          <Button
-            color="error"
-            startIcon={<DeleteOutline sx={{ fontSize: 18 }} />}
-            onClick={(): void => {
-              if (imgSel) {
-                editorRef.current?.deleteImage(imgSel.id);
-                setAttachments((prev) => prev.filter((a) => a.id !== imgSel.id));
-              }
-              closeImgSel();
-            }}
-            sx={{ textTransform: "none", fontWeight: 600, gap: 0.5, px: 1.75, py: 1, borderRadius: 0 }}
-          >
-            Delete
-          </Button>
-        </Stack>
-      </Popover>
+            <Stack
+              direction="row"
+              alignItems="stretch"
+              divider={<Divider orientation="vertical" flexItem sx={{ my: 0.875 }} />}
+            >
+              <Button
+                color="inherit"
+                startIcon={<Visibility />}
+                onPointerDown={(event): void => event.preventDefault()}
+                onClick={(): void => {
+                  // Resolve from the INLINE-IMAGE REGISTRY (all surfaces register there),
+                  // not the local `attachments` — otherwise Preview no-ops in the
+                  // expanded/overlay editor whose image lives in editAttachments (the
+                  // reported "展开页面无法预览"). Fall back to the local array just in case.
+                  const id = imgSel?.id;
+                  const att = (id ? getInlineAttachment(id) : undefined) ??
+                    attachments.find((a) => a.id === id);
+                  if (att) openLightbox([att], 0);
+                  closeImgSel();
+                }}
+                sx={INLINE_IMAGE_ACTION_BUTTON_SX}
+              >
+                Preview
+              </Button>
+              <Button
+                color="error"
+                startIcon={<DeleteOutline />}
+                onPointerDown={(event): void => event.preventDefault()}
+                onClick={(): void => {
+                  if (imgSel) {
+                    editorRef.current?.deleteImage(imgSel.id);
+                    setAttachments((prev) => prev.filter((a) => a.id !== imgSel.id));
+                  }
+                  closeImgSel();
+                }}
+                sx={INLINE_IMAGE_ACTION_BUTTON_SX}
+              >
+                Delete
+              </Button>
+            </Stack>
+          </Paper>
+        </ClickAwayListener>
+      </Popper>
       {/* Confirm for the session-lifecycle actions. Compact sends the agent's
           slash-command; Clear is a cowboy session RESET (fresh agent context).
           Both meaningfully change context, so neither fires on a bare tap; Clear

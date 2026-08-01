@@ -602,6 +602,17 @@ here says otherwise.
     mirroring merely to enable an action—the authoritative ref already supplies
     submit, park, schedule, and persistence.
 
+30. **Inline-image actions must not own focus.** MUI `Popover` is backed by a
+    `Modal` and `FocusTrap`; opening it for Preview/Delete moved focus away from
+    CM6, which immediately ended iOS's software-keyboard session. Render this
+    contextual toolbar with non-modal `Popper`, keep the editor's native
+    selection active, and prevent its buttons' pointer-down default so Delete
+    does not focus chrome before it edits the document. Preview may intentionally
+    enter the lightbox afterward. Keep action glyph sizes rem-based so the global
+    font-size setting scales them with their labels. Never repair this with a
+    delayed editor `focus()`: once the original UIKit gesture has ended, that is
+    too late to preserve the keyboard session and can regress long-press menus.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
