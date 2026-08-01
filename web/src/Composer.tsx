@@ -3451,7 +3451,12 @@ function PendingRow({
     setOverlayOpen(false);
     onEditDone();
   };
-  const requestDiscardEdit = (): void => setConfirmDiscardEdit(true);
+  // Open after the initiating Escape has finished bubbling. Mounting MUI's
+  // Dialog synchronously inside that same key event lets its escape listener
+  // observe the trigger and immediately close the brand-new confirmation.
+  const requestDiscardEdit = (): void => {
+    globalThis.requestAnimationFrame(() => setConfirmDiscardEdit(true));
+  };
   useConfirmEnter(confirmDiscardEdit, discardEdit);
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;

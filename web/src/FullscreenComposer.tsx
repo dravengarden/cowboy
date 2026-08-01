@@ -256,7 +256,11 @@ export function FullscreenComposer({
           vim={vim}
           {...(onVimMode ? { onVimMode } : {})}
           onEscape={(): boolean => {
-            if (onDiscard) setDiscardOpen(true);
+            if (onDiscard) {
+              // Keep the Escape that requests confirmation separate from the
+              // Escape MUI uses to close an already-open dialog.
+              globalThis.requestAnimationFrame(() => setDiscardOpen(true));
+            }
             else onCollapse();
             return true;
           }}
