@@ -13,7 +13,10 @@ import { useMemo } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./DesktopKeycap";
 import { useDesktopCommands } from "./DesktopCommandProvider";
-import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./workspaceShortcuts";
+import {
+  DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT,
+  DESKTOP_FOCUS_PROMPT_SHORTCUT,
+} from "./workspaceShortcuts";
 
 interface ShortcutRow {
   keys: string[];
@@ -23,7 +26,8 @@ interface ShortcutRow {
 
 const NAVIGATION: ShortcutRow[] = [
   { keys: ["Mod+E"], title: "Focus Sessions / Sidebar" },
-  { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Prompt Editor" },
+  { keys: [DESKTOP_FOCUS_PROMPT_SHORTCUT], title: "Focus Prompt" },
+  { keys: [DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT], title: "Return to Prompt Editor" },
   { keys: ["Mod+L"], title: "Focus Conversation Log" },
   { keys: ["Mod+T"], title: "Focus Top Bar" },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
@@ -34,7 +38,7 @@ const NAVIGATION: ShortcutRow[] = [
     keys: ["P / Mod+Y / Mod+D"],
     title: "Plan / Queue / Drafts inside Prompt",
     description:
-      `${DESKTOP_FOCUS_PROMPT_SHORTCUT} returns to the editor; the composer keeps native Vim commands`,
+      `${DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT} returns to the editor; the composer keeps native Vim commands`,
   },
   { keys: ["Ctrl", "W", "H/L"], title: "Move between workspace panes" },
   { keys: ["Ctrl", "W", "J/K"], title: "Move between regions in a pane" },

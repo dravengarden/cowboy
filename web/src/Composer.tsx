@@ -123,7 +123,7 @@ import {
   desktopListItemSx,
   desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
-import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
+import { DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
 import {
   type Attachment,
   filesToAttachments,
@@ -1497,7 +1497,7 @@ export function ComposerWorkspace({
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
-              shortcut={DESKTOP_FOCUS_PROMPT_SHORTCUT}
+              shortcut={DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT}
               title="Focus prompt editor"
               showWhenPane="prompt"
               hideWhenRegion="prompt.composer"

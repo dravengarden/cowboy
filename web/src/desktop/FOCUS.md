@@ -210,8 +210,9 @@ a persistent tinted fill and leading accent rail, while the transient keyboard
 cursor uses a crisp outline. When both states coincide, both signals remain
 visible. Do not reuse the same fill treatment for current state and J/K focus.
 
-`Mod+I` always returns to `prompt.composer` and its Vim Normal-mode command
-sink, even when Prompt currently owns Plan, Queue, or Draft focus.
+`Mod+P` enters the Prompt pane. Once Prompt owns focus, `Mod+I` always returns
+to `prompt.composer` and its Vim Normal-mode command sink, even when Plan,
+Queue, or Draft currently owns focus.
 
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region

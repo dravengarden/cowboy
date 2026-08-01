@@ -19,7 +19,10 @@ import {
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
-import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./workspaceShortcuts";
+import {
+  DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT,
+  DESKTOP_FOCUS_PROMPT_SHORTCUT,
+} from "./workspaceShortcuts";
 import { DESKTOP_INSET_RADIUS } from "../DesktopEmbeddedControl";
 
 function DesktopCommandRegistration(
@@ -118,9 +121,19 @@ export function DesktopCommandHost({
     },
     {
       id: "workspace.focusPrompt",
-      title: "Focus Prompt Editor",
+      title: "Focus Prompt",
       group: "Workspace",
       shortcut: DESKTOP_FOCUS_PROMPT_SHORTCUT,
+      allowInEditor: true,
+      run: () => workspace.focusPane("prompt"),
+    },
+    {
+      id: "prompt.focusEditor",
+      title: "Focus Prompt Editor",
+      description: "Return to Message the agent in Vim Normal mode",
+      group: "Prompt",
+      shortcut: DESKTOP_FOCUS_PROMPT_EDITOR_SHORTCUT,
+      contexts: ["prompt"],
       allowInEditor: true,
       run: () => workspace.focusRegion("prompt.composer"),
     },
