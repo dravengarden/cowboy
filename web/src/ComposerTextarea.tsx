@@ -382,6 +382,8 @@ export const ComposerTextarea = forwardRef<
 
   return (
     <Box
+      data-mobile-pager-ignore
+      data-mobile-drawer-ignore
       sx={{
         position: "relative",
         // `expanded` (fullscreen compose / edit sheet): fill the sheet so the
@@ -458,6 +460,12 @@ export const ComposerTextarea = forwardRef<
           // text. The textarea still grows from here as you type (top-aligned).
           "& .MuiInputBase-root": {
             minHeight: 44,
+            // MUI normally keeps multiline padding on this non-editable DIV,
+            // leaving only the 14px glyph line as the native textarea. A long
+            // press in the visible top/bottom inset then lands outside the
+            // editor and can dismiss UIKit's keyboard/menu. Put all hit area
+            // padding on the textarea itself, matching the CM6 path.
+            p: 0,
             alignItems: expanded ? "stretch" : "flex-start",
             ...(expanded && { height: "100%" }),
           },
@@ -465,10 +473,13 @@ export const ComposerTextarea = forwardRef<
           // down; line-height follows the reading line-height var. No 16px floor
           // — the installed PWA disables focus-zoom via the viewport meta.
           "& .MuiInputBase-input": {
+            boxSizing: "border-box",
+            minHeight: 44,
+            padding: "8.5px 14px",
             fontSize: "1rem",
             lineHeight: "var(--cowboy-reading-line-height, 1.5)",
             // Clear the overlaid send/kebab buttons at the bottom-right.
-            ...(endInset > 0 && { paddingRight: `${String(endInset)}px` }),
+            ...(endInset > 0 && { paddingRight: `${String(14 + endInset)}px` }),
             ...(expanded && { height: "100% !important", overflowY: "auto !important" }),
           },
           // Inside the composer's outlined Paper card the card draws the box, so

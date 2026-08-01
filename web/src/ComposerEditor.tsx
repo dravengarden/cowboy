@@ -843,6 +843,8 @@ export const ComposerEditor = forwardRef<
     : "rgba(255, 255, 255, 0.23)";
   return (
     <Box
+      data-mobile-pager-ignore
+      data-mobile-drawer-ignore
       onMouseDown={(e): void => {
         // Click anywhere in the padding focuses the editor, like a real input.
         if (e.target === e.currentTarget) {

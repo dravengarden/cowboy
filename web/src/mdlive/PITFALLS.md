@@ -625,6 +625,19 @@ here says otherwise.
     with a timer or post-mount refocus: neither can inherit the original UIKit
     keyboard transaction, and both risk the native long-press menu.
 
+32. **The whole visible compact input must be the native editing hit target.**
+    MUI's default multiline `OutlinedInput` puts its vertical padding on a
+    non-editable wrapper, so the 44px field contained only a roughly 14px-high
+    textarea. A long press in the visually valid top/bottom inset therefore hit
+    a DIV; UIKit treated it as an outside touch, and small long-press drift could
+    additionally let Cowboy's pager or Session drawer capture the gesture and
+    dismiss the keyboard. Move multiline padding onto the textarea, make that
+    editable element at least 44px high, and mark both native and CM6 composer
+    wrappers as pager/drawer-ignore regions. The writing surface owns every
+    touch that starts inside it; navigation gestures begin outside it. Do not
+    paper over an inert inset with delayed focus, pointer-down selection writes,
+    or a larger non-editable wrapper.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
