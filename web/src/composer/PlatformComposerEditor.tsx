@@ -58,14 +58,23 @@ export const PlatformComposerEditor = forwardRef<
     touchValue,
   );
   const wasNativeCompactRef = useRef(nativeCompact);
+  // The iOS paste-permission alert temporarily owns focus. When the accepted
+  // paste event returns, `document.activeElement` can therefore be BODY even
+  // though UIKit still considers this one native paste transaction. Preserve
+  // that intent through the synchronous native-textarea -> CM6 promotion so
+  // the replacement inherits the keyboard in the same React commit.
+  const pastePromotionPendingRef = useRef(false);
   // During an image Paste, the token is inserted synchronously and this render
   // replaces the still-focused native textarea. Autofocus the CM6 mount in the
   // same discrete UIKit gesture; a later rAF focus cannot inherit the keyboard.
+  // The explicit paste intent covers the system permission alert's transient
+  // focus loss without weakening ordinary attachment/file-picker semantics.
   const focusPromotedEditor = shouldFocusPromotedEditor(
     wasNativeCompactRef.current,
     nativeCompact,
     typeof document !== "undefined" &&
       document.activeElement instanceof HTMLTextAreaElement,
+    pastePromotionPendingRef.current,
   );
   const cmSeedRef = useRef(props.value);
   cmSeedRef.current = composerEditorMountSeed(
@@ -75,6 +84,7 @@ export const PlatformComposerEditor = forwardRef<
     touchValue,
   );
   wasNativeCompactRef.current = nativeCompact;
+  if (focusPromotedEditor) pastePromotionPendingRef.current = false;
   const [runtimeState, setRuntimeState] = useState<DesktopVimRuntimeState>(
     () => isDesktopVimRuntimeLoaded() ? "ready" : "pending",
   );
@@ -110,7 +120,22 @@ export const PlatformComposerEditor = forwardRef<
         {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
         {...(props.autoFocus !== undefined ? { autoFocus: props.autoFocus } : {})}
         {...(props.onEscape ? { onEscape: props.onEscape } : {})}
-        {...(props.onPasteFiles ? { onPasteFiles: props.onPasteFiles } : {})}
+        {...(props.onPasteFiles
+          ? {
+            onPasteFiles: (files: File[]): void => {
+              // Only an image inserts a synchronous inline token and promotes
+              // this native control. Non-image attachment work stays async and
+              // must not leave a focus claim behind for a later transition.
+              pastePromotionPendingRef.current = files.some((file) =>
+                (file.type || "").startsWith("image/")
+              );
+              props.onPasteFiles?.(files);
+              queueMicrotask(() => {
+                pastePromotionPendingRef.current = false;
+              });
+            },
+          }
+          : {})}
         {...(props.endInset !== undefined ? { endInset: props.endInset } : {})}
         {...(props.borderless !== undefined ? { borderless: props.borderless } : {})}
         {...(props.expanded !== undefined ? { expanded: props.expanded } : {})}

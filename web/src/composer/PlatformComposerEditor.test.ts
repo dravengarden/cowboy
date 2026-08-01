@@ -72,3 +72,9 @@ Deno.test("only a focused native promotion inherits the software keyboard", () =
   assertEquals(shouldFocusPromotedEditor(true, false, false), false);
   assertEquals(shouldFocusPromotedEditor(false, false, true), false);
 });
+
+Deno.test("an accepted iOS image paste survives permission-alert focus loss", () => {
+  assertEquals(shouldFocusPromotedEditor(true, false, false, true), true);
+  assertEquals(shouldFocusPromotedEditor(false, false, false, true), false);
+  assertEquals(shouldFocusPromotedEditor(true, true, false, true), false);
+});

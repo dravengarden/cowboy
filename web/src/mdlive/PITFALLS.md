@@ -613,6 +613,18 @@ here says otherwise.
     delayed editor `focus()`: once the original UIKit gesture has ended, that is
     too late to preserve the keyboard session and can regress long-press menus.
 
+31. **The iOS paste-permission alert temporarily hides the focused textarea.**
+    Accepting “Cowboy would like to paste” resumes the native `paste` event, but
+    `document.activeElement` can be `BODY` while the system alert returns. The
+    first inline image still replaces compact Mobile's native textarea with CM6;
+    checking only the active element therefore mounted CM6 without autofocus and
+    dismissed the keyboard with the old textarea. `PlatformComposerEditor` now
+    records an image-paste promotion intent synchronously in the resumed paste
+    callback and consumes it in that same native-to-CM6 React commit. Non-image
+    paste and file-picker attachment do not set the intent. Do not replace this
+    with a timer or post-mount refocus: neither can inherit the original UIKit
+    keyboard transaction, and both risk the native long-press menu.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

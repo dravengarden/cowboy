@@ -35,6 +35,8 @@ export function shouldFocusPromotedEditor(
   wasNative: boolean,
   nativeNow: boolean,
   activeElementIsTextarea: boolean,
+  pastePromotionPending = false,
 ): boolean {
-  return wasNative && !nativeNow && activeElementIsTextarea;
+  return wasNative && !nativeNow &&
+    (activeElementIsTextarea || pastePromotionPending);
 }
