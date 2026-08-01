@@ -121,6 +121,7 @@ import { FloatingActionIsland, ImageLightbox } from "./_shell";
 import { Kbd } from "./Kbd";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
 const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // A byte-bounded history page can contain only a few tall tool/Markdown rows.
@@ -964,10 +965,11 @@ function ChunkView({
   chunk: ContentChunk;
   invert: boolean;
 }): React.JSX.Element {
+  const touchSurface = useSurfaceProfile().kind !== "desktop";
   if (chunk.type === "image") {
     return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
   }
-  return <Markdown text={chunk.text} invert={invert} />;
+  return <Markdown text={chunk.text} invert={invert} touchWrap={touchSurface} />;
 }
 
 function ThoughtSteps({

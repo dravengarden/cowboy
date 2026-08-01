@@ -183,6 +183,7 @@ function DocumentView({
   const [inspectCandidates, setInspectCandidates] = useState<
     CodeInspectCandidate[]
   >([]);
+  const [inspectCandidatesExpanded, setInspectCandidatesExpanded] = useState(false);
   const [inspectAnchor, setInspectAnchor] = useState<
     { top: number; left: number } | undefined
   >();
@@ -301,6 +302,10 @@ function DocumentView({
   useEffect(() => {
     onSymbolOpenChange(hoverOpen ? inspectTarget : undefined);
   }, [hoverOpen, inspectTarget, onSymbolOpenChange]);
+
+  useEffect(() => {
+    if (!hoverOpen) setInspectCandidatesExpanded(false);
+  }, [hoverOpen]);
 
   useEffect(() => {
     setHoverOpen(false);
@@ -580,6 +585,32 @@ function DocumentView({
       </Box>
     );
   }
+  const candidateChip = (candidate: CodeInspectCandidate): React.JSX.Element => {
+    const selected = candidate.row === inspectTarget?.row &&
+      candidate.column === inspectTarget.column;
+    return (
+      <Chip
+        key={`${candidate.row}:${candidate.column}:${candidate.label}`}
+        label={candidate.label}
+        size="small"
+        color={selected ? "primary" : "default"}
+        variant={selected ? "filled" : "outlined"}
+        clickable={!selected}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={selected ? undefined : () => {
+          navigationHaptic();
+          inspectPoint(candidate, inspectCandidates, false);
+        }}
+        sx={{
+          flex: "0 0 auto",
+          height: 32,
+          borderRadius: 1.75,
+          fontFamily: "var(--cowboy-font-mono)",
+          fontWeight: selected ? 700 : 500,
+        }}
+      />
+    );
+  };
   const candidateSwitcher = inspectCandidates.length > 1
     ? (
       <Stack
@@ -599,33 +630,88 @@ function DocumentView({
           "&::-webkit-scrollbar": { display: "none" },
         }}
       >
-        {inspectCandidates.map((candidate) => {
-          const selected = candidate.row === inspectTarget?.row &&
-            candidate.column === inspectTarget.column;
-          return (
-            <Chip
-              key={`${candidate.row}:${candidate.column}:${candidate.label}`}
-              label={candidate.label}
-              size="small"
-              color={selected ? "primary" : "default"}
-              variant={selected ? "filled" : "outlined"}
-              clickable={!selected}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={selected ? undefined : () => {
-                navigationHaptic();
-                inspectPoint(candidate, inspectCandidates, false);
-              }}
-              sx={{
-                flex: "0 0 auto",
-                height: 32,
-                borderRadius: 1.75,
-                fontFamily: "var(--cowboy-font-mono)",
-                fontWeight: selected ? 700 : 500,
-              }}
-            />
-          );
-        })}
+        {inspectCandidates.map(candidateChip)}
       </Stack>
+    )
+    : null;
+  const selectedCandidate = inspectCandidates.find((candidate) =>
+    candidate.row === inspectTarget?.row && candidate.column === inspectTarget.column
+  ) ?? inspectCandidates[0];
+  const collapsedCandidates = selectedCandidate
+    ? [
+      selectedCandidate,
+      ...inspectCandidates.filter((candidate) => candidate !== selectedCandidate).slice(0, 1),
+    ]
+    : [];
+  const hiddenCandidateCount = Math.max(
+    0,
+    inspectCandidates.length - collapsedCandidates.length,
+  );
+  const mobileCandidateSelector = inspectCandidates.length > 1
+    ? (
+      <Box
+        data-mobile-symbol-candidates
+        sx={{
+          mb: 1.5,
+          pb: 1.5,
+          borderBottom: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Stack
+          direction="row"
+          useFlexGap
+          gap={0.75}
+          alignItems="flex-start"
+        >
+          <Stack
+            direction="row"
+            useFlexGap
+            flexWrap={inspectCandidatesExpanded ? "wrap" : "nowrap"}
+            gap={0.75}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              ...(inspectCandidatesExpanded
+                ? {
+                  maxHeight: 120,
+                  overflowY: "auto",
+                  overscrollBehaviorY: "contain",
+                  touchAction: "pan-y",
+                  WebkitOverflowScrolling: "touch",
+                }
+                : { overflow: "hidden" }),
+            }}
+          >
+            {(inspectCandidatesExpanded ? inspectCandidates : collapsedCandidates).map(
+              candidateChip,
+            )}
+          </Stack>
+          {(hiddenCandidateCount > 0 || inspectCandidatesExpanded) && (
+            <Button
+              size="small"
+              variant="text"
+              aria-expanded={inspectCandidatesExpanded}
+              onClick={() => {
+                navigationHaptic();
+                setInspectCandidatesExpanded((expanded) => !expanded);
+              }}
+              endIcon={inspectCandidatesExpanded
+                ? <KeyboardArrowUp />
+                : <KeyboardArrowDown />}
+              sx={{
+                minWidth: 0,
+                height: 32,
+                px: 1,
+                flex: "0 0 auto",
+                textTransform: "none",
+              }}
+            >
+              {inspectCandidatesExpanded ? "Collapse" : `+${hiddenCandidateCount}`}
+            </Button>
+          )}
+        </Stack>
+      </Box>
     )
     : null;
   const symbolContent = (
@@ -934,28 +1020,12 @@ function DocumentView({
             <Sheet
               open={hoverOpen}
               onClose={() => setHoverOpen(false)}
-              title={
-                <Stack
-                  component="span"
-                  direction="row"
-                  alignItems="center"
-                  gap={1}
-                  sx={{
-                    width: "100%",
-                    minWidth: 0,
-                  }}
-                >
-                  <Box
-                    component="span"
-                    sx={{ flex: "0 0 auto", fontWeight: 750 }}
-                  >
-                    Symbol
-                  </Box>
-                  {candidateSwitcher}
-                </Stack>
-              }
+              title={inspectCandidates.length > 1
+                ? `Symbols · ${inspectCandidates.length}`
+                : "Symbol"}
               forceSheet
             >
+              {mobileCandidateSelector}
               {symbolContent}
             </Sheet>
           )
