@@ -351,6 +351,21 @@ impl Store {
             .collect())
     }
 
+    /// Whether a registered Machine is colocated with this controller. This is
+    /// used only as a bounded fallback when its loopback adapter tunnel is
+    /// temporarily unavailable; remote Machines must never fall through to the
+    /// controller filesystem merely because they share a path spelling.
+    pub async fn machine_is_local(&self, machine_id: &str) -> Result<bool> {
+        let mode: Option<String> = sqlx::query_scalar(
+            "SELECT connection_mode FROM machines WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(machine_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("loading Machine connection mode")?;
+        Ok(mode.as_deref() == Some("local"))
+    }
+
     /// Revoke a remote Machine identity and fence its current connection.
     /// The active controller observes the cleared epoch on its next bounded
     /// revocation check and closes the socket.

@@ -3100,11 +3100,28 @@ async fn remote_code_request(
         .as_object_mut()
         .context("code adapter operation must be an object")?
         .insert("root".to_owned(), serde_json::Value::String(cwd.to_owned()));
-    let value = state
+    let value = match state
         .machine_control
         .adapter_request(&machine_id, "code", request)
         .await
-        .map_err(anyhow::Error::msg)?;
+    {
+        Ok(value) => value,
+        Err(error) => {
+            let colocated = match state.store.as_ref() {
+                Some(store) => store.machine_is_local(&machine_id).await.unwrap_or(false),
+                None => false,
+            };
+            if colocated {
+                tracing::warn!(
+                    machine = %machine_id,
+                    %error,
+                    "colocated Code adapter unavailable; using controller filesystem"
+                );
+                return Ok(None);
+            }
+            return Err(anyhow::Error::msg(error));
+        }
+    };
     Ok(Some(serde_json::from_value(value)?))
 }
 

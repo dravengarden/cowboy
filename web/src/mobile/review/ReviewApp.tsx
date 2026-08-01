@@ -500,6 +500,27 @@ function DocumentView({
     reloadKey,
   ]);
 
+  // A remote Machine or its adapter can reconnect after the bounded initial
+  // retries. Recover the preserved tab when the app becomes usable again so a
+  // transient outage never leaves Code Review stuck behind a manual button.
+  useEffect(() => {
+    if (!error) return undefined;
+    const retry = (): void => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      fileRetry.current.count = 0;
+      setError(undefined);
+      setReloadKey((value) => value + 1);
+    };
+    globalThis.addEventListener("online", retry);
+    globalThis.addEventListener("pageshow", retry);
+    document.addEventListener("visibilitychange", retry);
+    return () => {
+      globalThis.removeEventListener("online", retry);
+      globalThis.removeEventListener("pageshow", retry);
+      document.removeEventListener("visibilitychange", retry);
+    };
+  }, [error]);
+
   const loadMore = (): void => {
     if (!nextCursor || loadingMore) return;
     const controller = new AbortController();
