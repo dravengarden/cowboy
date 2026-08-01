@@ -93,7 +93,7 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         "--enrollment-token-file".to_owned(),
         token.display().to_string(),
         "--socket".to_owned(),
-        state.join("run/agentd.sock").display().to_string(),
+        state.join("run/machine.sock").display().to_string(),
         "--code-adapter-socket".to_owned(),
         state.join("run/code-adapter.sock").display().to_string(),
         "--zed-adapter-socket".to_owned(),
@@ -278,6 +278,8 @@ mod tests {
         };
         let script = launcher_script(&args, Path::new("/state"), Path::new("/state/token"));
         assert!(script.contains("components/commands/cowboy-machine"));
+        assert!(script.contains("/state/run/machine.sock"));
+        assert!(!script.contains("agentd"));
         assert!(script.contains("/opt/homebrew/bin"));
         assert!(script.contains("--enrollment-token-file"));
         assert!(!script.contains("secret"));

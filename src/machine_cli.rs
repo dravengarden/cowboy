@@ -59,7 +59,7 @@ enum CliSpawnMode {
 #[command(version)]
 pub struct Args {
     // Keep this stable path for detached workers that survive Machine upgrades.
-    #[arg(long, default_value = "/run/user/1000/cowboy/agentd.sock")]
+    #[arg(long, default_value = "/run/user/1000/cowboy/machine.sock")]
     socket: PathBuf,
     #[arg(long, default_value = "cowboy-acp-worker")]
     worker_command: PathBuf,
