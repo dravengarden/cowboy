@@ -211,7 +211,7 @@ export function DesktopCommandHost({
       description: "Open the conversation in a distraction-free reading workspace",
       group: "Conversation",
       shortcut: "Z",
-      regions: ["conversation.transcript"],
+      contexts: ["conversation"],
       run: () => {
         workspace.setProductMode("reading");
         requestAnimationFrame(() => workspace.focusRegion("conversation.transcript"));

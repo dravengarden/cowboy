@@ -323,6 +323,12 @@ question before resuming live output. Agent pane/session/queue commands must not
 leak into Reading. Future Code mode uses the same product-mode boundary rather
 than adding another Agent overlay.
 
+The Agent Conversation header exposes Reading as its own embedded action between
+the History/Explore projection switch and Following. Reading is not a third
+projection: entering it preserves the selected projection and changes only the
+product mode. Its visible `Z` slot is inactive outside Conversation and available
+while Conversation owns focus, matching the registered command exactly.
+
 `Mod+I` always enters `prompt.composer` and its Vim Normal-mode command sink,
 even when Sessions, Conversation, Plan, Queue, or Draft currently owns focus.
 `Mod+P` always enters Plan. When no Plan exists the command remains reserved

@@ -128,6 +128,12 @@ High-frequency fixed controls show a small key badge in workspace Normal mode.
 Dynamic page targets receive badges only in hint mode. This gives discoverability
 without covering the transcript permanently.
 
+Product-mode transitions are visible fixed controls rather than palette-only
+knowledge. In the Conversation header, Reading is a separate embedded action—not
+a History/Explore projection—and its contextual `Z` slot truthfully reflects
+whether Conversation currently owns keyboard focus. Entering Reading preserves
+the projection; `Esc` returns to Agent.
+
 User preference:
 
 - Normal mode only (default)

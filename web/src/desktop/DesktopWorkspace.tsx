@@ -7,6 +7,7 @@ import {
 } from "./DesktopWorkspaceController";
 import { DesktopRegionShortcut } from "./DesktopRegionShortcut";
 import { DesktopConversationControls } from "./DesktopConversationControls";
+import { DesktopReadingModeControl } from "./DesktopReadingModeControl";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
 import { MOD_LABEL } from "../platform";
 import { ShortcutKeycap } from "../ShortcutKeycap";
@@ -309,6 +310,14 @@ export function DesktopWorkspace({
                 projection={projection}
                 onChange={onProjectionChange}
                 shortcutActive={conversationShortcutsActive}
+              />
+              <DesktopReadingModeControl
+                shortcutActive={conversationShortcutsActive}
+                onEnter={(): void => {
+                  workspace.setProductMode("reading");
+                  requestAnimationFrame(() =>
+                    workspace.focusRegion("conversation.transcript"));
+                }}
               />
               <DesktopConversationControls
                 sessionId={sessionId}
