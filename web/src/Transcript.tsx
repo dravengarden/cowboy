@@ -36,6 +36,7 @@ import {
   useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
@@ -1567,7 +1568,7 @@ function ToolCard({
           // on every collapsed card, and a tool-heavy transcript stacked them into
           // a "ruled paper" look. The icon + status chip already mark it as a tool.
           bgcolor: "background.paper",
-          borderRadius: 1,
+          borderRadius: desktop ? `${DESKTOP_INSET_RADIUS}px` : 1,
           // Subtle breathing while a tool is mid-flight; nothing while
           // completed/failed (those are static states).
           animation: running ? `${pulse} 1.6s ease-in-out infinite` : undefined,

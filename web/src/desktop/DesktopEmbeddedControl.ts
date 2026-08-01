@@ -3,8 +3,8 @@ import { alpha, type Theme } from "@mui/material";
 /** One geometry vocabulary for Desktop's keyboard-first surfaces. Outer
  * controls/panels share the same silhouette; nested rows and tiles use the
  * smaller inset radius. Mobile intentionally owns a separate touch language. */
-export const DESKTOP_SURFACE_RADIUS = 14;
-export const DESKTOP_INSET_RADIUS = 10;
+export const DESKTOP_SURFACE_RADIUS = 10;
+export const DESKTOP_INSET_RADIUS = 6;
 
 export function desktopSurfaceSx({
   active = false,
