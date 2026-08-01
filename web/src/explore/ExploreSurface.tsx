@@ -1000,15 +1000,17 @@ export function ExploreTranscript(
   );
   const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
   const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
-  const indexedPosition = indexedQuestionPagePosition(
-    pageIndex.data?.pages ?? [],
-    current?.id,
-  );
-  const indexedCurrentOrdinal = indexedPosition.ordinal;
-  const currentOrdinal = indexedCurrentOrdinal ?? Math.max(
+  const provisionalOrdinal = Math.max(
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
+  const indexedPosition = indexedQuestionPagePosition(
+    pageIndex.data?.pages ?? [],
+    current?.id,
+    provisionalOrdinal,
+  );
+  const indexedCurrentOrdinal = indexedPosition.ordinal;
+  const currentOrdinal = indexedCurrentOrdinal ?? provisionalOrdinal;
   const atTail = indexedCurrentOrdinal === undefined
     ? currentIndex === pages.length - 1
     : indexedCurrentOrdinal === total;

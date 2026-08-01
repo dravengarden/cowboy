@@ -81,15 +81,18 @@ export function authoritativeTailPageId(
 export function indexedQuestionPagePosition(
   pages: QuestionPageIndexEntry[],
   currentId: string | undefined,
+  fallbackOrdinal?: number,
 ): {
   ordinal: number | undefined;
   previousId: string | undefined;
   nextId: string | undefined;
 } {
-  if (!currentId) {
-    return { ordinal: undefined, previousId: undefined, nextId: undefined };
-  }
-  const index = pages.findIndex((page) => page.id === currentId);
+  const idIndex = currentId
+    ? pages.findIndex((page) => page.id === currentId)
+    : -1;
+  const index = idIndex >= 0
+    ? idIndex
+    : pages.findIndex((page) => page.ordinal === fallbackOrdinal);
   if (index < 0) {
     return { ordinal: undefined, previousId: undefined, nextId: undefined };
   }

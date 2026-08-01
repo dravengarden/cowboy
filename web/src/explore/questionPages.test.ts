@@ -230,3 +230,16 @@ Deno.test("authoritative page index survives a sparse loaded content window", ()
     nextId: "32",
   });
 });
+
+Deno.test("authoritative page index falls back from a provisional id to its ordinal", () => {
+  const index = [
+    { id: "30", ordinal: 1 },
+    { id: "31", ordinal: 2 },
+  ];
+
+  assertEquals(indexedQuestionPagePosition(index, "provisional", 2), {
+    ordinal: 2,
+    previousId: "30",
+    nextId: undefined,
+  });
+});
