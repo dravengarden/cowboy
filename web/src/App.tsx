@@ -1475,6 +1475,7 @@ const StoreTranscript = memo(function StoreTranscript({
     onScrollableChange?: ((scrollable: boolean) => void) | undefined;
     desktopNavigation: boolean;
 }): React.JSX.Element {
+    const surface = useSurfaceProfile();
     // Streaming changes only this boundary. Keeping the three high-frequency
     // store slices out of App prevents every ACP chunk from re-running the
     // navigation, sheets, composer shell and glass layout while preserving the
@@ -1515,7 +1516,12 @@ const StoreTranscript = memo(function StoreTranscript({
             topInset={topInset}
             bottomInset={bottomInset}
             onScrollableChange={onScrollableChange}
-            shortContentAtTop={desktopNavigation}
+            // A short phone transcript belongs beside the composer: the next
+            // action and its context stay in one thumb-sized region. On a tall
+            // tablet that same bottom anchor creates a conspicuous empty upper
+            // half, so tablet History follows the document-like Desktop/Page
+            // treatment and starts below the top chrome instead.
+            shortContentAtTop={desktopNavigation || surface.kind === "tablet"}
             restoreAnchorKey={transitionAnchorKey}
             onAnchorRestored={(): void => resolveProjectionAnchor(sessionId)}
         />
