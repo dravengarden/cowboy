@@ -587,6 +587,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (runtime_command_tx, mut runtime_command_rx) = tokio::sync::mpsc::unbounded_channel();
     let login_sessions: LoginSessions = Arc::default();
     heartbeat.tick().await;
     loop {
@@ -614,15 +615,15 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                 crate::runtime_wire::write_frame(&mut runtime_writer, &frame).await?;
                             }
                             MachineFrame::Command { command } => {
-                                handle_machine_command(
-                                    command,
-                                    event_tx.clone(),
-                                    Arc::clone(&config.components),
-                                    config.zed_adapter_socket.clone(),
-                                    config.code_adapter_socket.clone(),
-                                    config.workspaces.clone(),
-                                    Arc::clone(&login_sessions),
-                                );
+                                handle_machine_command(command, MachineCommandContext {
+                                    events: event_tx.clone(),
+                                    components: Arc::clone(&config.components),
+                                    zed_adapter_socket: config.zed_adapter_socket.clone(),
+                                    code_adapter_socket: config.code_adapter_socket.clone(),
+                                    workspaces: config.workspaces.clone(),
+                                    login_sessions: Arc::clone(&login_sessions),
+                                    runtime_commands: runtime_command_tx.clone(),
+                                });
                             }
                             _ => {}
                         }
@@ -635,6 +636,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                     bail!("agentd runtime tunnel closed");
                 };
                 send_frame(&mut socket, &MachineFrame::Runtime { frame }).await?;
+            }
+            command = runtime_command_rx.recv() => {
+                if let Some(command) = command {
+                    crate::runtime_wire::write_frame(&mut runtime_writer, &command).await?;
+                }
             }
         }
     }
@@ -1095,15 +1101,26 @@ fn gemini_auth_from_metadata(
     }
 }
 
-fn handle_machine_command(
-    command: MachineCommand,
+struct MachineCommandContext {
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     workspaces: Vec<MachineWorkspace>,
     login_sessions: LoginSessions,
-) {
+    runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
+}
+
+fn handle_machine_command(command: MachineCommand, context: MachineCommandContext) {
+    let MachineCommandContext {
+        events,
+        components,
+        zed_adapter_socket,
+        code_adapter_socket,
+        workspaces,
+        login_sessions,
+        runtime_commands,
+    } = context;
     match command {
         MachineCommand::RefreshInventory { request_id } => {
             tokio::spawn(async move {
@@ -1221,6 +1238,13 @@ fn handle_machine_command(
             tokio::spawn(async move {
                 let result = update_npm_component(&component).await;
                 if result.is_ok() {
+                    if let Some(provider) = provider_for_component(&component) {
+                        let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
+                            command: crate::runtime_wire::CoreCommand::RollProvider {
+                                provider: provider.to_owned(),
+                            },
+                        });
+                    }
                     let inventory =
                         collect_inventory(&components, zed_adapter_socket.as_deref()).await;
                     let _ = events.send(MachineEvent::Inventory {
@@ -1235,6 +1259,15 @@ fn handle_machine_command(
                 });
             });
         }
+    }
+}
+
+fn provider_for_component(id: &ComponentId) -> Option<&'static str> {
+    match id.slot.as_str() {
+        "codex" => Some("codex"),
+        "claude" => Some("claude-code"),
+        "gemini" => Some("gemini"),
+        _ => None,
     }
 }
 
@@ -1627,8 +1660,8 @@ mod tests {
 
     use super::{
         disabled_provider_slots_from, gemini_auth_from_metadata, managed_provider_environment,
-        npm_package_for_component, parse_workspaces, reject_untrusted_workspace, selected_zed_pair,
-        validate_controller_url,
+        npm_package_for_component, parse_workspaces, provider_for_component,
+        reject_untrusted_workspace, selected_zed_pair, validate_controller_url,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
@@ -1689,6 +1722,13 @@ mod tests {
                 slot: "arbitrary-package".to_owned(),
             }),
             None
+        );
+        assert_eq!(
+            provider_for_component(&ComponentId {
+                kind: ComponentKind::ProviderCli,
+                slot: "claude".to_owned(),
+            }),
+            Some("claude-code")
         );
     }
 

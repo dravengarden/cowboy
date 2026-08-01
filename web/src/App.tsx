@@ -3611,6 +3611,11 @@ function MachinesContent(): React.JSX.Element {
     const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [loginCodes, setLoginCodes] = useState<Record<string, string>>({});
     const [componentErrors, setComponentErrors] = useState<Record<string, string>>({});
+    const [updateConfirmation, setUpdateConfirmation] = useState<{
+        machineId: string;
+        components: readonly MachineChoice["components"][number][];
+        action: "npm" | "reconcile-one" | "reconcile-all";
+    } | null>(null);
     const loadEvents = useCallback((machineId: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
             .then((response) => response.ok ? response.json() : [])
@@ -3712,6 +3717,32 @@ function MachinesContent(): React.JSX.Element {
                 setBusy((current) => ({ ...current, [key]: false }));
             }
         })();
+    };
+    const requestNpmUpdate = (machineId: string, component: MachineChoice["components"][number]): void => {
+        if (component.active_leases > 0) {
+            setUpdateConfirmation({ machineId, components: [component], action: "npm" });
+            return;
+        }
+        updateNpm(machineId, component);
+    };
+    const requestReconcileOne = (machineId: string, component: MachineChoice["components"][number]): void => {
+        if (component.active_leases > 0) {
+            setUpdateConfirmation({ machineId, components: [component], action: "reconcile-one" });
+            return;
+        }
+        updateOne(machineId, component);
+    };
+    const requestReconcileAll = (machine: MachineChoice): void => {
+        const affected = machine.components.filter((component) =>
+            component.active_leases > 0 && (machine.pending_updates ?? []).some((id) =>
+                id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
+            )
+        );
+        if (affected.length > 0) {
+            setUpdateConfirmation({ machineId: machine.id, components: affected, action: "reconcile-all" });
+            return;
+        }
+        command(machine.id, "components/reconcile");
     };
     return (
         <Stack spacing={2}>
@@ -3848,7 +3879,7 @@ function MachinesContent(): React.JSX.Element {
                                     variant="contained"
                                     startIcon={busy[`${machine.id}:components/reconcile:`] ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
                                     disabled={busy[`${machine.id}:components/reconcile:`]}
-                                    onClick={() => command(machine.id, "components/reconcile")}
+                                    onClick={() => requestReconcileAll(machine)}
                                     sx={{ alignSelf: "flex-start" }}
                                 >
                                     Update all ({pending.length})
@@ -3986,7 +4017,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 color="warning"
                                                                 disabled={npmUpdating}
                                                                 startIcon={npmUpdating ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
-                                                                onClick={() => updateNpm(machine.id, component)}
+                                                                onClick={() => requestNpmUpdate(machine.id, component)}
                                                             >{npmUpdating ? "Updating" : "Update"}</Button>
                                                         )}
                                                         {!provider && componentPending && (
@@ -3995,7 +4026,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 variant="outlined"
                                                                 color="warning"
                                                                 disabled={busy[componentKey]}
-                                                                onClick={() => updateOne(machine.id, component)}
+                                                                onClick={() => requestReconcileOne(machine.id, component)}
                                                             >{busy[componentKey] ? <CircularProgress size={14} /> : "Update"}</Button>
                                                         )}
                                                         {!provider && !componentPending && npmInstallable && (
@@ -4005,7 +4036,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 color="warning"
                                                                 disabled={npmUpdating}
                                                                 startIcon={npmUpdating ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
-                                                                onClick={() => updateNpm(machine.id, component)}
+                                                                onClick={() => requestNpmUpdate(machine.id, component)}
                                                             >{npmUpdating ? "Updating" : "Update"}</Button>
                                                         )}
                                                         {!provider && !componentPending && !npmInstallable && (
@@ -4106,6 +4137,48 @@ function MachinesContent(): React.JSX.Element {
                     </Paper>
                 );
             })}
+            <Dialog
+                open={updateConfirmation !== null}
+                onClose={() => setUpdateConfirmation(null)}
+                fullWidth
+                maxWidth="xs"
+            >
+                <DialogTitle>Roll out this update?</DialogTitle>
+                <DialogContent>
+                    {updateConfirmation && (
+                        <Stack spacing={2} sx={{ pt: 0.5 }}>
+                            <Typography variant="body2">
+                                {updateConfirmation.components.map(machineComponentName).join(", ")} {updateConfirmation.components.length === 1 ? "is" : "are"} used by active sessions on this Machine.
+                            </Typography>
+                            <Stack spacing={0.5}>
+                                {updateConfirmation.components.map((component) => (
+                                    <Typography key={`${component.id.kind}:${component.id.slot ?? ""}`} variant="caption" color="text.secondary">
+                                        {machineComponentName(component)} · {component.active_leases} active {component.active_leases === 1 ? "session" : "sessions"}
+                                    </Typography>
+                                ))}
+                            </Stack>
+                            <Alert severity="warning">
+                                Current turns will finish first. Cowboy will then replace affected workers gradually. Each session may be briefly unavailable while it reconnects; its transcript and agent session are preserved. Machine host or runtime updates may also reconnect the Machine service.
+                            </Alert>
+                            <Stack direction="row" spacing={1} justifyContent="flex-end">
+                                <Button color="inherit" onClick={() => setUpdateConfirmation(null)}>Cancel</Button>
+                                <Button
+                                    variant="contained"
+                                    color="warning"
+                                    onClick={() => {
+                                        const pending = updateConfirmation;
+                                        setUpdateConfirmation(null);
+                                        const component = pending.components[0];
+                                        if (pending.action === "npm" && component) updateNpm(pending.machineId, component);
+                                        else if (pending.action === "reconcile-one" && component) updateOne(pending.machineId, component);
+                                        else if (pending.action === "reconcile-all") command(pending.machineId, "components/reconcile");
+                                    }}
+                                >Update and roll out</Button>
+                            </Stack>
+                        </Stack>
+                    )}
+                </DialogContent>
+            </Dialog>
         </Stack>
     );
 }

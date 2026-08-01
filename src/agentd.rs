@@ -979,6 +979,31 @@ impl Broker {
         }
     }
 
+    fn roll_provider(&self, provider: &str) {
+        let sessions: Vec<String> = self
+            .sessions
+            .lock()
+            .iter()
+            .filter(|(_, session)| session.provider == provider)
+            .map(|(session_id, _)| session_id.clone())
+            .collect();
+        for session_id in sessions {
+            let snapshot = if let Some(worker) = self.workers.lock().get_mut(&session_id) {
+                worker.snapshot.drain_requested = true;
+                Some(worker.snapshot.clone())
+            } else {
+                None
+            };
+            if let Some(snapshot) = snapshot {
+                self.send_controller(Frame::Snapshot {
+                    worker: Box::new(snapshot),
+                });
+                self.route_worker(&session_id, WorkerCommand::Drain);
+                self.maybe_cutover(&session_id);
+            }
+        }
+    }
+
     fn update_from_event(
         &self,
         session_id: &str,
@@ -1688,6 +1713,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
         } => {
             broker.set_desired_generation(generation, worker_command);
         }
+        CoreCommand::RollProvider { provider } => broker.roll_provider(&provider),
     }
 }
 
@@ -1909,6 +1935,71 @@ mod tests {
             },
         );
         broker.maybe_cutover("sess-1");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::Stop { .. },
+                ..
+            })
+        ));
+        assert_eq!(
+            broker.replacing.lock().get("sess-1").map(String::as_str),
+            Some("gen-1")
+        );
+    }
+
+    #[test]
+    fn provider_rollout_drains_and_replaces_matching_idle_workers() {
+        let broker = Broker::new(AgentdArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            worker_ready_timeout: Duration::from_millis(10),
+        });
+        broker.sessions.lock().insert(
+            "sess-1".to_owned(),
+            StartSession {
+                session_id: "sess-1".to_owned(),
+                provider: "codex".to_owned(),
+                cwd: "/work".to_owned(),
+                agent_session_id: Some("agent-1".to_owned()),
+                system: false,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-1".to_owned(),
+                epoch: "epoch-1".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 1,
+                tx,
+            })
+            .expect("register worker");
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .unwrap()
+            .snapshot
+            .state = WorkerState::Running;
+
+        broker.roll_provider("codex");
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Frame::WorkerCommand {
+                command: WorkerCommand::Drain,
+                ..
+            })
+        ));
         assert!(matches!(
             rx.try_recv(),
             Ok(Frame::WorkerCommand {

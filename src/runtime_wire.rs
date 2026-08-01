@@ -143,6 +143,11 @@ pub enum CoreCommand {
         #[serde(default)]
         worker_command: Option<String>,
     },
+    /// Gracefully recycle the live workers for one provider after an external
+    /// CLI/adapter update. Busy turns drain before their worker is replaced.
+    RollProvider {
+        provider: String,
+    },
 }
 
 impl CoreCommand {
@@ -156,7 +161,7 @@ impl CoreCommand {
             | Self::SetConfigOption { session_id, .. }
             | Self::DrainSession { session_id, .. }
             | Self::StopSession { session_id, .. } => Some(session_id),
-            Self::SetDesiredGeneration { .. } => None,
+            Self::SetDesiredGeneration { .. } | Self::RollProvider { .. } => None,
         }
     }
 }

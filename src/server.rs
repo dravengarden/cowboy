@@ -1674,18 +1674,17 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             .cloned()
                             .and_then(|value| serde_json::from_value(value).ok())
                             .unwrap_or_default();
-                        let active_sessions = u32::try_from(
-                            state
-                                .hub
-                                .session_list()
-                                .into_iter()
-                                .filter(|session| {
-                                    session.machine_id == machine.id
-                                        && session.status != crate::agent_model::Status::Exited
-                                })
-                                .count(),
-                        )
-                        .unwrap_or(u32::MAX);
+                        let live_sessions: Vec<_> = state
+                            .hub
+                            .session_list()
+                            .into_iter()
+                            .filter(|session| {
+                                session.machine_id == machine.id
+                                    && session.status != crate::agent_model::Status::Exited
+                            })
+                            .collect();
+                        let active_sessions =
+                            u32::try_from(live_sessions.len()).unwrap_or(u32::MAX);
                         let local = machine.connection_mode == "local";
                         for component in &mut components {
                             if matches!(
@@ -1694,7 +1693,25 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                                     | crate::machine_protocol::ComponentKind::ProviderAdapter
                                     | crate::machine_protocol::ComponentKind::ProviderCli
                             ) {
-                                component.active_leases = u64::from(active_sessions);
+                                component.active_leases = match component.id.kind {
+                                    crate::machine_protocol::ComponentKind::ProviderAdapter
+                                    | crate::machine_protocol::ComponentKind::ProviderCli => {
+                                        let slot = component.id.slot.as_str();
+                                        u64::try_from(
+                                            live_sessions
+                                                .iter()
+                                                .filter(|session| {
+                                                    let provider = session.provider.as_str();
+                                                    provider == slot
+                                                        || (slot == "claude"
+                                                            && provider == "claude-code")
+                                                })
+                                                .count(),
+                                        )
+                                        .unwrap_or(u64::MAX)
+                                    }
+                                    _ => u64::from(active_sessions),
+                                };
                             }
                             if let Some(desired) = state
                                 .desired_machine_components
