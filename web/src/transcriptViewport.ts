@@ -46,13 +46,12 @@ export function historyPrefetchTransition(
 
 export function shouldShowHistoryLoading(
   requestOwned: boolean,
-  _nativeScrollActive: boolean,
+  requestPending: boolean,
 ): boolean {
-  // The overlay node stays mounted and changes only opacity/visibility, so a
-  // native iOS scroll no longer needs to suppress progress feedback. Request
-  // ownership is the sole authority: an older completion must not affect a
-  // newer page request.
-  return requestOwned;
+  // Visibility is delayed by the caller to avoid flashing for cache hits. Once
+  // that delay expires, both ownership and a genuinely pending request are
+  // required; a completed/no-op fetch must never masquerade as loading.
+  return requestOwned && requestPending;
 }
 
 export interface TranscriptMagnetInput {

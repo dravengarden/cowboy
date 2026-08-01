@@ -3082,7 +3082,7 @@ export function Transcript({
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
-  const historyLoadingHideTimerRef = useRef<number | null>(null);
+  const historyLoadingRevealTimerRef = useRef<number | null>(null);
   const historyLoadingRequestRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
@@ -3138,27 +3138,32 @@ export function Transcript({
   }, [backfillingViewport]);
   requestOlderPageRef.current = (): void => {
     if (!managesScrollHistoryRef.current) return;
-    if (historyLoadingHideTimerRef.current !== null) {
-      globalThis.clearTimeout(historyLoadingHideTimerRef.current);
-      historyLoadingHideTimerRef.current = null;
+    if (historyLoadingRevealTimerRef.current !== null) {
+      globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
+      historyLoadingRevealTimerRef.current = null;
     }
     const request = ++historyLoadingRequestRef.current;
-    const shownAt = performance.now();
-    setScrollbackLoading(shouldShowHistoryLoading(
-      historyLoadingRequestRef.current === request,
-      nativeScrollActiveRef.current,
-    ));
+    let pending = true;
+    setScrollbackLoading(false);
+    // Fast cache hits and requests already owned by viewport backfill should
+    // never flash a loading pill. Reveal only when this exact request is still
+    // pending after a short perceptual delay; completion always hides it
+    // immediately, so the widget remains an honest network-state indicator.
+    historyLoadingRevealTimerRef.current = globalThis.setTimeout(() => {
+      historyLoadingRevealTimerRef.current = null;
+      setScrollbackLoading(shouldShowHistoryLoading(
+        historyLoadingRequestRef.current === request,
+        pending,
+      ));
+    }, 160);
     void loadOlder(sessionIdRef.current).finally(() => {
+      pending = false;
       if (historyLoadingRequestRef.current !== request) return;
-      // Preserve a visible acknowledgement even for a cache-speed page. The
-      // overlay is geometry-neutral and permanently mounted, so this does not
-      // alter scroll range or race WebKit's native column-reverse layer.
-      const remaining = Math.max(0, 420 - (performance.now() - shownAt));
-      historyLoadingHideTimerRef.current = globalThis.setTimeout(() => {
-        historyLoadingHideTimerRef.current = null;
-        if (historyLoadingRequestRef.current !== request) return;
-        setScrollbackLoading(false);
-      }, remaining);
+      if (historyLoadingRevealTimerRef.current !== null) {
+        globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
+        historyLoadingRevealTimerRef.current = null;
+      }
+      setScrollbackLoading(false);
     });
   };
   useEffect(() => {
@@ -3173,9 +3178,9 @@ export function Transcript({
     requestViewportBackfillRef.current(false);
     return () => {
       historyLoadingRequestRef.current += 1;
-      if (historyLoadingHideTimerRef.current !== null) {
-        globalThis.clearTimeout(historyLoadingHideTimerRef.current);
-        historyLoadingHideTimerRef.current = null;
+      if (historyLoadingRevealTimerRef.current !== null) {
+        globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
+        historyLoadingRevealTimerRef.current = null;
       }
     };
   }, [sessionId]);

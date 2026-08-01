@@ -111,9 +111,10 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
   );
 });
 
-Deno.test("history loading remains visible during native scrolling", () => {
+Deno.test("history loading requires a currently owned pending request", () => {
   assertEquals(shouldShowHistoryLoading(true, true), true);
-  assertEquals(shouldShowHistoryLoading(true, false), true);
+  assertEquals(shouldShowHistoryLoading(true, false), false);
+  assertEquals(shouldShowHistoryLoading(false, true), false);
   assertEquals(shouldShowHistoryLoading(false, false), false);
 });
 
