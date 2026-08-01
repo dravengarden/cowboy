@@ -72,6 +72,34 @@ the queue/drafts UI. At PC width it injects a **vim** layer
 > routinely breaks another. `web/src/mdlive/PITFALLS.md` is the authoritative
 > map; read it before any composer change and re-verify the whole iOS matrix.
 
+### Composer toolbar contract
+
+The collapsed inline composer and expanded fullscreen composer have different
+space budgets and purposes. Their target design therefore uses two independent,
+persisted ordered command lists rather than one shared toolbar configuration:
+
+- collapsed defaults to the compact trigger/attachment set; only its left
+  content-command group is configurable and horizontally scrollable;
+- expanded owns the long-form formatting set and an opt-in persisted wrap mode
+  that reveals all configured buttons across multiple rows;
+- the inline send/queue, save-draft, jump-to-front, and force-push actions are
+  stateful primary actions, remain pinned on the right, and never appear in the
+  configurable command registry;
+- toolbar settings expose collapsed and expanded configuration separately, and
+  unknown persisted command ids continue to be filtered during deserialization.
+
+The current single `composerToolbarConfig` and hardcoded collapsed content group
+are implementation debt against this contract. Implementation and acceptance
+belong to an ordinary Codex task, not durable coordination metadata. Verify
+independent persistence across reload, both expanded overflow modes at phone
+width, and an empty collapsed command list with the fixed action cluster still
+visible.
+
+Composer controls, editor chrome, and inline image surfaces must derive colors,
+contrast, borders, and state layers from MUI theme tokens. Do not add hardcoded
+light- or dark-only colors; visually verify both themes when these surfaces
+change.
+
 ## Turn status & confirm
 
 The turn-status pill (`SegmentedPill.tsx`) reflects the confirm-detect verdict
