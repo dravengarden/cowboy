@@ -165,6 +165,7 @@ import {
     controlPlaneConnection,
     getActiveSessionId,
     setActiveSessionId,
+    useActiveSessionId,
 } from "./controlPlane";
 
 const DesktopCommandHost = lazy(async () => {
@@ -1640,7 +1641,8 @@ export function App({
     // RANGE tracks the panel with NO column reflow (column-reverse keeps the
     // newest pinned just above the growing panel).
     const columnRef = useRef<HTMLDivElement>(null);
-    const [activeId, setActiveId] = useState<string | null>(getActiveSessionId);
+    const activeId = useActiveSessionId();
+    const setActiveId = setActiveSessionId;
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
     // vars on the column. The glass follows every animation frame, while the
