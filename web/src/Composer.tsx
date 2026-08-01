@@ -1546,13 +1546,9 @@ export function ComposerWorkspace({
         />
       )}
       {!composeFs && (
-          // ONE editor on every surface now: CodeMirror 6 + the mdlive markdown
-          // live-preview engine. Touch used to fall back to a native <textarea>
-          // (CM6 contenteditable historically stranded iOS pinyin); v1 of the
-          // live-preview work moves touch onto the same CM6 editor, sans vim — the
-          // engine reveals raw markers on the cursor's line, so IME composes on
-          // plain text. The wrapper measures the live height for the desktop
-          // resize drag (harmless on touch). column mode fills it (desktop split).
+          // PlatformComposerEditor owns the compact-touch hybrid: native textarea
+          // for UIKit long-press editing while there is no inline image token,
+          // CM6 as soon as a token needs its widget. Fullscreen/column stays CM6.
           <Box
             ref={editorAreaRef}
             sx={{
@@ -1568,6 +1564,9 @@ export function ComposerWorkspace({
             // CM6 is seeded once and owns its document on every surface. Feeding
             // live React state back here would bounce the caret and corrupt IME.
             value={initialDraftText.current}
+            // The native compact touch branch is a controlled textarea and needs
+            // the live value. PlatformComposerEditor never feeds this back to CM6.
+            {...(touchInput ? { nativeValue: text } : {})}
             onChange={setText}
             onSubmit={submitAndNotify}
             onSaveDraft={saveDraft}

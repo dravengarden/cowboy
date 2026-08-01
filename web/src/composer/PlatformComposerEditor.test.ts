@@ -3,6 +3,7 @@ import {
   desktopVimMountPolicy,
   shouldPreloadDesktopVim,
 } from "./desktopVimMountPolicy";
+import { shouldUseNativeCompactEditor } from "./mobileCompactEditorPolicy";
 
 Deno.test("only a pending Desktop Vim runtime starts the preload promise", () => {
   assertEquals(shouldPreloadDesktopVim("desktop", true, "pending"), true);
@@ -37,4 +38,17 @@ Deno.test("a failed Vim chunk leaves the Desktop composer usable", () => {
     awaitingRuntime: false,
     enableVim: false,
   });
+});
+
+Deno.test("compact touch text uses the native editor for the iOS long-press menu", () => {
+  assertEquals(shouldUseNativeCompactEditor("mobile", false, false, "hello"), true);
+  assertEquals(shouldUseNativeCompactEditor("tablet", false, false, ""), true);
+  assertEquals(shouldUseNativeCompactEditor("desktop", false, false, "hello"), false);
+});
+
+Deno.test("inline images and expanded touch composers stay on CM6", () => {
+  const token = "before\n![shot.png](cowboy-att:image-1)\nafter";
+  assertEquals(shouldUseNativeCompactEditor("mobile", false, false, token), false);
+  assertEquals(shouldUseNativeCompactEditor("mobile", true, false, "hello"), false);
+  assertEquals(shouldUseNativeCompactEditor("tablet", false, true, "hello"), false);
 });

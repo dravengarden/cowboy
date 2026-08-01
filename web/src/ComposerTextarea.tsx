@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
+import type { Attachment } from "./attachments";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -254,10 +255,20 @@ export const ComposerTextarea = forwardRef<
       selectedSlashCommandRef.current = null;
       return command;
     },
-    // Inline images are CM6-only (the textarea fallback can't host widgets); a
-    // no-op keeps the shared handle satisfied. Touch paths that hit this fallback
-    // keep the legacy tray behaviour for their attachments.
-    insertImage: (): void => undefined,
+    // Preserve the placement token even though a native textarea cannot render
+    // the widget itself. PlatformComposerEditor sees the controlled value gain
+    // the token and immediately promotes this same document to CM6, where the
+    // registered attachment renders inline at this exact position.
+    insertImage: (attachment: Attachment): void => {
+      const ta = inputRef.current;
+      const at = ta?.selectionStart ?? value.length;
+      const to = ta?.selectionEnd ?? at;
+      const lineStart = value.lastIndexOf("\n", at - 1) + 1;
+      const lead = at === lineStart ? "" : "\n";
+      const label = attachment.name.replaceAll("]", "");
+      const token = `${lead}![${label}](cowboy-att:${attachment.id})\n`;
+      onChange(value.slice(0, at) + token + value.slice(to));
+    },
     deleteImage: (): void => undefined,
     // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
     // ComposerEditor, never this textarea). No-ops here just satisfy the shared

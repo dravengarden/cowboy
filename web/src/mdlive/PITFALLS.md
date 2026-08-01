@@ -546,12 +546,15 @@ here says otherwise.
     interaction reliable, but the follow-up workaround stripped
     `![name](cowboy-att:id)` tokens and rendered every image in an external tray.
     That destroyed document position, so expanding could not restore the image
-    inline. Keep `PlatformComposerEditor` on CM6 for both Mobile sizes, keep Vim
-    disabled on touch, and treat the token as the placement authority across
+    inline. `PlatformComposerEditor` therefore uses a deliberate hybrid: compact
+    touch text with no image token mounts the native textarea so UIKit owns the
+    caret and long-press menu; inserting the first image writes its placement
+    token at the native caret and promotes the unchanged document to CM6 so the
+    widget renders inline. Fullscreen and fill layouts always use CM6. Keep Vim
+    disabled on touch and treat the token as the placement authority across
     compact → fullscreen → compact remounts. The attachment tray is only for
-    ordinary files and legacy images without a token. If iOS caret, IME, or
-    long-press interaction regresses, repair the CM6/native-shell interaction;
-    never delete placement tokens or move token-backed images out of the editor.
+    ordinary files and legacy images without a token. Never delete placement
+    tokens or move token-backed images out of the editor to repair interaction.
     Drafts already damaged by the retired demotion path cannot recover their
     original coordinates; on restore, append each unplaced image in attachment
     order and mint a token so it rejoins the authoritative inline lifecycle.
