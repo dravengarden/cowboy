@@ -1,0 +1,3 @@
+export const NETWORK_PROGRESS_DELAY_MS = 180;
+export const NETWORK_PRESS_MIN_MS = 90;
+export const NETWORK_PROGRESS_MIN_MS = 280;

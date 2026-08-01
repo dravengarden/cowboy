@@ -100,6 +100,35 @@ contrast, borders, and state layers from MUI theme tokens. Do not add hardcoded
 light- or dark-only colors; visually verify both themes when these surfaces
 change.
 
+### Network action feedback
+
+Every button whose action crosses the network uses one shared asynchronous
+feedback grammar on Desktop and Mobile. Local navigation and disclosure controls
+do not use it.
+
+1. **Pressed / pending is immediate.** The activated control keeps its geometry,
+   becomes lower-emphasis, exposes `aria-busy`, and is non-interactive so a slow
+   round trip cannot produce duplicate mutations. Preserve at least 90 ms of
+   tactile visual response even when the acknowledgement is effectively instant.
+2. **Progress is delayed.** Do not flash a spinner for the common fast path. If
+   the action is still pending after 180 ms, fade a compact progress glyph into
+   the existing control without moving its label or adjacent layout.
+3. **Visible progress is stable.** Once painted, keep progress visible for at
+   least 280 ms so it reads as state rather than a rendering glitch.
+4. **Completion is authoritative.** Resolve from the server acknowledgement or
+   the corresponding broadcast/store projection. Animation timers never claim
+   that a network mutation completed. Optimistic rows may appear immediately,
+   but the originating control remains pending until their mutation id is
+   confirmed.
+5. **Failure recovers in place.** A send failure or bounded acknowledgement
+   timeout restores the control and surfaces the existing app notice. Never
+   leave a button inert indefinitely.
+
+`NetworkActionFeedback.tsx` owns these timings and visual states. New network
+buttons must compose that primitive (or its hook when gesture/ref handling
+requires retaining the native MUI button) rather than implementing private
+spinners, disabled delays, or timeout guesses.
+
 ## Turn status & confirm
 
 The turn-status pill (`SegmentedPill.tsx`) reflects the confirm-detect verdict

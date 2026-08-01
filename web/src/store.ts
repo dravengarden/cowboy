@@ -453,6 +453,48 @@ function setState(next: State): void {
   emit();
 }
 
+const NETWORK_ACTION_TIMEOUT_MS = 10_000;
+
+/** Resolve a UI mutation only after the authoritative store reflects it.
+ * Buttons use this promise for truthful delayed progress: a fast round-trip
+ * never shows a spinner, while a slow one stays disabled until the matching
+ * broadcast/echo arrives. */
+function waitForState(
+  predicate: (snapshot: State) => boolean,
+  label: string,
+): Promise<void> {
+  if (predicate(state)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timeout = 0;
+    const done = (): void => {
+      listeners.delete(check);
+      globalThis.clearTimeout(timeout);
+      resolve();
+    };
+    const check = (): void => {
+      if (predicate(state)) done();
+    };
+    listeners.add(check);
+    timeout = globalThis.setTimeout(() => {
+      listeners.delete(check);
+      reject(new Error(`${label} was not acknowledged`));
+    }, NETWORK_ACTION_TIMEOUT_MS);
+    // Close the tiny send/register race against a synchronous test transport.
+    check();
+  });
+}
+
+function sendWithAck(
+  command: Inbound,
+  predicate: (snapshot: State) => boolean,
+  label: string,
+): Promise<void> {
+  if (!send(command)) {
+    return Promise.reject(new Error(`${label} is unavailable while reconnecting`));
+  }
+  return waitForState(predicate, label);
+}
+
 // --- Server-synced queue + drafts -------------------------------------------
 //
 // The daemon is authoritative: it sends the full queue + drafts for a session in
@@ -1696,7 +1738,7 @@ function qAdd(
   // queue placement: "back" (normal append), "front" (jump ahead, no interrupt),
   // "force" (jump ahead + interrupt the running turn). Ignored for drafts.
   mode: "back" | "front" | "force" = "back",
-): void {
+): Promise<void> {
   const cmid = newCmid();
   const row: QueuedMessage = { id: `opt-${cmid}`, text, attachments, cmid };
   const store = qClient(sessionId);
@@ -1714,6 +1756,13 @@ function qAdd(
     : "addQueue";
   store.mutate(mutator, { row }, cmid);
   if (sent) armQTimers(sessionId, cmid);
+  if (!sent) {
+    return Promise.reject(new Error("Message is unavailable while reconnecting"));
+  }
+  return waitForState(
+    () => !store.pending().some((mutation) => mutation.id === cmid),
+    target === "drafts" ? "Save draft" : "Send message",
+  );
 }
 
 /** Retry a failed optimistic queue/draft row from THIS device: re-anchor it to
@@ -1854,7 +1903,11 @@ export function discardMessage(sessionId: string, cmid: string): void {
 
 /** Optimistic chat send (submit-when-idle): show a bubble in the transcript,
  *  fire the submit, arm timers. WS open → `pending`; WS down → `failed`. */
-function optimisticMessage(sessionId: string, text: string, attachments: Attachment[]): void {
+function optimisticMessage(
+  sessionId: string,
+  text: string,
+  attachments: Attachment[],
+): Promise<void> {
   const cmid = newCmid();
   const sent = send({ type: "submit", session_id: sessionId, text, content: contentOf(text, attachments), cmid });
   const map = new Map(state.optimisticMessages);
@@ -1862,6 +1915,16 @@ function optimisticMessage(sessionId: string, text: string, attachments: Attachm
   map.set(sessionId, [...(map.get(sessionId) ?? []), row]);
   setState({ ...state, optimisticMessages: map });
   if (sent) armMsgTimers(sessionId, cmid);
+  if (!sent) {
+    return Promise.reject(new Error("Send message is unavailable while reconnecting"));
+  }
+  return waitForState(
+    (snapshot) =>
+      !(snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
+        message.cmid === cmid
+      ),
+    "Send message",
+  );
 }
 
 // Tell the daemon the user opened/selected `id` so it revives that session's
@@ -1899,9 +1962,13 @@ export function markSessionHydrated(id: string): void {
 // The single entry point the composer calls to send a user prompt. The daemon
 // dispatches it immediately when idle, else queues it. A prompt with at least
 // one attachment is valid even with empty text; otherwise empty text is ignored.
-export function submitPrompt(sessionId: string, text: string, attachments: Attachment[] = []): void {
+export function submitPrompt(
+  sessionId: string,
+  text: string,
+  attachments: Attachment[] = [],
+): Promise<void> {
   const trimmed = text.trimEnd();
-  if (!trimmed.trim() && attachments.length === 0) return;
+  if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
   // Predict the daemon's path so the optimistic row lands in the right place: it
   // DISPATCHES (→ a chat bubble) only when the session is dispatchable AND
   // nothing is queued; otherwise it QUEUES (→ a queue row). A wrong guess
@@ -1915,10 +1982,10 @@ export function submitPrompt(sessionId: string, text: string, attachments: Attac
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (dispatchable && queueEmpty) {
     // → dispatch: an optimistic CHAT bubble in the transcript.
-    optimisticMessage(sessionId, trimmed, attachments);
+    return optimisticMessage(sessionId, trimmed, attachments);
   } else {
     // → queue: an optimistic row in the queue sync state.
-    qAdd("queue", sessionId, trimmed, attachments);
+    return qAdd("queue", sessionId, trimmed, attachments);
   }
 }
 
@@ -1926,19 +1993,19 @@ export function submitPrompt(sessionId: string, text: string, attachments: Attac
  *  this prompt to the FRONT of the queue and interrupt the running turn so it
  *  runs next. On an idle session there's nothing to jump ahead of, so it's just
  *  a normal send (a chat bubble). Mirrors submitPrompt's optimistic placement. */
-export function forcePrompt(sessionId: string, text: string, attachments: Attachment[] = []): void {
+export function forcePrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
   const trimmed = text.trimEnd();
-  if (!trimmed.trim() && attachments.length === 0) return;
+  if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
   const sess = state.sessions.find((s) => s.id === sessionId);
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (dispatchable && queueEmpty) {
     // Idle → nothing to force ahead of; a normal optimistic chat send.
-    optimisticMessage(sessionId, trimmed, attachments);
+    return optimisticMessage(sessionId, trimmed, attachments);
   } else {
     // Busy → optimistic FRONT row + `submit { force: true }` (interrupt + run next).
-    qAdd("queue", sessionId, trimmed, attachments, "force");
+    return qAdd("queue", sessionId, trimmed, attachments, "force");
   }
 }
 
@@ -1948,31 +2015,39 @@ export function forcePrompt(sessionId: string, text: string, attachments: Attach
  *  the rest of the queue. On an idle / empty-queue session there's nothing to
  *  jump ahead of, so it's just a normal send. Mirrors forcePrompt minus the
  *  interrupt. */
-export function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): void {
+export function frontPrompt(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
   const trimmed = text.trimEnd();
-  if (!trimmed.trim() && attachments.length === 0) return;
+  if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
   const sess = state.sessions.find((s) => s.id === sessionId);
   const dispatchable = sess !== undefined
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (dispatchable && queueEmpty) {
-    optimisticMessage(sessionId, trimmed, attachments);
+    return optimisticMessage(sessionId, trimmed, attachments);
   } else {
-    qAdd("queue", sessionId, trimmed, attachments, "front");
+    return qAdd("queue", sessionId, trimmed, attachments, "front");
   }
 }
 
 // "Send now" on a queued row: the daemon sends it if it can take a turn this
 // instant, otherwise moves it to the front to drain next.
-export function requestSendQueued(sessionId: string, id: string): void {
-  send({ type: "request_send_queued", session_id: sessionId, id });
+export function requestSendQueued(sessionId: string, id: string): Promise<void> {
+  return sendWithAck(
+    { type: "request_send_queued", session_id: sessionId, id },
+    (snapshot) => !(snapshot.queues.get(sessionId) ?? []).some((message) => message.id === id),
+    "Send queued message",
+  );
 }
 
 // "Force push" a queued row: interrupt the running turn and run this prompt
 // next. The daemon promotes it and cancels the in-flight turn (or just sends it
 // if the session is already idle).
-export function forcePushQueued(sessionId: string, id: string): void {
-  send({ type: "force_push_queued", session_id: sessionId, id });
+export function forcePushQueued(sessionId: string, id: string): Promise<void> {
+  return sendWithAck(
+    { type: "force_push_queued", session_id: sessionId, id },
+    (snapshot) => !(snapshot.queues.get(sessionId) ?? []).some((message) => message.id === id),
+    "Force push queued message",
+  );
 }
 
 // Edit a queued prompt in place — text AND attachments. Clearing both removes it
@@ -1993,16 +2068,34 @@ export function removeQueued(sessionId: string, id: string): void {
 }
 
 // Drop a session's whole queue (the "Clear All" header action).
-export function clearQueue(sessionId: string): void {
-  send({ type: "clear_queue", session_id: sessionId });
+export function clearQueue(sessionId: string): Promise<void> {
+  return sendWithAck(
+    { type: "clear_queue", session_id: sessionId },
+    (snapshot) => (snapshot.queues.get(sessionId)?.length ?? 0) === 0,
+    "Clear queue",
+  );
 }
 
 // "Clear conversation": reset the agent's context (fresh session/new) and
 // destructively remove its prior transcript. The daemon emits a fresh
 // `context_cleared` boundary after clearing memory + durable history. This is
 // the Clear composer action — NOT a slash command (no agent exposes `clear`).
-export function resetSession(sessionId: string): void {
-  send({ type: "reset_session", session_id: sessionId });
+export function resetSession(sessionId: string): Promise<void> {
+  const previousBoundary = [...(state.timelines.get(sessionId) ?? [])]
+    .reverse()
+    .find((event) =>
+      event.kind === "update" && event.update.sessionUpdate === "context_cleared"
+    )?.seq ?? -1;
+  return sendWithAck(
+    { type: "reset_session", session_id: sessionId },
+    (snapshot) =>
+      (snapshot.timelines.get(sessionId) ?? []).some((event) =>
+        event.seq > previousBoundary &&
+        event.kind === "update" &&
+        event.update.sessionUpdate === "context_cleared"
+      ),
+    "Clear conversation",
+  );
 }
 
 // Lift the confirm-detect "awaiting user" hold (the awaiting widget's dismiss /
@@ -2068,10 +2161,10 @@ export function setQueueEditing(sessionId: string, id: string | null): void {
 // Park the composer's content as a new draft (the "Draft" button). Shows the
 // draft INSTANTLY (optimistic), then sends. WS open → `pending` (no shimmer yet,
 // see SHIMMER_DELAY_MS); WS down → straight to `failed`. Empty is ignored.
-export function addDraft(sessionId: string, text: string, attachments: Attachment[]): void {
+export function addDraft(sessionId: string, text: string, attachments: Attachment[]): Promise<void> {
   const trimmed = text.trimEnd();
-  if (!trimmed.trim() && attachments.length === 0) return;
-  qAdd("drafts", sessionId, trimmed, attachments);
+  if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
+  return qAdd("drafts", sessionId, trimmed, attachments);
 }
 
 // Edit a draft in place (same shape as editQueued). Clearing both fields drops it.
@@ -2091,19 +2184,31 @@ export function removeDraft(sessionId: string, id: string): void {
 }
 
 // Drop a session's whole draft list ("Clear All" on the drafts panel).
-export function clearDrafts(sessionId: string): void {
-  send({ type: "clear_drafts", session_id: sessionId });
+export function clearDrafts(sessionId: string): Promise<void> {
+  return sendWithAck(
+    { type: "clear_drafts", session_id: sessionId },
+    (snapshot) => (snapshot.drafts.get(sessionId)?.length ?? 0) === 0,
+    "Clear drafts",
+  );
 }
 
 // Activate a draft: the daemon submits it (send-or-queue) and removes it from
 // drafts.
-export function activateDraft(sessionId: string, id: string): void {
-  send({ type: "activate_draft", session_id: sessionId, id });
+export function activateDraft(sessionId: string, id: string): Promise<void> {
+  return sendWithAck(
+    { type: "activate_draft", session_id: sessionId, id },
+    (snapshot) => !(snapshot.drafts.get(sessionId) ?? []).some((message) => message.id === id),
+    "Send draft",
+  );
 }
 
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
-export function activateAllDrafts(sessionId: string): void {
-  send({ type: "activate_all_drafts", session_id: sessionId });
+export function activateAllDrafts(sessionId: string): Promise<void> {
+  return sendWithAck(
+    { type: "activate_all_drafts", session_id: sessionId },
+    (snapshot) => (snapshot.drafts.get(sessionId)?.length ?? 0) === 0,
+    "Send all drafts",
+  );
 }
 
 // Give a draft a future fire time (or reschedule one). `id` targets an existing

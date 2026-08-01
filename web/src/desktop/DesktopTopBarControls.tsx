@@ -3,7 +3,6 @@ import {
   Box,
   Button,
   ButtonBase,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -41,6 +40,7 @@ import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
 import { send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
+import { NetworkButton } from "../NetworkActionFeedback";
 import {
   acceptedScheduleTime,
   fullResetTime,
@@ -313,7 +313,9 @@ function DesktopUsageExtras(
                 <Typography variant="caption" color="primary.main" fontWeight={750}>{scheduledResetCountdown(schedule.fire_at_ms)}</Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{fullResetTime(schedule.fire_at_ms / 1000)}</Typography>
               </Box>
-              <Button size="small" disabled={resetBusy} onClick={() => void cancelSchedule()}>Cancel</Button>
+              <NetworkButton size="small" disabled={resetBusy} networkAction={cancelSchedule}>
+                Cancel
+              </NetworkButton>
             </Stack>
           )}
           {resetError && !resetOpen && <Typography variant="caption" color="error.main">{resetError}</Typography>}
@@ -399,20 +401,20 @@ function DesktopUsageExtras(
             Cancel
             <Kbd keys="Esc" availability={resetBusy ? "inactive" : "available"} />
           </Button>
-          <Button
+          <NetworkButton
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
             disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
-            onClick={() => void submitReset()}
+            networkAction={submitReset}
           >
-            {resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}
+            {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
             <Kbd
               keys={`${MOD_LABEL}${ENTER_LABEL}`}
               availability={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)
                 ? "inactive"
                 : "available"}
             />
-          </Button>
+          </NetworkButton>
         </DialogActions>
       </Dialog>
     </>
@@ -1110,20 +1112,16 @@ export function DesktopTopBarControls({
                 </ButtonBase>
               </Stack>
             </Box>
-            {usagePanel === "usage" && <Button
+            {usagePanel === "usage" && <NetworkButton
               size="small"
-              startIcon={refreshing
-                ? <CircularProgress size={14} />
-                : <Refresh fontSize="small" />}
+              startIcon={<Refresh fontSize="small" />}
               disabled={refreshing}
-              onClick={(): void => {
-                void loadUsage(true);
-              }}
+              networkAction={() => loadUsage(true)}
               sx={{ textTransform: "none" }}
             >
               Refresh
               <Kbd keys="R" availability={refreshing ? "inactive" : "available"} />
-            </Button>}
+            </NetworkButton>}
           </Stack>
           <Divider />
           {usagePanel === "logs" ? <UsageLogs dense /> : <>

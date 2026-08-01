@@ -41,9 +41,13 @@ export interface ComposerDraftController {
   removeAttachment: (id: string) => void;
   clear: () => void;
   submit: () => boolean;
+  submitTracked: () => Promise<void> | null;
   force: () => boolean;
+  forceTracked: () => Promise<void> | null;
   jumpToFront: (queueLength: number) => boolean;
+  jumpToFrontTracked: (queueLength: number) => Promise<void> | null;
   saveAsDraft: () => boolean;
+  saveAsDraftTracked: () => Promise<void> | null;
   scheduleNew: (fireAtMs: number, delivery: Delivery) => boolean;
 }
 
@@ -206,11 +210,23 @@ export function useComposerDraftController(
 
   const sendable = (hasText || attachments.length > 0) &&
     !attachments.some((attachment) => attachment.pending);
-  const commit = (action: () => void, feedback = true): boolean => {
-    if (!sendable) return false;
+  const commitTracked = (
+    action: () => Promise<void>,
+    feedback = true,
+  ): Promise<void> | null => {
+    if (!sendable) return null;
     if (feedback) haptic();
-    action();
+    const confirmation = action();
     clear();
+    return confirmation;
+  };
+  const commit = (action: () => Promise<void>, feedback = true): boolean => {
+    const confirmation = commitTracked(action, feedback);
+    if (confirmation === null) return false;
+    // Keyboard/editor submission has no button to own the pending lifecycle.
+    // The optimistic row remains visible; keep a rejected acknowledgement from
+    // becoming an unhandled promise while the store's timeout marks it failed.
+    void confirmation.catch(() => undefined);
     return true;
   };
   const preparedText = (): string =>
@@ -231,11 +247,19 @@ export function useComposerDraftController(
     clear,
     submit: () =>
       commit(() => submitPrompt(sessionId, preparedText(), attachments)),
+    submitTracked: () =>
+      commitTracked(() => submitPrompt(sessionId, preparedText(), attachments)),
     force: () =>
       commit(() => forcePrompt(sessionId, preparedText(), attachments)),
+    forceTracked: () =>
+      commitTracked(() => forcePrompt(sessionId, preparedText(), attachments)),
     jumpToFront: (queueLength) =>
       queueLength > 0 &&
       commit(() => frontPrompt(sessionId, preparedText(), attachments)),
+    jumpToFrontTracked: (queueLength) =>
+      queueLength > 0
+        ? commitTracked(() => frontPrompt(sessionId, preparedText(), attachments))
+        : null,
     // Parking/scheduling is deliberate state management rather than a send
     // gesture, so preserve the existing no-haptic behaviour.
     saveAsDraft: () =>
@@ -243,15 +267,22 @@ export function useComposerDraftController(
         () => addDraft(sessionId, textRef.current.trimEnd(), attachments),
         false,
       ),
+    saveAsDraftTracked: () =>
+      commitTracked(
+        () => addDraft(sessionId, textRef.current.trimEnd(), attachments),
+        false,
+      ),
     scheduleNew: (fireAtMs, delivery) =>
       commit(
-        () =>
+        () => {
           scheduleDraft(sessionId, {
             text: preparedText(),
             attachments,
             fireAtMs,
             delivery,
-          }),
+          });
+          return Promise.resolve();
+        },
         false,
       ),
   };

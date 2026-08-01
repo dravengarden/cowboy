@@ -184,6 +184,11 @@ import { useSortable } from "./useSortable";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
 import { useReliableTouchTap } from "./useReliableTouchTap";
+import {
+  NetworkButton,
+  NetworkIconButton,
+  useNetworkActionState,
+} from "./NetworkActionFeedback";
 import { originLabel } from "./protocol";
 import type {
   AvailableCommand,
@@ -809,7 +814,8 @@ export function ComposerWorkspace({
     addFiles,
     removeAttachment,
     submit,
-    force: forceCurrentPrompt,
+    submitTracked,
+    forceTracked,
     jumpToFront: jumpCurrentPromptToFront,
     saveAsDraft,
     scheduleNew,
@@ -824,6 +830,15 @@ export function ComposerWorkspace({
     if (submitted) onSubmitted?.();
     return submitted;
   }, [onSubmitted, submit]);
+  const submitFeedback = useNetworkActionState();
+  const submitWithFeedback = useCallback((): void => {
+    void submitFeedback.run(() => {
+      const confirmation = submitTracked();
+      if (confirmation === null) return Promise.resolve();
+      onSubmitted?.();
+      return confirmation;
+    });
+  }, [onSubmitted, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -1032,24 +1047,27 @@ export function ComposerWorkspace({
     serverSize: sessionState.contextSize,
     completionSeq: timelineState.completionSeq,
   });
-  function runSessionAction(a: SessionAction): void {
+  function runSessionAction(a: SessionAction): Promise<void> {
     haptic();
     if (a.kind === "reset") {
       // Clear: a cowboy session reset (fresh agent context), not a prompt.
-      resetSession(sessionId);
+      return resetSession(sessionId);
     } else if (a.command !== undefined) {
       // Compact: send the agent's slash-command down the normal prompt path.
       compactContext.beginRefresh();
-      submitPrompt(sessionId, a.command, []);
+      return submitPrompt(sessionId, a.command, []);
     }
+    return Promise.resolve();
   }
-  function confirmSessionAction(): void {
+  async function confirmSessionAction(): Promise<void> {
     if (cmdConfirm === null) return;
     const action = cmdConfirm;
+    await runSessionAction(action);
     setCmdConfirm(null);
-    runSessionAction(action);
   }
-  useConfirmEnter(cmdConfirm !== null, confirmSessionAction);
+  useConfirmEnter(cmdConfirm !== null, () => {
+    void confirmSessionAction();
+  });
 
   // Vim is opt-in and desktop-only — ComposerEditor gates the actual
   // `@replit/codemirror-vim` load on a precise-pointer device, so touch never
@@ -1143,11 +1161,13 @@ export function ComposerWorkspace({
       lpFired.current = false;
       return;
     }
-    submitAndNotify();
+    submitWithFeedback();
   }
-  function confirmForce(): void {
+  async function confirmForce(): Promise<void> {
+    const confirmation = forceTracked();
+    if (confirmation === null) return;
+    await confirmation;
     setForceAnchor(null);
-    forceCurrentPrompt();
   }
   // "Jump to front of queue" (no interrupt): send the composed prompt to the
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
@@ -1158,7 +1178,9 @@ export function ComposerWorkspace({
   // Enter confirms the force-push popover (it doesn't autofocus a button the way
   // the Dialogs do). Held-⌘⏎ repeats are ignored inside the hook, so the still-
   // down Enter that opened it can't self-confirm — a fresh press does.
-  useConfirmEnter(forceAnchor !== null, confirmForce);
+  useConfirmEnter(forceAnchor !== null, () => {
+    void confirmForce();
+  });
   useEffect(() => (): void => {
     if (lpTimer.current !== undefined) globalThis.clearTimeout(lpTimer.current);
   }, []);
@@ -1927,8 +1949,9 @@ export function ComposerWorkspace({
               disableElevation
               startIcon={<Send fontSize="small" />}
               aria-label={busy || starting ? "queue message" : "send"}
-              disabled={!sendable}
-              onClick={busy || starting ? onQueueClick : submit}
+              disabled={!sendable || submitFeedback.pending}
+              aria-busy={submitFeedback.pending || undefined}
+              onClick={submitWithFeedback}
               sx={{
                 ml: 0.5,
                 minWidth: 86,
@@ -1937,7 +1960,9 @@ export function ComposerWorkspace({
                 fontWeight: 650,
               }}
             >
-              {busy || starting ? "Queue" : "Send"}
+              {submitFeedback.progress
+                ? <CircularProgress size={16} color="inherit" />
+                : busy || starting ? "Queue" : "Send"}
             </Button>, `${MOD_LABEL}↵`, `${busy || starting ? "Queue" : "Send"} · ${MOD_LABEL}Enter`, sendable)}
             </Stack>
           </>
@@ -2059,7 +2084,8 @@ export function ComposerWorkspace({
                   ref={queueBtnRef}
                   color="primary"
                   aria-label="queue message"
-                  disabled={!sendable}
+                  disabled={!sendable || submitFeedback.pending}
+                  aria-busy={submitFeedback.pending || undefined}
                   sx={{
                     ...TOOLBAR_ICON_BTN,
                     transition: "transform .12s",
@@ -2072,7 +2098,9 @@ export function ComposerWorkspace({
                   onPointerLeave={clearLongPress}
                   onPointerCancel={clearLongPress}
                 >
-                  <Send fontSize="small" />
+                  {submitFeedback.progress
+                    ? <CircularProgress size={18} color="inherit" />
+                    : <Send fontSize="small" />}
                 </IconButton>
                 {holding && (
                   <Box
@@ -2114,11 +2142,14 @@ export function ComposerWorkspace({
                 <IconButton
                   color="primary"
                   aria-label="send"
-                  disabled={!sendable}
+                  disabled={!sendable || submitFeedback.pending}
+                  aria-busy={submitFeedback.pending || undefined}
                   sx={TOOLBAR_ICON_BTN}
-                  onClick={submit}
+                  onClick={submitWithFeedback}
                 >
-                  <Send fontSize="small" />
+                  {submitFeedback.progress
+                    ? <CircularProgress size={18} color="inherit" />
+                    : <Send fontSize="small" />}
                 </IconButton>
               </span>
             </Tooltip>
@@ -2239,16 +2270,16 @@ export function ComposerWorkspace({
               Cancel
               <Kbd keys="Esc" />
             </Button>
-            <Button
+            <NetworkButton
               size="small"
               variant="contained"
               color="warning"
               startIcon={<Bolt />}
-              onClick={confirmForce}
+              networkAction={confirmForce}
             >
               Force push
               <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </Button>
+            </NetworkButton>
           </Stack>
         </Box>
       </Popover>
@@ -2377,15 +2408,15 @@ export function ComposerWorkspace({
                 Cancel
                 <Kbd keys="Esc" />
               </Button>
-              <Button
+              <NetworkButton
                 variant="contained"
                 color={cmdConfirm.destructive ? "error" : "primary"}
-                onClick={confirmSessionAction}
+                networkAction={confirmSessionAction}
                 sx={{ textTransform: "none" }}
               >
                 {cmdConfirm.destructive ? "Clear" : "Compact"}
                 <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-              </Button>
+              </NetworkButton>
             </DialogActions>
           </>
         )}
@@ -2824,18 +2855,20 @@ function ConfirmButton({
   confirmColor: "primary" | "error" | "warning";
   color?: "inherit" | "primary";
   muted?: boolean;
-  onConfirm: () => void;
+  onConfirm: () => Promise<void> | void;
 }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const confirm = (): void => {
+  const confirm = async (): Promise<void> => {
     // Destructive confirmation (error, e.g. Clear All) is high-consequence;
     // benign bulk confirmation (Send all) remains lightweight navigation.
     if (confirmColor === "error") importantHaptic();
     else navigationHaptic();
-    onConfirm();
+    await onConfirm();
     setAnchor(null);
   };
-  useConfirmEnter(anchor !== null, confirm);
+  useConfirmEnter(anchor !== null, () => {
+    void confirm();
+  });
   return (
     <>
       <Button
@@ -2872,16 +2905,16 @@ function ConfirmButton({
               Cancel
               <Kbd keys="Esc" />
             </Button>
-            <Button
+            <NetworkButton
               size="small"
               variant="contained"
               color={confirmColor}
-              onClick={confirm}
+              networkAction={confirm}
               sx={{ textTransform: "none" }}
             >
               {confirmLabel}
               <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </Button>
+            </NetworkButton>
           </Stack>
         </Box>
       </Popover>
@@ -3239,7 +3272,7 @@ function PendingPanel({
             confirmLabel="Send all"
             confirmColor="primary"
             color="primary"
-            onConfirm={(): void => activateAllDrafts(sessionId)}
+            onConfirm={() => activateAllDrafts(sessionId)}
           />
         )}
         <ConfirmButton
@@ -3250,10 +3283,8 @@ function PendingPanel({
           confirmLabel="Clear all"
           confirmColor="error"
           muted
-          onConfirm={(): void => {
-            if (kind === "queued") clearQueue(sessionId);
-            else clearDrafts(sessionId);
-          }}
+          onConfirm={() =>
+            kind === "queued" ? clearQueue(sessionId) : clearDrafts(sessionId)}
         />
       </Stack>
       {/* Match PlanDock's disclosure motion. Collapse keeps the rows mounted, so
@@ -3494,15 +3525,17 @@ function PendingRow({
   const connected = useConnected();
   // Confirm popover for force push (anchored to the Bolt button). Null = closed.
   const [confirmAnchor, setConfirmAnchor] = useState<HTMLElement | null>(null);
-  const confirmForcePush = (): void => {
+  const confirmForcePush = async (): Promise<void> => {
     // `starting` has no interruptible turn yet, and a disconnected client would
     // drop this non-durable command. Keep the event path guarded as well as the
     // button so keyboard/confirm callbacks cannot bypass the disabled state.
     if (!connected || status !== "busy") return;
-    forcePushQueued(sessionId, message.id);
+    await forcePushQueued(sessionId, message.id);
     setConfirmAnchor(null);
   };
-  useConfirmEnter(confirmAnchor !== null, confirmForcePush);
+  useConfirmEnter(confirmAnchor !== null, () => {
+    void confirmForcePush();
+  });
   // Per-row delete confirm. Dropping a queued message / draft is irreversible, so
   // the × opens this modal instead of deleting on a single tap.
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -3873,29 +3906,29 @@ function PendingRow({
   if (kind === "draft") {
     primary = (
       <Tooltip title={dispatchable ? "Send" : "Add to queue"}>
-        <IconButton
+        <NetworkIconButton
           data-desktop-item-action="default"
           size="small"
           color="primary"
           aria-label="send draft"
-          onClick={(): void => activateDraft(sessionId, message.id)}
+          networkAction={() => activateDraft(sessionId, message.id)}
         >
           <Send fontSize="small" />
-        </IconButton>
+        </NetworkIconButton>
       </Tooltip>
     );
   } else if (dispatchable) {
     primary = (
       <Tooltip title="Send now">
-        <IconButton
+        <NetworkIconButton
           data-desktop-item-action="default"
           size="small"
           color="primary"
           aria-label="send now"
-          onClick={(): void => requestSendQueued(sessionId, message.id)}
+          networkAction={() => requestSendQueued(sessionId, message.id)}
         >
           <Send fontSize="small" />
-        </IconButton>
+        </NetworkIconButton>
       </Tooltip>
     );
   } else {
@@ -4007,17 +4040,17 @@ function PendingRow({
                   Cancel
                   <Kbd keys="Esc" />
                 </Button>
-                <Button
+                <NetworkButton
                   size="small"
                   variant="contained"
                   color="warning"
                   startIcon={<Bolt />}
-                  onClick={confirmForcePush}
+                  networkAction={confirmForcePush}
                   sx={{ textTransform: "none" }}
                 >
                   Force push
                   <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-                </Button>
+                </NetworkButton>
               </Stack>
             </Box>
           </Popover>

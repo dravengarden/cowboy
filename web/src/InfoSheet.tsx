@@ -6,14 +6,12 @@ import {
   Box,
   Button,
   ButtonBase,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
   Divider,
-  IconButton,
   LinearProgress,
   Stack,
   TextField,
@@ -25,6 +23,7 @@ import { ExpandMore, Refresh } from "@mui/icons-material";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { useSkills } from "./store";
+import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import {
   acceptedScheduleTime,
   type JsonRecord,
@@ -260,7 +259,13 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
                           {fullDateTime(schedule.fire_at_ms / 1000)}
                         </Typography>
                       </Box>
-                      <Button size="small" disabled={resetBusy} onClick={() => void cancelSchedule()}>Cancel</Button>
+                      <NetworkButton
+                        size="small"
+                        disabled={resetBusy}
+                        networkAction={cancelSchedule}
+                      >
+                        Cancel
+                      </NetworkButton>
                     </Stack>
                   )}
                 </Box>
@@ -342,20 +347,20 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
             Cancel
             <Kbd keys="Esc" availability={resetBusy ? "inactive" : "available"} />
           </Button>
-          <Button
+          <NetworkButton
             variant="contained"
             color={resetMode === "now" ? "error" : "primary"}
             disabled={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)}
-            onClick={() => void submitReset()}
+            networkAction={submitReset}
           >
-            {resetBusy ? "Working…" : resetMode === "schedule" ? "Schedule reset" : "Reset now"}
+            {resetMode === "schedule" ? "Schedule reset" : "Reset now"}
             <Kbd
               keys={`${MOD_LABEL}${ENTER_LABEL}`}
               availability={resetBusy || confirmText !== "confirm" || (resetMode === "schedule" && !scheduleValid)
                 ? "inactive"
                 : "available"}
             />
-          </Button>
+          </NetworkButton>
         </DialogActions>
       </Dialog>
     </Box>
@@ -401,9 +406,14 @@ function UsageInfoSection(): React.JSX.Element {
             {nextRefreshMinutes !== null ? ` · Auto refresh in ${String(nextRefreshMinutes)}m` : ""}
           </Typography>
         </Box>
-        <IconButton aria-label="Refresh usage" disabled={refreshing} onClick={() => void load(true)} sx={{ width: 44, height: 44 }}>
-          {refreshing ? <CircularProgress size={20} /> : <Refresh />}
-        </IconButton>
+        <NetworkIconButton
+          aria-label="Refresh usage"
+          disabled={refreshing}
+          networkAction={() => load(true)}
+          sx={{ width: 44, height: 44 }}
+        >
+          <Refresh />
+        </NetworkIconButton>
       </Stack>
       {snapshot?.providers.map((provider) => (
         <ProviderUsageCard
