@@ -60,6 +60,7 @@ export function DesktopConversationControls(
           keyLabel="F"
           variant="global"
           accent={shortcutActive}
+          availability={shortcutActive ? "available" : "inactive"}
           sx={{ ml: 0.15, flexShrink: 0 }}
         />
       </Button>

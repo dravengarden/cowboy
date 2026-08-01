@@ -70,7 +70,7 @@ export function ShortcutKeycap({
           border: 1,
           borderColor: (theme) => {
             if (inactive) {
-              return alpha(theme.palette.text.disabled, 0.32);
+              return alpha(theme.palette.text.disabled, 0.18);
             }
             if (variant === "context") {
               return alpha(
@@ -88,7 +88,7 @@ export function ShortcutKeycap({
           },
           bgcolor: (theme) => {
             if (inactive) {
-              return alpha(theme.palette.action.disabledBackground, 0.28);
+              return alpha(theme.palette.action.disabledBackground, 0.12);
             }
             if (variant === "context") {
               return alpha(
@@ -125,8 +125,8 @@ export function ShortcutKeycap({
           fontWeight: 750,
           lineHeight: 1,
           whiteSpace: "nowrap",
-          opacity: inactive ? 0.48 : 1,
-          filter: inactive ? "saturate(0.2)" : "none",
+          opacity: inactive ? 0.32 : 1,
+          filter: inactive ? "grayscale(1) saturate(0)" : "none",
           transition:
             "color 120ms ease, background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, filter 120ms ease",
         },

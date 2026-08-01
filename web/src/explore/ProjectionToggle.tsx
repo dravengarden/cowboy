@@ -93,6 +93,7 @@ export function DesktopProjectionToggle({
         keyLabel="V"
         variant="global"
         accent={shortcutActive}
+        availability={shortcutActive ? "available" : "inactive"}
         sx={{ mx: 0.4, flexShrink: 0 }}
       />
     </Box>
