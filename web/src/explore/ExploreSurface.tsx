@@ -1474,8 +1474,10 @@ export function ExploreTranscript(
                     total={total}
                     previousDisabled={footerPreviousId === null}
                     nextDisabled={footerNextId === null}
-                    loadingPrevious={footerLoadingPageId === footerPreviousId}
-                    loadingNext={footerLoadingPageId === footerNextId}
+                    loadingPrevious={footerLoadingPageId !== null &&
+                      footerLoadingPageId === footerPreviousId}
+                    loadingNext={footerLoadingPageId !== null &&
+                      footerLoadingPageId === footerNextId}
                     onPrevious={goFooterPrevious}
                     onNext={goFooterNext}
                     desktop={props.desktop}
