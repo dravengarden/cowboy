@@ -271,22 +271,33 @@ pub fn with_session_usage(mut snapshot: UsageSnapshot, sessions: &[SessionMeta])
         else {
             continue;
         };
-        let provider_limits = usage
-            .raw
-            .pointer("/_meta/_claude~1rateLimit")
-            .cloned()
-            .map(|rate_limits| json!({ "rateLimits": rate_limits }));
+        let provider_limits = (provider.provider == "claude-code")
+            .then(|| claude_account_limits(&usage.raw))
+            .flatten();
+        let has_account_limits = provider_limits.is_some();
         if provider.rate_limits.is_none() {
             provider.rate_limits = provider_limits;
         }
         provider.activity = Some(json!({ "session": usage.raw }));
         provider.observed_at_ms = usage.observed_at_ms;
-        if provider.status != "available" {
+        if has_account_limits {
+            provider.status = "available";
+            provider.source = "Claude Agent SDK via ACP";
+            provider.error = None;
+        } else if provider.status != "available" {
             provider.status = "session-only";
-            provider.error = Some("Account limits unavailable; showing ACP session usage".into());
+            provider.error =
+                Some("Account quota is not exposed; showing ACP session activity".into());
         }
     }
     snapshot
+}
+
+fn claude_account_limits(raw: &Value) -> Option<Value> {
+    let limits = raw.pointer("/_meta/_claude~1rateLimit")?;
+    limits.get("utilization").and_then(Value::as_f64)?;
+    limits.get("rateLimitType").and_then(Value::as_str)?;
+    Some(json!({ "rateLimits": limits }))
 }
 
 fn now_ms() -> i64 {
@@ -484,5 +495,21 @@ mod tests {
             nearest_available_credit_id(Some(&limits)).as_deref(),
             Some("nearest")
         );
+    }
+
+    #[test]
+    fn claude_rate_limit_event_extracts_account_limits() {
+        let limits = claude_account_limits(&json!({
+            "sessionUpdate": "usage_update",
+            "_meta": { "_claude/rateLimit": {
+                "status": "allowed",
+                "rateLimitType": "five_hour",
+                "utilization": 23.5,
+                "resetsAt": 100
+            }}
+        }))
+        .unwrap();
+        assert_eq!(limits["rateLimits"]["utilization"], 23.5);
+        assert_eq!(limits["rateLimits"]["rateLimitType"], "five_hour");
     }
 }

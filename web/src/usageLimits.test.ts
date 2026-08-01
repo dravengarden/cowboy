@@ -53,6 +53,29 @@ Deno.test("usage limits preserve provider buckets and sort by window", () => {
   ]);
 });
 
+Deno.test("Claude ACP rate-limit events become account limit rows", () => {
+  assertEquals(usageLimits({
+    provider: "claude-code",
+    status: "available",
+    source: "Claude Agent SDK via ACP",
+    observed_at_ms: 1,
+    rate_limits: {
+      rateLimits: {
+        status: "allowed",
+        rateLimitType: "five_hour",
+        utilization: 23.5,
+        resetsAt: 100,
+      },
+    },
+  }), [{
+    id: "claude-five_hour",
+    label: "5h",
+    remaining: 77,
+    resetsAt: 100,
+    windowMinutes: 300,
+  }]);
+});
+
 Deno.test("desktop summary excludes model buckets and keeps provider account order", () => {
   const usage = {
     provider: "codex",

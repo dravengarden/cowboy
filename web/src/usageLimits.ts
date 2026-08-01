@@ -59,6 +59,34 @@ export function windowLabel(minutes: number | undefined): string {
 
 export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
   const rateRoot = record(usage?.rate_limits?.rateLimits);
+  if (usage?.provider === "claude-code" && rateRoot) {
+    const utilization = num(rateRoot.utilization);
+    const kind = typeof rateRoot.rateLimitType === "string"
+      ? rateRoot.rateLimitType
+      : undefined;
+    if (utilization !== undefined && kind) {
+      const labels: Record<string, { label: string; windowMinutes?: number }> = {
+        five_hour: { label: "5h", windowMinutes: 300 },
+        seven_day: { label: "Weekly", windowMinutes: 10080 },
+        seven_day_opus: { label: "Opus · Weekly", windowMinutes: 10080 },
+        seven_day_sonnet: { label: "Sonnet · Weekly", windowMinutes: 10080 },
+        seven_day_overage_included: { label: "Extra usage · Weekly", windowMinutes: 10080 },
+        overage: { label: "Extra usage" },
+      };
+      const presentation = labels[kind] ?? { label: "Plan usage" };
+      return [{
+        id: `claude-${kind}`,
+        label: presentation.label,
+        remaining: Math.round(100 - Math.min(100, Math.max(0, utilization))),
+        ...(num(rateRoot.resetsAt) === undefined
+          ? {}
+          : { resetsAt: num(rateRoot.resetsAt) as number }),
+        ...(presentation.windowMinutes === undefined
+          ? {}
+          : { windowMinutes: presentation.windowMinutes }),
+      }];
+    }
+  }
   const buckets = record(usage?.rate_limits?.rateLimitsByLimitId);
   const source = buckets
     ? Object.entries(buckets).flatMap(([id, value]) => {

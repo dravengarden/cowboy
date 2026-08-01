@@ -12,7 +12,7 @@ the same binary is both frontend and backend.
 | `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
 | `GET /api/metrics` | storage/session/RSS plus persistence pending, dropped, and failed-batch counters |
-| `GET /api/usage` | cached provider account limits plus latest live ACP session usage |
+| `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
 | `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |

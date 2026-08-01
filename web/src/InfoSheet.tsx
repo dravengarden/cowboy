@@ -143,6 +143,13 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
   const sessionUsage = record(usage.activity?.session);
   const sessionCost = record(sessionUsage?.cost);
   const title = usage.provider === "claude-code" ? "Claude Code" : usage.provider === "gemini" ? "Gemini" : "Codex";
+  const statusLabel = plan
+    ? plan.toUpperCase()
+    : usage.status === "available"
+    ? "LIVE"
+    : usage.status === "session-only"
+    ? "SESSION"
+    : "WAITING";
   const scheduleValid = fireAt !== "" && new Date(fireAt).getTime() > Date.now();
   const openResetDialog = () => {
     setResetMode("schedule");
@@ -208,7 +215,7 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
         <Stack direction="row" justifyContent="space-between" alignItems="baseline">
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{title}</Typography>
           <Typography variant="caption" color={usage.status === "available" ? "success.main" : "text.secondary"}>
-            {plan ? plan.toUpperCase() : usage.status === "available" ? "Live" : "Unavailable"}
+            {statusLabel}
           </Typography>
         </Stack>
         {limits.map((limit) => <LimitRow key={limit.id} limit={limit} />)}
@@ -290,7 +297,15 @@ function ProviderUsageCard({ usage, schedule, now, onUsageChanged }: {
           />
         )}
         {limits.length === 0 && (
-          <Typography variant="body2" color="text.secondary">{usage.error ?? "Detailed limits are not available."}</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {usage.status === "unavailable"
+              ? usage.provider === "claude-code"
+                ? "Waiting for Claude Code session activity. Plan limits appear after the Agent SDK reports them."
+                : usage.provider === "gemini"
+                ? "Waiting for Gemini session activity. Account quota is not exposed by Gemini ACP."
+                : usage.error ?? "Waiting for usage data."
+              : usage.error ?? "Account quota is not exposed for this session."}
+          </Typography>
         )}
         <Typography variant="caption" color="text.secondary">
           {usage.source} · Updated {relativeUpdateTime(usage.observed_at_ms)}
