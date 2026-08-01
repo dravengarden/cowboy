@@ -2414,7 +2414,7 @@ export function App({
                     transformOrigin: "left center",
                     backfaceVisibility: "hidden",
                     contain: mobile ? "paint" : undefined,
-                    willChange: mobile ? "transform, opacity" : undefined,
+                    willChange: mobile ? "transform" : undefined,
                     // Lift the whole column off the on-screen keyboard + its
                     // iOS-native accessory bar: this padding (the keyboard's
                     // overlap, published by useKeyboardInset) reserves space at

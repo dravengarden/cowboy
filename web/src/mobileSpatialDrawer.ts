@@ -1,8 +1,5 @@
 import { navigationHaptic, prepareNavigationHaptic } from "./haptic";
-import {
-  mobileDrawerSurfaceVisual,
-  predictDrawerOffset,
-} from "./mobileDrawerMotion";
+import { mobileDrawerProgress, predictDrawerOffset } from "./mobileDrawerMotion";
 import {
   expandedSelection,
   hasHorizontalScroller,
@@ -73,10 +70,6 @@ export function bindMobileSpatialDrawer({
   let releaseIdle: number | undefined;
   let releasePresentation: (() => void) | undefined;
   let presentationWidth = 1;
-  const reducedMotion = globalThis.matchMedia?.(
-    "(prefers-reduced-motion: reduce)",
-  ).matches ?? false;
-
   const drawerWidth = (): number => {
     const width = surface.clientWidth;
     return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
@@ -93,19 +86,17 @@ export function bindMobileSpatialDrawer({
   };
   const render = (offset: number): void => {
     currentOffset = offset;
-    const visual = mobileDrawerSurfaceVisual(
-      offset,
-      presentationWidth,
-      phone,
-      reducedMotion,
-    );
-    const progress = Math.max(0, Math.min(1, offset / presentationWidth));
+    const progress = mobileDrawerProgress(offset, presentationWidth);
     const drawerParallax = presentationWidth * (phone ? 0.28 : 0.22) *
       (1 - progress);
+    // Keep the heavy foreground (Transcript or CodeMirror) on a translation-
+    // only compositor path. Scaling or fading this layer makes iPhone WebKit
+    // blend/raster the full viewport for every touch frame. The static radius
+    // and edge shadow plus the lightweight drawer parallax still provide the
+    // same spatial depth without spending the phone's frame budget.
     surface.style.transform = `translate3d(${
       String(openingSign * offset)
-    }px, 0, 0) scale(${String(visual.scale)})`;
-    surface.style.opacity = String(visual.opacity);
+    }px, 0, 0)`;
     drawer.style.transform = `translate3d(${
       String(-openingSign * drawerParallax)
     }px, 0, 0)`;
@@ -192,8 +183,7 @@ export function bindMobileSpatialDrawer({
       ),
     );
     surface.style.transition =
-      `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1), ` +
-      `opacity ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+      `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
     drawerMask.style.transition =
       `transform ${String(duration)}ms cubic-bezier(0.22, 1, 0.36, 1)`;
     drawer.style.transition =
@@ -301,7 +291,7 @@ export function bindMobileSpatialDrawer({
       gestureTarget.setAttribute("data-mobile-drawer-moving", "true");
       applyOpenDepth();
       surface.style.transition = "none";
-      surface.style.willChange = "transform, opacity";
+      surface.style.willChange = "transform";
       drawer.style.transition = "none";
       drawer.style.willChange = "transform, opacity";
       drawerMask.style.transition = "none";
