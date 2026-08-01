@@ -98,6 +98,7 @@ import {
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { bindMobileSpatialDrawer } from "./mobileSpatialDrawer";
+import { sessionDrawerTargetScroll } from "./mobileDrawerMotion";
 import { setNotifySetting, setVibrateSetting, useNotifySetting, useVibrateSetting } from "./turnNotify";
 import {
     clampComposerColWidth,
@@ -500,11 +501,23 @@ function SessionList({
         let frame = requestAnimationFrame(() => {
             frame = requestAnimationFrame(() => {
                 const list = listRef.current;
-                if (list) list.scrollTop = list.scrollHeight - list.clientHeight;
+                const current = activeId
+                    ? list?.querySelector<HTMLElement>(
+                        `[data-desktop-item="${CSS.escape(activeId)}"]`,
+                    )
+                    : null;
+                if (!list || !current) return;
+                list.scrollTop = sessionDrawerTargetScroll({
+                    currentScroll: list.scrollTop,
+                    viewportHeight: list.clientHeight,
+                    contentHeight: list.scrollHeight,
+                    itemTop: current.offsetTop,
+                    itemHeight: current.offsetHeight,
+                });
             });
         });
         return () => cancelAnimationFrame(frame);
-    }, [loaded, mobileDrawer, mobileDrawerOpen]);
+    }, [activeId, loaded, mobileDrawer, mobileDrawerOpen]);
     useEffect(() => {
         const list = listRef.current;
         const region = list?.closest<HTMLElement>("[data-desktop-region='sessions.list']");
