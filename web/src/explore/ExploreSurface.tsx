@@ -139,19 +139,25 @@ function PageTurnFooter({
         direction="row"
         spacing={0.75}
         alignItems="center"
-        sx={{ minWidth: 0, width: "100%" }}
+        sx={{ minWidth: 0, width: "100%", position: "relative" }}
       >
         {previous && (loading
           ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
           : <ChevronLeft sx={{ flexShrink: 0 }} />)}
-        <Box sx={{ minWidth: 0, flex: 1, textAlign: previous ? "left" : "right" }}>
+        <Box
+          sx={{
+            minWidth: 0,
+            flex: 1,
+            textAlign: previous ? "left" : "right",
+            ...(desktop && (previous ? { pr: 4 } : { pl: 4 })),
+          }}
+        >
           <Typography
             component="span"
             variant="caption"
             sx={{ display: "block", fontWeight: 700, lineHeight: 1.2 }}
           >
             {previous ? "Previous" : "Next"}
-            {desktop && <Kbd keys={previous ? "[" : "]"} />}
           </Typography>
           <Typography
             component="span"
@@ -170,6 +176,21 @@ function PageTurnFooter({
             {question ?? "Untitled question"}
           </Typography>
         </Box>
+        {desktop && (
+          <Box
+            sx={{
+              position: "absolute",
+              top: 0,
+              ...(previous ? { right: 0 } : { left: 0 }),
+              display: "inline-flex",
+              alignItems: "center",
+              pointerEvents: "none",
+              "& kbd": { ml: "0 !important" },
+            }}
+          >
+            <Kbd keys={previous ? "[" : "]"} variant="global" />
+          </Box>
+        )}
         {!previous && (loading
           ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
           : <ChevronRight sx={{ flexShrink: 0 }} />)}
