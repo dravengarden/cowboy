@@ -1629,6 +1629,7 @@ export function ComposerWorkspace({
             : (expanded ? "Collapse editor" : "Expand editor")}
         >
           <IconButton
+            data-desktop-item-action="default"
             size="small"
             aria-label={touchInput
               ? "fullscreen editor"
@@ -3717,6 +3718,13 @@ function PendingRow({
         onClick: (): void => setConfirmRemove(true),
       },
     ];
+  const secondaryShortcut: Record<string, { badge: string; description: string }> = {
+    edit: { badge: "L", description: "L / Enter · edit focused item" },
+    schedule: { badge: "T", description: "T · schedule focused item" },
+    move: { badge: "M", description: "M · move focused item" },
+    return: { badge: "R", description: "R · return focused item to drafts" },
+    remove: { badge: "X", description: "X · remove focused item" },
+  };
 
   // Primary action — always inline. Drafts always Send (send-or-queue); a queued
   // row Sends now when the session's free, else Force-pushes (confirm popover).
@@ -3763,6 +3771,7 @@ function PendingRow({
             reason discoverable while the action itself remains inert. */}
         <span>
           <IconButton
+            data-desktop-item-action="default"
             size="small"
             color="warning"
             aria-label="force push"
@@ -3775,6 +3784,21 @@ function PendingRow({
           </IconButton>
         </span>
       </Tooltip>
+    );
+  }
+  if (desktop) {
+    const primaryControl = primary;
+    primary = (
+      <Suspense fallback={primaryControl}>
+        <DesktopContextShortcut
+          badge="S"
+          shortcut="S · send focused item"
+          itemScoped
+          placement="corner"
+        >
+          {primaryControl}
+        </DesktopContextShortcut>
+      </Suspense>
     );
   }
   return (
@@ -3866,28 +3890,28 @@ function PendingRow({
           {secondary.map((a) => (
             <Tooltip key={a.key} title={a.label}>
               <Box component="span" sx={{ display: "inline-flex" }}>
-                {desktop && a.key === "edit"
+                {desktop
                   ? (
                     <Suspense fallback={
                       <IconButton
                         size="small"
                         aria-label={a.label}
-                        data-desktop-item-action="edit"
+                        data-desktop-item-action={a.key}
                         onClick={a.onClick}
                       >
                         {a.icon}
                       </IconButton>
                     }>
                       <DesktopContextShortcut
-                        badge="L"
-                        shortcut="L / Enter · edit focused item"
+                        badge={secondaryShortcut[a.key]?.badge ?? ""}
+                        shortcut={secondaryShortcut[a.key]?.description ?? a.label}
                         itemScoped
                         placement="corner"
                       >
                         <IconButton
                           size="small"
                           aria-label={a.label}
-                          data-desktop-item-action="edit"
+                          data-desktop-item-action={a.key}
                           onClick={a.onClick}
                         >
                           {a.icon}
@@ -3899,7 +3923,7 @@ function PendingRow({
                     <IconButton
                       size="small"
                       aria-label={a.label}
-                      data-desktop-item-action={a.key === "edit" ? "edit" : undefined}
+                      data-desktop-item-action={a.key}
                       onClick={a.onClick}
                     >
                       {a.icon}

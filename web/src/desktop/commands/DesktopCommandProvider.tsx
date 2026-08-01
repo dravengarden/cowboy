@@ -19,7 +19,7 @@ import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
-import { listJumpIndex } from "./listNavigation";
+import { listJumpIndex, pendingItemActionKey } from "./listNavigation";
 
 export interface DesktopCommand {
   id: string;
@@ -489,6 +489,20 @@ export function DesktopCommandProvider(
             items[next]?.focus({ preventScroll: true });
             items[next]?.scrollIntoView({ block: "nearest" });
             return;
+          }
+          if (pendingList && active >= 0) {
+            const pendingAction = pendingItemActionKey(key);
+            const action = pendingAction
+              ? items[active]?.querySelector<HTMLElement>(
+                `[data-desktop-item-action='${pendingAction}']`,
+              )
+              : null;
+            if (action) {
+              event.preventDefault();
+              event.stopPropagation();
+              action.click();
+              return;
+            }
           }
           const opensSession = region?.dataset.desktopRegion === "sessions.list" &&
             (key === "Enter" || key.toLowerCase() === "l");
