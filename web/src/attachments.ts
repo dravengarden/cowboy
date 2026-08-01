@@ -399,14 +399,18 @@ export function promoteUnplacedImageTokens(
 export function reconcileDeletedInlineImages(
   previousText: string,
   nextText: string,
-  attachments: readonly Attachment[],
+  attachments: Attachment[],
 ): Attachment[] {
   const previousIds = new Set(imageTokensInText(previousText).map((token) => token.id));
-  if (previousIds.size === 0) return [...attachments];
+  // Ordinary text input is overwhelmingly the hot path. Preserve the array
+  // identity when no inline image can have been removed so React state bails
+  // out instead of scheduling an attachment update for every keystroke.
+  if (previousIds.size === 0) return attachments;
   const nextIds = new Set(imageTokensInText(nextText).map((token) => token.id));
-  return attachments.filter((attachment) =>
+  const reconciled = attachments.filter((attachment) =>
     !attachment.isImage || !previousIds.has(attachment.id) || nextIds.has(attachment.id)
   );
+  return reconciled.length === attachments.length ? attachments : reconciled;
 }
 
 /// Drop every inline-image token from `text` (for any plain-text view — the

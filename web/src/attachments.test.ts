@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import {
   attachmentDisplayParts,
   type Attachment,
@@ -48,7 +48,19 @@ Deno.test("an image attachment remains while any matching token remains", () => 
   const previous = "![one](cowboy-att:inline)\n![two](cowboy-att:inline)";
   const next = "![two](cowboy-att:inline)";
 
-  assertEquals(reconcileDeletedInlineImages(previous, next, [inline]), [inline]);
+  const attachments = [inline];
+  assertStrictEquals(
+    reconcileDeletedInlineImages(previous, next, attachments),
+    attachments,
+  );
+});
+
+Deno.test("ordinary text input preserves attachment state identity", () => {
+  const attachments = [attachment("file", false)];
+  assertStrictEquals(
+    reconcileDeletedInlineImages("hello", "hello!", attachments),
+    attachments,
+  );
 });
 
 Deno.test("legacy unplaced images regain deterministic inline positions", () => {

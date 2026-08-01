@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -308,6 +309,18 @@ export const ComposerEditor = forwardRef<
   holdToForceRef.current = holdToForce;
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
+  // @uiw/react-codemirror includes `onChange` in the dependency list of the
+  // effect that dispatches StateEffect.reconfigure. Parent composer state can
+  // legitimately produce a new callback during typing, but passing that
+  // identity through would reconfigure the whole CM6 state after every input
+  // transaction — including in the middle of native IME marked text. Keep one
+  // bridge for the editor lifetime and route the latest product callback
+  // through a ref, just like every other callback captured by `extensions`.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const handleChange = useCallback((next: string): void => {
+    onChangeRef.current(next);
+  }, []);
   // Long-press-send timing. `holdTimer` is armed on the first send-chord keydown
   // while busy; if it survives to the threshold it opens the force confirm
   // (`forceFired` guards against the keyup then also queuing). 450ms matches the
@@ -905,7 +918,7 @@ export const ComposerEditor = forwardRef<
         // during edits). Idempotent + stable for a stable seed, so @uiw doesn't
         // re-apply it. See inlineImages.ts (ensureTrailingImageLine).
         value={ensureTrailingImageLine(value)}
-        onChange={onChange}
+        onChange={handleChange}
         editable={!disabled}
         autoFocus={autoFocus}
         // `none` disables @uiw's built-in light theme (which paints the editor

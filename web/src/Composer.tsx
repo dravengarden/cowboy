@@ -786,7 +786,12 @@ export function ComposerWorkspace({
     jumpToFront: jumpCurrentPromptToFront,
     saveAsDraft,
     scheduleNew,
-  } = useComposerDraftController(sessionId, editorRef);
+  } = useComposerDraftController(sessionId, editorRef, {
+    // Desktop CodeMirror owns its document. Keeping its hot path in refs avoids
+    // rerendering the entire Prompt pane for every IME composition update;
+    // touch-native editors still require the live React value.
+    mirrorTextInReact: surface !== "desktop",
+  });
   const submitAndNotify = useCallback((): boolean => {
     const submitted = submit();
     if (submitted) onSubmitted?.();

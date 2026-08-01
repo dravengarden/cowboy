@@ -581,6 +581,27 @@ here says otherwise.
     the check to Mobile or alter the contenteditable node. Verify first Escape
     Insert to Normal, Visual to Normal, and a second Normal Escape to the modal.
 
+29. **Desktop CM6 callbacks must be stable across native composition.** A live
+    production trace showed that the document transaction was followed by two
+    effect-only editor dispatches for every typed character. The editor DOM and
+    `extensions` identity stayed stable, but `ComposerWorkspace` recreated its
+    draft `onChange` callback after mirroring each character into React.
+    `@uiw/react-codemirror` includes `onChange` in the dependency list of the
+    effect that dispatches `StateEffect.reconfigure`, so the callback churn
+    reconfigured CM6 during macOS marked text. The visible failure is an
+    underlined pinyin fragment left behind while the normal editor paint appears
+    to vanish; the performance failure is a delayed next paint after otherwise
+    short input processing. **Fix (`ComposerEditor.tsx` and
+    `useComposerDraftController.ts`):** pass one lifetime-stable ref bridge to
+    `@uiw`, and keep Desktop's uncontrolled document/draft hot path in refs plus
+    the already-debounced draft store. React only observes semantic transitions
+    such as empty to sendable or attachment placement; native touch controls keep
+    their live React mirror. `reconcileDeletedInlineImages` must preserve the
+    attachment-array identity when no image was removed. Never pass a render-time
+    callback directly to `@uiw`, and never restore per-character Desktop text
+    mirroring merely to enable an action—the authoritative ref already supplies
+    submit, park, schedule, and persistence.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
@@ -611,6 +632,8 @@ Desktop Vim + IME checks:
       for `o/O`, the Selection anchor is the new active `.cm-line`, not `.cm-content`.
 - [ ] `.cm-content` stays the identical DOM node and remains `contenteditable=true`.
 - [ ] Composition text is accepted with a visible, focused caret after the switch.
+- [ ] Typing/composition keeps the same `.cm-content` node and emits no callback-
+      identity `StateEffect.reconfigure` after the document transaction.
 - [ ] Escape returns focus to the command sink and the status line shows `IME SAFE`.
 - [ ] `Mod+P` focuses and expands a visible Plan from any Agent region;
       bare `p/P` remains native Vim paste in every composer state.

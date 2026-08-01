@@ -1,5 +1,6 @@
 import {
   type RefObject,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -46,40 +47,85 @@ export interface ComposerDraftController {
   scheduleNew: (fireAtMs: number, delivery: Delivery) => boolean;
 }
 
+export interface ComposerDraftControllerOptions {
+  /**
+   * Native text controls need React to mirror every input value. Desktop CM6
+   * owns its document, so mirroring each composition update would only rerender
+   * the whole Prompt workspace and delay the editor's next paint.
+   */
+  mirrorTextInReact?: boolean;
+}
+
 // Owns the local, not-yet-sent prompt. This is product behaviour shared by the
 // Desktop and Mobile composer shells: persistence, attachment staging and the
 // imperative clear required by the uncontrolled CM6 editor all live here.
 export function useComposerDraftController(
   sessionId: string,
   editorRef: RefObject<ComposerEditorHandle | null>,
+  { mirrorTextInReact = true }: ComposerDraftControllerOptions = {},
 ): ComposerDraftController {
   const seed = useRef(getDraft(sessionId)).current;
   const seededText = useRef(
     promoteUnplacedImageTokens(seed.text, seed.attachments),
   ).current;
-  const [text, setTextState] = useState(seededText);
+  const [textState, setTextState] = useState(seededText);
   const textRef = useRef(seededText);
   const initialText = useRef(seededText);
-  const [attachments, setAttachments] = useState<Attachment[]>(() => {
+  const [hasText, setHasText] = useState(seededText.trim().length > 0);
+  const attachmentsRef = useRef(seed.attachments);
+  const [attachments, setAttachmentsState] = useState<Attachment[]>(() => {
     seedInlineAttachments(seed.attachments);
     return seed.attachments;
   });
 
-  const setText = (next: string): void => {
+  const setAttachments = useCallback<React.Dispatch<React.SetStateAction<Attachment[]>>>(
+    (update): void => {
+      const current = attachmentsRef.current;
+      const next = typeof update === "function" ? update(current) : update;
+      // Keep the imperative editor path authoritative immediately. React may
+      // defer the state commit, but a same-gesture paste can emit CM changes
+      // before that commit and must reconcile against the new attachments.
+      attachmentsRef.current = next;
+      setAttachmentsState(next);
+    },
+    [],
+  );
+
+  const setText = useCallback((next: string): void => {
     const previous = textRef.current;
     textRef.current = next;
-    setAttachments((current) =>
-      reconcileDeletedInlineImages(previous, next, current)
+    const currentAttachments = attachmentsRef.current;
+    const reconciled = reconcileDeletedInlineImages(
+      previous,
+      next,
+      currentAttachments,
     );
-    setTextState(next);
-  };
+    if (reconciled !== currentAttachments) {
+      attachmentsRef.current = reconciled;
+      setAttachmentsState(reconciled);
+    }
+    const nextHasText = next.trim().length > 0;
+    setHasText((current) => current === nextHasText ? current : nextHasText);
+    if (mirrorTextInReact) {
+      setTextState(next);
+    } else if (!reconciled.some((attachment) => attachment.pending)) {
+      // CM6 is uncontrolled and the local draft store already debounces disk
+      // I/O. Update that store directly without routing every keystroke through
+      // React; refs remain authoritative for submit/park/schedule actions.
+      setDraft(sessionId, { text: next, attachments: reconciled });
+    }
+  }, [mirrorTextInReact, sessionId]);
 
   useEffect(() => {
     // A same-gesture paste placeholder has only a local object URL and an empty
     // wire block. Keep the last durable draft until encoding completes.
     if (attachments.some((attachment) => attachment.pending)) return;
-    setDraft(sessionId, { text, attachments });
-  }, [sessionId, text, attachments]);
+    setDraft(sessionId, { text: textRef.current, attachments });
+  }, [sessionId, textState, attachments]);
+
+  // Desktop reads the live ref whenever another meaningful state transition
+  // renders the shell. Mobile/native controls consume the reactive mirror.
+  const text = mirrorTextInReact ? textState : textRef.current;
 
   const addFiles = (
     files: File[],
@@ -149,14 +195,16 @@ export function useComposerDraftController(
     editorRef.current?.clear();
     textRef.current = "";
     setTextState("");
-    setAttachments([]);
+    setHasText(false);
+    attachmentsRef.current = [];
+    setAttachmentsState([]);
     // Page View can intentionally unmount the composer immediately after send.
     // Persist the cleared value synchronously so a later remount cannot restore
     // the pre-send draft before React's effects get a chance to run.
     setDraft(sessionId, { text: "", attachments: [] });
   };
 
-  const sendable = (text.trim().length > 0 || attachments.length > 0) &&
+  const sendable = (hasText || attachments.length > 0) &&
     !attachments.some((attachment) => attachment.pending);
   const commit = (action: () => void, feedback = true): boolean => {
     if (!sendable) return false;
@@ -167,7 +215,7 @@ export function useComposerDraftController(
   };
   const preparedText = (): string =>
     prepareUserPrompt(
-      text.trimEnd(),
+      textRef.current.trimEnd(),
       editorRef.current?.consumeSelectedSlashCommand() ?? null,
     );
 
@@ -191,7 +239,10 @@ export function useComposerDraftController(
     // Parking/scheduling is deliberate state management rather than a send
     // gesture, so preserve the existing no-haptic behaviour.
     saveAsDraft: () =>
-      commit(() => addDraft(sessionId, text.trimEnd(), attachments), false),
+      commit(
+        () => addDraft(sessionId, textRef.current.trimEnd(), attachments),
+        false,
+      ),
     scheduleNew: (fireAtMs, delivery) =>
       commit(
         () =>
