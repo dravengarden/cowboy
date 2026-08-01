@@ -1314,6 +1314,7 @@ export function ComposerWorkspace({
       }
       {(queue.length > 0 || draftList.length > 0) && !desktop && (
         <Box
+          data-mobile-pending-scrollport
           // This is a native vertical scrollport, but it still participates in
           // the shell-wide direction-locked Sessions gesture. `pan-y` below
           // keeps vertical movement native; only a deliberate horizontal move
@@ -1342,8 +1343,10 @@ export function ComposerWorkspace({
             flexShrink: 1,
             touchAction: "pan-y",
             WebkitOverflowScrolling: "touch",
-            display: "grid",
-            rowGap: "var(--mobile-composer-stack-gap)",
+            display: "block",
+            "& > * + *": {
+              mt: "var(--mobile-composer-stack-gap)",
+            },
             // The outer Composer owns the space before and after this group.
             // Keep this nested scroller flush so one optional Queue/Draft panel
             // cannot introduce a different-looking gap above the editor.
@@ -3165,7 +3168,14 @@ function PendingPanel({
           // Large attachment previews otherwise re-enter layout + paint on
           // every clipped-height frame. Isolate the already-laid-out list so
           // the compositor can reveal it as smoothly as Plan's text-only list.
-          "& .MuiCollapse-wrapperInner": { contain: "layout paint" },
+          // Layout containment can leave iOS WebKit's parent overflow layer
+          // with the pre-animation scroll range until a later layout pass.
+          // That presents as a temporarily frozen Queue/Drafts stack after a
+          // disclosure. Desktop benefits from the paint isolation; Mobile's
+          // native scrollport must observe every intermediate/final height.
+          ...(desktop && {
+            "& .MuiCollapse-wrapperInner": { contain: "layout paint" },
+          }),
         }}
       >
         <Stack
