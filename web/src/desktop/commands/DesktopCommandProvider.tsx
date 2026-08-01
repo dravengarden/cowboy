@@ -19,6 +19,7 @@ import { workspaceCommandKey } from "./workspaceCommandKey";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
 import { desktopOverlayOwnsShortcuts } from "./desktopShortcutScope";
+import { listJumpIndex } from "./listNavigation";
 
 export interface DesktopCommand {
   id: string;
@@ -396,6 +397,9 @@ export function DesktopCommandProvider(
           }
           const sessionsList = region?.dataset.desktopRegion === "sessions.list";
           const pinned = sessionsList && region?.dataset.desktopPinned === "true";
+          const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
+            region?.dataset.desktopRegion === "prompt.draft";
+          const reordering = pendingList && region?.dataset.desktopReordering === "true";
           if (sessionsList && key.toLowerCase() === "p" && !event.repeat) {
             event.preventDefault();
             event.stopPropagation();
@@ -422,6 +426,32 @@ export function DesktopCommandProvider(
             }));
             return;
           }
+          if (pendingList && key.toLowerCase() === "p" && !event.repeat) {
+            event.preventDefault();
+            event.stopPropagation();
+            region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
+              new CustomEvent("cowboy:desktop-toggle-reorder"),
+            );
+            items[Math.max(0, active)]?.focus({ preventScroll: true });
+            return;
+          }
+          if (pendingList && reordering && key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
+              new CustomEvent("cowboy:desktop-release-reorder"),
+            );
+            return;
+          }
+          if (pendingList && reordering && (key === "j" || key === "k")) {
+            event.preventDefault();
+            event.stopPropagation();
+            items[Math.max(0, active)]?.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
+              bubbles: true,
+              detail: { delta: key === "j" ? 1 : -1 },
+            }));
+            return;
+          }
           if (sessionsList && key.toLowerCase() === "h" && !event.repeat) {
             const item = items[active];
             if (item) {
@@ -437,7 +467,8 @@ export function DesktopCommandProvider(
           if (itemChord.current !== null) {
             globalThis.clearTimeout(itemChord.current);
             itemChord.current = null;
-            if (key === "g") next = 0;
+            const jump = listJumpIndex(key, items.length);
+            if (key === "g" || pendingList) next = jump ?? -1;
           } else if (key === "g") {
             event.preventDefault();
             itemChord.current = globalThis.setTimeout(() => {

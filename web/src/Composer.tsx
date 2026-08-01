@@ -118,10 +118,9 @@ import {
   type TranscriptProjection,
   useExploreAtTail,
 } from "./explore/exploreStore";
-import { desktopFocusBoundary, desktopFocusFill } from "./theme";
 import {
-  DESKTOP_INSET_RADIUS,
   desktopEmbeddedControlSx,
+  desktopListItemSx,
   desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
 import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
@@ -2909,6 +2908,21 @@ function PendingPanel({
   useEffect(() => {
     if (count < 2 && reordering) setReordering(false);
   }, [count, reordering]);
+  useEffect(() => {
+    const list = scrollRef.current;
+    const region = list?.closest<HTMLElement>(`[data-desktop-region='prompt.${kind}']`);
+    if (!desktop || !list || !region) return undefined;
+    region.dataset.desktopReordering = reordering ? "true" : "false";
+    const onToggle = (): void => setReordering((current) => !current);
+    const onRelease = (): void => setReordering(false);
+    list.addEventListener("cowboy:desktop-toggle-reorder", onToggle);
+    list.addEventListener("cowboy:desktop-release-reorder", onRelease);
+    return () => {
+      delete region.dataset.desktopReordering;
+      list.removeEventListener("cowboy:desktop-toggle-reorder", onToggle);
+      list.removeEventListener("cowboy:desktop-release-reorder", onRelease);
+    };
+  }, [desktop, kind, reordering]);
   // Bridge the locally-edited QUEUED message id to the store so the auto-drain
   // holds that message (and everything behind it) until the edit finishes.
   // Drafts don't drain, so they need no hold. Clears on unmount / session switch.
@@ -3095,6 +3109,15 @@ function PendingPanel({
               )}
             </Stack>
           )}
+          {desktop && reordering && (
+            <Typography
+              variant="caption"
+              color="primary.main"
+              sx={{ ml: 0.75, fontWeight: 700, letterSpacing: "0.04em" }}
+            >
+              REORDER · J/K MOVE · ESC DONE
+            </Typography>
+          )}
         </ButtonBase>
         {
           /* Reorder toggle — reveals the per-row drag grips. Only meaningful (and
@@ -3200,6 +3223,7 @@ function PendingPanel({
                 {...(desktop
                   ? {
                     "data-desktop-item": m.id,
+                    "data-desktop-current": editingId === m.id ? "true" : undefined,
                     tabIndex: -1,
                   }
                   : {})}
@@ -3210,14 +3234,7 @@ function PendingPanel({
                 spacing={0.5}
                 sx={desktop
                   ? {
-                    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-                    outline: "2px solid transparent",
-                    outlineOffset: -2,
-                    transition: "background-color 120ms ease, outline-color 120ms ease",
-                    "&:focus-visible": {
-                      bgcolor: desktopFocusFill,
-                      outlineColor: desktopFocusBoundary,
-                    },
+                    ...desktopListItemSx(),
                   }
                   : undefined}
               >
@@ -3331,7 +3348,6 @@ function PendingRow({
   // Per-row kebab (⋮) anchor — holds the draft's secondary actions (Edit / Move
   // / Remove) so the row shows only Send inline and stays uncluttered.
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const [confirmDiscardEdit, setConfirmDiscardEdit] = useState(false);
   // Local attachments while editing, seeded from the queued message. The edit
   // box is the SAME ComposerEditor as the main composer, so a queued prompt can
   // gain/lose images here too (pasted screenshots, picked files).
@@ -3411,10 +3427,8 @@ function PendingRow({
     editTextRef.current = message.text;
     setEditAttachments(message.attachments);
     setOverlayOpen(false);
-    setConfirmDiscardEdit(false);
     onEditDone();
   };
-  useConfirmEnter(confirmDiscardEdit, discardEdit);
   useLayoutEffect(() => {
     if (!overlayOpen) return undefined;
     if (touchInput) {
@@ -3527,7 +3541,7 @@ function PendingRow({
               if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
               event.preventDefault();
               event.stopPropagation();
-              setConfirmDiscardEdit(true);
+              discardEdit();
             }
             : undefined}
         >
@@ -3564,7 +3578,7 @@ function PendingRow({
               placeholder="Edit message…"
               onPasteFiles={addEditFiles}
               onEscape={(): boolean => {
-                if (desktop) setConfirmDiscardEdit(true);
+                if (desktop) discardEdit();
                 else save();
                 return true;
               }}
@@ -3627,38 +3641,6 @@ function PendingRow({
               : undefined}
           />
         )}
-        <Dialog
-          open={confirmDiscardEdit}
-          onClose={(): void => setConfirmDiscardEdit(false)}
-          maxWidth="xs"
-          fullWidth
-        >
-          <DialogTitle>Discard message edits?</DialogTitle>
-          <DialogContent>
-            <DialogContentText>
-              The pending message is unchanged until you save with {MOD_LABEL}{ENTER_LABEL}.
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              color="inherit"
-              onClick={(): void => setConfirmDiscardEdit(false)}
-              sx={{ textTransform: "none" }}
-            >
-              Keep editing
-              <Kbd keys="Esc" />
-            </Button>
-            <Button
-              color="error"
-              variant="contained"
-              onClick={discardEdit}
-              sx={{ textTransform: "none" }}
-            >
-              Discard
-              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-            </Button>
-          </DialogActions>
-        </Dialog>
       </>
     );
   }

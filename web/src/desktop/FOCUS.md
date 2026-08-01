@@ -191,3 +191,9 @@ background, accent rail, or focus ring.
 `topbar.controls`. Prompt Plan, Queue, and Draft are auxiliary panels rather
 than Vim windows; enter them through their dedicated commands, so vertical
 window movement never collapses or selects them as an intermediate stop.
+
+Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
+`G` jump to the ends, `g1` through `g0` jump to a visible slot, and `L`/`Enter`
+opens the selected message editor. `P` pins reorder mode so `J/K` moves the
+message and `Esc` releases it. Inside the editor, `Mod+Enter` saves and `Esc`
+cancels, with both returning focus to the originating list row.

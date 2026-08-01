@@ -108,8 +108,10 @@ function regionHints(
     case "prompt.draft":
       return [
         { keys: "J/K", label: "Message" },
-        { keys: "Enter", label: "Run" },
-        { keys: "I", label: "Edit" },
+        { keys: "GG/G", label: "First/last" },
+        { keys: "g1–0", label: "Jump" },
+        { keys: "L/Enter", label: "Edit" },
+        { keys: "P", label: "Pin reorder" },
       ];
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;

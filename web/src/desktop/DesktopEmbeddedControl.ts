@@ -56,6 +56,12 @@ export function desktopEmbeddedControlSx(options: Parameters<typeof desktopSurfa
  * Keep 1px geometry stable, but reveal the boundary only for selection,
  * keyboard focus, and hover so long lists do not become a wall of capsules. */
 export function desktopListItemSx() {
+  const selected = {
+    borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.34),
+    bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.065),
+    boxShadow: (theme: Theme) =>
+      `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.07)}`,
+  };
   return {
     border: 1,
     borderStyle: "solid",
@@ -69,12 +75,7 @@ export function desktopListItemSx() {
       borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.18),
       bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.045),
     },
-    "&.Mui-selected": {
-      borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.34),
-      bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.065),
-      boxShadow: (theme: Theme) =>
-        `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.07)}`,
-    },
+    "&.Mui-selected, &[data-desktop-current='true'], &:focus-within": selected,
     "&.Mui-selected:hover": {
       borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.44),
       bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.09),
