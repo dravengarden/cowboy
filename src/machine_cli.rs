@@ -1415,15 +1415,7 @@ async fn run_login(
     let (command, args): (&str, &[&str]) = match provider.as_str() {
         "codex" => ("codex", &["login", "--device-auth"]),
         "claude" => ("claude", &["auth", "login"]),
-        "gemini" => (
-            "gemini",
-            &[
-                "--prompt",
-                "Confirm authentication.",
-                "--output-format",
-                "json",
-            ],
-        ),
+        "gemini" => ("script", &[]),
         _ => {
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
@@ -1448,9 +1440,20 @@ async fn run_login(
         return;
     }
     let mut process = tokio::process::Command::new(command);
-    process.args(args);
     if provider == "gemini" {
-        process.env("NO_BROWSER", "true").env("TERM", "dumb");
+        // Gemini deliberately rejects manual OAuth without a terminal. Give
+        // only the login process a private PTY; Cowboy still owns its stdin and
+        // parses the public authorization URL from stdout.
+        process.args([
+            "-q",
+            "-e",
+            "-f",
+            "-c",
+            "env NO_BROWSER=true TERM=dumb gemini",
+            "/dev/null",
+        ]);
+    } else {
+        process.args(args);
     }
     let mut child = match process
         .stdin(std::process::Stdio::piped())
@@ -1487,6 +1490,7 @@ async fn run_login(
     let mut verification_url = None;
     let mut user_code = None;
     let mut challenge_sent = false;
+    let mut login_completed = false;
     loop {
         let line = tokio::select! {
             line = stdout.next_line(), if stdout_open => {
@@ -1528,6 +1532,11 @@ async fn run_login(
             }
             continue;
         };
+        if provider == "gemini" && challenge_sent && probe_gemini_auth() == AuthState::SignedIn {
+            login_completed = true;
+            let _ = child.kill().await;
+            break;
+        }
         for word in line.split_whitespace() {
             let trimmed = word.trim_matches(|character: char| {
                 matches!(character, '(' | ')' | '[' | ']' | ',' | ':' | ';')
@@ -1561,7 +1570,7 @@ async fn run_login(
     }
     let status = child.wait().await;
     login.sessions.lock().remove(&request_id);
-    let signed_in = status.is_ok_and(|status| status.success());
+    let signed_in = login_completed || status.is_ok_and(|status| status.success());
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),
         provider,
