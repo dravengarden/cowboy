@@ -1415,6 +1415,15 @@ async fn run_login(
     let (command, args): (&str, &[&str]) = match provider.as_str() {
         "codex" => ("codex", &["login", "--device-auth"]),
         "claude" => ("claude", &["auth", "login"]),
+        "gemini" => (
+            "gemini",
+            &[
+                "--prompt",
+                "Confirm authentication.",
+                "--output-format",
+                "json",
+            ],
+        ),
         _ => {
             login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
@@ -1427,8 +1436,23 @@ async fn run_login(
             return;
         }
     };
-    let mut child = match tokio::process::Command::new(command)
-        .args(args)
+    if provider == "gemini"
+        && let Err(error) = select_gemini_oauth()
+    {
+        login.sessions.lock().remove(&request_id);
+        let _ = events.send(MachineEvent::CommandResult {
+            request_id,
+            accepted: false,
+            detail: Some(format!("preparing Gemini OAuth failed: {error:#}")),
+        });
+        return;
+    }
+    let mut process = tokio::process::Command::new(command);
+    process.args(args);
+    if provider == "gemini" {
+        process.env("NO_BROWSER", "true").env("TERM", "dumb");
+    }
+    let mut child = match process
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1519,7 +1543,7 @@ async fn run_login(
                 user_code = Some(trimmed.to_owned());
             }
         }
-        let challenge_ready = provider == "claude" || user_code.is_some();
+        let challenge_ready = provider != "codex" || user_code.is_some();
         if !challenge_sent
             && challenge_ready
             && let Some(url) = verification_url.clone()
@@ -1529,7 +1553,7 @@ async fn run_login(
                 provider: provider.clone(),
                 verification_url: url,
                 user_code: user_code.clone(),
-                input_required: provider == "claude",
+                input_required: provider != "codex",
                 expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
             });
             challenge_sent = true;
@@ -1556,6 +1580,41 @@ async fn run_login(
             observed_at_ms: unix_ms(),
         });
     }
+}
+
+fn select_gemini_oauth() -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME").context("HOME is not configured")?;
+    let root = PathBuf::from(home).join(".gemini");
+    std::fs::create_dir_all(&root).context("creating Gemini state directory")?;
+    let settings_path = root.join("settings.json");
+    let mut settings = std::fs::read(&settings_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let object = settings
+        .as_object_mut()
+        .context("Gemini settings must be a JSON object")?;
+    let security = object
+        .entry("security")
+        .or_insert_with(|| serde_json::json!({}));
+    let security = security
+        .as_object_mut()
+        .context("Gemini security settings must be a JSON object")?;
+    let auth = security
+        .entry("auth")
+        .or_insert_with(|| serde_json::json!({}));
+    let auth = auth
+        .as_object_mut()
+        .context("Gemini auth settings must be a JSON object")?;
+    auth.insert(
+        "selectedType".to_owned(),
+        serde_json::Value::String("oauth-personal".to_owned()),
+    );
+    let temporary = root.join("settings.json.cowboy-login");
+    std::fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)
+        .context("writing staged Gemini settings")?;
+    std::fs::rename(&temporary, &settings_path).context("activating Gemini OAuth settings")?;
+    Ok(())
 }
 
 fn current_platform() -> Platform {

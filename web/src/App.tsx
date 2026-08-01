@@ -3998,7 +3998,7 @@ function MachinesContent(): React.JSX.Element {
                                                         {provider && component.auth === "signed_in" && (
                                                             <Chip size="small" color="success" variant="outlined" label="Signed in" />
                                                         )}
-                                                        {provider && component.auth !== "signed_in" && provider !== "gemini" && (
+                                                        {provider && component.auth !== "signed_in" && (
                                                             <Button
                                                                 size="small"
                                                                 variant={loginBusy ? "outlined" : "contained"}
@@ -4006,9 +4006,6 @@ function MachinesContent(): React.JSX.Element {
                                                                 startIcon={loginBusy ? <CircularProgress size={14} /> : undefined}
                                                                 onClick={() => command(machine.id, "login", provider)}
                                                             >{loginBusy ? "Waiting" : "Sign in"}</Button>
-                                                        )}
-                                                        {provider === "gemini" && component.auth !== "signed_in" && (
-                                                            <Chip size="small" variant="outlined" label="Sign in on Machine" />
                                                         )}
                                                         {provider && npmInstallable && (
                                                             <Button
