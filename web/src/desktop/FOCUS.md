@@ -144,6 +144,18 @@ approximate these states with component-local opacity or colors; all persistent
 contextual badges must use `ShortcutKeycap` availability so enabled and inactive
 semantics remain identical across Desktop.
 
+Sequential list chords use the same persistent states. Queue and Draft headers
+show the `G` prefix and their first ten visible rows show `1` through `9`, then
+`0`; all are `inactive` at rest so the list remains quiet. Pressing `G` while
+the list owns Normal-mode focus changes the prefix and all visible slot keycaps
+to `available` for 1.2 seconds. A valid slot focuses that exact row. A second
+`G` focuses the first row. Escape, an unavailable slot, any unrelated second
+key, changing regions, entering an editor, or timeout cancels the chord and
+restores every badge to `inactive`. The cancelling key is consumed while the
+list still owns the chord so it cannot fall through to an item action. Modified
+global chords cancel the prefix but continue normally, so `Mod+I` still returns
+to Composer immediately.
+
 List-row action hints are item-scoped: focusing Queue or Drafts reveals hints
 only on the current `[data-desktop-item]`, never on every row merely because the
 region owns focus. A badge must describe an actual binding; `L`/`Enter` belongs
@@ -237,7 +249,7 @@ than Vim windows; enter them through their dedicated commands, so vertical
 window movement never collapses or selects them as an intermediate stop.
 
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
-`G` jump to the ends, `g1` through `g0` jump to a visible slot, and `L`/`Enter`
-opens the selected message editor. `P` pins reorder mode so `J/K` moves the
-message and `Esc` releases it. Inside the editor, `Mod+Enter` saves and `Esc`
-cancels, with both returning focus to the originating list row.
+`G` jump to the ends, `g1` through `g0` jump to one of the first ten visible
+slots, and `L`/`Enter` opens the selected message editor. `P` pins reorder mode
+so `J/K` moves the message and `Esc` releases it. Inside the editor, `Mod+Enter`
+saves and `Esc` cancels, with both returning focus to the originating list row.

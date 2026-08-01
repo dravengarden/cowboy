@@ -113,7 +113,7 @@ function regionHints(
       return [
         { keys: "J/K", label: "Message" },
         { keys: "GG/G", label: "First/last" },
-        { keys: "g1–0", label: "Jump" },
+        { keys: "G→1…0", label: "Direct jump" },
         { keys: "L/Enter", label: "Edit" },
         { keys: "P", label: "Pin reorder" },
       ];

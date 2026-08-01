@@ -48,6 +48,11 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: ["Mod+J/K"], title: "Reorder the focused item when supported" },
   { keys: ["G", "G"], title: "First item" },
   { keys: ["Shift+G"], title: "Last item" },
+  {
+    keys: ["G", "1…0"],
+    title: "Jump directly to a Queue or Draft item",
+    description: "The first ten visible rows use 1–9, then 0",
+  },
   { keys: ["Enter"], title: "Open or activate the focused item" },
   { keys: ["I"], title: "Edit the focused item" },
   { keys: ["Esc"], title: "Leave edit mode or close the active layer" },

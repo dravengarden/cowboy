@@ -45,9 +45,15 @@ interface DesktopCommandContextValue {
   commands: DesktopCommand[];
 }
 
+interface PendingJumpChord {
+  region: string;
+  timer: number;
+}
+
 const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
   null,
 );
+const DesktopListJumpContext = createContext<string | null>(null);
 
 function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
   const horizontal = region?.dataset.desktopAxis === "horizontal";
@@ -95,8 +101,27 @@ export function DesktopCommandProvider(
   const commands = useRef(new Map<string, DesktopCommand>());
   const windowChord = useRef<number | null>(null);
   const itemChord = useRef<number | null>(null);
+  const pendingJumpChord = useRef<PendingJumpChord | null>(null);
   const [revision, setRevision] = useState(0);
+  const [pendingJumpRegion, setPendingJumpRegion] = useState<string | null>(null);
   const workspace = useDesktopWorkspace();
+  const clearPendingJumpChord = useCallback((): void => {
+    const chord = pendingJumpChord.current;
+    if (chord) globalThis.clearTimeout(chord.timer);
+    pendingJumpChord.current = null;
+    setPendingJumpRegion((current) => current === null ? current : null);
+  }, []);
+  const armPendingJumpChord = useCallback((region: string): void => {
+    const current = pendingJumpChord.current;
+    if (current) globalThis.clearTimeout(current.timer);
+    const timer = globalThis.setTimeout(() => {
+      if (pendingJumpChord.current?.timer !== timer) return;
+      pendingJumpChord.current = null;
+      setPendingJumpRegion((armed) => armed === region ? null : armed);
+    }, 1200);
+    pendingJumpChord.current = { region, timer };
+    setPendingJumpRegion(region);
+  }, []);
   const register = useCallback((command: DesktopCommand): () => void => {
     assertMacShortcutAllowed(command.id, command.shortcut);
     commands.current.set(command.id, command);
@@ -128,6 +153,17 @@ export function DesktopCommandProvider(
   }), [commandList, execute, register]);
 
   useEffect(() => {
+    const chord = pendingJumpChord.current;
+    if (
+      chord &&
+      (workspace.productMode !== "agent" || workspace.mode !== "normal" ||
+        workspace.focusedRegion !== chord.region)
+    ) {
+      clearPendingJumpChord();
+    }
+  }, [clearPendingJumpChord, workspace.focusedRegion, workspace.mode, workspace.productMode]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const eventElement = event.target instanceof Element ? event.target : null;
       const normalCommandSink = eventElement?.matches("[data-vim-command-sink]") ?? false;
@@ -157,11 +193,65 @@ export function DesktopCommandProvider(
           globalThis.clearTimeout(itemChord.current);
           itemChord.current = null;
         }
+        clearPendingJumpChord();
         return;
       }
       // A visible configuration popover advertises and owns its own J/K/H/L
       // map. Relinquish the workspace map before it consumes those keys.
-      if (desktopOverlayOwnsShortcuts(document)) return;
+      if (desktopOverlayOwnsShortcuts(document)) {
+        clearPendingJumpChord();
+        return;
+      }
+      // Queue and Draft direct jumps are a visible, transient `G -> slot`
+      // chord. Once armed, the next non-modifier key belongs exclusively to
+      // that chord: a valid 1-9/0 (or a second G) jumps, while Escape, a
+      // unrelated bare key cancels without leaking through to destructive row
+      // actions such as X. A new modified/global chord cancels G but remains
+      // available (for example Mod+I still enters Composer). Moving focus/editor
+      // mode clears the chord without swallowing the new surface's first key.
+      const pendingChord = pendingJumpChord.current;
+      if (pendingChord) {
+        const stillOwned = workspace.productMode === "agent" &&
+          workspace.mode === "normal" &&
+          workspace.focusedRegion === pendingChord.region &&
+          !textEditorOwnsKey;
+        if (!stillOwned) {
+          clearPendingJumpChord();
+        } else {
+          const key = workspaceCommandKey(event);
+          const modifierOnly = [
+            "Alt",
+            "AltGraph",
+            "CapsLock",
+            "Control",
+            "Fn",
+            "FnLock",
+            "Meta",
+            "Shift",
+          ].includes(key);
+          if (modifierOnly) return;
+          const modified = event.metaKey || event.ctrlKey || event.altKey ||
+            event.shiftKey;
+          if (modified) {
+            clearPendingJumpChord();
+          } else {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.repeat) return;
+            clearPendingJumpChord();
+            const region = document.querySelector<HTMLElement>(
+              `[data-desktop-region="${CSS.escape(pendingChord.region)}"]`,
+            );
+            const items = visibleRegionItems(region);
+            const jump = listJumpIndex(key, items.length);
+            if (jump !== null) {
+              items[jump]?.focus({ preventScroll: true });
+              items[jump]?.scrollIntoView({ block: "nearest" });
+            }
+            return;
+          }
+        }
+      }
       if (workspace.productMode === "reading") {
         const key = workspaceCommandKey(event);
         const readingSidebarOwnsKey = Boolean(eventElement?.closest(
@@ -432,7 +522,8 @@ export function DesktopCommandProvider(
       }
       // Reordering remains contextual to the focused list. Positional Mod+number
       // access is reserved globally for Sessions above; local lists use standard
-      // Vim j/k, gg/G and Enter instead of overloading the same chord.
+      // Vim j/k, gg/G and Enter. Queue and Draft additionally expose a local,
+      // two-stroke G -> number jump below instead of overloading Mod+number.
       if (
         workspace.mode === "normal" && mod && !event.altKey && !event.shiftKey &&
         !textEditorOwnsKey &&
@@ -482,6 +573,14 @@ export function DesktopCommandProvider(
           const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
             region?.dataset.desktopRegion === "prompt.draft";
           const reordering = pendingList && region?.dataset.desktopReordering === "true";
+          if (pendingList && key === "g") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!event.repeat && region?.dataset.desktopRegion) {
+              armPendingJumpChord(region.dataset.desktopRegion);
+            }
+            return;
+          }
           if (sessionsList && key.toLowerCase() === "p" && !event.repeat) {
             event.preventDefault();
             event.stopPropagation();
@@ -546,17 +645,18 @@ export function DesktopCommandProvider(
             }
           }
           let next = -1;
-          if (itemChord.current !== null) {
-            globalThis.clearTimeout(itemChord.current);
-            itemChord.current = null;
-            const jump = listJumpIndex(key, items.length);
-            if (key === "g" || pendingList) next = jump ?? -1;
-          } else if (key === "g") {
-            event.preventDefault();
-            itemChord.current = globalThis.setTimeout(() => {
+          if (!pendingList) {
+            if (itemChord.current !== null) {
+              globalThis.clearTimeout(itemChord.current);
               itemChord.current = null;
-            }, 900);
-            return;
+              if (key === "g") next = 0;
+            } else if (key === "g") {
+              event.preventDefault();
+              itemChord.current = globalThis.setTimeout(() => {
+                itemChord.current = null;
+              }, 900);
+              return;
+            }
           }
           if (key === "j") next = Math.min(items.length - 1, Math.max(0, active + 1));
           else if (key === "k") next = Math.max(0, active < 0 ? items.length - 1 : active - 1);
@@ -681,12 +781,18 @@ export function DesktopCommandProvider(
         globalThis.clearTimeout(itemChord.current);
         itemChord.current = null;
       }
+      if (pendingJumpChord.current !== null) {
+        globalThis.clearTimeout(pendingJumpChord.current.timer);
+        pendingJumpChord.current = null;
+      }
     };
-  }, [workspace]);
+  }, [armPendingJumpChord, clearPendingJumpChord, workspace]);
 
   return (
     <DesktopCommandContext.Provider value={value}>
-      {children}
+      <DesktopListJumpContext.Provider value={pendingJumpRegion}>
+        {children}
+      </DesktopListJumpContext.Provider>
     </DesktopCommandContext.Provider>
   );
 }
@@ -709,4 +815,8 @@ export function useDesktopCommands(): DesktopCommandContextValue {
     );
   }
   return registry;
+}
+
+export function useDesktopListJumpChord(region: string): boolean {
+  return useContext(DesktopListJumpContext) === region;
 }

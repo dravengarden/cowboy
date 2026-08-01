@@ -127,6 +127,7 @@ import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
 } from "./desktop/commands/workspaceShortcuts";
+import { listJumpKey } from "./desktop/commands/listNavigation";
 import {
   type Attachment,
   filesToAttachments,
@@ -211,6 +212,10 @@ const DesktopPendingEditCommandBindings = lazy(async () => {
 const DesktopRegionShortcut = lazy(async () => {
   const module = await import("./desktop/DesktopRegionShortcut");
   return { default: module.DesktopRegionShortcut };
+});
+const DesktopListJumpKeycap = lazy(async () => {
+  const module = await import("./desktop/commands/DesktopListJumpKeycap");
+  return { default: module.DesktopListJumpKeycap };
 });
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
@@ -3087,6 +3092,25 @@ function PendingPanel({
             {count} {noun}
             {count === 1 ? "" : "s"}
           </Typography>
+          {desktop && (
+            <Suspense
+              fallback={
+                <ShortcutKeycap
+                  keyLabel="G"
+                  variant="context"
+                  availability="inactive"
+                  sx={{ ml: 0.75 }}
+                />
+              }
+            >
+              <DesktopListJumpKeycap
+                region={`prompt.${kind}`}
+                keyLabel="G"
+                prefix
+                sx={{ ml: 0.75 }}
+              />
+            </Suspense>
+          )}
           {/* Why-it's-held badge: the queue is manually paused, so it won't drain
               until the user resumes (the ⏸ toggle in the nav/status bar). */}
           {queueHeld && (
@@ -3238,9 +3262,10 @@ function PendingPanel({
             }),
           }}
         >
-          {sortable.order.map((id) => {
+          {sortable.order.map((id, index) => {
             const m = byId.get(id);
             if (!m) return null;
+            const jumpKey = desktop ? listJumpKey(index) : null;
             // A LOCAL optimistic draft (carries `status`) renders a lightweight
             // row with no grip / edit / reorder — it isn't a server item yet.
             const optimistic = m.status !== undefined;
@@ -3265,6 +3290,39 @@ function PendingPanel({
                   }
                   : undefined}
               >
+                {jumpKey && (
+                  <Suspense
+                    fallback={
+                      <Box
+                        component="span"
+                        sx={{
+                          width: 28,
+                          alignSelf: "stretch",
+                          pt: 0.75,
+                          display: "inline-flex",
+                          justifyContent: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <ShortcutKeycap
+                          keyLabel={jumpKey}
+                          variant="context"
+                          availability="inactive"
+                        />
+                      </Box>
+                    }
+                  >
+                    <DesktopListJumpKeycap
+                      region={`prompt.${kind}`}
+                      keyLabel={jumpKey}
+                      sx={{
+                        width: 28,
+                        alignSelf: "stretch",
+                        pt: 0.75,
+                      }}
+                    />
+                  </Suspense>
+                )}
                 {
                   /* Leading grip — visibility is ADAPTIVE: on a narrow panel it's
                     hidden until reorder mode (so rows reclaim ~40px), but on a wide
