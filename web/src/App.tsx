@@ -71,6 +71,7 @@ import { SessionControls } from "./Composer";
 import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import { machineProviderAvailable } from "./machineProvider";
+import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { Transcript } from "./Transcript";
 import {
     PROVIDERS,
@@ -1223,6 +1224,7 @@ type MachineChoice = {
         active_leases: number;
         auth?: string;
         detail?: string;
+        update?: MachineComponentUpdate;
     }[];
 };
 
@@ -3764,13 +3766,14 @@ function MachinesContent(): React.JSX.Element {
                                                 const unavailable = component.state === "missing";
                                                 const failed = component.state === "failed" || component.auth === "error" || component.auth === "expired";
                                                 const ready = component.state === "active" && component.auth === "signed_in";
-                                                const state = unavailable ? "unavailable" : ready ? "ready" : failed ? "error" : component.auth === "signed_out" ? "sign in" : component.state;
+                                                const updateAvailable = component.update?.available === true;
+                                                const state = unavailable ? "unavailable" : failed ? "error" : component.auth === "signed_out" ? "sign in" : updateAvailable ? "update" : ready ? "ready" : component.state;
                                                 return (
                                                     <Chip
                                                         key={component.id.slot}
                                                         size="small"
                                                         variant="outlined"
-                                                        color={ready ? "success" : failed ? "error" : "default"}
+                                                        color={failed ? "error" : updateAvailable ? "warning" : ready ? "success" : "default"}
                                                         label={`${machineProviderName(component.id.slot)} · ${state}`}
                                                     />
                                                 );
@@ -3861,6 +3864,16 @@ function MachinesContent(): React.JSX.Element {
                                                     id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
                                                 );
                                                 const componentKey = `${machine.id}:component:${component.id.kind}:${component.id.slot ?? ""}`;
+                                                const update = component.update;
+                                                const release = machineVersionPresentation(
+                                                    component.version,
+                                                    component.state,
+                                                    update,
+                                                    componentPending,
+                                                );
+                                                const updateTitle = update
+                                                    ? `Checked ${new Date(update.checked_at_ms).toLocaleString()} via ${update.source}`
+                                                    : "No authoritative release comparison is available";
                                                 return (
                                                     <Stack
                                                         key={`${component.id.kind}:${component.id.slot ?? ""}`}
@@ -3879,24 +3892,34 @@ function MachinesContent(): React.JSX.Element {
                                                             <Typography variant="body2" fontWeight={650}>
                                                                 {machineComponentName(component)}
                                                             </Typography>
-                                                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
-                                                                {component.version || component.state}
+                                                            <Typography
+                                                                variant="caption"
+                                                                color="text.secondary"
+                                                                title={updateTitle}
+                                                                sx={{ display: "block", overflowWrap: "anywhere" }}
+                                                            >
+                                                                {release.version}
                                                                 {component.auth ? ` · ${component.auth.replaceAll("_", " ")}` : ""}
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
                                                         </Box>
-                                                        <Chip
-                                                            size="small"
-                                                            variant="outlined"
-                                                            color={component.state === "active" ? "success" : component.state === "failed" ? "error" : "default"}
-                                                            label={componentPending ? "Update" : component.state}
-                                                        />
                                                         {componentPending && (
                                                             <Button
                                                                 size="small"
+                                                                variant="outlined"
+                                                                color="warning"
                                                                 disabled={busy[componentKey]}
                                                                 onClick={() => updateOne(machine.id, component)}
                                                             >{busy[componentKey] ? <CircularProgress size={14} /> : "Update"}</Button>
+                                                        )}
+                                                        {!componentPending && (
+                                                            <Chip
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color={release.tone}
+                                                                label={release.status}
+                                                                title={updateTitle}
+                                                            />
                                                         )}
                                                     </Stack>
                                                 );

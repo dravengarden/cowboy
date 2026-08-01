@@ -85,6 +85,23 @@ pub struct ComponentInventory {
     pub auth: Option<AuthState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Latest release observed from the component's authoritative update
+    /// channel. Absent means the Machine could not establish a trustworthy
+    /// comparison; it must not be interpreted as "up to date".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<ComponentUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentUpdate {
+    pub latest_version: String,
+    pub available: bool,
+    pub source: String,
+    pub checked_at_ms: i64,
+    /// True only when Cowboy has a signed artifact it can reconcile. Release
+    /// discovery alone never grants the browser authority to mutate a host.
+    #[serde(default)]
+    pub installable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -366,6 +383,20 @@ mod tests {
     }
 
     #[test]
+    fn old_component_inventory_does_not_claim_release_freshness() {
+        let component: ComponentInventory = serde_json::from_value(serde_json::json!({
+            "id": { "kind": "provider_cli", "slot": "codex" },
+            "state": "active",
+            "version": "0.145.0",
+            "generation": "",
+            "digest": "",
+            "active_leases": 0
+        }))
+        .unwrap();
+        assert_eq!(component.update, None);
+    }
+
+    #[test]
     fn old_machine_hello_defaults_to_a_safe_single_session_capacity() {
         let hello: MachineHello = serde_json::from_value(serde_json::json!({
             "machine_id": "old",
@@ -462,6 +493,7 @@ mod tests {
                 active_leases: 1,
                 auth: None,
                 detail: None,
+                update: None,
             })
             .collect::<Vec<_>>();
         let json = serde_json::to_value(inventory).expect("serialize inventory");

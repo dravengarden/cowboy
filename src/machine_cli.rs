@@ -19,9 +19,9 @@ use crate::agentd::{AgentdArgs, SpawnMode};
 use crate::machine_auth::MachineIdentity;
 use crate::machine_components::ComponentStore;
 use crate::machine_protocol::{
-    AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ConnectionMode,
-    MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity, MachineCommand,
-    MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
+    AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
+    ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
+    MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
 };
 
 type LoginCancels =
@@ -648,6 +648,7 @@ async fn collect_inventory(
         active_leases: 1,
         auth: None,
         detail: None,
+        update: None,
     }];
     let mut managed = store.active().unwrap_or_default();
     managed.retain(|(component, _)| {
@@ -671,6 +672,7 @@ async fn collect_inventory(
             active_leases: 0,
             auth: None,
             detail: None,
+            update: None,
         }
     }));
     if !has_managed_acp {
@@ -687,6 +689,7 @@ async fn collect_inventory(
             active_leases: 0,
             auth: None,
             detail: Some("bootstrap generation".to_owned()),
+            update: None,
         });
     }
     for (slot, command, version_args) in [
@@ -757,6 +760,7 @@ async fn collect_inventory(
             active_leases: 0,
             auth: Some(auth),
             detail,
+            update: None,
         });
     }
     inventory.push(probe_zed_inventory(zed_adapter_socket).await);
@@ -815,9 +819,98 @@ async fn collect_inventory(
             active_leases: 0,
             auth: None,
             detail,
+            update: None,
         });
     }
+    apply_npm_release_status(&mut inventory).await;
     inventory
+}
+
+const NPM_COMPONENTS: &[(ComponentKind, &str, &str)] = &[
+    (ComponentKind::ProviderCli, "codex", "@openai/codex"),
+    (
+        ComponentKind::ProviderCli,
+        "claude",
+        "@anthropic-ai/claude-code",
+    ),
+    (ComponentKind::ProviderCli, "gemini", "@google/gemini-cli"),
+    (
+        ComponentKind::ProviderAdapter,
+        "codex",
+        "@agentclientprotocol/codex-acp",
+    ),
+    (
+        ComponentKind::ProviderAdapter,
+        "claude",
+        "@agentclientprotocol/claude-agent-acp",
+    ),
+];
+
+async fn apply_npm_release_status(inventory: &mut [ComponentInventory]) {
+    let (installed, outdated) = tokio::join!(
+        npm_json(&["list", "--global", "--depth=0", "--json"]),
+        npm_json(&["outdated", "--global", "--json"]),
+    );
+    let Some(installed) = installed else {
+        return;
+    };
+    let Some(dependencies) = installed
+        .get("dependencies")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    let Some(outdated) = outdated.as_ref().and_then(serde_json::Value::as_object) else {
+        // A successful install probe is not evidence that the registry check
+        // succeeded. Keep freshness unknown rather than claiming everything is
+        // current after an offline or timed-out `npm outdated`.
+        return;
+    };
+    let checked_at_ms = unix_ms();
+    for component in inventory {
+        let Some((_, _, package)) = NPM_COMPONENTS
+            .iter()
+            .find(|(kind, slot, _)| &component.id.kind == kind && component.id.slot == *slot)
+        else {
+            continue;
+        };
+        let Some(current) = dependencies
+            .get(*package)
+            .and_then(|value| value.get("version"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let latest = outdated
+            .get(*package)
+            .and_then(|value| value.get("latest"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(current);
+        component.update = Some(ComponentUpdate {
+            latest_version: latest.to_owned(),
+            available: current != latest,
+            source: "npm registry".to_owned(),
+            checked_at_ms,
+            installable: false,
+        });
+    }
+}
+
+async fn npm_json(args: &[&str]) -> Option<serde_json::Value> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(8),
+        tokio::process::Command::new("npm")
+            .args(args)
+            .env("NO_UPDATE_NOTIFIER", "1")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    // `npm outdated` deliberately exits non-zero when updates exist, so its
+    // JSON stdout is authoritative regardless of the process status.
+    serde_json::from_slice(&output.stdout).ok()
 }
 
 async fn probe_zed_inventory(socket: Option<&std::path::Path>) -> ComponentInventory {
@@ -834,6 +927,7 @@ async fn probe_zed_inventory(socket: Option<&std::path::Path>) -> ComponentInven
         active_leases: 0,
         auth: None,
         detail: Some("Cowboy Zed adapter is not configured".to_owned()),
+        update: None,
     };
     let Some(socket) = socket else {
         return component;

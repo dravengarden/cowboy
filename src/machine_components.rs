@@ -152,6 +152,7 @@ impl ComponentStore {
             active_leases: 0,
             auth: None,
             detail: None,
+            update: None,
         })
     }
 

@@ -1692,6 +1692,22 @@ async fn api_machines(State(state): State<Arc<AppState>>) -> Response {
                             ) {
                                 component.active_leases = u64::from(active_sessions);
                             }
+                            if let Some(desired) = state
+                                .desired_machine_components
+                                .iter()
+                                .find(|desired| desired.id == component.id)
+                            {
+                                let available = component.state
+                                    != crate::machine_protocol::ComponentState::Active
+                                    || !component.digest.eq_ignore_ascii_case(&desired.digest);
+                                component.update = Some(crate::machine_protocol::ComponentUpdate {
+                                    latest_version: desired.version.clone(),
+                                    available,
+                                    source: "signed Cowboy manifest".to_owned(),
+                                    checked_at_ms: now_ms(),
+                                    installable: available,
+                                });
+                            }
                         }
                         let pending_updates = state
                             .desired_machine_components
@@ -2594,6 +2610,7 @@ mod machine_provider_tests {
             active_leases: 0,
             auth,
             detail: None,
+            update: None,
         }
     }
 
