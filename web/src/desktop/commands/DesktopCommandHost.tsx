@@ -18,6 +18,7 @@ import {
 } from "./DesktopCommandProvider";
 import { DesktopShortcut } from "./DesktopKeycap";
 import { DesktopShortcutsDialog } from "./DesktopShortcutsDialog";
+import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./workspaceShortcuts";
 
 function DesktopCommandRegistration(
   { command }: { command: DesktopCommand },
@@ -117,7 +118,7 @@ export function DesktopCommandHost({
       id: "workspace.focusPrompt",
       title: "Focus Prompt",
       group: "Workspace",
-      shortcut: "Mod+P",
+      shortcut: DESKTOP_FOCUS_PROMPT_SHORTCUT,
       allowInEditor: true,
       run: () => workspace.focusPane("prompt"),
     },

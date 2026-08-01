@@ -3,6 +3,7 @@ import {
   assertMacShortcutAllowed,
   macShortcutConflict,
 } from "./macShortcutPolicy";
+import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./workspaceShortcuts";
 
 Deno.test("macOS destructive and system shortcuts are rejected", () => {
   for (
@@ -43,7 +44,7 @@ Deno.test("common Command shortcuts require matching native semantics", () => {
 Deno.test("Cowboy workspace chords avoid Command collisions", () => {
   for (const [commandId, shortcut] of [
     ["workspace.focusSessions", "Mod+E"],
-    ["workspace.focusPrompt", "Mod+P"],
+    ["workspace.focusPrompt", DESKTOP_FOCUS_PROMPT_SHORTCUT],
     ["workspace.focusConversation", "Mod+L"],
     ["workspace.focusTopbar", "Mod+T"],
     ["commandPalette.open", "Mod+K"],

@@ -13,6 +13,7 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
+import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./commands/workspaceShortcuts";
 
 const PROMPT_MIN = 360;
 const CONVERSATION_MIN = 520;
@@ -128,7 +129,7 @@ export function DesktopWorkspace({
       >
         <PaneHeader
           pane="prompt"
-          shortcut={{ value: "Mod+P", title: "Focus Prompt" }}
+          shortcut={{ value: DESKTOP_FOCUS_PROMPT_SHORTCUT, title: "Focus Prompt" }}
         >
           Prompt
         </PaneHeader>

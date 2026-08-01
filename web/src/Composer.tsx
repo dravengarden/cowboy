@@ -124,6 +124,7 @@ import {
   desktopEmbeddedControlSx,
   desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
+import { DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
 import {
   type Attachment,
   filesToAttachments,
@@ -1497,8 +1498,8 @@ export function ComposerWorkspace({
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
-              shortcut="Mod+I"
-              title="Focus editor in Vim Normal mode"
+              shortcut={DESKTOP_FOCUS_PROMPT_SHORTCUT}
+              title="Focus prompt editor"
               showWhenPane="prompt"
               hideWhenRegion="prompt.composer"
               sx={{ position: "absolute", top: 10, right: 10, zIndex: 4 }}
