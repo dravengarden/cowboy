@@ -31,7 +31,6 @@ import {
     ListItemIcon,
     ListItemText,
     ListSubheader,
-    Link,
     Menu,
     MenuItem,
     Paper,
@@ -3581,7 +3580,7 @@ function AutoResumeSettings({ showToggle = true }: { showToggle?: boolean } = {}
 }
 
 type MachineEventView =
-    | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; expires_at_ms: number }
+    | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; input_required?: boolean; expires_at_ms: number }
     | { event: "login_state"; request_id: string; provider: string; state: string; account_label?: string; detail?: string }
     | { event: "command_result"; request_id: string; accepted: boolean; detail?: string }
     | { event: "inventory"; observed_at_ms: number; components: unknown[] };
@@ -3610,6 +3609,7 @@ function MachinesContent(): React.JSX.Element {
     const [events, setEvents] = useState<Record<string, readonly MachineEventView[]>>({});
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<Record<string, boolean>>({});
+    const [loginCodes, setLoginCodes] = useState<Record<string, string>>({});
     const loadEvents = useCallback((machineId: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
             .then((response) => response.ok ? response.json() : [])
@@ -3656,6 +3656,22 @@ function MachinesContent(): React.JSX.Element {
         }).finally(() => {
             setBusy((current) => ({ ...current, [key]: false }));
             globalThis.setTimeout(refresh, 500);
+        });
+    };
+    const submitLoginCode = (machineId: string, requestId: string): void => {
+        const code = loginCodes[requestId]?.trim() ?? "";
+        if (!code) return;
+        const key = `${machineId}:login-code:${requestId}`;
+        setBusy((current) => ({ ...current, [key]: true }));
+        void fetch(`/api/machines/${encodeURIComponent(machineId)}/login/${encodeURIComponent(requestId)}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ code }),
+        }).then((response) => {
+            if (response.ok) setLoginCodes((current) => ({ ...current, [requestId]: "" }));
+        }).finally(() => {
+            setBusy((current) => ({ ...current, [key]: false }));
+            globalThis.setTimeout(() => loadEvents(machineId), 300);
         });
     };
     return (
@@ -3713,9 +3729,6 @@ function MachinesContent(): React.JSX.Element {
                         ),
                     },
                 ].filter((section) => section.components.length > 0);
-                const challenge = [...(events[machine.id] ?? [])].reverse().find((event) =>
-                    event.event === "login_challenge" && event.expires_at_ms > Date.now()
-                );
                 return (
                     <Paper
                         key={machine.id}
@@ -3846,15 +3859,6 @@ function MachinesContent(): React.JSX.Element {
                                                 disabled={busy[`${machine.id}:refresh:`]}
                                                 onClick={() => command(machine.id, "refresh")}
                                             >Refresh</Button>
-                                            {providerComponents.filter((component) =>
-                                                component.auth && component.auth !== "signed_in"
-                                            ).map((component) => (
-                                                <Button
-                                                    key={component.id.slot}
-                                                    size="small"
-                                                    onClick={() => command(machine.id, "login", component.id.slot)}
-                                                >Sign in {component.id.slot}</Button>
-                                            ))}
                                     </Stack>
                                     {componentSections.map((section) => (
                                         <Stack key={section.label} spacing={0.75}>
@@ -3874,12 +3878,27 @@ function MachinesContent(): React.JSX.Element {
                                                 const updateTitle = update
                                                     ? `Checked ${new Date(update.checked_at_ms).toLocaleString()} via ${update.source}`
                                                     : "No authoritative release comparison is available";
+                                                const provider = component.id.kind === "provider_cli" ? component.id.slot : undefined;
+                                                const authEvent = provider
+                                                    ? [...(events[machine.id] ?? [])].reverse().find((event) =>
+                                                        (event.event === "login_challenge" || event.event === "login_state") && event.provider === provider
+                                                    )
+                                                    : undefined;
+                                                const loginChallenge = authEvent?.event === "login_challenge" && authEvent.expires_at_ms > Date.now()
+                                                    ? authEvent
+                                                    : undefined;
+                                                const loginPending = authEvent?.event === "login_challenge" ||
+                                                    (authEvent?.event === "login_state" && authEvent.state === "pending");
+                                                const loginBusyKey = `${machine.id}:login:${provider ?? ""}`;
+                                                const loginBusy = busy[loginBusyKey] || loginPending;
                                                 return (
                                                     <Stack
                                                         key={`${component.id.kind}:${component.id.slot ?? ""}`}
                                                         direction="row"
                                                         spacing={1}
                                                         alignItems="center"
+                                                        flexWrap="wrap"
+                                                        useFlexGap
                                                         sx={{
                                                             minWidth: 0,
                                                             py: 0.75,
@@ -3903,7 +3922,22 @@ function MachinesContent(): React.JSX.Element {
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
                                                         </Box>
-                                                        {componentPending && (
+                                                        {provider && component.auth === "signed_in" && (
+                                                            <Chip size="small" color="success" variant="outlined" label="Signed in" />
+                                                        )}
+                                                        {provider && component.auth !== "signed_in" && provider !== "gemini" && (
+                                                            <Button
+                                                                size="small"
+                                                                variant={loginBusy ? "outlined" : "contained"}
+                                                                disabled={loginBusy}
+                                                                startIcon={loginBusy ? <CircularProgress size={14} /> : undefined}
+                                                                onClick={() => command(machine.id, "login", provider)}
+                                                            >{loginBusy ? "Waiting" : "Sign in"}</Button>
+                                                        )}
+                                                        {provider === "gemini" && component.auth !== "signed_in" && (
+                                                            <Chip size="small" variant="outlined" label="Sign in on Machine" />
+                                                        )}
+                                                        {!provider && componentPending && (
                                                             <Button
                                                                 size="small"
                                                                 variant="outlined"
@@ -3912,7 +3946,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 onClick={() => updateOne(machine.id, component)}
                                                             >{busy[componentKey] ? <CircularProgress size={14} /> : "Update"}</Button>
                                                         )}
-                                                        {!componentPending && (
+                                                        {!provider && !componentPending && (
                                                             <Chip
                                                                 size="small"
                                                                 variant="outlined"
@@ -3921,34 +3955,79 @@ function MachinesContent(): React.JSX.Element {
                                                                 title={updateTitle}
                                                             />
                                                         )}
+                                                        {loginChallenge && (
+                                                            <Alert
+                                                                severity="info"
+                                                                sx={{ width: "100%", alignItems: "flex-start", mt: 0.25 }}
+                                                            >
+                                                                <Stack spacing={1} sx={{ minWidth: 0 }}>
+                                                                    <Typography variant="body2" fontWeight={650}>
+                                                                        Finish signing in to {machineProviderName(provider)}
+                                                                    </Typography>
+                                                                    <Typography variant="caption" color="text.secondary">
+                                                                        {loginChallenge.input_required
+                                                                            ? "Open the sign-in page, approve access, then paste the authorization code shown by the browser."
+                                                                            : "Open the sign-in page and enter the device code. Cowboy will finish automatically."}
+                                                                    </Typography>
+                                                                    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                                                        <Button
+                                                                            size="small"
+                                                                            variant="contained"
+                                                                            component="a"
+                                                                            href={loginChallenge.verification_url}
+                                                                            target="_blank"
+                                                                            rel="noreferrer"
+                                                                        >Open sign-in page</Button>
+                                                                        {loginChallenge.user_code && (
+                                                                            <Button
+                                                                                size="small"
+                                                                                variant="outlined"
+                                                                                onClick={() => void navigator.clipboard.writeText(loginChallenge.user_code ?? "")}
+                                                                            >Copy {loginChallenge.user_code}</Button>
+                                                                        )}
+                                                                        <Button
+                                                                            size="small"
+                                                                            color="inherit"
+                                                                            onClick={() => {
+                                                                                void fetch(
+                                                                                    `/api/machines/${encodeURIComponent(machine.id)}/login/${encodeURIComponent(loginChallenge.request_id)}`,
+                                                                                    { method: "DELETE" },
+                                                                                ).finally(() => loadEvents(machine.id));
+                                                                            }}
+                                                                        >Cancel</Button>
+                                                                    </Stack>
+                                                                    {loginChallenge.input_required && (
+                                                                        <Stack direction={{ xs: "column", sm: "row" }} spacing={0.75}>
+                                                                            <TextField
+                                                                                size="small"
+                                                                                fullWidth
+                                                                                label="Authorization code"
+                                                                                value={loginCodes[loginChallenge.request_id] ?? ""}
+                                                                                autoComplete="off"
+                                                                                onChange={(event) => setLoginCodes((current) => ({
+                                                                                    ...current,
+                                                                                    [loginChallenge.request_id]: event.target.value,
+                                                                                }))}
+                                                                                onKeyDown={(event) => {
+                                                                                    if (event.key === "Enter") submitLoginCode(machine.id, loginChallenge.request_id);
+                                                                                }}
+                                                                            />
+                                                                            <Button
+                                                                                variant="contained"
+                                                                                disabled={!loginCodes[loginChallenge.request_id]?.trim() || busy[`${machine.id}:login-code:${loginChallenge.request_id}`]}
+                                                                                onClick={() => submitLoginCode(machine.id, loginChallenge.request_id)}
+                                                                            >{busy[`${machine.id}:login-code:${loginChallenge.request_id}`] ? <CircularProgress size={16} /> : "Continue"}</Button>
+                                                                        </Stack>
+                                                                    )}
+                                                                </Stack>
+                                                            </Alert>
+                                                        )}
                                                     </Stack>
                                                 );
                                             })}
                                         </Stack>
                                     ))}
-                                    {providerComponents.some((component) =>
-                                        component.id.slot === "gemini" && component.auth !== "signed_in"
-                                    ) && (
-                                        <Typography variant="caption" color="text.secondary">
-                                            Gemini sign-in stays in the official CLI on {machine.display_name}.
-                                        </Typography>
-                                    )}
                                 </Stack>
-                            )}
-                            {challenge?.event === "login_challenge" && (
-                                <Alert severity="info">
-                                    Open <Link href={challenge.verification_url} target="_blank" rel="noreferrer">{challenge.verification_url}</Link>
-                                    {challenge.user_code ? ` and enter ${challenge.user_code}` : ""}
-                                    <Button
-                                        size="small"
-                                        onClick={() => {
-                                            void fetch(
-                                                `/api/machines/${encodeURIComponent(machine.id)}/login/${encodeURIComponent(challenge.request_id)}`,
-                                                { method: "DELETE" },
-                                            ).finally(() => loadEvents(machine.id));
-                                        }}
-                                    >Cancel</Button>
-                                </Alert>
                             )}
                             {latest && latest.event !== "inventory" && (
                                 <Typography variant="caption" color="text.secondary">

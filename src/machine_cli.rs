@@ -24,8 +24,18 @@ use crate::machine_protocol::{
     MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
 };
 
-type LoginCancels =
-    Arc<parking_lot::Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>;
+struct LoginSession {
+    cancel: tokio::sync::watch::Sender<bool>,
+    input: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+type LoginSessions = Arc<parking_lot::Mutex<std::collections::HashMap<String, LoginSession>>>;
+
+struct LoginIo {
+    cancel: tokio::sync::watch::Receiver<bool>,
+    input: tokio::sync::mpsc::UnboundedReceiver<String>,
+    sessions: LoginSessions,
+}
 
 struct ControllerConfig {
     controller_url: String,
@@ -577,7 +587,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let login_cancels: LoginCancels = Arc::default();
+    let login_sessions: LoginSessions = Arc::default();
     heartbeat.tick().await;
     loop {
         tokio::select! {
@@ -611,7 +621,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                     config.zed_adapter_socket.clone(),
                                     config.code_adapter_socket.clone(),
                                     config.workspaces.clone(),
-                                    Arc::clone(&login_cancels),
+                                    Arc::clone(&login_sessions),
                                 );
                             }
                             _ => {}
@@ -1049,7 +1059,7 @@ fn handle_machine_command(
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     workspaces: Vec<MachineWorkspace>,
-    login_cancels: LoginCancels,
+    login_sessions: LoginSessions,
 ) {
     match command {
         MachineCommand::RefreshInventory { request_id } => {
@@ -1072,15 +1082,25 @@ fn handle_machine_command(
             provider,
         } => {
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            login_cancels.lock().insert(request_id.clone(), cancel_tx);
+            let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
+            login_sessions.lock().insert(
+                request_id.clone(),
+                LoginSession {
+                    cancel: cancel_tx,
+                    input: input_tx,
+                },
+            );
             tokio::spawn(run_login(
                 request_id,
                 provider,
                 events,
                 components,
                 zed_adapter_socket,
-                cancel_rx,
-                login_cancels,
+                LoginIo {
+                    cancel: cancel_rx,
+                    input: input_rx,
+                    sessions: login_sessions,
+                },
             ));
         }
         MachineCommand::AdapterRequest {
@@ -1128,14 +1148,27 @@ fn handle_machine_command(
             });
         }
         MachineCommand::CancelLogin { request_id } => {
-            let accepted = login_cancels
+            let accepted = login_sessions
                 .lock()
                 .remove(&request_id)
-                .is_some_and(|cancel| cancel.send(true).is_ok());
+                .is_some_and(|session| session.cancel.send(true).is_ok());
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted,
                 detail: (!accepted).then_some("login request is not active".to_owned()),
+            });
+        }
+        MachineCommand::SubmitLoginCode { request_id, code } => {
+            let code = code.trim();
+            let accepted = !code.is_empty()
+                && login_sessions
+                    .lock()
+                    .get(&request_id)
+                    .is_some_and(|session| session.input.send(code.to_owned()).is_ok());
+            let _ = events.send(MachineEvent::CommandResult {
+                request_id,
+                accepted,
+                detail: (!accepted).then_some("login request is not accepting a code".to_owned()),
             });
         }
     }
@@ -1280,14 +1313,13 @@ async fn run_login(
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
     zed_adapter_socket: Option<PathBuf>,
-    mut cancel: tokio::sync::watch::Receiver<bool>,
-    login_cancels: LoginCancels,
+    mut login: LoginIo,
 ) {
     let (command, args): (&str, &[&str]) = match provider.as_str() {
         "codex" => ("codex", &["login", "--device-auth"]),
         "claude" => ("claude", &["auth", "login"]),
         _ => {
-            login_cancels.lock().remove(&request_id);
+            login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted: false,
@@ -1300,6 +1332,7 @@ async fn run_login(
     };
     let mut child = match tokio::process::Command::new(command)
         .args(args)
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
@@ -1307,7 +1340,7 @@ async fn run_login(
     {
         Ok(child) => child,
         Err(error) => {
-            login_cancels.lock().remove(&request_id);
+            login.sessions.lock().remove(&request_id);
             let _ = events.send(MachineEvent::CommandResult {
                 request_id,
                 accepted: false,
@@ -1316,6 +1349,14 @@ async fn run_login(
             return;
         }
     };
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let _ = events.send(MachineEvent::LoginState {
+        request_id: request_id.clone(),
+        provider: provider.clone(),
+        state: AuthState::Pending,
+        account_label: None,
+        detail: Some("starting browser authorization".to_owned()),
+    });
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let mut stdout = tokio::io::BufReader::new(stdout).lines();
@@ -1335,10 +1376,10 @@ async fn run_login(
                 if matches!(line, Ok(None)) { stderr_open = false; }
                 line
             },
-            changed = cancel.changed() => {
-                if changed.is_ok() && *cancel.borrow() {
+            changed = login.cancel.changed() => {
+                if changed.is_ok() && *login.cancel.borrow() {
                     let _ = child.kill().await;
-                    login_cancels.lock().remove(&request_id);
+                    login.sessions.lock().remove(&request_id);
                     let _ = events.send(MachineEvent::LoginState {
                         request_id,
                         provider,
@@ -1347,6 +1388,15 @@ async fn run_login(
                         detail: Some("login cancelled".to_owned()),
                     });
                     return;
+                }
+                continue;
+            },
+            code = login.input.recv() => {
+                if let Some(code) = code
+                    && (stdin.write_all(code.as_bytes()).await.is_err()
+                        || stdin.write_all(b"\n").await.is_err())
+                {
+                    let _ = child.kill().await;
                 }
                 continue;
             }
@@ -1372,19 +1422,24 @@ async fn run_login(
                 user_code = Some(trimmed.to_owned());
             }
         }
-        if !challenge_sent && let Some(url) = verification_url.clone() {
+        let challenge_ready = provider == "claude" || user_code.is_some();
+        if !challenge_sent
+            && challenge_ready
+            && let Some(url) = verification_url.clone()
+        {
             let _ = events.send(MachineEvent::LoginChallenge {
                 request_id: request_id.clone(),
                 provider: provider.clone(),
                 verification_url: url,
                 user_code: user_code.clone(),
+                input_required: provider == "claude",
                 expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
             });
             challenge_sent = true;
         }
     }
     let status = child.wait().await;
-    login_cancels.lock().remove(&request_id);
+    login.sessions.lock().remove(&request_id);
     let signed_in = status.is_ok_and(|status| status.success());
     let _ = events.send(MachineEvent::LoginState {
         request_id: request_id.clone(),

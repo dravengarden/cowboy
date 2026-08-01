@@ -262,6 +262,10 @@ pub enum MachineCommand {
     CancelLogin {
         request_id: String,
     },
+    SubmitLoginCode {
+        request_id: String,
+        code: String,
+    },
     RefreshInventory {
         request_id: String,
     },
@@ -293,6 +297,8 @@ pub enum MachineEvent {
         verification_url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         user_code: Option<String>,
+        #[serde(default)]
+        input_required: bool,
         expires_at_ms: i64,
     },
     LoginState {
@@ -394,6 +400,26 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(component.update, None);
+    }
+
+    #[test]
+    fn old_login_challenge_defaults_to_browser_only_completion() {
+        let event: MachineEvent = serde_json::from_value(serde_json::json!({
+            "event": "login_challenge",
+            "request_id": "login-1",
+            "provider": "codex",
+            "verification_url": "https://example.invalid/device",
+            "user_code": "ABCD-EFGH",
+            "expires_at_ms": 1
+        }))
+        .unwrap();
+        assert!(matches!(
+            event,
+            MachineEvent::LoginChallenge {
+                input_required: false,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -1013,7 +1013,7 @@ async fn serve_axum(
         .route("/api/machines/{id}/login", post(api_machine_login))
         .route(
             "/api/machines/{id}/login/{request_id}",
-            axum::routing::delete(api_machine_login_cancel),
+            post(api_machine_login_submit).delete(api_machine_login_cancel),
         )
         .route(
             "/api/machines/{id}/components/reconcile",
@@ -1770,6 +1770,11 @@ struct MachineLoginRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct MachineLoginCodeRequest {
+    code: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct MachineEnrollmentRequest {
     machine_id: String,
     display_name: String,
@@ -1852,6 +1857,27 @@ async fn api_machine_login(
         crate::machine_protocol::MachineCommand::BeginLogin {
             request_id: request_id.clone(),
             provider: request.provider,
+        },
+    ) {
+        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_machine_login_submit(
+    State(state): State<Arc<AppState>>,
+    Path((machine_id, request_id)): Path<(String, String)>,
+    Json(request): Json<MachineLoginCodeRequest>,
+) -> Response {
+    let code = request.code.trim();
+    if code.is_empty() || code.len() > 16_384 {
+        return (StatusCode::BAD_REQUEST, "authorization code is invalid").into_response();
+    }
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::SubmitLoginCode {
+            request_id: request_id.clone(),
+            code: code.to_owned(),
         },
     ) {
         Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
