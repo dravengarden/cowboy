@@ -70,6 +70,7 @@ import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import { machineProviderAvailable } from "./machineProvider";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
+import { DelayedNetworkProgress } from "./NetworkActionFeedback";
 import { Transcript } from "./Transcript";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
@@ -3889,7 +3890,7 @@ function MachinesContent(): React.JSX.Element {
                                 <Button
                                     size="small"
                                     variant="contained"
-                                    startIcon={busy[`${machine.id}:components/reconcile:`] ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
+                                    startIcon={busy[`${machine.id}:components/reconcile:`] ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
                                     disabled={busy[`${machine.id}:components/reconcile:`]}
                                     onClick={() => requestReconcileAll(machine)}
                                     sx={{ alignSelf: "flex-start" }}
@@ -3937,7 +3938,7 @@ function MachinesContent(): React.JSX.Element {
                                     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                                             <Button
                                                 size="small"
-                                                startIcon={busy[`${machine.id}:refresh:`] ? <CircularProgress size={14} /> : <RefreshIcon />}
+                                                startIcon={busy[`${machine.id}:refresh:`] ? <DelayedNetworkProgress size={14} /> : <RefreshIcon />}
                                                 disabled={busy[`${machine.id}:refresh:`]}
                                                 onClick={() => command(machine.id, "refresh")}
                                             >Refresh</Button>
@@ -4015,7 +4016,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 size="small"
                                                                 variant={loginBusy ? "outlined" : "contained"}
                                                                 disabled={loginBusy}
-                                                                startIcon={loginBusy ? <CircularProgress size={14} /> : undefined}
+                                                                startIcon={loginBusy ? <DelayedNetworkProgress size={14} /> : undefined}
                                                                 onClick={() => command(machine.id, "login", provider)}
                                                             >{loginBusy ? "Waiting" : "Sign in"}</Button>
                                                         )}
@@ -4025,7 +4026,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 variant="outlined"
                                                                 color="warning"
                                                                 disabled={npmUpdating}
-                                                                startIcon={npmUpdating ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
+                                                                startIcon={npmUpdating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
                                                                 onClick={() => requestNpmUpdate(machine.id, component)}
                                                             >{npmUpdating ? "Updating" : "Update"}</Button>
                                                         )}
@@ -4036,7 +4037,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 color="warning"
                                                                 disabled={busy[componentKey]}
                                                                 onClick={() => requestReconcileOne(machine.id, component)}
-                                                            >{busy[componentKey] ? <CircularProgress size={14} /> : "Update"}</Button>
+                                                            >{busy[componentKey] ? <DelayedNetworkProgress size={14} /> : "Update"}</Button>
                                                         )}
                                                         {!provider && !componentPending && npmInstallable && (
                                                             <Button
@@ -4044,7 +4045,7 @@ function MachinesContent(): React.JSX.Element {
                                                                 variant="outlined"
                                                                 color="warning"
                                                                 disabled={npmUpdating}
-                                                                startIcon={npmUpdating ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
+                                                                startIcon={npmUpdating ? <DelayedNetworkProgress size={14} /> : <SystemUpdateAlt />}
                                                                 onClick={() => requestNpmUpdate(machine.id, component)}
                                                             >{npmUpdating ? "Updating" : "Update"}</Button>
                                                         )}
@@ -4123,7 +4124,7 @@ function MachinesContent(): React.JSX.Element {
                                                                                 variant="contained"
                                                                                 disabled={!loginCodes[loginChallenge.request_id]?.trim() || busy[`${machine.id}:login-code:${loginChallenge.request_id}`]}
                                                                                 onClick={() => submitLoginCode(machine.id, loginChallenge.request_id)}
-                                                                            >{busy[`${machine.id}:login-code:${loginChallenge.request_id}`] ? <CircularProgress size={16} /> : "Continue"}</Button>
+                                                                            >{busy[`${machine.id}:login-code:${loginChallenge.request_id}`] ? <DelayedNetworkProgress size={16} /> : "Continue"}</Button>
                                                                         </Stack>
                                                                     )}
                                                                 </Stack>

@@ -106,6 +106,31 @@ function ProgressOverlay({ visible, size }: { visible: boolean; size: number }):
   );
 }
 
+/** Drop-in progress glyph for legacy controls that already own their pending
+ * state. Its paint is delayed without another React timer, so list-rendered
+ * machine actions can share the same fast-path behaviour. */
+export function DelayedNetworkProgress(
+  { size = 18, color = "inherit" }: {
+    size?: number;
+    color?: "inherit" | "primary" | "secondary" | "error" | "info" | "success" | "warning";
+  },
+): React.JSX.Element {
+  return (
+    <CircularProgress
+      size={size}
+      color={color}
+      sx={{
+        opacity: 0,
+        animation: `cowboy-network-progress-in 160ms ease ${String(NETWORK_PROGRESS_DELAY_MS)}ms forwards`,
+        "@keyframes cowboy-network-progress-in": {
+          from: { opacity: 0, transform: "scale(0.82)" },
+          to: { opacity: 1, transform: "scale(1)" },
+        },
+      }}
+    />
+  );
+}
+
 export interface NetworkButtonProps extends Omit<ButtonProps, "onClick" | "action"> {
   networkAction: () => Promise<void> | void;
   children: ReactNode;
