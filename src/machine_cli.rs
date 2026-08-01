@@ -856,6 +856,15 @@ const NPM_COMPONENTS: &[(ComponentKind, &str, &str)] = &[
     ),
 ];
 
+static NPM_UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn npm_package_for_component(id: &ComponentId) -> Option<&'static str> {
+    NPM_COMPONENTS
+        .iter()
+        .find(|(kind, slot, _)| &id.kind == kind && id.slot == *slot)
+        .map(|(_, _, package)| *package)
+}
+
 async fn apply_npm_release_status(inventory: &mut [ComponentInventory]) {
     let (installed, outdated) = tokio::join!(
         npm_json(&["list", "--global", "--depth=0", "--json"]),
@@ -901,8 +910,42 @@ async fn apply_npm_release_status(inventory: &mut [ComponentInventory]) {
             available: current != latest,
             source: "npm registry".to_owned(),
             checked_at_ms,
-            installable: false,
+            installable: true,
         });
+    }
+}
+
+async fn update_npm_component(id: &ComponentId) -> anyhow::Result<()> {
+    let package = npm_package_for_component(id).context("component has no npm update channel")?;
+    let _guard = NPM_UPDATE_LOCK.lock().await;
+    let status = tokio::time::timeout(
+        Duration::from_secs(180),
+        tokio::process::Command::new("npm")
+            .args([
+                "install",
+                "--global",
+                "--no-audit",
+                "--no-fund",
+                &format!("{package}@latest"),
+            ])
+            .env("NO_UPDATE_NOTIFIER", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("npm update timed out")??;
+    if status.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&status.stderr).trim().to_owned();
+        bail!(if detail.is_empty() {
+            "npm update failed".to_owned()
+        } else {
+            detail
+        })
     }
 }
 
@@ -1169,6 +1212,27 @@ fn handle_machine_command(
                 request_id,
                 accepted,
                 detail: (!accepted).then_some("login request is not accepting a code".to_owned()),
+            });
+        }
+        MachineCommand::UpdateNpmComponent {
+            request_id,
+            component,
+        } => {
+            tokio::spawn(async move {
+                let result = update_npm_component(&component).await;
+                if result.is_ok() {
+                    let inventory =
+                        collect_inventory(&components, zed_adapter_socket.as_deref()).await;
+                    let _ = events.send(MachineEvent::Inventory {
+                        components: inventory,
+                        observed_at_ms: unix_ms(),
+                    });
+                }
+                let _ = events.send(MachineEvent::CommandResult {
+                    request_id,
+                    accepted: result.is_ok(),
+                    detail: result.err().map(|error| format!("{error:#}")),
+                });
             });
         }
     }
@@ -1563,7 +1627,8 @@ mod tests {
 
     use super::{
         disabled_provider_slots_from, gemini_auth_from_metadata, managed_provider_environment,
-        parse_workspaces, reject_untrusted_workspace, selected_zed_pair, validate_controller_url,
+        npm_package_for_component, parse_workspaces, reject_untrusted_workspace, selected_zed_pair,
+        validate_controller_url,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
@@ -1606,6 +1671,24 @@ mod tests {
         assert_eq!(
             disabled_provider_slots_from("claude-code, gemini"),
             ["claude", "gemini"]
+        );
+    }
+
+    #[test]
+    fn npm_updates_are_confined_to_known_component_ids() {
+        assert_eq!(
+            npm_package_for_component(&ComponentId {
+                kind: ComponentKind::ProviderAdapter,
+                slot: "codex".to_owned(),
+            }),
+            Some("@agentclientprotocol/codex-acp")
+        );
+        assert_eq!(
+            npm_package_for_component(&ComponentId {
+                kind: ComponentKind::ProviderAdapter,
+                slot: "arbitrary-package".to_owned(),
+            }),
+            None
         );
     }
 

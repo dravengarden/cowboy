@@ -266,6 +266,10 @@ pub enum MachineCommand {
         request_id: String,
         code: String,
     },
+    UpdateNpmComponent {
+        request_id: String,
+        component: ComponentId,
+    },
     RefreshInventory {
         request_id: String,
     },

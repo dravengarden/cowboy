@@ -3610,6 +3610,7 @@ function MachinesContent(): React.JSX.Element {
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [loginCodes, setLoginCodes] = useState<Record<string, string>>({});
+    const [componentErrors, setComponentErrors] = useState<Record<string, string>>({});
     const loadEvents = useCallback((machineId: string): void => {
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/events`)
             .then((response) => response.ok ? response.json() : [])
@@ -3673,6 +3674,44 @@ function MachinesContent(): React.JSX.Element {
             setBusy((current) => ({ ...current, [key]: false }));
             globalThis.setTimeout(() => loadEvents(machineId), 300);
         });
+    };
+    const updateNpm = (machineId: string, component: MachineChoice["components"][number]): void => {
+        const key = `${machineId}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
+        setBusy((current) => ({ ...current, [key]: true }));
+        setComponentErrors((current) => ({ ...current, [key]: "" }));
+        void (async () => {
+            try {
+                const response = await fetch(`/api/machines/${encodeURIComponent(machineId)}/components/update-npm`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
+                });
+                if (!response.ok) throw new Error(await response.text() || "Could not start update");
+                const { request_id: requestId } = await response.json() as { request_id: string };
+                for (let attempt = 0; attempt < 180; attempt += 1) {
+                    await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
+                    const eventResponse = await fetch(`/api/machines/${encodeURIComponent(machineId)}/events`);
+                    const machineEvents = eventResponse.ok ? await eventResponse.json() as MachineEventView[] : [];
+                    const result = machineEvents.find((event) =>
+                        event.event === "command_result" && event.request_id === requestId
+                    );
+                    if (result?.event === "command_result") {
+                        if (!result.accepted) throw new Error(result.detail || "Update failed");
+                        refresh();
+                        loadEvents(machineId);
+                        return;
+                    }
+                }
+                throw new Error("Update is still running; refresh to check its result");
+            } catch (error) {
+                setComponentErrors((current) => ({
+                    ...current,
+                    [key]: error instanceof Error ? error.message : "Update failed",
+                }));
+            } finally {
+                setBusy((current) => ({ ...current, [key]: false }));
+            }
+        })();
     };
     return (
         <Stack spacing={2}>
@@ -3891,6 +3930,9 @@ function MachinesContent(): React.JSX.Element {
                                                     (authEvent?.event === "login_state" && authEvent.state === "pending");
                                                 const loginBusyKey = `${machine.id}:login:${provider ?? ""}`;
                                                 const loginBusy = busy[loginBusyKey] || loginPending;
+                                                const npmUpdateKey = `${machine.id}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
+                                                const npmUpdating = busy[npmUpdateKey];
+                                                const npmInstallable = update?.available === true && update.installable;
                                                 return (
                                                     <Stack
                                                         key={`${component.id.kind}:${component.id.slot ?? ""}`}
@@ -3937,6 +3979,16 @@ function MachinesContent(): React.JSX.Element {
                                                         {provider === "gemini" && component.auth !== "signed_in" && (
                                                             <Chip size="small" variant="outlined" label="Sign in on Machine" />
                                                         )}
+                                                        {provider && npmInstallable && (
+                                                            <Button
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color="warning"
+                                                                disabled={npmUpdating}
+                                                                startIcon={npmUpdating ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
+                                                                onClick={() => updateNpm(machine.id, component)}
+                                                            >{npmUpdating ? "Updating" : "Update"}</Button>
+                                                        )}
                                                         {!provider && componentPending && (
                                                             <Button
                                                                 size="small"
@@ -3946,7 +3998,17 @@ function MachinesContent(): React.JSX.Element {
                                                                 onClick={() => updateOne(machine.id, component)}
                                                             >{busy[componentKey] ? <CircularProgress size={14} /> : "Update"}</Button>
                                                         )}
-                                                        {!provider && !componentPending && (
+                                                        {!provider && !componentPending && npmInstallable && (
+                                                            <Button
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color="warning"
+                                                                disabled={npmUpdating}
+                                                                startIcon={npmUpdating ? <CircularProgress size={14} color="inherit" /> : <SystemUpdateAlt />}
+                                                                onClick={() => updateNpm(machine.id, component)}
+                                                            >{npmUpdating ? "Updating" : "Update"}</Button>
+                                                        )}
+                                                        {!provider && !componentPending && !npmInstallable && (
                                                             <Chip
                                                                 size="small"
                                                                 variant="outlined"
@@ -3954,6 +4016,11 @@ function MachinesContent(): React.JSX.Element {
                                                                 label={release.status}
                                                                 title={updateTitle}
                                                             />
+                                                        )}
+                                                        {componentErrors[npmUpdateKey] && (
+                                                            <Alert severity="error" sx={{ width: "100%" }}>
+                                                                {componentErrors[npmUpdateKey]}
+                                                            </Alert>
                                                         )}
                                                         {loginChallenge && (
                                                             <Alert

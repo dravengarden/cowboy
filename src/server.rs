@@ -1023,6 +1023,10 @@ async fn serve_axum(
             "/api/machines/{id}/components/reconcile-one",
             post(api_machine_reconcile_one),
         )
+        .route(
+            "/api/machines/{id}/components/update-npm",
+            post(api_machine_update_npm),
+        )
         .route("/api/machines/{id}/revoke", post(api_machine_revoke))
         .route("/api/machine/enroll", post(api_machine_enroll))
         .route("/api/machine/connect", any(machine_ws_upgrade))
@@ -1928,6 +1932,24 @@ async fn api_machine_reconcile_one(
         crate::machine_protocol::MachineCommand::Reconcile {
             request_id: request_id.clone(),
             components: vec![component],
+        },
+    ) {
+        Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+async fn api_machine_update_npm(
+    State(state): State<Arc<AppState>>,
+    Path(machine_id): Path<String>,
+    Json(component): Json<crate::machine_protocol::ComponentId>,
+) -> Response {
+    let request_id = machine_request_id("update-npm");
+    match state.machine_control.send(
+        &machine_id,
+        crate::machine_protocol::MachineCommand::UpdateNpmComponent {
+            request_id: request_id.clone(),
+            component,
         },
     ) {
         Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),
