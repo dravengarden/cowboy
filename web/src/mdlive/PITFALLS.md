@@ -578,6 +578,18 @@ here says otherwise.
     Never repair this by externalizing inline images or feeding live React text
     back into CM6.
 
+28. **Desktop transactional-edit Escape must follow Vim mode ownership.** A
+    queued/draft row once captured every Escape on its outer Paper before
+    CodeMirror could process it. The first Insert-mode Escape therefore opened
+    the discard dialog instead of merely returning to Normal. The outer capture
+    remains necessary because Normal focus lives on the non-editable command
+    sink, but it must query the mounted editor's actual CM Vim state. Insert,
+    Visual, operator-pending, and partial key-prefix states belong to Vim; only
+    plain Normal may delegate Escape to Cowboy's discard/stop chrome. Do not use
+    asynchronously mirrored React mode text for this boundary, and do not move
+    the check to Mobile or alter the contenteditable node. Verify first Escape
+    Insert to Normal, Visual to Normal, and a second Normal Escape to the modal.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

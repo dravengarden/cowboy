@@ -1,6 +1,9 @@
 import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import type { Envelope } from "./protocol.ts";
-import { advanceTimelinePresentation } from "./timelinePresentation.ts";
+import {
+  advanceTimelinePresentation,
+  revealHistoryPrepend,
+} from "./timelinePresentation.ts";
 
 function chunk(seq: number, text: string): Envelope {
   return {
@@ -60,4 +63,40 @@ Deno.test("drawer catch-up safely adopts non-append timeline replacements", () =
   const step = advanceTimelinePresentation(current, latest);
   assertStrictEquals(step.timeline, latest);
   assertEquals(step.complete, true);
+});
+
+Deno.test("history prepend is revealed without releasing a frozen live tail", () => {
+  const current = [chunk(30, "shown"), chunk(40, "frozen tail")];
+  const latest = [
+    chunk(10, "older a"),
+    chunk(20, "older b"),
+    chunk(30, "canonical replacement"),
+    chunk(40, "new live text"),
+    chunk(50, "new live event"),
+  ];
+
+  const revealed = revealHistoryPrepend(current, latest);
+  assertEquals(revealed.map((entry) => entry.seq), [10, 20, 30, 40]);
+  assertStrictEquals(revealed[2], current[0]);
+  assertStrictEquals(revealed[3], current[1]);
+
+  const secondPage = revealHistoryPrepend(revealed, [
+    chunk(1, "oldest"),
+    ...latest,
+  ]);
+  assertEquals(secondPage.map((entry) => entry.seq), [1, 10, 20, 30, 40]);
+  assertStrictEquals(secondPage[1], revealed[0]);
+  assertStrictEquals(secondPage[4], revealed[3]);
+});
+
+Deno.test("append-only and unrelated timelines remain frozen", () => {
+  const current = [chunk(10, "shown")];
+  assertStrictEquals(
+    revealHistoryPrepend(current, [...current, chunk(20, "live")]),
+    current,
+  );
+  assertStrictEquals(
+    revealHistoryPrepend(current, [chunk(5, "other"), chunk(11, "other")]),
+    current,
+  );
 });

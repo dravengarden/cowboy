@@ -37,6 +37,7 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
+import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import {
@@ -112,7 +113,10 @@ import {
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
-import { advanceTimelinePresentation } from "./timelinePresentation";
+import {
+  advanceTimelinePresentation,
+  revealHistoryPrepend,
+} from "./timelinePresentation";
 import {
   canRestoreTranscriptViewport,
   getTranscriptViewport,
@@ -2922,6 +2926,7 @@ export function Transcript({
   restoreAnchorKey?: string | null | undefined;
   onAnchorRestored?: (() => void) | undefined;
 }): React.JSX.Element {
+  const managesScrollHistory = historyPaging === "scroll";
   // Memoized on `timeline` identity: `applyEnvelope` (store.ts) only hands us a
   // new array when a new event actually lands, so this O(n) fold runs once per
   // event — NOT on every scroll-driven re-render. Stable item identities also
@@ -2938,6 +2943,15 @@ export function Transcript({
   const [drawerCatchupStep, setDrawerCatchupStep] = useState(0);
   if (!renderPausedForScroll && !drawerCatchupActiveRef.current) {
     presentedTimelineRef.current = timeline;
+  } else if (managesScrollHistory) {
+    // Native momentum keeps live tail changes frozen, but an older history page
+    // is safe to reveal immediately: column-reverse inserts it above the current
+    // viewport and preserves every already-visible envelope by reference. Do
+    // not make a 10ms page wait for a long trackpad/touch settle interval.
+    presentedTimelineRef.current = revealHistoryPrepend(
+      presentedTimelineRef.current,
+      timeline,
+    );
   }
   const presentedTimeline = presentedTimelineRef.current;
   const startDrawerCatchupRef = useRef<() => void>(() => undefined);
@@ -3049,7 +3063,6 @@ export function Transcript({
   const showTrailingDots = working && !lastIsStreamingAssistant &&
     !compacting && !compactedAtTail;
   const parentRef = useRef<HTMLDivElement>(null);
-  const managesScrollHistory = historyPaging === "scroll";
   const managesScrollHistoryRef = useRef(managesScrollHistory);
   managesScrollHistoryRef.current = managesScrollHistory;
   // Switching from Explore remounts the History transcript. Remember whether
@@ -4104,6 +4117,7 @@ export function Transcript({
           // Hide focus ring; we keep tabIndex for keyboard scroll capture.
           outline: "none",
           overscrollBehavior: "contain",
+          ...(desktopNavigation ? desktopScrollbarSx : {}),
           // This is a scrolling FLEX column, not a height-constrained toolbar.
           // Flex items default to `flex-shrink: 1`; while a streamed message is
           // growing and the next tool card lands, WebKit can briefly keep the

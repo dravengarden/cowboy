@@ -227,6 +227,8 @@ export const ComposerTextarea = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => inputRef.current?.focus(),
+    // The native touch textarea has no Vim state; Escape belongs to its host.
+    escapeBelongsToApp: (): boolean => true,
     focusEnd: (): void => {
       const ta = inputRef.current;
       if (!ta) return;

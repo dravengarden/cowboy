@@ -3571,6 +3571,11 @@ function PendingRow({
           onKeyDownCapture={desktop
             ? (event): void => {
               if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+              // Capture is required because Normal-mode focus lives on the
+              // non-editable Vim command sink. It must nevertheless respect
+              // the editor's actual mode: Insert/Visual/operator Escape belongs
+              // to Vim first; only plain Normal may open the discard dialog.
+              if (!editorRef.current?.escapeBelongsToApp()) return;
               event.preventDefault();
               event.stopPropagation();
               requestDiscardEdit();

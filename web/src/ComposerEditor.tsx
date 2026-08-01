@@ -54,9 +54,15 @@ import {
 } from "./composerCompletions";
 import type { AvailableCommand } from "./protocol";
 import { createLoadedDesktopVimRuntime } from "./desktop/vim/runtimeLoader";
+import {
+  type VimEscapeState,
+  vimEscapeBelongsToApp,
+} from "./desktop/vim/vimEscapeOwnership";
 
 export interface ComposerEditorHandle {
   focus: () => void;
+  /** Whether the current editor mode may delegate Escape to Cowboy chrome. */
+  escapeBelongsToApp: () => boolean;
   // Focus AND place the caret at the very end of the document — used when
   // opening an existing draft/queued message for editing, so you continue from
   // where the text left off instead of with the caret stranded at the start.
@@ -118,15 +124,13 @@ export interface ComposerEditorHandle {
   redo: () => void;
 }
 
-// Reads whether the editor is in Vim *insert* mode, via the loaded vim module's
-// CM5-compat handle. Lets the Escape keymap (below) decide whether Esc should
-// exit insert mode (vim's job) or bubble up to the app (cancel a running turn).
-// The vim module's CM5-compat handle: enough of it to read insert mode (for the
-// Escape keymap) AND subscribe to `vim-mode-change` (for the NORMAL/INSERT hint
-// surfaced in the composer card).
+// Reads the actual Vim state from the loaded module's CM5-compat handle. Escape
+// stays with Vim through Insert, Visual, and operator/key-prefix states; only
+// plain Normal delegates to Cowboy chrome. The same handle also drives the
+// NORMAL/INSERT hint surfaced in the composer card.
 type VimModeEvent = { mode?: string; subMode?: string };
 type CmVimHandle = {
-  state?: { vim?: { insertMode?: boolean } };
+  state?: { vim?: VimEscapeState };
   on?: (event: "vim-mode-change", handler: (e: VimModeEvent) => void) => void;
   off?: (event: "vim-mode-change", handler: (e: VimModeEvent) => void) => void;
 };
@@ -224,10 +228,10 @@ export const ComposerEditor = forwardRef<
     /// Called when the vim mode changes (normal / insert / visual). Drives the
     /// NORMAL/INSERT hint in the composer card. Only wired when vim is on.
     onVimMode?: (mode: string) => void;
-    // Called on Escape when it should act on the app, not the editor: vim OFF,
-    // or vim ON and already in normal/visual mode. Returns true if it consumed
-    // the key. In vim insert mode Esc is left to the vim extension (→ normal),
-    // so the first Esc exits insert and the second reaches here (Zed-style).
+    // Called on Escape when it should act on the app, not the editor: Vim off,
+    // or Vim on in plain Normal mode. Insert, Visual, operator-pending, and
+    // partial prefixes normalize through Vim first, so a later plain-Normal
+    // Escape reaches here (Zed-style). Returns true when consumed.
     onEscape?: () => boolean;
     // Called with image / file blobs found on a clipboard paste (a screenshot,
     // a copied image). When it handles them the editor swallows the paste so
@@ -363,6 +367,13 @@ export const ComposerEditor = forwardRef<
 
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
+    escapeBelongsToApp: (): boolean => {
+      const view = cmRef.current?.view;
+      const state = view
+        ? vimApiRef.current?.getCM(view)?.state?.vim
+        : undefined;
+      return vimEscapeBelongsToApp(vim ?? false, state);
+    },
     focusEnd: (): void => {
       const view = cmRef.current?.view;
       if (!view) return;
@@ -777,19 +788,19 @@ export const ComposerEditor = forwardRef<
           },
         }),
       ),
-      // Escape: in vim insert mode, yield (return false) so the vim extension
-      // takes it as exit-to-normal — the SECOND Esc, now in normal mode, reaches
-      // onEscape. With vim off, or already in normal/visual, Esc goes straight to
-      // onEscape (the app uses it to cancel a running turn). High precedence so
-      // it beats the default keymap's Escape (clear-selection).
+      // Escape belongs to Vim until it reaches plain Normal mode: Insert exits
+      // to Normal, Visual clears its selection, and pending operators/prefixes
+      // cancel. Only the next Normal-mode Escape reaches Cowboy's surrounding
+      // transaction. With Vim off, Cowboy keeps its direct Escape behavior.
+      // High precedence keeps the ownership decision ahead of defaultKeymap's
+      // clear-selection Escape.
       Prec.high(
         keymap.of([
           {
             key: "Escape",
             run: (view): boolean => {
-              const insert =
-                vimApiRef.current?.getCM(view)?.state?.vim?.insertMode ?? false;
-              if (insert) return false;
+              const state = vimApiRef.current?.getCM(view)?.state?.vim;
+              if (!vimEscapeBelongsToApp(vim ?? false, state)) return false;
               return onEscapeRef.current?.() ?? false;
             },
           },
@@ -805,7 +816,7 @@ export const ComposerEditor = forwardRef<
       ...livePreviewExtensions(),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vimExt, aboveCursor, fill],
+    [theme, sessionId, placeholder, vim, vimExt, aboveCursor, fill],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather

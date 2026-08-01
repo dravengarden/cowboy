@@ -71,6 +71,7 @@ import { claimKeyboard } from "./keyboardClaim";
 import { machineProviderAvailable } from "./machineProvider";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { Transcript } from "./Transcript";
+import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     PROVIDERS,
     type Envelope,
@@ -713,6 +714,7 @@ function SessionList({
                 sx={{
                     flex: 1,
                     overflowY: "auto",
+                    ...(desktop ? desktopScrollbarSx : {}),
                     // The dismiss island overlays rows during ordinary scrolling,
                     // but at the true end the final session must be able to rest
                     // fully above it. Keep this clearance inside the scrolling

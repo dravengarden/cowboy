@@ -6,6 +6,36 @@ export interface TimelinePresentationStep {
   complete: boolean;
 }
 
+/**
+ * Reveal a history-only prepend while live presentation is frozen for native
+ * scrolling.
+ *
+ * A column-reverse transcript inserts older rows above the viewport, so this
+ * mutation cannot move the reader's current content. Live tail replacements or
+ * appends are deliberately left frozen: those grow below the viewport and can
+ * fight scroll anchoring. Existing envelopes stay reference-identical so their
+ * Markdown and tool rows do not re-render.
+ */
+export function revealHistoryPrepend(
+  current: Envelope[],
+  latest: Envelope[],
+): Envelope[] {
+  if (current.length === 0 || latest.length <= current.length) return current;
+  const firstSeq = current[0]?.seq;
+  if (firstSeq === undefined) return current;
+  const currentStart = latest.findIndex((event) => event.seq === firstSeq);
+  if (currentStart <= 0 || currentStart + current.length > latest.length) {
+    return current;
+  }
+  for (let index = 0; index < current.length; index += 1) {
+    if (latest[currentStart + index]?.seq !== current[index]?.seq) return current;
+  }
+  return linkTimeline(
+    [...latest.slice(0, currentStart), ...current],
+    current,
+  );
+}
+
 function textChunk(event: Envelope | undefined): string | null {
   if (
     event?.kind !== "update" ||
