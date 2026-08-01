@@ -193,6 +193,13 @@ Only the focused region gets the subtle accent rail/background. The focused
 item uses the MUI selected/focus-visible treatment. Avoid simultaneous heavy
 outlines at pane, region and item levels.
 
+Desktop geometry has two levels. First-level interactive surfaces—including
+Top Bar controls, Session rows, Queue rows, and Draft rows—always use
+`DESKTOP_SURFACE_RADIUS`. Chips, shortcut groups, tiles, and other content
+nested inside those surfaces use `DESKTOP_INSET_RADIUS`. Never apply the inset
+radius to a whole selectable row; changing geometry must happen in the shared
+Desktop primitive rather than in a component-local override.
+
 The Composer is the exception: its caret and outlined editing canvas already
 communicate focus, so `prompt.composer` must not receive the generic region
 background, accent rail, or focus ring.

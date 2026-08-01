@@ -1,8 +1,9 @@
 import { alpha, type Theme } from "@mui/material";
 
 /** One geometry vocabulary for Desktop's keyboard-first surfaces. Outer
- * controls/panels share the same silhouette; nested rows and tiles use the
- * smaller inset radius. Mobile intentionally owns a separate touch language. */
+ * controls, panels, and first-level interactive rows share the same silhouette;
+ * only content nested inside them uses the smaller inset radius. Mobile
+ * intentionally owns a separate touch language. */
 export const DESKTOP_SURFACE_RADIUS = 10;
 export const DESKTOP_INSET_RADIUS = 6;
 
@@ -66,7 +67,7 @@ export function desktopListItemSx() {
     border: 1,
     borderStyle: "solid",
     borderColor: "transparent",
-    borderRadius: `${DESKTOP_INSET_RADIUS}px`,
+    borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
     bgcolor: "transparent",
     boxShadow: "none",
     transition:
