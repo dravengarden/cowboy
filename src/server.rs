@@ -73,6 +73,8 @@ struct AppState {
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
 const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
+const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, PartialEq, Eq)]
 enum ScheduledResetFailurePolicy {
@@ -218,6 +220,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --postgres-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
+    let machine_presence_task = store.as_ref().map(|store| {
+        let store = store.clone();
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(run_machine_presence_sweeper(store, shutdown))
+    });
     let runtime_router = RuntimeRouter::new();
     // Reset credits belong to the Codex account, not a session. Restore one
     // shared provider-level timer and keep it independent from session queues.
@@ -501,6 +508,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if let Some(task) = purge_task {
         task.abort();
     }
+    if let Some(task) = machine_presence_task {
+        task.abort();
+    }
     let _ = store_shutdown_tx.send(true);
     if let Some(task) = writer_task {
         match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
@@ -510,6 +520,26 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
     result
+}
+
+async fn run_machine_presence_sweeper(store: Store, mut shutdown: watch::Receiver<bool>) {
+    loop {
+        match store.expire_machine_reconnects().await {
+            Ok(expired) if expired > 0 => {
+                tracing::warn!(expired, "Machine reconnect grace expired");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "expiring Machine reconnect grace"),
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(MACHINE_RECONNECT_SWEEP_INTERVAL) => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// Drain write-behind intents in small batches. Streaming text/tool updates are
@@ -2104,7 +2134,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     .is_err()
     {
         let _ = store
-            .machine_disconnected(&hello.machine_id, &challenge_id)
+            .machine_disconnected(
+                &hello.machine_id,
+                &challenge_id,
+                MACHINE_RECONNECT_GRACE_SECONDS,
+            )
             .await;
         return;
     }
@@ -2286,7 +2320,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         .machine_control
         .remove_if_current(&hello.machine_id, &challenge_id);
     if let Err(error) = store
-        .machine_disconnected(&hello.machine_id, &challenge_id)
+        .machine_disconnected(
+            &hello.machine_id,
+            &challenge_id,
+            MACHINE_RECONNECT_GRACE_SECONDS,
+        )
         .await
     {
         tracing::warn!(%error, machine = %hello.machine_id, "marking Machine offline");

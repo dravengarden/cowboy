@@ -85,6 +85,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0019_unify_local_machine.sql",
         "3b9ae1a0569d12b880165c9a8f1b9311be09e43cc8c638a6b9ea1b55c18bc993",
     ),
+    (
+        "0020_machine_reconnect_grace.sql",
+        "f4993e561935bdd74ef706e84ab81ccbb809b754f6ec0c3f45c9abc8ae93bdc8",
+    ),
 ];
 
 #[test]

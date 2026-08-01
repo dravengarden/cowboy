@@ -277,7 +277,8 @@ impl Store {
              VALUES ($1, $2, 'outbound_wss', 'unknown', 'unknown', 'offline', $3, now()) \
              ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, \
              connection_mode = 'outbound_wss', public_key = EXCLUDED.public_key, \
-             enrolled_at = now(), revoked_at = NULL, updated_at = now() \
+             enrolled_at = now(), revoked_at = NULL, status = 'offline', \
+             connection_epoch = NULL, reconnect_deadline_at = NULL, updated_at = now() \
              WHERE machines.public_key IS NULL OR \
              (machines.revoked_at IS NOT NULL AND machines.public_key IS DISTINCT FROM EXCLUDED.public_key)",
         )
@@ -365,7 +366,7 @@ impl Store {
             .context("starting Machine revocation")?;
         let result = sqlx::query(
             "UPDATE machines SET revoked_at = now(), status = 'offline', \
-             connection_epoch = NULL, updated_at = now() \
+             connection_epoch = NULL, reconnect_deadline_at = NULL, updated_at = now() \
              WHERE id = $1 AND public_key IS NOT NULL AND revoked_at IS NULL",
         )
         .bind(machine_id)
@@ -423,7 +424,8 @@ impl Store {
     ) -> Result<()> {
         let result = sqlx::query(
             "UPDATE machines SET connection_epoch = $2, platform = $3, architecture = $4, \
-             connection_mode = $5, status = 'online', inventory = $6, last_seen_at = now(), updated_at = now() \
+             connection_mode = $5, status = 'online', inventory = $6, last_seen_at = now(), \
+             reconnect_deadline_at = NULL, updated_at = now() \
              WHERE id = $1 AND revoked_at IS NULL",
         )
         .bind(machine_id)
@@ -454,7 +456,7 @@ impl Store {
     ) -> Result<()> {
         let result = sqlx::query(
             "UPDATE machines SET status = 'online', last_seen_at = now(), \
-             inventory = COALESCE($3, inventory), updated_at = now() \
+             inventory = COALESCE($3, inventory), reconnect_deadline_at = NULL, updated_at = now() \
              WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
         )
         .bind(machine_id)
@@ -470,7 +472,7 @@ impl Store {
         Ok(())
     }
 
-    /// Mark a disconnected Machine offline.
+    /// Mark a disconnected Machine as reconnecting for a bounded grace period.
     ///
     /// # Errors
     /// Returns when the database update fails.
@@ -478,17 +480,38 @@ impl Store {
         &self,
         machine_id: &str,
         connection_epoch: &str,
+        grace_seconds: i32,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE machines SET status = 'offline', connection_epoch = NULL, updated_at = now() \
+            "UPDATE machines SET status = 'reconnecting', connection_epoch = NULL, \
+             reconnect_deadline_at = now() + $3::integer * interval '1 second', updated_at = now() \
              WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
         )
         .bind(machine_id)
         .bind(connection_epoch)
+        .bind(grace_seconds)
         .execute(&self.pool)
         .await
         .context("recording Machine disconnect")?;
         Ok(())
+    }
+
+    /// Expire reconnect grace windows that were not superseded by a new epoch.
+    ///
+    /// Returns the number of Machines that became offline.
+    ///
+    /// # Errors
+    /// Returns when the database update fails.
+    pub async fn expire_machine_reconnects(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE machines SET status = 'offline', reconnect_deadline_at = NULL, updated_at = now() \
+             WHERE status = 'reconnecting' AND reconnect_deadline_at <= now() \
+             AND connection_epoch IS NULL AND revoked_at IS NULL",
+        )
+        .execute(&self.pool)
+        .await
+        .context("expiring Machine reconnect grace")?;
+        Ok(result.rows_affected())
     }
 
     pub async fn upsert_codex_reset(&self, fire_at_ms: i64, idempotency_key: &str) -> Result<()> {

@@ -128,6 +128,7 @@ before fallback so late frames cannot corrupt the replacement session.
 | Controller disconnects after receiving but before ACK | worker replays its retained suffix after reconnect |
 | Prompt arrives during drain | hold and deduplicate it; release only after replacement registers |
 | Core and Machine reconnect in opposite order | bootstrap briefly settles and buffers snapshots/events before Hub reconciliation |
+| Cowboy controller restarts | Machine presence stays `reconnecting` for a 15 s grace; a successful reconnect returns it to `online`, while grace expiry marks it `offline` |
 | A declared worker never reconnects for 45 s | stop that session's transient unit and publish `Crashed`; this is the explicit session-level extreme fallback, preventing a second owner |
 | Core shuts down while a prompt is being handed off | drain to worker ACK, or retain broker-owned prompts; only demonstrably unsent prompts return to the durable queue |
 | Unknown/extreme inconsistency | kill the affected worker and use the prior Interrupted/Crashed recovery path |

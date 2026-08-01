@@ -118,6 +118,10 @@ import { useNavbarAtBottom } from "./navbarSettings";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import {
+    type MachinePresence,
+    machinePresencePresentation,
+} from "./machinePresence";
+import {
     ExploreTranscript,
     MobilePageDock,
 } from "./explore/ExploreSurface";
@@ -1210,7 +1214,7 @@ type MachineChoice = {
     display_name: string;
     platform: string;
     architecture: string;
-    status: "online" | "offline" | "updating" | "degraded";
+    status: MachinePresence;
     local: boolean;
     schedulable: boolean;
     capacity: { max_sessions: number; draining: boolean };
@@ -3806,6 +3810,7 @@ function MachinesContent(): React.JSX.Element {
                         ),
                     },
                 ].filter((section) => section.components.length > 0);
+                const presence = machinePresencePresentation(machine.status);
                 return (
                     <Paper
                         key={machine.id}
@@ -3819,7 +3824,7 @@ function MachinesContent(): React.JSX.Element {
                     >
                         <Stack spacing={1.25} sx={{ p: 1.5 }}>
                             <Stack direction="row" alignItems="center" spacing={1.25}>
-                                <StatusDot status={machine.status === "online" ? "running" : "exited"} />
+                                <StatusDot status={presence.indicator} />
                                 <Box sx={{ minWidth: 0, flex: 1 }}>
                                     <Stack direction="row" spacing={0.75} alignItems="baseline" flexWrap="wrap" useFlexGap>
                                         <Typography fontWeight={740}>{machine.display_name}</Typography>
@@ -3834,7 +3839,11 @@ function MachinesContent(): React.JSX.Element {
                                 </Box>
                                 <Chip
                                     size="small"
-                                    label={machine.schedulable ? "Ready" : machine.capacity.draining ? "Draining" : machine.status}
+                                    label={machine.schedulable
+                                        ? "Ready"
+                                        : machine.capacity.draining
+                                        ? "Draining"
+                                        : presence.label}
                                     color={machine.schedulable ? "success" : "default"}
                                     sx={{ fontWeight: 650 }}
                                 />
