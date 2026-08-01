@@ -2163,7 +2163,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             return;
         }
     };
-    let (mut runtime_reader, mut runtime_writer) = runtime_tunnel.into_split();
+    let (runtime_reader, mut runtime_writer) = runtime_tunnel.into_split();
+    let mut runtime_reader = crate::runtime_wire::FrameReader::new(runtime_reader);
     let (runtime_tx, mut runtime_rx) = tokio::sync::oneshot::channel();
     {
         let router = Arc::clone(&state.runtime_router);
@@ -2213,7 +2214,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 }
                 None
             }
-            frame = crate::runtime_wire::read_frame(&mut runtime_reader) => {
+            frame = runtime_reader.next() => {
                 match frame {
                     Ok(Some(frame)) => {
                         if send_json(

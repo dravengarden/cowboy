@@ -580,7 +580,8 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                 config.runtime_socket.display()
             )
         })?;
-    let (mut runtime_reader, mut runtime_writer) = runtime.into_split();
+    let (runtime_reader, mut runtime_writer) = runtime.into_split();
+    let mut runtime_reader = crate::runtime_wire::FrameReader::new(runtime_reader);
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -628,7 +629,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                     Some(Ok(_)) => {}
                 }
             }
-            frame = crate::runtime_wire::read_frame(&mut runtime_reader) => {
+            frame = runtime_reader.next() => {
                 let Some(frame) = frame? else {
                     bail!("Machine broker runtime tunnel closed");
                 };

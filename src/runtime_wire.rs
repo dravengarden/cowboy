@@ -509,19 +509,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stateful_reader_resumes_after_cancelled_partial_frame() {
+    async fn stateful_reader_resumes_after_repeated_select_cancellation() {
         let (mut writer, reader) = tokio::io::duplex(128);
         let payload = serde_json::to_vec(&Frame::Heartbeat).expect("serialize heartbeat");
         let len = u32::try_from(payload.len())
             .expect("small frame")
             .to_be_bytes();
-        writer.write_all(&len).await.expect("write header");
+        writer
+            .write_all(&len[..2])
+            .await
+            .expect("write partial header");
+
+        let mut reader = FrameReader::new(reader);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), reader.next())
+                .await
+                .is_err(),
+            "partial header must still be waiting"
+        );
+
+        writer.write_all(&len[2..]).await.expect("finish header");
         writer
             .write_all(&payload[..2])
             .await
             .expect("write partial payload");
 
-        let mut reader = FrameReader::new(reader);
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(10), reader.next())
                 .await
