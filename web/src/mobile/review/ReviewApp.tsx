@@ -76,10 +76,7 @@ import { invalidateDiffCache, loadCodeDiff } from "./diffCache";
 import { diffHunkLines, reviewEntryKey } from "./diffNavigationModel";
 import { type ReviewProgress, revisionMatches } from "./reviewProgress";
 import { ReviewRepository } from "./ReviewRepository";
-import type {
-  CodeInspectCandidate,
-  CodeRevealRange,
-} from "./CodeViewer";
+import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
@@ -211,7 +208,9 @@ function DocumentView({
   const [inspectCandidates, setInspectCandidates] = useState<
     CodeInspectCandidate[]
   >([]);
-  const [inspectCandidatesExpanded, setInspectCandidatesExpanded] = useState(false);
+  const [inspectCandidatesExpanded, setInspectCandidatesExpanded] = useState(
+    false,
+  );
   const [inspectAnchor, setInspectAnchor] = useState<
     { top: number; left: number } | undefined
   >();
@@ -634,7 +633,9 @@ function DocumentView({
       </Box>
     );
   }
-  const candidateChip = (candidate: CodeInspectCandidate): React.JSX.Element => {
+  const candidateChip = (
+    candidate: CodeInspectCandidate,
+  ): React.JSX.Element => {
     const selected = candidate.row === inspectTarget?.row &&
       candidate.column === inspectTarget.column;
     return (
@@ -690,13 +691,17 @@ function DocumentView({
       </Stack>
     )
     : null;
-  const selectedCandidate = inspectCandidates.find((candidate) =>
-    candidate.row === inspectTarget?.row && candidate.column === inspectTarget.column
-  ) ?? inspectCandidates[0];
+  const selectedCandidate =
+    inspectCandidates.find((candidate) =>
+      candidate.row === inspectTarget?.row &&
+      candidate.column === inspectTarget.column
+    ) ?? inspectCandidates[0];
   const collapsedCandidates = selectedCandidate
     ? [
       selectedCandidate,
-      ...inspectCandidates.filter((candidate) => candidate !== selectedCandidate).slice(0, 1),
+      ...inspectCandidates.filter((candidate) =>
+        candidate !== selectedCandidate
+      ).slice(0, 1),
     ]
     : [];
   const hiddenCandidateCount = Math.max(
@@ -739,9 +744,11 @@ function DocumentView({
                 : { overflow: "hidden" }),
             }}
           >
-            {(inspectCandidatesExpanded ? inspectCandidates : collapsedCandidates).map(
-              candidateChip,
-            )}
+            {(inspectCandidatesExpanded
+              ? inspectCandidates
+              : collapsedCandidates).map(
+                candidateChip,
+              )}
           </Stack>
           {(hiddenCandidateCount > 0 || inspectCandidatesExpanded) && (
             <Button
@@ -763,7 +770,9 @@ function DocumentView({
                 textTransform: "none",
               }}
             >
-              {inspectCandidatesExpanded ? "Collapse" : `+${hiddenCandidateCount}`}
+              {inspectCandidatesExpanded
+                ? "Collapse"
+                : `+${hiddenCandidateCount}`}
             </Button>
           )}
         </Stack>
@@ -1407,18 +1416,14 @@ export function ReviewApp({
     setMarkdownPreview(isMarkdownReviewPath(path));
     const line = syncedReviewRef.current.positions?.[path]?.line;
     setSourceTarget((current) =>
-      current?.path === path
-        ? current
-        : {
-          kind: "source",
-          path,
-          ...(line === undefined
-            ? {}
-            : {
-              revealLine: line,
-              revealRequestId: ++revealRangeId.current,
-            }),
-        }
+      current?.path === path ? current : {
+        kind: "source",
+        path,
+        ...(line === undefined ? {} : {
+          revealLine: line,
+          revealRequestId: ++revealRangeId.current,
+        }),
+      }
     );
   }, [syncedReview.active, workspace?.sessionId]);
 
@@ -1679,9 +1684,7 @@ export function ReviewApp({
   const tabCloseTitle = tabCloseRequest?.kind === "one"
     ? `Close ${requestedTab?.path.split("/").at(-1) ?? "this tab"}?`
     : tabCloseRequest?.kind === "others"
-    ? `Close ${tabCloseCount} other ${
-      tabCloseCount === 1 ? "tab" : "tabs"
-    }?`
+    ? `Close ${tabCloseCount} other ${tabCloseCount === 1 ? "tab" : "tabs"}?`
     : tabCloseCount === 1
     ? "Close the only open tab?"
     : `Close all ${tabCloseCount} tabs?`;
@@ -1826,135 +1829,126 @@ export function ReviewApp({
           pt: "env(safe-area-inset-top, 0px)",
         }}
       >
-        {target.kind !== "changes" && (
-          <Stack
-            direction="row"
-            alignItems="center"
-            sx={{
-              minHeight: 44,
-              px: 2,
-              borderBottom: 1,
-              borderColor: "divider",
-            }}
-          >
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography
-                variant="body2"
-                fontFamily="var(--cowboy-font-mono)"
-                noWrap
-              >
-                {target.path}
+        <Stack
+          direction="row"
+          alignItems="center"
+          sx={{
+            minHeight: 52,
+            px: 2,
+            borderBottom: 1,
+            borderColor: "divider",
+          }}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography
+              variant="body2"
+              fontFamily="var(--cowboy-font-mono)"
+              noWrap
+            >
+              {target.kind === "changes"
+                ? mode === "files" ? "Worktree" : "Changes"
+                : target.path}
+            </Typography>
+            <Box
+              component="button"
+              type="button"
+              aria-label={`Switch session. Current session ${
+                currentSession?.title ?? "none"
+              }`}
+              onClick={() => {
+                navigationHaptic();
+                setSessionSwitcherOpen(true);
+              }}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.625,
+                minWidth: 0,
+                maxWidth: "100%",
+                p: 0,
+                border: 0,
+                bgcolor: "transparent",
+                color: "text.secondary",
+                font: "inherit",
+                textAlign: "left",
+                cursor: "pointer",
+                WebkitTapHighlightColor: "transparent",
+                "&:active": { color: "primary.main" },
+              }}
+            >
+              <Box
+                aria-hidden
+                sx={{
+                  width: 6,
+                  height: 6,
+                  flex: "0 0 auto",
+                  borderRadius: "50%",
+                  bgcolor: currentSession
+                    ? sessionStatusColor(currentSession.status)
+                    : "text.disabled",
+                }}
+              />
+              <Typography variant="caption" noWrap>
+                {target.kind === "diff"
+                  ? target.scope === "staged"
+                    ? "Staged · "
+                    : target.scope === "unstaged"
+                    ? "Unstaged · "
+                    : "Conflict · "
+                  : ""}
+                {currentSession?.title ?? currentProject ??
+                  (workspace ? "Loading session…" : "Choose session")}
+                {currentProject && currentSession?.title !== currentProject
+                  ? ` · ${currentProject}`
+                  : ""}
+                {repositoryContext?.branch
+                  ? ` · ${repositoryContext.branch}`
+                  : ""}
               </Typography>
-              {target.kind === "diff"
-                ? (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    noWrap
-                    sx={{ display: "block" }}
-                  >
-                    {target.scope === "staged"
-                      ? "Staged changes"
-                      : target.scope === "unstaged"
-                      ? "Unstaged changes"
-                      : "Conflict review"}
-                  </Typography>
-                )
-                : (
-                  <Box
-                    component="button"
-                    type="button"
-                    aria-label={`Switch session. Current session ${
-                      currentSession?.title ?? "unknown"
-                    }`}
-                    onClick={() => {
-                      navigationHaptic();
-                      setSessionSwitcherOpen(true);
-                    }}
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 0.625,
-                      minWidth: 0,
-                      maxWidth: "100%",
-                      p: 0,
-                      border: 0,
-                      bgcolor: "transparent",
-                      color: "text.secondary",
-                      font: "inherit",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      WebkitTapHighlightColor: "transparent",
-                      "&:active": { color: "primary.main" },
-                    }}
-                  >
-                    <Box
-                      aria-hidden
-                      sx={{
-                        width: 6,
-                        height: 6,
-                        flex: "0 0 auto",
-                        borderRadius: "50%",
-                        bgcolor: currentSession
-                          ? sessionStatusColor(currentSession.status)
-                          : "text.disabled",
-                      }}
-                    />
-                    <Typography variant="caption" noWrap>
-                      {currentSession?.title ?? currentProject ??
-                        "Loading session…"}
-                      {currentProject && currentSession?.title !== currentProject
-                        ? ` · ${currentProject}`
-                        : ""}
-                      {repositoryContext?.branch
-                        ? ` · ${repositoryContext.branch}`
-                        : ""}
-                    </Typography>
-                    <KeyboardArrowDown
-                      aria-hidden
-                      sx={{ fontSize: "0.9rem", flex: "0 0 auto" }}
-                    />
-                  </Box>
-                )}
+              <KeyboardArrowDown
+                aria-hidden
+                sx={{ fontSize: "0.9rem", flex: "0 0 auto" }}
+              />
             </Box>
-            {mode === "files" &&
-              (navigationHistory.length > 0 ||
-                navigationForwardHistory.length > 0) && (
-                <Stack
-                  direction="row"
-                  role="group"
-                  aria-label="Code navigation history"
-                >
-                  <IconButton
-                    aria-label="Back to previous code location"
-                    disabled={navigationHistory.length === 0}
-                    onClick={navigateBack}
-                  >
-                    <ArrowBack />
-                  </IconButton>
-                  <IconButton
-                    aria-label="Forward to next code location"
-                    disabled={navigationForwardHistory.length === 0}
-                    onClick={navigateForward}
-                  >
-                    <ArrowForward />
-                  </IconButton>
-                </Stack>
-            )}
-            {target.kind === "diff" && (
-              <IconButton
-                aria-label={targetIsReviewed
-                  ? "Mark unreviewed"
-                  : "Mark reviewed"}
-                color={targetIsReviewed ? "success" : "default"}
-                disabled={!currentRevision}
-                onClick={toggleReviewed}
+          </Box>
+          {mode === "files" &&
+            (navigationHistory.length > 0 ||
+              navigationForwardHistory.length > 0) &&
+            (
+              <Stack
+                direction="row"
+                role="group"
+                aria-label="Code navigation history"
               >
-                {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
-              </IconButton>
+                <IconButton
+                  aria-label="Back to previous code location"
+                  disabled={navigationHistory.length === 0}
+                  onClick={navigateBack}
+                >
+                  <ArrowBack />
+                </IconButton>
+                <IconButton
+                  aria-label="Forward to next code location"
+                  disabled={navigationForwardHistory.length === 0}
+                  onClick={navigateForward}
+                >
+                  <ArrowForward />
+                </IconButton>
+              </Stack>
             )}
-          </Stack>
-        )}
+          {target.kind === "diff" && (
+            <IconButton
+              aria-label={targetIsReviewed
+                ? "Mark unreviewed"
+                : "Mark reviewed"}
+              color={targetIsReviewed ? "success" : "default"}
+              disabled={!currentRevision}
+              onClick={toggleReviewed}
+            >
+              {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
+            </IconButton>
+          )}
+        </Stack>
         {!workspace
           ? (
             <Stack
@@ -2089,10 +2083,9 @@ export function ReviewApp({
               ),
             backdropFilter: "blur(30px) saturate(200%)",
             WebkitBackdropFilter: "blur(30px) saturate(200%)",
-            boxShadow: (theme) =>
-              theme.palette.mode === "dark"
-                ? "0 -1px 24px rgba(0,0,0,0.5)"
-                : "0 -1px 24px rgba(0,0,0,0.07)",
+            boxShadow: (theme) => theme.palette.mode === "dark"
+              ? "0 -1px 24px rgba(0,0,0,0.5)"
+              : "0 -1px 24px rgba(0,0,0,0.07)",
           }}
         >
           <ReviewTabStrip
@@ -2385,71 +2378,97 @@ export function ReviewApp({
             {[
               { label: "Other sessions", sessions: otherSessions },
               { label: "Current project", sessions: projectSessions },
-            ].map((section) => section.sessions.length > 0 && (
-              <Stack key={section.label} spacing={0.5}>
-                <Typography
-                  variant="overline"
-                  color="text.secondary"
-                  sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
-                >
-                  {section.label}
-                </Typography>
-                <Stack divider={<Divider flexItem />}>
-                  {section.sessions.map((session) => {
-                const selected = session.id === workspace?.sessionId;
-                const project = sessionProject(session);
-                return (
-                  <ListItemButton
-                    key={session.id}
-                    selected={selected}
-                    onClick={() => switchSession(session)}
-                    sx={{
-                      minHeight: 68,
-                      px: 1.25,
-                      py: 0.75,
-                      borderRadius: 1.5,
-                      gap: 1.25,
-                    }}
+            ].map((section) =>
+              section.sessions.length > 0 && (
+                <Stack key={section.label} spacing={0.5}>
+                  <Typography
+                    variant="overline"
+                    color="text.secondary"
+                    sx={{ px: 1.25, fontWeight: 700, letterSpacing: "0.09em" }}
                   >
-                    <Box
-                      aria-label={`${session.status} session`}
-                      sx={{
-                        width: 8,
-                        height: 8,
-                        flex: "0 0 auto",
-                        borderRadius: "50%",
-                        bgcolor: sessionStatusColor(session.status),
-                      }}
-                    />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Stack direction="row" spacing={0.75} alignItems="baseline">
-                        <Typography variant="body2" fontWeight={selected ? 700 : 600} noWrap>
-                          {session.title}
-                        </Typography>
-                        {selected && (
-                          <Typography variant="caption" color="primary.main">
-                            Current
-                          </Typography>
-                        )}
-                      </Stack>
-                      <Stack spacing={0.125} sx={{ mt: 0.125 }}>
-                        <Typography variant="caption" color="text.secondary" noWrap>
-                          {session.machine_id ?? "local"} · {session.provider} · {project}
-                        </Typography>
-                        <Typography variant="caption" color="text.disabled" noWrap>
-                          {session.cwd}
-                        </Typography>
-                      </Stack>
-                    </Box>
-                    <ChevronRight color="disabled" fontSize="small" />
-                  </ListItemButton>
-                );
-                  })}
+                    {section.label}
+                  </Typography>
+                  <Stack divider={<Divider flexItem />}>
+                    {section.sessions.map((session) => {
+                      const selected = session.id === workspace?.sessionId;
+                      const project = sessionProject(session);
+                      return (
+                        <ListItemButton
+                          key={session.id}
+                          selected={selected}
+                          onClick={() => switchSession(session)}
+                          sx={{
+                            minHeight: 68,
+                            px: 1.25,
+                            py: 0.75,
+                            borderRadius: 1.5,
+                            gap: 1.25,
+                          }}
+                        >
+                          <Box
+                            aria-label={`${session.status} session`}
+                            sx={{
+                              width: 8,
+                              height: 8,
+                              flex: "0 0 auto",
+                              borderRadius: "50%",
+                              bgcolor: sessionStatusColor(session.status),
+                            }}
+                          />
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Stack
+                              direction="row"
+                              spacing={0.75}
+                              alignItems="baseline"
+                            >
+                              <Typography
+                                variant="body2"
+                                fontWeight={selected ? 700 : 600}
+                                noWrap
+                              >
+                                {session.title}
+                              </Typography>
+                              {selected && (
+                                <Typography
+                                  variant="caption"
+                                  color="primary.main"
+                                >
+                                  Current
+                                </Typography>
+                              )}
+                            </Stack>
+                            <Stack spacing={0.125} sx={{ mt: 0.125 }}>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                noWrap
+                              >
+                                {session.machine_id ?? "local"} ·{" "}
+                                {session.provider} · {project}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.disabled"
+                                noWrap
+                              >
+                                {session.cwd}
+                              </Typography>
+                            </Stack>
+                          </Box>
+                          <ChevronRight color="disabled" fontSize="small" />
+                        </ListItemButton>
+                      );
+                    })}
+                  </Stack>
                 </Stack>
-              </Stack>
-            ))}
+              )
+            )}
             {displayedSessions.length === 0 && (
-              <Typography color="text.secondary" variant="body2" sx={{ py: 3, textAlign: "center" }}>
+              <Typography
+                color="text.secondary"
+                variant="body2"
+                sx={{ py: 3, textAlign: "center" }}
+              >
                 No matching sessions
               </Typography>
             )}
