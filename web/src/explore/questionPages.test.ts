@@ -119,6 +119,9 @@ Deno.test("question title is compact and strips common markdown wrappers", () =>
     questionTitle(user("1", "## [Prompt caching](https://example.test)\nDetails"), 1),
     "Prompt caching Details",
   );
+  const longTitle = questionTitle(user("2", "A".repeat(100)), 2);
+  assertEquals(longTitle.length, 70);
+  assertEquals(longTitle, `${"A".repeat(69)}…`);
 });
 
 Deno.test("explicit follow-ups fold into their target page without moving history", () => {

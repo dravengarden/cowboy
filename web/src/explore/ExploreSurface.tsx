@@ -90,6 +90,8 @@ function PageTurnFooter({
   total,
   previousDisabled,
   nextDisabled,
+  previousQuestion,
+  nextQuestion,
   loadingPrevious,
   loadingNext,
   onPrevious,
@@ -100,6 +102,8 @@ function PageTurnFooter({
   total: number;
   previousDisabled: boolean;
   nextDisabled: boolean;
+  previousQuestion: string | null;
+  nextQuestion: string | null;
   loadingPrevious: boolean;
   loadingNext: boolean;
   onPrevious: () => void;
@@ -109,19 +113,69 @@ function PageTurnFooter({
   const actionSx = desktop
     ? {
       ...desktopEmbeddedControlSx(),
-      minHeight: 38,
+      minHeight: 52,
       px: 1.25,
       textTransform: "none",
     }
     : {
-      minHeight: 48,
-      px: 1.5,
+      minHeight: 64,
+      px: 1.25,
       border: 1,
       borderColor: "divider",
       borderRadius: 1,
       bgcolor: "action.hover",
       textTransform: "none",
     };
+  const directionLabel = (
+    direction: "previous" | "next",
+    question: string | null,
+    disabled: boolean,
+    loading: boolean,
+  ): React.JSX.Element => {
+    const previous = direction === "previous";
+    const boundary = previous ? "First question" : "Latest question";
+    return (
+      <Stack
+        direction="row"
+        spacing={0.75}
+        alignItems="center"
+        sx={{ minWidth: 0, width: "100%" }}
+      >
+        {previous && !disabled && (loading
+          ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
+          : <ChevronLeft sx={{ flexShrink: 0 }} />)}
+        <Box sx={{ minWidth: 0, flex: 1, textAlign: previous ? "left" : "right" }}>
+          <Typography
+            component="span"
+            variant="caption"
+            sx={{ display: "block", fontWeight: 700, lineHeight: 1.2 }}
+          >
+            {previous ? "Previous" : "Next"}
+            {desktop && !disabled && <Kbd keys={previous ? "[" : "]"} />}
+          </Typography>
+          <Typography
+            component="span"
+            variant="caption"
+            color="text.secondary"
+            title={question ?? boundary}
+            sx={{
+              display: "-webkit-box",
+              overflow: "hidden",
+              overflowWrap: "anywhere",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: desktop ? 1 : 2,
+              lineHeight: 1.25,
+            }}
+          >
+            {disabled ? boundary : question}
+          </Typography>
+        </Box>
+        {!previous && !disabled && (loading
+          ? <CircularProgress size={16} sx={{ flexShrink: 0 }} />
+          : <ChevronRight sx={{ flexShrink: 0 }} />)}
+      </Stack>
+    );
+  };
   return (
     <Box
       component="nav"
@@ -140,13 +194,14 @@ function PageTurnFooter({
       }}
     >
       <Button
-        startIcon={loadingPrevious ? <CircularProgress size={16} /> : <ChevronLeft />}
+        aria-label={previousDisabled
+          ? "Already at the first question"
+          : `Previous question: ${previousQuestion ?? "Untitled question"}`}
         disabled={previousDisabled || loadingPrevious || loadingNext}
         onClick={onPrevious}
-        sx={{ ...actionSx, justifySelf: "start" }}
+        sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
       >
-        Previous
-        {desktop && <Kbd keys="[" />}
+        {directionLabel("previous", previousQuestion, previousDisabled, loadingPrevious)}
       </Button>
       <Typography
         variant="caption"
@@ -156,13 +211,14 @@ function PageTurnFooter({
         {currentOrdinal} / {total}
       </Typography>
       <Button
-        endIcon={loadingNext ? <CircularProgress size={16} /> : <ChevronRight />}
+        aria-label={nextDisabled
+          ? "Already at the latest question"
+          : `Next question: ${nextQuestion ?? "Untitled question"}`}
         disabled={nextDisabled || loadingPrevious || loadingNext}
         onClick={onNext}
-        sx={{ ...actionSx, justifySelf: "end" }}
+        sx={{ ...actionSx, justifySelf: "stretch", minWidth: 0, width: "100%" }}
       >
-        Next
-        {desktop && <Kbd keys="]" />}
+        {directionLabel("next", nextQuestion, nextDisabled, loadingNext)}
       </Button>
     </Box>
   );
@@ -1028,6 +1084,12 @@ export function ExploreTranscript(
   const loadedNext = pages[currentIndex + 1];
   const footerPreviousId = indexedPosition.previousId ?? loadedPrevious?.id ?? null;
   const footerNextId = indexedPosition.nextId ?? loadedNext?.id ?? null;
+  const footerPreviousQuestion = footerPreviousId
+    ? directoryPages.find((page) => page.id === footerPreviousId)?.title ?? null
+    : null;
+  const footerNextQuestion = footerNextId
+    ? directoryPages.find((page) => page.id === footerNextId)?.title ?? null
+    : null;
   const navigateFooterPage = useCallback((id: string | null): void => {
     if (!id || footerLoadingPageId !== null) return;
     if (isQuestionPageLoaded(props.sessionId, id)) {
@@ -1474,6 +1536,8 @@ export function ExploreTranscript(
                     total={total}
                     previousDisabled={footerPreviousId === null}
                     nextDisabled={footerNextId === null}
+                    previousQuestion={footerPreviousQuestion}
+                    nextQuestion={footerNextQuestion}
                     loadingPrevious={footerLoadingPageId !== null &&
                       footerLoadingPageId === footerPreviousId}
                     loadingNext={footerLoadingPageId !== null &&
