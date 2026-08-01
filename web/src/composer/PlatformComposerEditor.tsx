@@ -19,6 +19,7 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  shouldFocusPromotedEditor,
   shouldUseNativeCompactEditor,
 } from "./mobileCompactEditorPolicy";
 
@@ -57,6 +58,15 @@ export const PlatformComposerEditor = forwardRef<
     touchValue,
   );
   const wasNativeCompactRef = useRef(nativeCompact);
+  // During an image Paste, the token is inserted synchronously and this render
+  // replaces the still-focused native textarea. Autofocus the CM6 mount in the
+  // same discrete UIKit gesture; a later rAF focus cannot inherit the keyboard.
+  const focusPromotedEditor = shouldFocusPromotedEditor(
+    wasNativeCompactRef.current,
+    nativeCompact,
+    typeof document !== "undefined" &&
+      document.activeElement instanceof HTMLTextAreaElement,
+  );
   const cmSeedRef = useRef(props.value);
   cmSeedRef.current = composerEditorMountSeed(
     wasNativeCompactRef.current,
@@ -111,6 +121,7 @@ export const PlatformComposerEditor = forwardRef<
     <ComposerEditor
       {...props}
       value={cmSeedRef.current}
+      autoFocus={props.autoFocus || focusPromotedEditor}
       // The loading editor is deliberately a separate, non-interactive CM6
       // lifetime. The real editor mounts only after Vim can be included in its
       // initial EditorState, so native IME composition never spans reconfigure.

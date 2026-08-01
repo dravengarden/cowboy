@@ -34,6 +34,9 @@ export interface Attachment {
   previewUrl?: string;
   /** The ACP `ContentBlock` JSON sent inside `Inbound::Prompt { content }`. */
   block: ContentBlock;
+  /** True only while a pasted image is being encoded. It may render locally,
+   * but must not be sent or persisted as a completed attachment yet. */
+  pending?: boolean;
 }
 
 /** Read every file representation exposed by a clipboard paste. iOS WebKit can
@@ -72,7 +75,7 @@ const TEXT_EXT = new Set([
   "dockerfile", "makefile", "lock", "log",
 ]);
 
-function nextId(): string {
+export function nextAttachmentId(): string {
   // A GLOBALLY-unique id, not a reload-resettable counter. Inline-image tokens
   // `![](cowboy-att:<id>)` persist inside restored drafts / queued messages and
   // keep their original ids (blocksToAttachments reuses them). A module-level
@@ -83,6 +86,22 @@ function nextId(): string {
   // collide with a restored id. (crypto.randomUUID is available in every secure
   // context cowboy runs in — https + the WKWebView shell + localhost dev.)
   return `att-${globalThis.crypto.randomUUID()}`;
+}
+
+/** Create an immediately renderable image placeholder during the native paste
+ * event. This lets React promote the focused textarea to CM6 in the same UIKit
+ * gesture; the expensive payload encoding finishes asynchronously. */
+export function pendingImageAttachment(file: File, id = nextAttachmentId()): Attachment {
+  const mimeType = file.type || "image/png";
+  return {
+    id,
+    name: file.name || "pasted-image",
+    mimeType,
+    isImage: true,
+    previewUrl: URL.createObjectURL(file),
+    block: { type: "image", data: "", mimeType },
+    pending: true,
+  };
 }
 
 function extOf(name: string): string {
@@ -207,13 +226,16 @@ async function encodeImage(file: File): Promise<Raster | null> {
 /// Convert one picked / pasted file into a stageable `Attachment`. Throws (via a
 /// rejected promise) only on a FileReader error — callers should `.catch` and
 /// drop that single file rather than failing the whole batch.
-export async function fileToAttachment(file: File): Promise<Attachment> {
+export async function fileToAttachment(
+  file: File,
+  id = nextAttachmentId(),
+): Promise<Attachment> {
   const mimeType = file.type || "application/octet-stream";
   if (mimeType.startsWith("image/")) {
     const encoded = await encodeImage(file);
     if (encoded) {
       return {
-        id: nextId(),
+        id,
         name: file.name || "pasted-image",
         mimeType: encoded.mimeType,
         isImage: true,
@@ -224,7 +246,7 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
     // Fallback: the browser couldn't rasterize — embed the original bytes.
     const data = await readBase64(file);
     return {
-      id: nextId(),
+      id,
       name: file.name || "pasted-image",
       mimeType,
       isImage: true,
@@ -236,7 +258,7 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
   if (isTextual(file)) {
     const text = await readText(file);
     return {
-      id: nextId(),
+      id,
       name: file.name || "attachment.txt",
       mimeType,
       isImage: false,
@@ -245,7 +267,7 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
   }
   const blob = await readBase64(file);
   return {
-    id: nextId(),
+    id,
     name: file.name || "attachment",
     mimeType,
     isImage: false,
@@ -300,7 +322,7 @@ export function blocksToAttachments(
       const data = typeof block.data === "string" ? block.data : "";
       const mimeType = typeof block.mimeType === "string" ? block.mimeType : "image/jpeg";
       out.push({
-        id: tokenIds[imageSeen++] ?? nextId(),
+        id: tokenIds[imageSeen++] ?? nextAttachmentId(),
         name: "image",
         mimeType,
         isImage: true,
@@ -313,7 +335,7 @@ export function blocksToAttachments(
       const mimeType =
         typeof resource.mimeType === "string" ? resource.mimeType : "application/octet-stream";
       out.push({
-        id: nextId(),
+        id: nextAttachmentId(),
         name: nameFromUri(uri),
         mimeType,
         isImage: false,

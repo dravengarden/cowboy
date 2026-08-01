@@ -18,7 +18,7 @@ import {
   EditorView,
   WidgetType,
 } from "@codemirror/view";
-import { EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { Attachment } from "./attachments";
 import { openLightbox } from "./ResourceLightbox";
 
@@ -60,6 +60,8 @@ export function forgetInlineAttachment(id: string): void {
   registry.delete(id);
 }
 
+export const refreshInlineImages = StateEffect.define<null>();
+
 class InlineImageWidget extends WidgetType {
   constructor(
     private readonly id: string,
@@ -67,12 +69,13 @@ class InlineImageWidget extends WidgetType {
     // True when the doc selection covers this image's block line (Backspace-armed
     // delete, or a range select) — draws the selection ring.
     private readonly selected: boolean,
+    private readonly previewUrl: string | undefined,
   ) {
     super();
   }
   override eq(other: InlineImageWidget): boolean {
     return other.id === this.id && other.name === this.name &&
-      other.selected === this.selected;
+      other.selected === this.selected && other.previewUrl === this.previewUrl;
   }
   override toDOM(view: EditorView): HTMLElement {
     const att = registry.get(this.id);
@@ -161,7 +164,12 @@ function buildImageDecorations(state: EditorState): DecorationSet {
         line.from,
         line.to,
         Decoration.replace({
-          widget: new InlineImageWidget(m[2], m[1] ?? "", selected),
+          widget: new InlineImageWidget(
+            m[2],
+            m[1] ?? "",
+            selected,
+            registry.get(m[2])?.previewUrl,
+          ),
           block: true,
         }),
       );
@@ -181,7 +189,9 @@ export const inlineImageField = StateField.define<DecorationSet>({
   // Rebuild on doc OR selection change — the selection drives the "armed for
   // delete" ring (the two-stage Backspace below selects before it deletes).
   update: (value, tr) =>
-    tr.docChanged || tr.selection ? buildImageDecorations(tr.state) : value,
+    tr.docChanged || tr.selection || tr.effects.some((effect) => effect.is(refreshInlineImages))
+      ? buildImageDecorations(tr.state)
+      : value,
   provide: (f) => [
     EditorView.decorations.from(f),
     EditorView.atomicRanges.of(

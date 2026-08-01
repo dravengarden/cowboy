@@ -28,3 +28,13 @@ export function composerEditorMountSeed(
 ): string {
   return wasNative || nativeNow ? touchValue : frozenSeed;
 }
+
+/** A focused native textarea replaced during native → CM6 promotion must hand
+ * its UIKit keyboard session to the new editor in the same React commit. */
+export function shouldFocusPromotedEditor(
+  wasNative: boolean,
+  nativeNow: boolean,
+  activeElementIsTextarea: boolean,
+): boolean {
+  return wasNative && !nativeNow && activeElementIsTextarea;
+}

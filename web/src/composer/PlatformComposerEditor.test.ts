@@ -5,6 +5,7 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  shouldFocusPromotedEditor,
   shouldUseNativeCompactEditor,
 } from "./mobileCompactEditorPolicy";
 
@@ -64,4 +65,10 @@ Deno.test("native to CM6 promotion freezes the token-bearing live document", () 
     composerEditorMountSeed(false, false, promoted, "later React echo"),
     promoted,
   );
+});
+
+Deno.test("only a focused native promotion inherits the software keyboard", () => {
+  assertEquals(shouldFocusPromotedEditor(true, false, true), true);
+  assertEquals(shouldFocusPromotedEditor(true, false, false), false);
+  assertEquals(shouldFocusPromotedEditor(false, false, true), false);
 });

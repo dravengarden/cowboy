@@ -564,12 +564,16 @@ here says otherwise.
     but an inline-image token promotes it to CM6. Inserting asynchronously
     converted files one-by-one reused the textarea's stale render-time value, so
     later files could overwrite earlier tokens; unmounting that focused textarea
-    also dismissed the keyboard. Clipboard extraction must inspect both
+    after async encoding also dismissed the keyboard. A deferred `focus()` cannot
+    reclaim UIKit's software-keyboard session once the Paste gesture has ended.
+    Clipboard extraction must inspect both
     `DataTransfer.files` and item-only file entries used by iOS. Register all
-    attachment bytes, insert every token in one editor transaction from the live
-    DOM value/selection, freeze that token-bearing live document as CM6's one-shot
-    promotion seed, then—only for a clipboard paste—focus the newly mounted CM6
-    once on the next frame. File-picker attachment remains intentionally
+    an object-URL placeholder and insert every token synchronously from the live
+    DOM value/selection during the Paste event. React then freezes that token-bearing
+    document as CM6's one-shot promotion seed and autofocuses the replacement in
+    the same discrete UIKit gesture. Encode the durable ACP bytes asynchronously,
+    disable send/persistence while placeholders are pending, replace them by stable
+    id, refresh the widgets, and revoke their object URLs. File-picker attachment remains intentionally
     non-refocusing because picker dismissal owns a separate UIKit lifecycle.
     Never repair this by externalizing inline images or feeding live React text
     back into CM6.

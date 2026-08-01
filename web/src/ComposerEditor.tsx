@@ -44,6 +44,7 @@ import {
   inlineImageTrailingLine,
   insertImageToken,
   registerInlineAttachment,
+  refreshInlineImages,
   removeImageTokenById,
 } from "./inlineImages";
 import { clipboardFiles, type Attachment } from "./attachments";
@@ -69,6 +70,9 @@ export interface ComposerEditorHandle {
   // Batch paste is one document transaction. Inserting files one-by-one can
   // reuse a stale native-textarea value during the touch → CM6 promotion.
   insertImages: (attachments: Attachment[]) => void;
+  // Rebuild image widgets after an asynchronously encoded paste replaces its
+  // same-id object-URL placeholder with durable data.
+  refreshImages: () => void;
   // Remove a specific inline image (by id) from the doc — the selection popover's
   // Delete action.
   deleteImage: (id: string) => void;
@@ -398,6 +402,9 @@ export const ComposerEditor = forwardRef<
         scrollIntoView: true,
       });
       view.focus();
+    },
+    refreshImages: (): void => {
+      cmRef.current?.view?.dispatch({ effects: refreshInlineImages.of(null) });
     },
     deleteImage: (id: string): void => {
       const view = cmRef.current?.view;

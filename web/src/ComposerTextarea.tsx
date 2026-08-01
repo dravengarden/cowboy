@@ -285,6 +285,7 @@ export const ComposerTextarea = forwardRef<
       }).join("");
       onChange(current.slice(0, at) + tokens + current.slice(to));
     },
+    refreshImages: (): void => undefined,
     deleteImage: (): void => undefined,
     // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
     // ComposerEditor, never this textarea). No-ops here just satisfy the shared
