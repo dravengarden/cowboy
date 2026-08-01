@@ -3602,6 +3602,36 @@ impl Hub {
         self.try_drain(session_id);
     }
 
+    /// Reconcile an authoritative runtime snapshot that says the worker is idle.
+    ///
+    /// Remote worker lifecycle events can straddle a Machine broker reconnect.
+    /// If Cowboy missed the Busy -> Running edge, the Hub may still retain the
+    /// dispatch guard even though the worker snapshot proves that no turn is
+    /// active. Callers must first prove that no prompt command is still pending
+    /// in the controller; otherwise a Running snapshot can merely predate a
+    /// prompt that is still travelling to the worker.
+    pub fn reconcile_runtime_idle(&self, session_id: &str) {
+        let released = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.meta.status != Status::Running || !s.in_flight {
+                false
+            } else {
+                s.in_flight = false;
+                true
+            }
+        };
+        if released {
+            tracing::warn!(
+                session = %session_id,
+                "authoritative idle runtime snapshot released stale in-flight guard"
+            );
+            self.try_drain(session_id);
+        }
+    }
+
     /// Put a dispatched-but-never-run prompt BACK on the queue front.
     ///
     /// A prompt sent to a session that had to REVIVE rides `cmd_rx` into the
@@ -5241,6 +5271,34 @@ mod confirm_hold_tests {
         assert_eq!(dispatched.text, "after reset");
         assert!(rx.try_recv().is_err());
         assert!(queue_texts(&hub, "reset-queue").is_empty());
+    }
+
+    #[tokio::test]
+    async fn authoritative_runtime_idle_releases_missed_turn_lifecycle_guard() {
+        let hub = hub_with_session("runtime-reconnect");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("runtime-reconnect", Status::Running, None);
+
+        hub.submit(
+            "runtime-reconnect",
+            "lost lifecycle turn".to_owned(),
+            vec![],
+            None,
+        );
+        let first = rx.recv().await.expect("first dispatch");
+        assert_eq!(first.text, "lost lifecycle turn");
+        hub.submit("runtime-reconnect", "queued turn".to_owned(), vec![], None);
+        assert_eq!(queue_texts(&hub, "runtime-reconnect"), vec!["queued turn"]);
+
+        hub.reconcile_runtime_idle("runtime-reconnect");
+
+        let dispatched = rx
+            .recv()
+            .await
+            .expect("queued dispatch after runtime reconciliation");
+        assert_eq!(dispatched.text, "queued turn");
+        assert!(queue_texts(&hub, "runtime-reconnect").is_empty());
     }
 
     #[test]

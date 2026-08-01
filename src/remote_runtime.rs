@@ -816,6 +816,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 .remove(&format!("ensure:{session_id}"));
             shared.sent.lock().remove(&format!("ensure:{session_id}"));
             apply_snapshot(&shared.hub, &worker);
+            reconcile_idle_snapshot(shared, &worker);
         }
         Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
         Frame::Heartbeat => {}
@@ -894,6 +895,7 @@ fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
         }
         update_declaration(shared, &worker);
         apply_snapshot(&shared.hub, &worker);
+        reconcile_idle_snapshot(shared, &worker);
         shared
             .pending
             .lock()
@@ -915,6 +917,7 @@ fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
         }
         update_declaration(shared, &worker);
         apply_snapshot(&shared.hub, &worker);
+        reconcile_idle_snapshot(shared, &worker);
         shared
             .pending
             .lock()
@@ -974,6 +977,26 @@ fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) {
         worker_status(worker.state)
     };
     hub.set_status(&worker.session_id, status, None);
+}
+
+fn pending_prompt_for(shared: &Shared, session_id: &str) -> bool {
+    shared.pending.lock().values().any(|command| {
+        matches!(
+            command,
+            CoreCommand::Prompt {
+                session_id: pending_session,
+                ..
+            } if pending_session == session_id
+        )
+    })
+}
+
+fn reconcile_idle_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+    let idle = worker.current_turn_id.is_none()
+        && matches!(worker.state, WorkerState::Running | WorkerState::Draining);
+    if idle && !pending_prompt_for(shared, &worker.session_id) {
+        shared.hub.reconcile_runtime_idle(&worker.session_id);
+    }
 }
 
 fn update_snapshot_from_event(
@@ -1405,6 +1428,53 @@ mod tests {
         .expect("reset acknowledgement");
         assert!(!runtime.shared.resetting.lock().contains("s"));
         assert_eq!(runtime.shared.hub.status("s"), Some(Status::Starting));
+    }
+
+    #[tokio::test]
+    async fn idle_snapshot_waits_for_controller_pending_prompt_before_reconciliation() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("s", Status::Running, None);
+        hub.submit("s", "first".to_owned(), vec![], None);
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "first");
+        hub.submit("s", "second".to_owned(), vec![], None);
+
+        let runtime = RemoteRuntime::for_test(hub, vec![snapshot("s")]);
+        runtime.shared.pending.lock().insert(
+            "prompt-in-transit".to_owned(),
+            CoreCommand::Prompt {
+                session_id: "s".to_owned(),
+                command_id: "prompt-in-transit".to_owned(),
+                turn_id: "turn-in-transit".to_owned(),
+                content: vec![serde_json::json!({"type": "text", "text": "first"})],
+                cmid: None,
+            },
+        );
+        let mut idle = snapshot("s");
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+
+        reconcile_idle_snapshot(&runtime.shared, &idle);
+        assert!(
+            rx.try_recv().is_err(),
+            "pending prompt must retain the guard"
+        );
+
+        runtime.shared.pending.lock().clear();
+        reconcile_idle_snapshot(&runtime.shared, &idle);
+        assert_eq!(
+            rx.recv().await.expect("dispatch after reconciliation").text,
+            "second"
+        );
     }
 
     #[tokio::test]
