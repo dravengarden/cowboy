@@ -215,12 +215,19 @@ function PageTurnFooter({
       data-page-turn-footer
       sx={{
         mt: 2.5,
-        mb: 0.5,
+        mb: desktop ? 0.5 : 1.5,
         pt: 1.5,
         borderTop: 1,
         borderColor: "divider",
         display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+        // Mobile already has a persistent Page Dock with the authoritative
+        // ordinal. Repeating it here made the last-page footer's middle cell
+        // collide visually with that dock when the Next card was absent.
+        // Keep this footer about destination context only; Desktop has no
+        // persistent dock, so it retains the centered ordinal.
+        gridTemplateColumns: desktop
+          ? "minmax(0, 1fr) auto minmax(0, 1fr)"
+          : "repeat(2, minmax(0, 1fr))",
         alignItems: "center",
         gap: 1,
       }}
@@ -242,13 +249,15 @@ function PageTurnFooter({
             )}
           </Button>
         )}
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}
-      >
-        {currentOrdinal} / {total}
-      </Typography>
+      {desktop && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}
+        >
+          {currentOrdinal} / {total}
+        </Typography>
+      )}
       {nextDisabled
         ? <Box aria-hidden />
         : (
