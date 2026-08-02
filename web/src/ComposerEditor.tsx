@@ -225,6 +225,8 @@ export const ComposerEditor = forwardRef<
     placeholder?: string;
     disabled?: boolean;
     autoFocus?: boolean;
+    /** Initial caret for the one native-textarea -> CM6 promotion mount. */
+    initialSelection?: number;
     vim?: boolean;
     /// Called when the vim mode changes (normal / insert / visual). Drives the
     /// NORMAL/INSERT hint in the composer card. Only wired when vim is on.
@@ -277,6 +279,7 @@ export const ComposerEditor = forwardRef<
     placeholder,
     disabled,
     autoFocus = false,
+    initialSelection,
     vim,
     onVimMode,
     onEscape,
@@ -926,6 +929,16 @@ export const ComposerEditor = forwardRef<
         // during edits). Idempotent + stable for a stable seed, so @uiw doesn't
         // re-apply it. See inlineImages.ts (ensureTrailingImageLine).
         value={ensureTrailingImageLine(value)}
+        {...(initialSelection !== undefined
+          ? {
+            selection: {
+              anchor: Math.min(
+                Math.max(0, initialSelection),
+                ensureTrailingImageLine(value).length,
+              ),
+            },
+          }
+          : {})}
         onChange={handleChange}
         editable={!disabled}
         autoFocus={autoFocus}

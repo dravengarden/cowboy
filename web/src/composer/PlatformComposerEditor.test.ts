@@ -5,6 +5,7 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  insertNativeInlineImages,
   shouldExpandInlineComposer,
   shouldFocusPromotedEditor,
   shouldUseNativeTouchEditor,
@@ -88,4 +89,35 @@ Deno.test("an accepted iOS image paste survives permission-alert focus loss", ()
   assertEquals(shouldFocusPromotedEditor(true, false, false, true), true);
   assertEquals(shouldFocusPromotedEditor(false, false, false, true), false);
   assertEquals(shouldFocusPromotedEditor(true, true, false, true), false);
+});
+
+Deno.test("native image promotion carries the caret to the end of the pasted image", () => {
+  const edit = insertNativeInlineImages(
+    "beforeafter",
+    6,
+    6,
+    [{ id: "image-1", name: "shot].png" }],
+  );
+  assertEquals(
+    edit.value,
+    "before\n![shot.png](cowboy-att:image-1)\nafter",
+  );
+  assertEquals(edit.caret, edit.value.indexOf("after"));
+});
+
+Deno.test("native batch image promotion replaces selection and lands after every token", () => {
+  const edit = insertNativeInlineImages(
+    "replace this tail",
+    0,
+    12,
+    [
+      { id: "image-1", name: "one.png" },
+      { id: "image-2", name: "two.png" },
+    ],
+  );
+  assertEquals(
+    edit.value,
+    "![one.png](cowboy-att:image-1)\n![two.png](cowboy-att:image-2)\n tail",
+  );
+  assertEquals(edit.caret, edit.value.indexOf(" tail"));
 });

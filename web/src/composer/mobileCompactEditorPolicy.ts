@@ -1,5 +1,40 @@
 import { imageTokensInText } from "../attachments";
 
+interface NativeInlineImage {
+  id: string;
+  name: string;
+}
+
+export interface NativeInlineImageEdit {
+  value: string;
+  caret: number;
+}
+
+/** Insert one or more placement tokens into the live native-textarea document.
+ * The returned caret is part of the edit: the textarea is replaced by CM6 as
+ * soon as the first token lands, so there is no surviving native selection to
+ * query on the promotion render. */
+export function insertNativeInlineImages(
+  value: string,
+  from: number,
+  to: number,
+  attachments: readonly NativeInlineImage[],
+): NativeInlineImageEdit {
+  const start = Math.max(0, Math.min(from, value.length));
+  const end = Math.max(start, Math.min(to, value.length));
+  if (attachments.length === 0) return { value, caret: start };
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  const tokens = attachments.map((attachment, index) => {
+    const lead = index === 0 && start !== lineStart ? "\n" : "";
+    const label = attachment.name.replaceAll("]", "");
+    return `${lead}![${label}](cowboy-att:${attachment.id})\n`;
+  }).join("");
+  return {
+    value: value.slice(0, start) + tokens + value.slice(end),
+    caret: start + tokens.length,
+  };
+}
+
 /** The persisted inline-height preference belongs to Desktop only. Mobile and
  * tablet have a separate, explicit fullscreen sheet; leaking the Desktop bit
  * into their compact composer silently promotes it to a 48vh CM6 canvas. */

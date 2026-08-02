@@ -58,6 +58,7 @@ export const PlatformComposerEditor = forwardRef<
     touchValue,
   );
   const wasNativeTouchRef = useRef(nativeTouch);
+  const promotionCaretRef = useRef<number | null>(null);
   // The iOS paste-permission alert temporarily owns focus. When the accepted
   // paste event returns, `document.activeElement` can therefore be BODY even
   // though UIKit still considers this one native paste transaction. Preserve
@@ -69,8 +70,9 @@ export const PlatformComposerEditor = forwardRef<
   // same discrete UIKit gesture; a later rAF focus cannot inherit the keyboard.
   // The explicit paste intent covers the system permission alert's transient
   // focus loss without weakening ordinary attachment/file-picker semantics.
+  const wasNativeTouch = wasNativeTouchRef.current;
   const focusPromotedEditor = shouldFocusPromotedEditor(
-    wasNativeTouchRef.current,
+    wasNativeTouch,
     nativeTouch,
     typeof document !== "undefined" &&
       document.activeElement instanceof HTMLTextAreaElement,
@@ -78,7 +80,7 @@ export const PlatformComposerEditor = forwardRef<
   );
   const cmSeedRef = useRef(props.value);
   cmSeedRef.current = composerEditorMountSeed(
-    wasNativeTouchRef.current,
+    wasNativeTouch,
     nativeTouch,
     cmSeedRef.current,
     touchValue,
@@ -129,6 +131,9 @@ export const PlatformComposerEditor = forwardRef<
         {...(props.onSelectionChange
           ? { onSelectionChange: props.onSelectionChange }
           : {})}
+        onInlineImageInsertion={(caret): void => {
+          promotionCaretRef.current = caret;
+        }}
         {...(props.onPasteFiles
           ? {
             onPasteFiles: (files: File[]): void => {
@@ -158,6 +163,9 @@ export const PlatformComposerEditor = forwardRef<
       {...props}
       value={cmSeedRef.current}
       autoFocus={props.autoFocus || focusPromotedEditor}
+      {...(wasNativeTouch && promotionCaretRef.current !== null
+        ? { initialSelection: promotionCaretRef.current }
+        : {})}
       // The loading editor is deliberately a separate, non-interactive CM6
       // lifetime. The real editor mounts only after Vim can be included in its
       // initial EditorState, so native IME composition never spans reconfigure.

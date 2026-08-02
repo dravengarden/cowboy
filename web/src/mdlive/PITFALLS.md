@@ -809,6 +809,15 @@ here says otherwise.
     own the gesture through `touchend`/`touchcancel`. Never prevent presses near
     text: they must retain native Select/Paste and selection handles.
 
+39. **Native-to-CM6 image promotion transfers selection, not only text and
+    focus.** The first inline-image token immediately unmounts the native iOS
+    textarea, so its `selectionStart` no longer exists when CM6 constructs its
+    initial state. Record the caret at the end of the inserted token before the
+    controlled `onChange`, then pass it as CM6's initial `selection` in the same
+    render that transfers the token-bearing document and keyboard focus. A
+    later `focusEnd()` is incorrect: it moves past unrelated trailing text and
+    is too late to make the native-to-CM6 handoff atomic.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
@@ -830,6 +839,9 @@ fullscreen editor:
       folds directly without a confirmation flash (pitfall #17).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
+- [ ] Paste a photo in the middle of text — the image lands at the caret and the
+      caret resumes immediately after the image, before the original trailing
+      text; the keyboard stays visible.
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
       twice — the image is ringed then deleted (pitfall #11; keydown-only handlers
       don't fire on a phone, so this is the beforeinput path).

@@ -43,6 +43,7 @@ import {
   toggleNativeWrap,
   wrapNativeSelection,
 } from "./composer/nativeTextareaEditing";
+import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 
 // Compatibility hook for composer call sites. Platform classification is owned
 // centrally by SurfaceProvider so every part of the app agrees on the active
@@ -168,6 +169,8 @@ export const ComposerTextarea = forwardRef<
     autoFocus?: boolean;
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
+    /** Synchronous native -> CM6 handoff point for an inline-image insert. */
+    onInlineImageInsertion?: (caret: number) => void;
     onSelectionChange?: (hasSelection: boolean) => void;
     /// Right padding (px) reserved on the text so it never runs under the action
     /// buttons the composer overlays at the input's bottom-right. 0 when none.
@@ -193,6 +196,7 @@ export const ComposerTextarea = forwardRef<
     autoFocus = false,
     onEscape,
     onPasteFiles,
+    onInlineImageInsertion,
     onSelectionChange,
     endInset = 0,
     borderless = false,
@@ -529,13 +533,13 @@ export const ComposerTextarea = forwardRef<
     // registered attachment renders inline at this exact position.
     insertImage: (attachment: Attachment): void => {
       const ta = inputRef.current;
-      const at = ta?.selectionStart ?? value.length;
+      const current = ta?.value ?? value;
+      const at = ta?.selectionStart ?? current.length;
       const to = ta?.selectionEnd ?? at;
-      const lineStart = value.lastIndexOf("\n", at - 1) + 1;
-      const lead = at === lineStart ? "" : "\n";
-      const label = attachment.name.replaceAll("]", "");
-      const token = `${lead}![${label}](cowboy-att:${attachment.id})\n`;
-      onChange(value.slice(0, at) + token + value.slice(to));
+      const edit = insertNativeInlineImages(current, at, to, [attachment]);
+      // Record before onChange schedules the render that replaces this textarea.
+      onInlineImageInsertion?.(edit.caret);
+      onChange(edit.value);
     },
     insertImages: (attachments: Attachment[]): void => {
       if (attachments.length === 0) return;
@@ -545,13 +549,11 @@ export const ComposerTextarea = forwardRef<
       const current = ta?.value ?? value;
       const at = ta?.selectionStart ?? current.length;
       const to = ta?.selectionEnd ?? at;
-      const lineStart = current.lastIndexOf("\n", at - 1) + 1;
-      const tokens = attachments.map((attachment, index) => {
-        const lead = index === 0 && at !== lineStart ? "\n" : "";
-        const label = attachment.name.replaceAll("]", "");
-        return `${lead}![${label}](cowboy-att:${attachment.id})\n`;
-      }).join("");
-      onChange(current.slice(0, at) + tokens + current.slice(to));
+      const edit = insertNativeInlineImages(current, at, to, attachments);
+      // CM6's initial EditorState consumes this exact selection in the same
+      // promotion commit. Defaulting to 0 strands the caret before the image.
+      onInlineImageInsertion?.(edit.caret);
+      onChange(edit.value);
     },
     refreshImages: (): void => undefined,
     deleteImage: (): void => undefined,
