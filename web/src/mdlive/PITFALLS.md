@@ -652,8 +652,8 @@ here says otherwise.
     accessory dock.** The former single rail mixed Markdown transformations with
     keyboard, attachment, and Send/Done lifecycle actions; overflow then made the
     stable Settings area look like a selected column. `MobileComposerAccessoryDock`
-    now owns one 96px material with two semantic tracks: keyboard/attachment and
-    contextual Send/Done remain stable above, while formatting scrolls alone on
+    now owns one 96px material with two semantic tracks: formatting scrolls alone
+    above, while keyboard/attachment and contextual Send/Done remain stable on
     the track nearest the keyboard. Fullscreen editors render that material as
     the same inset, rounded panel used by the compact composer, not as two
     edge-to-edge system bars. Both surfaces use the same 8px Mobile composer
@@ -677,7 +677,7 @@ here says otherwise.
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Compact compose reuses this interaction model as one adaptive dock:
     its message-action track is present at rest, and the formatting track expands
-    below it, nearest the keyboard, while the persistent editor owns focus.
+    above it while the persistent editor owns focus.
     Settings remains an ordinary equal-width formatting action, never a sticky
     contrasting block. Focus may increase the editor canvas, but the card radius
     and horizontal outer edge stay on the shared Mobile panel geometry. Do not

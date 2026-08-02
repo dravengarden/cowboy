@@ -272,7 +272,7 @@ export function FullscreenComposer({
       </Box>
 
       {/* One inset keyboard-adjacent card shared by main compose and row editing.
-          Lifecycle actions stay above the formatting track nearest the keyboard. */}
+          Formatting stays above lifecycle actions nearest the keyboard. */}
       <MobileComposerAccessoryDock
         mode={hasSelection ? "selection" : "insert"}
         formatActions={actions}

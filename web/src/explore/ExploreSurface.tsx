@@ -2261,7 +2261,7 @@ export function MobilePageDock({
           minHeight: 52,
           mx: "max(env(safe-area-inset-left), 12px)",
           mr: "max(env(safe-area-inset-right), 12px)",
-          mt: 1.5,
+          mt: 0.5,
           mb: 0.75,
           px: "0.5em",
           display: "grid",
