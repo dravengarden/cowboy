@@ -69,6 +69,22 @@ interface MetricsData {
   sessions_live: number;
   sessions_deleted: number;
   daemon_rss_bytes: number;
+  observability_pending: number;
+  observability_accepted_batches: number;
+  observability_dropped_batches: number;
+  observability_failed_log_batches: number;
+  observability_failed_metric_batches: number;
+}
+
+interface RuntimeIncident {
+  id: string;
+  occurred_at_ms: number;
+  classification: string;
+  severity: string;
+  state: string;
+  summary: string;
+  session_id?: string;
+  recovery_outcome?: string;
 }
 
 function str(value: unknown): string | undefined {
@@ -474,6 +490,56 @@ function StorageInfoSection(): React.JSX.Element {
       <InfoRow k="Live sessions" v={String(m.sessions_live)} />
       <InfoRow k="Deleted (purge ≤3d)" v={String(m.sessions_deleted)} />
       <InfoRow k="Daemon memory" v={formatBytes(m.daemon_rss_bytes)} />
+      <InfoRow k="Telemetry pending" v={m.observability_pending.toLocaleString()} />
+      <InfoRow k="Telemetry accepted" v={m.observability_accepted_batches.toLocaleString()} />
+      <InfoRow k="Telemetry dropped" v={m.observability_dropped_batches.toLocaleString()} />
+      <InfoRow
+        k="Victoria write failures"
+        v={String(m.observability_failed_log_batches + m.observability_failed_metric_batches)}
+      />
+    </Stack>
+  );
+}
+
+function RuntimeIncidentsSection(): React.JSX.Element {
+  const [incidents, setIncidents] = useState<RuntimeIncident[] | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/observability/incidents", { signal: controller.signal })
+      .then((response) => response.ok ? response.json() as Promise<RuntimeIncident[]> : [])
+      .then(setIncidents)
+      .catch(() => setIncidents([]));
+    return (): void => controller.abort();
+  }, []);
+  return (
+    <Stack spacing={1}>
+      <Typography variant="overline" color="text.secondary">
+        Runtime incidents
+      </Typography>
+      {incidents === null && <Typography variant="caption" color="text.secondary">Loading…</Typography>}
+      {incidents?.length === 0 && (
+        <Typography variant="caption" color="text.secondary">No incidents recorded.</Typography>
+      )}
+      {incidents?.slice(0, 5).map((incident) => (
+        <Box key={incident.id} sx={{ py: 0.75, borderTop: 1, borderColor: "divider" }}>
+          <Stack direction="row" justifyContent="space-between" spacing={1}>
+            <Typography variant="caption" sx={{ fontWeight: 700 }}>
+              {incident.classification.replaceAll("_", " ")}
+            </Typography>
+            <Typography
+              variant="caption"
+              color={incident.state === "recovered" ? "success.main" : "error.main"}
+            >
+              {incident.state}
+            </Typography>
+          </Stack>
+          <Typography variant="body2" sx={{ mt: 0.35 }}>{incident.summary}</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {relativeUpdateTime(incident.occurred_at_ms, Date.now())}
+            {incident.session_id ? ` · ${incident.session_id}` : ""}
+          </Typography>
+        </Box>
+      ))}
     </Stack>
   );
 }
@@ -590,6 +656,11 @@ export function InfoContent({
           </Typography>
           <StorageInfoSection />
         </Stack>
+
+        {!desktop && <Divider />}
+        <Box sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>
+          <RuntimeIncidentsSection />
+        </Box>
 
         {!desktop && <Divider />}
         <Stack spacing={0.5} sx={desktop ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 } : undefined}>

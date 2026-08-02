@@ -25,6 +25,7 @@ import {
 import { pruneDrafts } from "./draftStore";
 import { linkTimeline } from "./derive";
 import { notifyHaptic } from "./haptic";
+import { reportClientLog, reportClientMetric } from "./observability";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import type {
   ConfigOption,
@@ -1168,6 +1169,7 @@ function openSocket(): void {
     return;
   }
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
+  const connectStartedAt = performance.now();
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?bootstrap=lazy`);
   socket = ws;
   // A socket wedged in CONNECTING (a half-open proxy / network that completes the
@@ -1187,6 +1189,8 @@ function openSocket(): void {
       return;
     }
     clearReconnectTimer();
+    reportClientMetric("websocket_connect_duration_ms", performance.now() - connectStartedAt);
+    reportClientLog("info", "websocket_open", "Cowboy WebSocket connected");
     markAlive(); // seed liveness so the watchdog doesn't fire before the snapshot
     startLiveness(ws);
     setState({ ...state, connected: true });
@@ -1229,7 +1233,7 @@ function openSocket(): void {
       console.warn("bad message", err);
     }
   };
-  ws.onclose = (): void => {
+  ws.onclose = (event): void => {
     clearTimeout(connectGuard);
     // A superseded socket may close after its replacement has opened. It no
     // longer owns global connection state and must not raise the red banner or
@@ -1238,11 +1242,16 @@ function openSocket(): void {
     socket = undefined;
     stopLiveness();
     setState({ ...state, connected: false });
+    reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
+      code: event.code,
+      clean: event.wasClean,
+    });
     // Raises the red banner past the failure threshold and hands back the
     // exponential-backoff delay to wait before retrying (banner lives in `conn`).
     scheduleReconnect(conn.connectionLost());
   };
   ws.onerror = (): void => {
+    reportClientLog("error", "websocket_error", "Cowboy WebSocket failed");
     if (socket === ws) ws.close();
   };
 }

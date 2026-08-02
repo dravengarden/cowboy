@@ -147,6 +147,49 @@ pub struct ProviderActionLog {
     pub created_at_ms: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RuntimeIncidentWrite {
+    pub id: String,
+    pub occurred_at_ms: i64,
+    pub source: String,
+    pub classification: String,
+    pub severity: String,
+    pub state: String,
+    pub summary: String,
+    pub fingerprint: String,
+    pub session_id: Option<String>,
+    pub client_id: Option<String>,
+    pub machine_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub build: Option<String>,
+    pub evidence_start_ms: i64,
+    pub evidence_end_ms: i64,
+    pub detail: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct RuntimeIncident {
+    pub id: String,
+    pub occurred_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub source: String,
+    pub classification: String,
+    pub severity: String,
+    pub state: String,
+    pub summary: String,
+    pub fingerprint: String,
+    pub session_id: Option<String>,
+    pub client_id: Option<String>,
+    pub machine_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub build: Option<String>,
+    pub evidence_start_ms: i64,
+    pub evidence_end_ms: i64,
+    pub detail: serde_json::Value,
+    pub recovered_at_ms: Option<i64>,
+    pub recovery_outcome: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MachineRecord {
     pub id: String,
@@ -1465,6 +1508,87 @@ impl Store {
         .await
         .context("purge soft-deleted sessions")?;
         Ok(done.rows_affected())
+    }
+
+    /// Insert an incident idempotently. Raw evidence is retained by Victoria;
+    /// this row is the durable index and recovery record.
+    pub async fn upsert_runtime_incident(&self, incident: &RuntimeIncidentWrite) -> Result<()> {
+        let mut detail = incident.detail.clone();
+        strip_nul(&mut detail);
+        sqlx::query(
+            "INSERT INTO runtime_incidents (id, occurred_at, source, classification, severity, \
+             state, summary, fingerprint, session_id, client_id, machine_id, trace_id, build, \
+             evidence_start, evidence_end, detail) VALUES ( \
+             $1, to_timestamp($2::double precision / 1000), $3, $4, $5, $6, $7, $8, $9, $10, \
+             COALESCE($11, (SELECT machine_id FROM sessions WHERE id = $9)), \
+             $12, $13, to_timestamp($14::double precision / 1000), \
+             to_timestamp($15::double precision / 1000), $16) \
+             ON CONFLICT (id) DO UPDATE SET updated_at = now(), \
+             evidence_end = GREATEST(runtime_incidents.evidence_end, EXCLUDED.evidence_end), \
+             detail = runtime_incidents.detail || EXCLUDED.detail",
+        )
+        .bind(strip_nul_str(&incident.id).as_ref())
+        .bind(incident.occurred_at_ms)
+        .bind(strip_nul_str(&incident.source).as_ref())
+        .bind(strip_nul_str(&incident.classification).as_ref())
+        .bind(strip_nul_str(&incident.severity).as_ref())
+        .bind(strip_nul_str(&incident.state).as_ref())
+        .bind(strip_nul_str(&incident.summary).as_ref())
+        .bind(strip_nul_str(&incident.fingerprint).as_ref())
+        .bind(incident.session_id.as_deref())
+        .bind(incident.client_id.as_deref())
+        .bind(incident.machine_id.as_deref())
+        .bind(incident.trace_id.as_deref())
+        .bind(incident.build.as_deref())
+        .bind(incident.evidence_start_ms)
+        .bind(incident.evidence_end_ms)
+        .bind(detail)
+        .execute(&self.pool)
+        .await
+        .context("UPSERT runtime incident")?;
+        Ok(())
+    }
+
+    /// Mark the newest unresolved incident for a session as recovered.
+    pub async fn recover_runtime_incident(
+        &self,
+        session_id: &str,
+        recovered_at_ms: i64,
+        outcome: &str,
+    ) -> Result<u64> {
+        let done = sqlx::query(
+            "UPDATE runtime_incidents SET state = 'recovered', \
+             recovered_at = to_timestamp($2::double precision / 1000), \
+             recovery_outcome = $3, updated_at = now() WHERE id = ( \
+               SELECT id FROM runtime_incidents WHERE session_id = $1 \
+               AND source = 'controller' AND state <> 'recovered' \
+               ORDER BY occurred_at DESC LIMIT 1)",
+        )
+        .bind(session_id)
+        .bind(recovered_at_ms)
+        .bind(outcome)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("recover runtime incident for {session_id}"))?;
+        Ok(done.rows_affected())
+    }
+
+    /// Query recent incident summaries, newest first.
+    pub async fn runtime_incidents(&self, limit: i64) -> Result<Vec<RuntimeIncident>> {
+        sqlx::query_as(
+            "SELECT id, (extract(epoch FROM occurred_at) * 1000)::bigint AS occurred_at_ms, \
+             (extract(epoch FROM updated_at) * 1000)::bigint AS updated_at_ms, source, \
+             classification, severity, state, summary, fingerprint, session_id, client_id, \
+             machine_id, trace_id, build, \
+             (extract(epoch FROM evidence_start) * 1000)::bigint AS evidence_start_ms, \
+             (extract(epoch FROM evidence_end) * 1000)::bigint AS evidence_end_ms, detail, \
+             (extract(epoch FROM recovered_at) * 1000)::bigint AS recovered_at_ms, \
+             recovery_outcome FROM runtime_incidents ORDER BY occurred_at DESC LIMIT $1",
+        )
+        .bind(limit.clamp(1, 500))
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT runtime incidents")
     }
 
     /// Storage metrics for the info panel: `(db_bytes, events_rows,

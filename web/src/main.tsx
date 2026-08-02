@@ -7,6 +7,7 @@ import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
+import { installObservability } from "./observability";
 import {
   checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
@@ -83,6 +84,7 @@ function Root(): React.JSX.Element {
 // haptic() calls (queue/send, turn-end notifications, long-press, drag) via the
 // primitive's coalesce window — no double-buzz. Installed once, never torn down.
 installHaptics();
+installObservability();
 
 const el = document.getElementById("root");
 if (el) {

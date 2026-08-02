@@ -89,6 +89,10 @@ const PUBLISHED_MIGRATIONS: &[(&str, &str)] = &[
         "0020_machine_reconnect_grace.sql",
         "f4993e561935bdd74ef706e84ab81ccbb809b754f6ec0c3f45c9abc8ae93bdc8",
     ),
+    (
+        "0021_runtime_incidents.sql",
+        "6b80aa0284f9a113ac4ebde0f72e43565677aec5b0d66e2378fe207ff797db58",
+    ),
 ];
 
 #[test]

@@ -71,6 +71,7 @@ import { claimKeyboard } from "./keyboardClaim";
 import { machineProviderAvailable } from "./machineProvider";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
 import { DelayedNetworkProgress } from "./NetworkActionFeedback";
+import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
@@ -1607,6 +1608,13 @@ export function App({
     const columnRef = useRef<HTMLDivElement>(null);
     const activeId = useActiveSessionId();
     const setActiveId = setActiveSessionId;
+    const observabilityMachineId = sessions.find((session) => session.id === activeId)?.machine_id;
+    useEffect(() => {
+        setObservabilityContext({
+            ...(activeId ? { session_id: activeId } : {}),
+            ...(observabilityMachineId ? { machine_id: observabilityMachineId } : {}),
+        });
+    }, [activeId, observabilityMachineId]);
     // Floating-glass inset: publish the panel's TRUE live height — the AppBar plus
     // the composer (the latter INCLUDING an expanded queue/drafts panel) — as CSS
     // vars on the column. The glass follows every animation frame, while the

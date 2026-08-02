@@ -48,6 +48,8 @@ pub mod machine_install;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
 #[cfg(feature = "full")]
+mod observability;
+#[cfg(feature = "full")]
 mod persistence;
 #[cfg(feature = "full")]
 mod provider;

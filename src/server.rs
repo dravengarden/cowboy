@@ -18,6 +18,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use axum::Router;
 use axum::body::Body;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
@@ -42,6 +43,7 @@ use crate::core::{
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
+use crate::observability::{Observability, SubmitReceipt, TelemetryBatch};
 use crate::persistence::EventReducer;
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
@@ -69,6 +71,7 @@ struct AppState {
     diff_snapshots: DiffSnapshotCache,
     code_cache: crate::code_cache::CodeCache,
     zed_adapter_socket: Option<PathBuf>,
+    observability: Observability,
 }
 
 const STORE_QUEUE_CAPACITY: usize = 8_192;
@@ -367,6 +370,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         session_id_floor,
         Arc::clone(&runtime_router),
     ));
+    let observability = Observability::start(
+        store.clone(),
+        args.victoria_logs_url,
+        args.victoria_metrics_url,
+    );
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
     // call the Supervisor (which holds the Hub) — that cycle is why the queue
@@ -490,6 +498,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             diff_snapshots: DiffSnapshotCache::default(),
             code_cache,
             zed_adapter_socket: args.zed_adapter_socket,
+            observability,
         },
         shutdown_tx,
     )
@@ -629,7 +638,14 @@ async fn flush_event_batch(
     let mut last_error = None;
     for attempt in 0..4 {
         match store.upsert_event_batch(&rows, &watermarks).await {
-            Ok(()) => return true,
+            Ok(()) => {
+                if let Err(error) = record_lifecycle_incidents(store, &rows).await {
+                    tracing::error!(%error, "recording lifecycle incidents failed");
+                    last_error = Some(error);
+                } else {
+                    return true;
+                }
+            }
             Err(e) => {
                 last_error = Some(e);
                 tokio::time::sleep(std::time::Duration::from_millis(50 * (1 << attempt))).await;
@@ -640,6 +656,155 @@ async fn flush_event_batch(
         tracing::error!(%error, rows = rows.len(), "store writer exhausted event-batch retries");
     }
     false
+}
+
+async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow::Result<()> {
+    for envelope in rows {
+        let Event::Lifecycle { status, detail } = &envelope.event else {
+            continue;
+        };
+        if *status == Status::Running {
+            let recovered = store
+                .recover_runtime_incident(&envelope.session_id, now_ms(), "session_running")
+                .await?;
+            if recovered > 0 {
+                tracing::info!(
+                    session_id = %envelope.session_id,
+                    recovery_outcome = "session_running",
+                    "runtime incident recovered"
+                );
+            }
+            continue;
+        }
+        if !matches!(status, Status::Crashed | Status::Interrupted) {
+            continue;
+        }
+        let occurred_at_ms = now_ms();
+        let classification = if *status == Status::Interrupted {
+            classify_interruption_detail(detail.as_deref())
+        } else {
+            classify_crash_detail(detail.as_deref())
+        };
+        let summary = detail.as_deref().unwrap_or(if *status == Status::Crashed {
+            "Runtime crashed without a diagnostic detail"
+        } else {
+            "Runtime was interrupted"
+        });
+        let fingerprint = format!(
+            "{:x}",
+            Sha256::digest(format!("{classification}:{summary}").as_bytes())
+        );
+        let incident_id = format!("lifecycle:{}:{}", envelope.session_id, envelope.seq);
+        store
+            .upsert_runtime_incident(&crate::store::RuntimeIncidentWrite {
+                id: incident_id.clone(),
+                occurred_at_ms,
+                source: "controller".to_owned(),
+                classification: classification.to_owned(),
+                severity: if *status == Status::Crashed {
+                    "error".to_owned()
+                } else {
+                    "warning".to_owned()
+                },
+                state: "active".to_owned(),
+                summary: summary.to_owned(),
+                fingerprint,
+                session_id: Some(envelope.session_id.clone()),
+                client_id: None,
+                machine_id: None,
+                trace_id: None,
+                build: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                evidence_start_ms: occurred_at_ms.saturating_sub(30_000),
+                evidence_end_ms: occurred_at_ms.saturating_add(30_000),
+                detail: serde_json::json!({
+                    "status": status,
+                    "lifecycle_seq": envelope.seq,
+                    "detail": detail,
+                }),
+            })
+            .await?;
+        tracing::error!(
+            incident_id,
+            session_id = %envelope.session_id,
+            classification,
+            lifecycle_seq = envelope.seq,
+            detail = summary,
+            "runtime incident opened"
+        );
+    }
+    Ok(())
+}
+
+fn classify_crash_detail(detail: Option<&str>) -> &'static str {
+    let detail = detail.unwrap_or_default().to_ascii_lowercase();
+    if detail.contains("oom") || detail.contains("out of memory") || detail.contains("signal: 9") {
+        "resource_exhaustion"
+    } else if detail.contains("protocol") || detail.contains("frame") || detail.contains("json-rpc")
+    {
+        "protocol_failure"
+    } else if detail.contains("connection")
+        || detail.contains("socket")
+        || detail.contains("timed out")
+    {
+        "transport_failure"
+    } else if detail.contains("exited")
+        || detail.contains("exit status")
+        || detail.contains("signal")
+    {
+        "process_exit"
+    } else {
+        "runtime_failure"
+    }
+}
+
+fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
+    let detail = detail.unwrap_or_default().to_ascii_lowercase();
+    if detail.contains("deploy")
+        || detail.contains("shutdown")
+        || detail.contains("controller restart")
+    {
+        "expected_interruption"
+    } else {
+        "runtime_interruption"
+    }
+}
+
+#[cfg(test)]
+mod incident_classification_tests {
+    use super::{classify_crash_detail, classify_interruption_detail};
+
+    #[test]
+    fn crash_details_map_to_stable_incident_classes() {
+        assert_eq!(
+            classify_crash_detail(Some("process exited with signal: 9")),
+            "resource_exhaustion"
+        );
+        assert_eq!(
+            classify_crash_detail(Some("runtime frame too large")),
+            "protocol_failure"
+        );
+        assert_eq!(
+            classify_crash_detail(Some("socket connection timed out")),
+            "transport_failure"
+        );
+        assert_eq!(
+            classify_crash_detail(Some("exit status 217")),
+            "process_exit"
+        );
+        assert_eq!(classify_crash_detail(None), "runtime_failure");
+    }
+
+    #[test]
+    fn only_explicit_control_plane_edges_are_expected_interruptions() {
+        assert_eq!(
+            classify_interruption_detail(Some("controller restart during deploy")),
+            "expected_interruption"
+        );
+        assert_eq!(
+            classify_interruption_detail(Some("force cancel watchdog fired")),
+            "runtime_interruption"
+        );
+    }
 }
 
 async fn retry_store_write(store: &Store, write: &StoreWrite) -> bool {
@@ -955,6 +1120,14 @@ async fn serve_axum(
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
+        .route(
+            "/api/observability/batches",
+            post(api_observability_batch).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/observability/incidents",
+            get(api_observability_incidents),
+        )
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/logs", get(api_usage_logs))
         .route("/api/usage/codex/reset", post(api_codex_reset))
@@ -1172,6 +1345,11 @@ struct Metrics {
     code_cache_hits: u64,
     code_cache_misses: u64,
     code_cache_evictions: u64,
+    observability_pending: usize,
+    observability_accepted_batches: u64,
+    observability_dropped_batches: u64,
+    observability_failed_log_batches: u64,
+    observability_failed_metric_batches: u64,
 }
 
 /// Resident set size of THIS process (the daemon, not its agent children) from
@@ -1221,8 +1399,40 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         code_cache_hits: code_cache.hits,
         code_cache_misses: code_cache.misses,
         code_cache_evictions: code_cache.evictions,
+        observability_pending: state.observability.health().pending(),
+        observability_accepted_batches: state.observability.health().accepted_batches(),
+        observability_dropped_batches: state.observability.health().dropped_batches(),
+        observability_failed_log_batches: state.observability.health().failed_log_batches(),
+        observability_failed_metric_batches: state.observability.health().failed_metric_batches(),
     })
     .into_response()
+}
+
+async fn api_observability_batch(
+    State(state): State<Arc<AppState>>,
+    Json(batch): Json<TelemetryBatch>,
+) -> Response {
+    match state.observability.submit(batch) {
+        Ok(()) => (StatusCode::ACCEPTED, Json(SubmitReceipt { accepted: true })).into_response(),
+        Err(message) if message == "observability queue full" => {
+            (StatusCode::SERVICE_UNAVAILABLE, message).into_response()
+        }
+        Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+    }
+}
+
+async fn api_observability_incidents(State(state): State<Arc<AppState>>) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "incident ledger unavailable",
+        )
+            .into_response();
+    };
+    match store.runtime_incidents(200).await {
+        Ok(incidents) => Json(incidents).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
 }
 
 async fn api_usage(State(state): State<Arc<AppState>>) -> Response {
@@ -1435,7 +1645,7 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
     let runtime = state.runtime_router.stats();
     let runtime_connected = state.runtime_router.has_connected_runtime();
     let body = format!(
-        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n# TYPE cowboy_runtime_connected gauge\ncowboy_runtime_connected {}\n# TYPE cowboy_runtime_workers gauge\ncowboy_runtime_workers {}\n# TYPE cowboy_runtime_busy_workers gauge\ncowboy_runtime_busy_workers {}\n# TYPE cowboy_runtime_draining_workers gauge\ncowboy_runtime_draining_workers {}\n# TYPE cowboy_runtime_handoff_workers gauge\ncowboy_runtime_handoff_workers {}\n# TYPE cowboy_runtime_pending_commands gauge\ncowboy_runtime_pending_commands {}\n",
+        "# TYPE cowboy_up gauge\ncowboy_up {}\n# TYPE cowboy_database_bytes gauge\ncowboy_database_bytes {db_bytes}\n# TYPE cowboy_events_rows gauge\ncowboy_events_rows {events_rows}\n# TYPE cowboy_sessions gauge\ncowboy_sessions{{state=\"live\"}} {sessions_live}\ncowboy_sessions{{state=\"deleted\"}} {sessions_deleted}\n# TYPE cowboy_daemon_rss_bytes gauge\ncowboy_daemon_rss_bytes {}\n# TYPE cowboy_persistence_pending gauge\ncowboy_persistence_pending {}\n# TYPE cowboy_persistence_dropped_total counter\ncowboy_persistence_dropped_total {}\n# TYPE cowboy_persistence_failed_batches_total counter\ncowboy_persistence_failed_batches_total {}\n# TYPE cowboy_persistence_healthy gauge\ncowboy_persistence_healthy {}\n# TYPE cowboy_runtime_connected gauge\ncowboy_runtime_connected {}\n# TYPE cowboy_runtime_workers gauge\ncowboy_runtime_workers {}\n# TYPE cowboy_runtime_busy_workers gauge\ncowboy_runtime_busy_workers {}\n# TYPE cowboy_runtime_draining_workers gauge\ncowboy_runtime_draining_workers {}\n# TYPE cowboy_runtime_handoff_workers gauge\ncowboy_runtime_handoff_workers {}\n# TYPE cowboy_runtime_pending_commands gauge\ncowboy_runtime_pending_commands {}\n# TYPE cowboy_observability_pending gauge\ncowboy_observability_pending {}\n# TYPE cowboy_observability_accepted_batches_total counter\ncowboy_observability_accepted_batches_total {}\n# TYPE cowboy_observability_dropped_batches_total counter\ncowboy_observability_dropped_batches_total {}\n# TYPE cowboy_observability_failed_log_batches_total counter\ncowboy_observability_failed_log_batches_total {}\n# TYPE cowboy_observability_failed_metric_batches_total counter\ncowboy_observability_failed_metric_batches_total {}\n",
         u8::from(state.runtime_health.is_healthy(state.store.is_some()) && runtime_connected),
         daemon_rss_bytes(),
         health.map_or(0, |h| h.pending()),
@@ -1448,6 +1658,11 @@ async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
         runtime.draining_workers,
         runtime.handoff_workers,
         runtime.pending_commands,
+        state.observability.health().pending(),
+        state.observability.health().accepted_batches(),
+        state.observability.health().dropped_batches(),
+        state.observability.health().failed_log_batches(),
+        state.observability.health().failed_metric_batches(),
     );
     (
         [(

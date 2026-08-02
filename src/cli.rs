@@ -135,6 +135,22 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_POSTGRES_URL")]
     pub postgres_url: Option<String>,
 
+    /// `VictoriaLogs` base URL used by the bounded client observability relay.
+    #[arg(
+        long,
+        env = "COWBOY_VICTORIA_LOGS_URL",
+        default_value = "http://127.0.0.1:6302"
+    )]
+    pub victoria_logs_url: String,
+
+    /// `VictoriaMetrics` base URL used by the bounded client observability relay.
+    #[arg(
+        long,
+        env = "COWBOY_VICTORIA_METRICS_URL",
+        default_value = "http://127.0.0.1:6301"
+    )]
+    pub victoria_metrics_url: String,
+
     /// Codex CLI used by the shared Luna classifier app-server. The self-managed
     /// `/opt` install follows Codex's own update channel on hawk.
     #[arg(

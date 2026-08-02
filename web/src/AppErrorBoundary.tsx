@@ -17,6 +17,7 @@
 import { Box, Button, Typography } from "@mui/material";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { isModuleLoadError } from "./moduleRecovery";
+import { reportClientIncident, reportClientLog } from "./observability";
 
 interface State {
   readonly error: Error | undefined;
@@ -69,6 +70,13 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
     // below only shows the message (a full stack is noise for the user).
     // eslint-disable-next-line no-console
     console.error("AppErrorBoundary caught a render error", error, info.componentStack);
+    const componentStack = info.componentStack?.slice(0, 512) ?? "";
+    reportClientLog("error", "react_render_error", error, {
+      component_stack: componentStack,
+    });
+    reportClientIncident("client_render_failure", "error", error, {
+      component_stack: componentStack,
+    });
     if (isModuleLoadError(error)) void recoverLatestBundle();
   }
 
