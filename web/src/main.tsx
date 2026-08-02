@@ -7,7 +7,11 @@ import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
 import { useKeyboardInset } from "./keyboardInset";
 import { installHaptics } from "./_shell";
-import { installObservability } from "./observability";
+import {
+  installObservability,
+  markClientReloadIntent,
+  reportClientLog,
+} from "./observability";
 import {
   checkForDeployedUpdate,
   createServiceWorkerUpdateCheck,
@@ -120,10 +124,17 @@ globalThis.addEventListener("keydown", (e: KeyboardEvent): void => {
 // countdown and Mobile requires an explicit Update tap, so detection never
 // replaces a page while the user is reading or composing.
 if (import.meta.env.PROD) {
+  let updateReported = false;
   const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
     'script[type="module"][src]',
   )?.getAttribute("src") ?? undefined;
   const reportUpdate = async (): Promise<void> => {
+    if (updateReported) return;
+    updateReported = true;
+    markClientReloadIntent("deployed_version_detected");
+    reportClientLog("info", "client_update_available", "A new Cowboy client build is available", {
+      loaded_entry: loadedEntry?.split("/").pop() ?? "unknown",
+    });
     const { conn } = await import("./store");
     conn.updateAvailable();
   };
@@ -170,6 +181,7 @@ if (import.meta.env.PROD) {
       void reportUpdate().catch(() => {
         // If the old module graph is already unavailable, reload is the only
         // recovery path. Normal updates take the visible update route above.
+        markClientReloadIntent("service_worker_controller_fallback");
         globalThis.location.reload();
       });
     });

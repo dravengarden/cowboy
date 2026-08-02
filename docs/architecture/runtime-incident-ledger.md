@@ -39,6 +39,13 @@ switching, or shutdown. A bounded queue drops ordinary evidence under pressure;
 drop counts are exported from Cowboy's native `/metrics` endpoint. Incident
 ledger writes remain durable and idempotent.
 
+The client connection timeline must remain reconstructable across reloads. It
+records initial connection and reconnect attempts, trigger reason, close code,
+socket lifetime, exponential-backoff delay, outage duration, foreground and
+network recovery, loaded bundle identity, server and Service Worker versions,
+and the update-detected to reload-completed transition. Metrics keep only
+bounded dimensions; client, session, and trace identity remain log fields.
+
 ## Privacy and cardinality
 
 Do not collect prompts, responses, tool output, clipboard or attachment

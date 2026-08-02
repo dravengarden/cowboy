@@ -259,6 +259,9 @@ function retainTranscriptSessions(valid: ReadonlySet<string>): void {
 // open/close into it and reads back the backoff delay. The only reconnect state
 // kept here is the single pending-attempt timer.
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let outageStartedAt: number | undefined;
+let reconnectAttempts = 0;
+let nextConnectReason = "initial";
 
 function clearReconnectTimer(): void {
   if (reconnectTimer !== undefined) {
@@ -302,7 +305,7 @@ function startLiveness(ws: WebSocket): void {
       socket === ws && ws.readyState === WebSocket.OPEN &&
       Date.now() - lastMessageAt > STALE_MS
     ) {
-      reconnectNow();
+      reconnectNow("liveness_stale");
     }
   }, LIVENESS_CHECK_MS);
 }
@@ -313,13 +316,23 @@ function startLiveness(ws: WebSocket): void {
 // the zombie first so its eventual callbacks cannot affect the replacement,
 // then open the replacement immediately. This path is user-driven (foreground
 // or network return), so it intentionally bypasses outage backoff.
-function reconnectNow(): void {
+function reconnectNow(reason: string): void {
   const stale = socket;
+  const silenceMs = lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0;
+  reportClientLog("warn", "websocket_reconnect_triggered", "Cowboy WebSocket reconnect triggered", {
+    reason,
+    ready_state: stale?.readyState ?? -1,
+    silence_ms: silenceMs,
+    visibility: document.visibilityState,
+    network_online: navigator.onLine,
+  });
+  outageStartedAt ??= Date.now();
   socket = undefined;
   clearReconnectTimer();
   stopLiveness();
   if (state.connected) setState({ ...state, connected: false });
   stale?.close();
+  nextConnectReason = reason;
   openSocket();
 }
 
@@ -352,12 +365,12 @@ if (typeof document !== "undefined") {
       )
     ) {
       lastForegroundRecoveryAt = now;
-      reconnectNow();
+      reconnectNow(appleTouchWebView ? "apple_foreground" : "foreground_stale");
     }
   };
   document.addEventListener("visibilitychange", recoverForeground);
   globalThis.addEventListener("pageshow", recoverForeground);
-  globalThis.addEventListener("online", reconnectNow);
+  globalThis.addEventListener("online", () => reconnectNow("network_online"));
 }
 
 function emit(): void {
@@ -1112,8 +1125,13 @@ export function notify(message: string, severity: "error" | "warning" = "error")
 // computed off the consecutive-failure count). One pending attempt at a time.
 function scheduleReconnect(delay: number): void {
   if (reconnectTimer !== undefined) return;
+  reportClientLog("info", "websocket_reconnect_scheduled", "Cowboy WebSocket reconnect scheduled", {
+    delay_ms: delay,
+    attempt: reconnectAttempts + 1,
+  });
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
+    nextConnectReason = "backoff";
     connect();
   }, delay);
 }
@@ -1170,8 +1188,20 @@ function openSocket(): void {
   }
   const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const connectStartedAt = performance.now();
+  const connectReason = nextConnectReason;
+  const reconnecting = outageStartedAt !== undefined;
+  if (reconnecting) reconnectAttempts += 1;
+  reportClientLog("info", "websocket_connect_attempt", "Cowboy WebSocket connection attempt", {
+    reason: connectReason,
+    attempt: reconnecting ? reconnectAttempts : 0,
+    reconnecting,
+    network_online: navigator.onLine,
+    visibility: document.visibilityState,
+  });
+  nextConnectReason = "unspecified";
   const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?bootstrap=lazy`);
   socket = ws;
+  let openedAt: number | undefined;
   // A socket wedged in CONNECTING (a half-open proxy / network that completes the
   // TCP handshake but never the WS upgrade) fires NEITHER onopen NOR onclose, so
   // without this it strands the UI on "Connecting…" forever with no reconnect.
@@ -1179,6 +1209,11 @@ function openSocket(): void {
   // it opens or closes on its own.
   const connectGuard = setTimeout(() => {
     if (socket === ws && ws.readyState === WebSocket.CONNECTING) {
+      reportClientLog("warn", "websocket_connect_timeout", "Cowboy WebSocket upgrade timed out", {
+        reason: connectReason,
+        attempt: reconnecting ? reconnectAttempts : 0,
+        timeout_ms: 8000,
+      });
       ws.close();
     }
   }, 8000);
@@ -1189,8 +1224,25 @@ function openSocket(): void {
       return;
     }
     clearReconnectTimer();
-    reportClientMetric("websocket_connect_duration_ms", performance.now() - connectStartedAt);
-    reportClientLog("info", "websocket_open", "Cowboy WebSocket connected");
+    openedAt = performance.now();
+    const connectDurationMs = openedAt - connectStartedAt;
+    const outageDurationMs = outageStartedAt === undefined ? 0 : Math.max(0, Date.now() - outageStartedAt);
+    reportClientMetric("websocket_connect_duration_ms", connectDurationMs, {
+      connection: reconnecting ? "reconnect" : "initial",
+    });
+    if (reconnecting) {
+      reportClientMetric("websocket_reconnect_duration_ms", outageDurationMs);
+      reportClientMetric("websocket_reconnect_success", 1, { reason: connectReason });
+    }
+    reportClientLog("info", "websocket_open", "Cowboy WebSocket connected", {
+      reason: connectReason,
+      attempt: reconnecting ? reconnectAttempts : 0,
+      reconnecting,
+      connect_duration_ms: connectDurationMs,
+      outage_duration_ms: outageDurationMs,
+    });
+    outageStartedAt = undefined;
+    reconnectAttempts = 0;
     markAlive(); // seed liveness so the watchdog doesn't fire before the snapshot
     startLiveness(ws);
     setState({ ...state, connected: true });
@@ -1242,16 +1294,25 @@ function openSocket(): void {
     socket = undefined;
     stopLiveness();
     setState({ ...state, connected: false });
+    outageStartedAt ??= Date.now();
     reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
       code: event.code,
       clean: event.wasClean,
+      socket_lifetime_ms: openedAt === undefined ? 0 : Math.max(0, performance.now() - openedAt),
+      visibility: document.visibilityState,
+      network_online: navigator.onLine,
     });
     // Raises the red banner past the failure threshold and hands back the
     // exponential-backoff delay to wait before retrying (banner lives in `conn`).
     scheduleReconnect(conn.connectionLost());
   };
   ws.onerror = (): void => {
-    reportClientLog("error", "websocket_error", "Cowboy WebSocket failed");
+    reportClientLog("error", "websocket_error", "Cowboy WebSocket failed", {
+      reason: connectReason,
+      attempt: reconnecting ? reconnectAttempts : 0,
+      ready_state: ws.readyState,
+      network_online: navigator.onLine,
+    });
     if (socket === ws) ws.close();
   };
 }
