@@ -33,6 +33,8 @@ Deno.test("scrollback skeleton is replaced by measured older content", () => {
 Deno.test("scrollback heuristic fills only a nearby unfinished skeleton", () => {
   const base = {
     remaining: 120,
+    loadedRows: 10,
+    minimumRows: 10,
     fromTop: 300,
     viewportHeight: 800,
     reachedStart: false,
@@ -41,6 +43,10 @@ Deno.test("scrollback heuristic fills only a nearby unfinished skeleton", () => 
   };
   assertEquals(shouldContinueScrollbackFill(base), true);
   assertEquals(shouldContinueScrollbackFill({ ...base, remaining: 20 }), false);
+  assertEquals(
+    shouldContinueScrollbackFill({ ...base, remaining: 20, loadedRows: 9 }),
+    true,
+  );
   assertEquals(shouldContinueScrollbackFill({ ...base, fromTop: 2_500 }), false);
   assertEquals(shouldContinueScrollbackFill({ ...base, reachedStart: true }), false);
 });

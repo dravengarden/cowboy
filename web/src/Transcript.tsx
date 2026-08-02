@@ -146,7 +146,11 @@ const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // cannot turn a mount into an unbounded full-log download.
 const VIEWPORT_BACKFILL_PAGE_LIMIT = 24;
 const VIEWPORT_BACKFILL_SETTLE_MS = 96;
-const SCROLLBACK_FILL_PAGE_LIMIT = 3;
+// One upward gesture should reveal a useful reading batch, not three isolated
+// tool cards. Count rendered transcript rows rather than assuming a byte page
+// has a stable visual density; tool-heavy pages can collapse to very little UI.
+const SCROLLBACK_FILL_MINIMUM_ROWS = 10;
+const SCROLLBACK_FILL_PAGE_LIMIT = 10;
 const SCROLLBACK_FILL_SETTLE_MS = 96;
 
 // --- Loading primitives -----------------------------------------------------
@@ -388,6 +392,13 @@ function TranscriptLoadingFill({
 // replaced from its lower edge by real older rows; column-reverse keeps the
 // reader's current item anchored while the history grows above it.
 function ScrollbackLoadingSkeleton({ height }: { height: number }): React.JSX.Element {
+  const rows = [
+    { title: "42%", card: "100%" },
+    { title: "58%", card: "100%" },
+    { title: "36%", card: "100%" },
+    { title: "52%", card: "100%" },
+    { title: "44%", card: "100%" },
+  ];
   return (
     <Box
       data-transcript-scrollback-fill
@@ -406,28 +417,38 @@ function ScrollbackLoadingSkeleton({ height }: { height: number }): React.JSX.El
       }}
     >
       <Stack
-        spacing={1}
+        spacing={1.35}
         sx={{
           height: "100%",
           justifyContent: "flex-end",
-          py: 1,
-          maskImage: "linear-gradient(to bottom, transparent 0%, black 28%, black 100%)",
+          py: 1.25,
+          maskImage:
+            "linear-gradient(to bottom, transparent 0%, black 20%, black 100%)",
           WebkitMaskImage:
-            "linear-gradient(to bottom, transparent 0%, black 28%, black 100%)",
+            "linear-gradient(to bottom, transparent 0%, black 20%, black 100%)",
         }}
       >
-        {[0.58, 0.82, 0.7].map((width, index) => (
-          <Skeleton
-            key={index}
-            variant="rounded"
-            animation="wave"
-            sx={{
-              alignSelf: index === 1 ? "stretch" : "flex-start",
-              width: index === 1 ? "100%" : `${width * 100}%`,
-              height: index === 1 ? 52 : 18,
-              borderRadius: 1.5,
-            }}
-          />
+        {rows.map((row, index) => (
+          <Stack key={index} spacing={0.7}>
+            <Skeleton
+              variant="rounded"
+              animation={index >= rows.length - 3 ? "wave" : false}
+              width={row.title}
+              height={10}
+              sx={{
+                ml: 1.5,
+                borderRadius: 99,
+                opacity: 0.72,
+              }}
+            />
+            <Skeleton
+              variant="rounded"
+              animation={index >= rows.length - 3 ? "wave" : false}
+              width={row.card}
+              height={58}
+              sx={{ borderRadius: 2.25 }}
+            />
+          </Stack>
         ))}
       </Stack>
     </Box>
@@ -3284,6 +3305,7 @@ export function Transcript({
     scrollbackFillActiveRef.current = true;
     const targetHeight = Math.min(420, Math.max(180, el.clientHeight * 0.42));
     const baseScrollHeight = el.scrollHeight;
+    const baseRowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
     let pending = true;
     setScrollbackLoading(false);
     setScrollbackFillHeight(targetHeight);
@@ -3317,10 +3339,16 @@ export function Transcript({
           });
           setScrollbackFillHeight(remaining);
           const currentPaging = pagingRef.current;
+          const loadedRows = Math.max(
+            0,
+            el.querySelectorAll<HTMLElement>("[data-key]").length - baseRowCount,
+          );
           const fromBottom = Math.abs(el.scrollTop);
           const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
           if (!currentPaging || !shouldContinueScrollbackFill({
             remaining,
+            loadedRows,
+            minimumRows: SCROLLBACK_FILL_MINIMUM_ROWS,
             fromTop,
             viewportHeight: el.clientHeight,
             reachedStart: currentPaging.reachedStart,

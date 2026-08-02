@@ -75,17 +75,19 @@ export function scrollbackFillRemaining(input: {
 
 export function shouldContinueScrollbackFill(input: {
   remaining: number;
+  loadedRows: number;
+  minimumRows: number;
   fromTop: number;
   viewportHeight: number;
   reachedStart: boolean;
   loadingOlder: boolean;
   beforeSeq: number | null;
 }): boolean {
-  return input.remaining > 24 &&
-    !input.reachedStart &&
+  return !input.reachedStart &&
     !input.loadingOlder &&
     input.beforeSeq !== null &&
-    input.fromTop <= input.viewportHeight * 3;
+    input.fromTop <= input.viewportHeight * 3 &&
+    (input.loadedRows < input.minimumRows || input.remaining > 24);
 }
 
 export interface TranscriptMagnetInput {

@@ -652,6 +652,15 @@ here says otherwise.
     bridge. Toolbar changes must not add focus retries, controlled editor state,
     or a second compact-composer toolbar.
 
+34. **Mobile scrollback batches are measured in visible rows, not cursor
+    pages.** History cursors are byte bounded, so a tool-heavy page may render
+    only a few cards. One upward gesture keeps fetching sequentially until at
+    least ten new `[data-key]` transcript rows have mounted and the reserved
+    skeleton band is filled, or history ends. Keep the ten-page ceiling as a
+    pathological-session safety bound. The in-flow placeholder should resemble
+    compact thought headings plus tool cards; do not regress to detached pills
+    or a floating loading overlay.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
