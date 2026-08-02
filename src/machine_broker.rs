@@ -1194,7 +1194,7 @@ impl Broker {
             SpawnMode::SystemdUser => {
                 let mut command = Command::new("systemd-run");
                 let unit = worker_unit_name(&session.session_id);
-                wait_for_unit_collected(&unit).await?;
+                prepare_transient_unit(&unit).await?;
                 command.args([
                     "--user",
                     "--quiet",
@@ -1282,25 +1282,59 @@ impl Broker {
 /// races systemd with "already loaded or has a fragment file". Wait for the
 /// unit to disappear before either the desired generation or its fallback is
 /// launched. A brand-new session returns `not-found` immediately.
-async fn wait_for_unit_collected(unit: &str) -> Result<()> {
+async fn prepare_transient_unit(unit: &str) -> Result<()> {
     let deadline = tokio::time::Instant::now() + TRANSIENT_UNIT_COLLECT_TIMEOUT;
+    let mut stopped_orphan = false;
     loop {
         let output = Command::new("systemctl")
-            .args(["--user", "show", unit, "--property=LoadState", "--value"])
+            .args([
+                "--user",
+                "show",
+                unit,
+                "--property=LoadState",
+                "--property=ActiveState",
+            ])
             .output()
             .await
             .with_context(|| format!("checking transient worker unit {unit}"))?;
-        let load_state = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let fields = String::from_utf8_lossy(&output.stdout);
+        let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
+        let active_state = systemd_show_value(&fields, "ActiveState").unwrap_or_default();
         if !output.status.success() || load_state.is_empty() || load_state == "not-found" {
             return Ok(());
         }
+        // Reaching spawn_worker means this broker has no attached peer and no
+        // launch owner for the session. An active same-name transient unit is
+        // therefore an orphan from the retired broker socket, not a worker we
+        // can safely adopt. Stop that exact per-session unit once, then wait for
+        // --collect to remove it before reusing the stable name.
+        if !stopped_orphan && matches!(active_state.as_str(), "active" | "activating") {
+            tracing::warn!(%unit, %active_state, "recycling orphaned transient worker unit");
+            let status = Command::new("systemctl")
+                .args(["--user", "stop", unit])
+                .status()
+                .await
+                .with_context(|| format!("stopping orphaned transient worker unit {unit}"))?;
+            if !status.success() {
+                anyhow::bail!("systemctl stop {unit} exited {status}");
+            }
+            stopped_orphan = true;
+            continue;
+        }
         if tokio::time::Instant::now() >= deadline {
             anyhow::bail!(
-                "transient worker unit {unit} was not collected (LoadState={load_state})"
+                "transient worker unit {unit} was not collected (LoadState={load_state}, ActiveState={active_state})"
             );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+fn systemd_show_value(output: &str, key: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| line.split_once('=').filter(|(name, _)| *name == key))
+        .map(|(_, value)| value.trim().to_owned())
 }
 
 fn worker_unit_name(session_id: &str) -> String {
@@ -1800,6 +1834,20 @@ async fn handle_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn systemd_show_parser_keeps_load_and_active_state_distinct() {
+        let output = "ActiveState=active\nLoadState=loaded\n";
+        assert_eq!(
+            systemd_show_value(output, "LoadState").as_deref(),
+            Some("loaded")
+        );
+        assert_eq!(
+            systemd_show_value(output, "ActiveState").as_deref(),
+            Some("active")
+        );
+        assert_eq!(systemd_show_value(output, "SubState"), None);
+    }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};
 
     fn test_socket() -> PathBuf {

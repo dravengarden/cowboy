@@ -297,7 +297,12 @@ impl RemoteRuntime {
     }
 
     pub fn reset(&self, mut session: StartSession) {
-        session.adopt_only = false;
+        // The declaration must reach Machine before the reset-flavoured stop,
+        // but it must not start a replacement of its own. The reset command is
+        // the single owner of fencing the old unit and launching the new one.
+        // Without `adopt_only`, EnsureSession can briefly spawn a worker that
+        // reset_session immediately stops again.
+        session.adopt_only = true;
         if session.generation.is_empty() {
             session
                 .generation
@@ -310,9 +315,9 @@ impl RemoteRuntime {
             .lock()
             .insert(session_id.clone(), session.clone());
         // Re-declare the replacement metadata before the reset-flavoured stop.
-        // `send_pending` orders EnsureSession first, so Machine broker can atomically
-        // fence the old worker and relaunch from this fresh specification while
-        // preserving the existing v1 wire contract and worker generation.
+        // `send_pending` orders this adopt-only EnsureSession first, so Machine
+        // can atomically fence and relaunch from the fresh specification while
+        // preserving the existing v1 wire contract.
         let ensure_key = format!("ensure:{session_id}");
         self.queue(ensure_key, CoreCommand::EnsureSession { session });
         let command_id = self.next_id("reset");
@@ -1390,7 +1395,7 @@ mod tests {
             let pending = runtime.shared.pending.lock();
             assert!(pending
                 .values()
-                .any(|command| matches!(command, CoreCommand::EnsureSession { session } if session.agent_session_id.is_none())));
+                .any(|command| matches!(command, CoreCommand::EnsureSession { session } if session.agent_session_id.is_none() && session.adopt_only)));
             assert!(pending.values().any(
                 |command| matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
             ));
