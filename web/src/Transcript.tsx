@@ -111,6 +111,7 @@ import {
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackFillRemaining,
+  scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
   shouldMagnetizeTranscript,
@@ -3355,6 +3356,7 @@ export function Transcript({
     setScrollbackLoading(true);
     setScrollbackFillHeight(targetHeight);
     void (async (): Promise<void> => {
+      let mountedContent = false;
       try {
         // Give React/WebKit one paint with the promoted boundary before the
         // first network request can resolve and prepend rows.
@@ -3404,6 +3406,15 @@ export function Transcript({
             previousContentHeight,
             () => scrollbackFillRunRef.current === run,
           );
+          const mountedRowCount = el.querySelectorAll<HTMLElement>("[data-key]")
+            .length;
+          const mountedBandHeight = el.querySelector<HTMLElement>(
+            "[data-transcript-scrollback-fill]",
+          )?.getBoundingClientRect().height ?? 0;
+          const mountedContentHeight = Math.max(0, el.scrollHeight - mountedBandHeight);
+          mountedContent = mountedContent ||
+            mountedRowCount > previousRowCount ||
+            mountedContentHeight > previousContentHeight + 1;
           await new Promise<void>((resolve) => {
             globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
               SCROLLBACK_FILL_SETTLE_MS);
@@ -3450,6 +3461,38 @@ export function Transcript({
           scrollbackFillActiveRef.current = false;
           setScrollbackLoading(false);
           setScrollbackFillHeight(SCROLLBACK_IDLE_BOUNDARY_HEIGHT);
+          // State above changes the active placeholder into the quiet boundary
+          // for the *next* page. Wait until that exact geometry is painted,
+          // then move only a reader who is still inside the boundary past it.
+          // This is the missing replacement hand-off: fetched rows take the
+          // old skeleton's place while the next skeleton remains just above.
+          if (mountedContent) {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              if (scrollbackFillRunRef.current !== run) return;
+              const currentEl = parentRef.current;
+              const boundary = currentEl?.querySelector<HTMLElement>(
+                "[data-transcript-scrollback-fill]",
+              );
+              if (!currentEl || !boundary) return;
+              const fromBottom = Math.abs(currentEl.scrollTop);
+              const currentFromTop = Math.max(
+                0,
+                currentEl.scrollHeight - currentEl.clientHeight - fromBottom,
+              );
+              const desiredFromTop = scrollbackReplacementFromTop({
+                currentFromTop,
+                boundaryHeight: boundary.getBoundingClientRect().height,
+                mountedContent: true,
+              });
+              if (desiredFromTop === null) return;
+              const desiredFromBottom = Math.max(
+                0,
+                currentEl.scrollHeight - currentEl.clientHeight - desiredFromTop,
+              );
+              const direction = currentEl.scrollTop > 0.5 ? 1 : -1;
+              currentEl.scrollTop = direction * desiredFromBottom;
+            }));
+          }
         }
       }
     })();

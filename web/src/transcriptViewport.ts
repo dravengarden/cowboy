@@ -63,6 +63,23 @@ export function scrollbackFillRemaining(input: {
   return Math.max(0, input.targetHeight - addedHeight);
 }
 
+/**
+ * Once an older page has mounted, the quiet boundary now represents the next
+ * page rather than the page that just loaded. If the reader is still looking
+ * at that boundary, advance exactly past it so the fetched rows occupy the
+ * placeholder's former screen area. A reader who has moved away keeps native
+ * ownership of the viewport.
+ */
+export function scrollbackReplacementFromTop(input: {
+  currentFromTop: number;
+  boundaryHeight: number;
+  mountedContent: boolean;
+}): number | null {
+  if (!input.mountedContent || input.boundaryHeight <= 1) return null;
+  if (input.currentFromTop >= input.boundaryHeight - 1) return null;
+  return input.boundaryHeight;
+}
+
 export function shouldContinueScrollbackFill(input: {
   remaining: number;
   loadedRows: number;

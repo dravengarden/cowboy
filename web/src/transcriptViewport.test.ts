@@ -3,6 +3,7 @@ import {
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackFillRemaining,
+  scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
   shouldMagnetizeTranscript,
@@ -26,6 +27,33 @@ Deno.test("scrollback skeleton is replaced by measured older content", () => {
       skeletonHeight: 120,
     }),
     0,
+  );
+});
+
+Deno.test("mounted scrollback content hands the viewport to real rows", () => {
+  assertEquals(
+    scrollbackReplacementFromTop({
+      currentFromTop: 0,
+      boundaryHeight: 132,
+      mountedContent: true,
+    }),
+    132,
+  );
+  assertEquals(
+    scrollbackReplacementFromTop({
+      currentFromTop: 180,
+      boundaryHeight: 132,
+      mountedContent: true,
+    }),
+    null,
+  );
+  assertEquals(
+    scrollbackReplacementFromTop({
+      currentFromTop: 0,
+      boundaryHeight: 132,
+      mountedContent: false,
+    }),
+    null,
   );
 });
 
