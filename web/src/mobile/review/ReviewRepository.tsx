@@ -42,6 +42,13 @@ function shortOid(oid: string): string {
   return oid.slice(0, 8);
 }
 
+function commitBody(message: string, subject: string): string {
+  const normalized = message.replaceAll("\r\n", "\n").trim();
+  const [firstLine = "", ...remainingLines] = normalized.split("\n");
+  if (firstLine.trim() !== subject.trim()) return normalized;
+  return remainingLines.join("\n").trim();
+}
+
 function relativeDate(value: string): string {
   const date = new Date(value);
   const delta = Date.now() - date.getTime();
@@ -241,6 +248,7 @@ function CommitDetail({
   if (selectedPath) {
     return <CommitPatch sessionId={sessionId} oid={commit.oid} path={selectedPath} onBack={() => setSelectedPath(undefined)} />;
   }
+  const body = detail ? commitBody(detail.message, commit.subject) : "";
   return (
     <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
       <RepositoryDetailHeader
@@ -254,9 +262,11 @@ function CommitDetail({
           ? <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}><CircularProgress size={24} /></Box>
           : (
             <Stack spacing={2}>
-              <Typography sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {detail.message}
-              </Typography>
+              {body && (
+                <Typography sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {body}
+                </Typography>
+              )}
               <Stack spacing={0.25}>
                 <Typography variant="caption" color="text.secondary">
                   {detail.author} · {detail.authorEmail}
