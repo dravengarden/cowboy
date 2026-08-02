@@ -660,19 +660,21 @@ here says otherwise.
     only a few cards. One upward gesture keeps fetching sequentially until at
     least ten new `[data-key]` transcript rows have mounted and the reserved
     skeleton band is filled, or history ends. Keep the ten-page ceiling as a
-    pathological-session safety bound. A remaining `beforeSeq` is an invisible
-    page-head trigger, not persistent loading chrome. Promote an in-flow skeleton
-    before I/O and replace it from its lower edge as older rows mount. The placeholder
+    pathological-session safety bound. A remaining `beforeSeq` owns a quiet
+    page-head skeleton group. Promote it before I/O and replace it from its lower
+    edge as older rows mount. The placeholder
     should resemble compact thought headings plus tool cards; do not regress to
     a delayed, detached, or floating loading overlay. `loadOlder` must remain
-    bounded by a client timeout and report cursor progress: a suspended fetch or
-    unchanged cursor must remove the active band instead of leaving Mobile
-    behind a permanent expanded skeleton.
+    bounded by a client timeout and report cursor progress. HTTP completion is
+    not mounted-content completion: iPhone render pacing may defer the new React
+    rows, so replacement geometry must wait for a real row-count or content-height
+    change before measuring. A suspended fetch or unchanged cursor must collapse
+    the active band instead of leaving Mobile behind a permanent expanded skeleton.
     Permit one delayed automatic retry while the boundary remains near the
     viewport; after that, expose an explicit Retry action. Do not leave the
     threshold consumed with an inert loading-shaped block. A request uses compact
-    thought-plus-tool rows, but mounted content must consume that expansion and
-    then unmount it completely; a failure replaces the skeleton with a
+    thought-plus-tool rows; mounted content consumes the expansion back to the
+    next quiet page-head group. A failure replaces the skeleton with a
     visible Retry row rather than clipping the action above placeholder cards.
 
 ## Verification matrix (run the WHOLE thing after any editor change)

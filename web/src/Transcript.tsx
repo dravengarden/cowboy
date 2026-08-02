@@ -151,6 +151,29 @@ const VIEWPORT_BACKFILL_SETTLE_MS = 96;
 const SCROLLBACK_FILL_MINIMUM_ROWS = 10;
 const SCROLLBACK_FILL_PAGE_LIMIT = 10;
 const SCROLLBACK_FILL_SETTLE_MS = 96;
+const SCROLLBACK_IDLE_BOUNDARY_HEIGHT = 132;
+const SCROLLBACK_MOUNT_WAIT_MS = 900;
+
+async function waitForScrollbackMount(
+  el: HTMLElement,
+  previousRowCount: number,
+  previousContentHeight: number,
+  stillCurrent: () => boolean,
+): Promise<void> {
+  const deadline = performance.now() + SCROLLBACK_MOUNT_WAIT_MS;
+  while (stillCurrent() && performance.now() < deadline) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const bandHeight = el.querySelector<HTMLElement>(
+      "[data-transcript-scrollback-fill]",
+    )?.getBoundingClientRect().height ?? 0;
+    const rowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
+    const contentHeight = Math.max(0, el.scrollHeight - bandHeight);
+    if (rowCount > previousRowCount || contentHeight > previousContentHeight + 1) {
+      return;
+    }
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 32));
+  }
+}
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -3338,6 +3361,14 @@ export function Transcript({
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         if (scrollbackFillRunRef.current !== run) return;
         for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
+          const previousBandHeight = el.querySelector<HTMLElement>(
+            "[data-transcript-scrollback-fill]",
+          )?.getBoundingClientRect().height ?? 0;
+          const previousRowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
+          const previousContentHeight = Math.max(
+            0,
+            el.scrollHeight - previousBandHeight,
+          );
           const progressed = await loadOlder(sessionIdRef.current);
           if (!progressed) {
             const currentPaging = pagingRef.current;
@@ -3363,6 +3394,16 @@ export function Transcript({
             break;
           }
           scrollbackRetryCountRef.current = 0;
+          // The store publishes as soon as HTTP completes, but iPhone render
+          // pacing can defer the corresponding React rows for several frames.
+          // Measure only after a real row or content-height change reaches DOM;
+          // otherwise the fetched page is mistaken for zero replacement.
+          await waitForScrollbackMount(
+            el,
+            previousRowCount,
+            previousContentHeight,
+            () => scrollbackFillRunRef.current === run,
+          );
           await new Promise<void>((resolve) => {
             globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
               SCROLLBACK_FILL_SETTLE_MS);
@@ -3377,9 +3418,11 @@ export function Transcript({
             currentScrollHeight: el.scrollHeight,
             skeletonHeight: bandHeight,
           });
-          // Real rows consume the visible placeholder. A remaining cursor is
-          // an invisible trigger after this request, never persistent chrome.
-          setScrollbackFillHeight(remaining);
+          // Real rows consume the visible placeholder from its lower edge. A
+          // remaining cursor keeps the next quiet skeleton group at page head.
+          setScrollbackFillHeight(
+            Math.max(SCROLLBACK_IDLE_BOUNDARY_HEIGHT, remaining),
+          );
           const currentPaging = pagingRef.current;
           const loadedRows = Math.max(
             0,
@@ -3406,7 +3449,7 @@ export function Transcript({
         if (scrollbackFillRunRef.current === run) {
           scrollbackFillActiveRef.current = false;
           setScrollbackLoading(false);
-          setScrollbackFillHeight(0);
+          setScrollbackFillHeight(SCROLLBACK_IDLE_BOUNDARY_HEIGHT);
         }
       }
     })();
@@ -4587,10 +4630,13 @@ export function Transcript({
                   </Box>
                 ))}
               {managesScrollHistory && !backfillingViewport && paging != null &&
-                  paging.beforeSeq !== null && !paging.reachedStart &&
-                  (scrollbackLoading || scrollbackFailed) && (
+                  paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton
-                  height={scrollbackFailed ? 44 : scrollbackFillHeight}
+                  height={scrollbackFailed
+                    ? 44
+                    : scrollbackLoading
+                    ? scrollbackFillHeight
+                    : SCROLLBACK_IDLE_BOUNDARY_HEIGHT}
                   loading={scrollbackLoading}
                   failed={scrollbackFailed}
                   onRetry={() => {
