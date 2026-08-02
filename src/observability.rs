@@ -139,6 +139,11 @@ pub struct Observability {
 
 impl Observability {
     pub fn start(store: Option<Store>, logs_url: String, metrics_url: String) -> Self {
+        // Reqwest intentionally uses rustls-no-provider so Cowboy has one TLS
+        // provider across SQLx, WebSocket, and HTTP clients. Install that
+        // provider before constructing Reqwest; otherwise it panics lazily in
+        // release builds when the first observability client is created.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
         let health = Arc::new(ObservabilityHealth::default());
         tokio::spawn(run_writer(
