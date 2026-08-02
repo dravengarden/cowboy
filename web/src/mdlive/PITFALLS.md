@@ -665,7 +665,8 @@ here says otherwise.
     editing, omitting the main composer's delivery actions.
     Keep every action in an equal 44pt slot:
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
-    WebView and adjacent to the native-resized keyboard. Moving it into a native
+    WebView and adjacent to the native-resized keyboard, with a 6px outer breathing
+    gap rather than padding either action track. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Compact compose reuses this interaction model as one adaptive dock:
     its message-action track is present at rest, and the formatting track expands

@@ -200,7 +200,10 @@ export function FullscreenComposer({
         // ABOVE it (a fixed element's bottom otherwise hides under the keyboard on
         // iOS — the layout viewport doesn't shrink). When the keyboard is down,
         // fall back to the home-indicator safe inset.
-        pb: "max(var(--kb-inset, 0px), env(safe-area-inset-bottom, 0px))",
+        // Keep a narrow breathing gap between the composer card and the native
+        // keyboard. The gap belongs outside the dock: padding either track would
+        // disturb the shared 44pt action rhythm and make compact/fullscreen drift.
+        pb: "calc(max(var(--kb-inset, 0px), env(safe-area-inset-bottom, 0px)) + 6px)",
       }}
     >
       {onDiscard && (
