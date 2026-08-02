@@ -2573,7 +2573,12 @@ export function ComposerWorkspace({
             // ("展开/收缩 state 不同步"). Can't feed `text` as the inline value: it'd
             // re-apply on every keystroke and bounce the iOS caret (see line ~500).
             initialDraftText.current = text;
-            setComposeFs(false);
+            // The fullscreen editor is the current focus owner. Replace it with
+            // the compact editor synchronously inside this same user gesture,
+            // then transfer focus before UIKit ends its keyboard transaction.
+            // A delayed effect cannot preserve the software keyboard here.
+            flushSync(() => setComposeFs(false));
+            editorRef.current?.focusEnd();
           }}
           onAttach={(): void => fileInputRef.current?.click()}
           onPasteFiles={(files): void => addFiles(files, { preserveFocus: true })}

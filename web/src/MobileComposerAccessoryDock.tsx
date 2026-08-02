@@ -74,6 +74,7 @@ export function MobileComposerAccessoryDock({
             <IconButton
               aria-label={primaryLabel.toLowerCase()}
               disabled={primaryDisabled}
+              onPointerDown={(event): void => event.preventDefault()}
               onClick={onPrimary}
               sx={{
                 width: 44,
@@ -138,6 +139,7 @@ export function MobileComposerAccessoryButton({
     <Tooltip title={title}>
       <IconButton
         aria-label={title}
+        onPointerDown={(event): void => event.preventDefault()}
         onClick={onClick}
         sx={{
           width: 44,
