@@ -646,7 +646,9 @@ here says otherwise.
     formatting scrolls at the leading edge; keyboard, attachment, settings, and
     the contextual Send/Done action remain fixed at the trailing edge. Main
     fullscreen compose no longer duplicates Save Draft in this bar; Draft and
-    Queue reuse the same component with Done editing. Keep this dock in the
+    Queue reuse the same component with Done editing. Keep all trailing actions
+    in equal 44pt slots: Send/Done uses primary color for hierarchy, not a
+    circular container or a divider that splits the continuous dock. Keep this dock in the
     WebView and adjacent to the native-resized keyboard. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Toolbar changes must not add focus retries, controlled editor state,

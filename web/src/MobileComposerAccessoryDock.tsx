@@ -67,9 +67,6 @@ export function MobileComposerAccessoryDock({
         sx={{
           flex: "0 0 auto",
           minWidth: 0,
-          pl: 0.5,
-          borderLeft: 1,
-          borderColor: "divider",
         }}
       >
         {utilityActions}
@@ -82,23 +79,14 @@ export function MobileComposerAccessoryDock({
               sx={{
                 width: 44,
                 height: 44,
-                ml: 0.25,
                 flexShrink: 0,
                 color: "primary.main",
-                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.11),
-                border: 1,
-                borderColor: (theme) => alpha(theme.palette.primary.main, 0.28),
                 transition:
-                  "background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease",
+                  "color 120ms ease, opacity 120ms ease, transform 120ms ease",
                 "&:active": { transform: "scale(0.94)" },
-                "&:hover": {
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.16),
-                },
                 "&.Mui-disabled": {
                   color: "text.disabled",
-                  bgcolor: "transparent",
-                  borderColor: "divider",
-                  opacity: 0.52,
+                  opacity: 0.44,
                 },
                 "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
               }}
