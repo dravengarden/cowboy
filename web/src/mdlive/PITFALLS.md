@@ -449,18 +449,17 @@ here says otherwise.
     escape slashes, and keep app-generated lifecycle commands such as `/compact`
     outside this user-composer guard.
 
-20. **Fullscreen row-edit chrome is one non-selectable keyboard dock.** The
-    formatting toolbar, edit-mode Save action, and toolbar settings share one
-    three-column row: horizontally scrolling commands on the left, an exact-centre
-    54px liquid-glass check action, and settings on the right. The dock itself is
-    transparent; glass belongs to the primary action, not a keyboard-like second
-    surface spanning the screen. Do not restore the wide Save pill, opaque second
-    Save row, or a detached dismissal pill: on iOS each wastes the
-    keyboard-adjacent area and the detached label can acquire native text-selection
+20. **Fullscreen row-edit chrome is one non-selectable two-track keyboard dock.**
+    The upper track owns only horizontally scrolling formatting commands. The
+    lower track owns completion and editor-level actions, with Settings fixed in
+    its final 44pt slot. This keeps Done stable without mixing document formatting
+    and message lifecycle in one crowded rail. Do not restore the wide Save pill,
+    opaque detached rows, or a dismissal pill: on iOS each wastes the
+    keyboard-adjacent area and detached labels can acquire native text-selection
     handles. The dock and its controls use `user-select: none`; this applies only
     to chrome, never the CM6 canvas, so native caret, selection, long-press Paste,
     and IME behavior remain unchanged. The top-right ignore-modifications action
-    and confirmation dialog stay separate from Save.
+    and confirmation dialog stay separate from Done.
 
 21. **The native iOS shell can intermittently leave a gray strip above the
     keyboard when UIKit's predicted keyboard frame is taller than its final
@@ -638,18 +637,17 @@ here says otherwise.
     paper over an inert inset with delayed focus, pointer-down selection writes,
     or a larger non-editable wrapper.
 
-33. **Mobile formatting and completion actions share one keyboard accessory
-    dock.** The former fullscreen footer split commands around an oversized
-    detached glass Send/Done island, while compact compose already had its own
-    action row. This created two visual grammars and made row editing look like
-    a different editor. `MobileComposerAccessoryDock` now owns one 52px material:
-    formatting, keyboard, attachment, and the contextual Send/Done action scroll
-    together at the leading edge; only Settings remains fixed at the trailing edge. Main
-    fullscreen compose no longer duplicates Save Draft in this bar; Draft and
-    Queue reuse the same component with Done editing. Keep every action in an
-    equal 44pt slot: Send/Done uses primary color for hierarchy, not a circular
-    container. Separate fixed Settings from the scroll rail with a quiet edge
-    shadow rather than a hard divider. Keep this dock in the
+33. **Mobile formatting and completion actions share one two-track keyboard
+    accessory dock.** The former single rail mixed Markdown transformations with
+    keyboard, attachment, and Send/Done lifecycle actions; overflow then made the
+    stable Settings area look like a selected column. `MobileComposerAccessoryDock`
+    now owns one 96px material with two semantic tracks: formatting scrolls alone
+    above, while keyboard/attachment and contextual Send/Done remain stable below.
+    Settings occupies only the lower trailing 44pt slot and uses a low-contrast
+    one-pixel boundary, never a wide gradient shadow. Main fullscreen compose no
+    longer duplicates Save Draft in this bar; Draft and Queue reuse the same
+    component with Done editing. Keep every action in an equal 44pt slot:
+    Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Toolbar changes must not add focus retries, controlled editor state,

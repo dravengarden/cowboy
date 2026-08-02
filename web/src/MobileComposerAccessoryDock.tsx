@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
 
-/** A single keyboard-adjacent command surface for every focused Mobile editor. */
+/** A two-track keyboard-adjacent command surface for every focused Mobile editor. */
 export function MobileComposerAccessoryDock({
   mode,
   formatActions,
@@ -26,20 +26,20 @@ export function MobileComposerAccessoryDock({
       data-mobile-composer-accessory
       data-toolbar-mode={mode}
       sx={{
-        minHeight: 52,
-        display: "flex",
-        alignItems: "center",
-        gap: 0.5,
-        px: 0.75,
-        py: 0.5,
+        minHeight: 96,
+        display: "grid",
+        gridTemplateRows: "48px 48px",
         borderTop: 1,
         borderColor: "divider",
         bgcolor: (theme) =>
-          alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.9 : 0.86),
+          alpha(
+            theme.palette.background.paper,
+            theme.palette.mode === "dark" ? 0.94 : 0.92,
+          ),
         backdropFilter: "blur(18px) saturate(135%)",
         WebkitBackdropFilter: "blur(18px) saturate(135%)",
         boxShadow: (theme) =>
-          `0 -8px 24px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.14 : 0.045)}`,
+          `0 -1px 0 ${alpha(theme.palette.text.primary, 0.035)}`,
         userSelect: "none",
         WebkitUserSelect: "none",
       }}
@@ -50,8 +50,11 @@ export function MobileComposerAccessoryDock({
         alignItems="center"
         spacing={0.125}
         sx={{
-          flex: "1 1 auto",
+          minHeight: 48,
           minWidth: 0,
+          px: 0.75,
+          borderBottom: 1,
+          borderColor: (theme) => alpha(theme.palette.divider, 0.72),
           overflowX: "auto",
           overscrollBehaviorX: "contain",
           scrollbarWidth: "none",
@@ -59,7 +62,17 @@ export function MobileComposerAccessoryDock({
         }}
       >
         {formatActions}
+      </Stack>
+
+      <Stack
+        data-mobile-composer-message-actions
+        direction="row"
+        alignItems="center"
+        spacing={0.125}
+        sx={{ minWidth: 0, px: 0.75 }}
+      >
         {utilityActions}
+        <Box sx={{ flex: 1, minWidth: 8 }} />
         <Tooltip title={primaryLabel}>
           <span>
             <IconButton
@@ -85,35 +98,21 @@ export function MobileComposerAccessoryDock({
             </IconButton>
           </span>
         </Tooltip>
+        <Box
+          data-mobile-composer-fixed-action
+          sx={{
+            flex: "0 0 45px",
+            width: 45,
+            height: 44,
+            ml: 0.25,
+            pl: 0.25,
+            borderLeft: 1,
+            borderColor: (theme) => alpha(theme.palette.divider, 0.78),
+          }}
+        >
+          {fixedAction}
+        </Box>
       </Stack>
-
-      <Box
-        data-mobile-composer-fixed-action
-        sx={{
-          position: "relative",
-          flex: "0 0 44px",
-          width: 44,
-          height: 44,
-          ml: 0.5,
-          bgcolor: (theme) =>
-            alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.96 : 0.94),
-          "&::before": {
-            content: '""',
-            position: "absolute",
-            pointerEvents: "none",
-            top: 3,
-            bottom: 3,
-            left: -10,
-            width: 10,
-            background: (theme) =>
-              `linear-gradient(90deg, transparent, ${
-                alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.12 : 0.055)
-              })`,
-          },
-        }}
-      >
-        {fixedAction}
-      </Box>
     </Box>
   );
 }

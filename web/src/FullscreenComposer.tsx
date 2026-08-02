@@ -273,7 +273,7 @@ export function FullscreenComposer({
       </Box>
 
       {/* One keyboard-adjacent dock shared by main compose and row editing.
-          Commands scroll together while Settings remains stable at the trailing edge. */}
+          Formatting scrolls on its own track; message actions remain stable below. */}
       <MobileComposerAccessoryDock
         mode={hasSelection ? "selection" : "insert"}
         formatActions={actions}
