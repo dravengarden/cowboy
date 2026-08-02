@@ -3147,6 +3147,7 @@ export function Transcript({
   const reportScrollableRef = useRef<() => void>(() => undefined);
   const viewportBackfillRafRef = useRef(0);
   const viewportBackfillSettleTimerRef = useRef<number | null>(null);
+  const viewportBackfillSettlingRef = useRef(false);
   const viewportBackfillCursorRef = useRef<number | null>(null);
   const viewportBackfillAllowanceRef = useRef(
     VIEWPORT_BACKFILL_PAGE_LIMIT,
@@ -3244,6 +3245,7 @@ export function Transcript({
     setShowHistoryLoadingFill(false);
     setViewportBackfillPaused(false);
     viewportBackfillCursorRef.current = null;
+    viewportBackfillSettlingRef.current = false;
     viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_LIMIT;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
@@ -3259,6 +3261,7 @@ export function Transcript({
         globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
         viewportBackfillSettleTimerRef.current = null;
       }
+      viewportBackfillSettlingRef.current = false;
       if (viewportBackfillRafRef.current !== 0) {
         cancelAnimationFrame(viewportBackfillRafRef.current);
         viewportBackfillRafRef.current = 0;
@@ -3305,7 +3308,8 @@ export function Transcript({
       });
       const needsOlderPage = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
-        allowed: viewportBackfillAllowanceRef.current > 0,
+        allowed: viewportBackfillAllowanceRef.current > 0 &&
+          !viewportBackfillSettlingRef.current,
         desktop: desktopNavigation,
         fromResize,
         reachedStart: paging.reachedStart,
@@ -3316,7 +3320,7 @@ export function Transcript({
         loadingFillHeight,
       });
       const requestOwned = viewportBackfillCursorRef.current !== null ||
-        paging.loadingOlder;
+        paging.loadingOlder || viewportBackfillSettlingRef.current;
       setBackfillingViewport(hasVisibleGap);
       setViewportBackfillPaused(
         hasVisibleGap && !requestOwned &&
@@ -3328,6 +3332,7 @@ export function Transcript({
       ) {
         const requestedCursor = paging.beforeSeq;
         viewportBackfillAllowanceRef.current -= 1;
+        viewportBackfillSettlingRef.current = true;
         viewportBackfillCursorRef.current = requestedCursor;
         void loadOlder(sessionId).finally(() => {
           if (viewportBackfillCursorRef.current === requestedCursor) {
@@ -3340,6 +3345,7 @@ export function Transcript({
             }
             viewportBackfillSettleTimerRef.current = globalThis.setTimeout(() => {
               viewportBackfillSettleTimerRef.current = null;
+              viewportBackfillSettlingRef.current = false;
               requestViewportBackfillRef.current(false);
             }, VIEWPORT_BACKFILL_SETTLE_MS);
           }
@@ -4414,6 +4420,7 @@ export function Transcript({
                     ? () => {
                       viewportBackfillAllowanceRef.current =
                         VIEWPORT_BACKFILL_PAGE_LIMIT;
+                      viewportBackfillSettlingRef.current = false;
                       setViewportBackfillPaused(false);
                       requestViewportBackfillRef.current(false);
                     }
