@@ -641,11 +641,14 @@ here says otherwise.
     accessory dock.** The former single rail mixed Markdown transformations with
     keyboard, attachment, and Send/Done lifecycle actions; overflow then made the
     stable Settings area look like a selected column. `MobileComposerAccessoryDock`
-    now owns one 96px material with two semantic tracks: formatting scrolls alone
-    above, while keyboard/attachment and contextual Send/Done remain stable below.
-    Settings occupies only the lower trailing 44pt slot and uses a short,
-    low-contrast hairline, never a full-height selected-looking rail or wide
-    gradient shadow. Main fullscreen compose also moves Collapse into the lower
+    now owns one 96px material with two semantic tracks: keyboard/attachment and
+    contextual Send/Done remain stable above, while formatting scrolls alone on
+    the track nearest the keyboard. Fullscreen editors render that material as
+    the same inset, rounded panel used by the compact composer, not as two
+    edge-to-edge system bars. Its only internal separator is the quiet horizontal
+    boundary between semantic tracks. Settings is an ordinary trailing 44pt
+    formatting action, never a selected-looking rail, gradient, or separately
+    divided region. Main fullscreen compose also moves Collapse into the upper
     message-action track; do not restore a mostly empty top app bar. The overlay
     itself must retain `safe-area-inset-top`: removing the app bar also removes
     the inset it used to consume, otherwise the first editor line sits beneath

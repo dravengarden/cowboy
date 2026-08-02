@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
+import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
 
 /** A two-track keyboard-adjacent command surface for every focused Mobile editor. */
 export function MobileComposerAccessoryDock({
@@ -29,46 +30,42 @@ export function MobileComposerAccessoryDock({
         minHeight: 96,
         display: "grid",
         gridTemplateRows: "48px 48px",
-        borderTop: 1,
-        borderColor: (theme) => alpha(theme.palette.divider, 0.42),
+        mx: 1.5,
+        mb: 0.75,
+        ...mobileComposerPanelFrameSx,
+        borderColor: (theme) => alpha(theme.palette.divider, 0.5),
         bgcolor: (theme) =>
           alpha(
             theme.palette.background.paper,
-            theme.palette.mode === "dark" ? 0.94 : 0.92,
+            theme.palette.mode === "dark" ? 0.96 : 0.94,
           ),
         backdropFilter: "blur(18px) saturate(135%)",
         WebkitBackdropFilter: "blur(18px) saturate(135%)",
-        boxShadow: "none",
+        boxShadow: (theme) =>
+          theme.palette.mode === "dark"
+            ? "0 8px 26px rgba(0, 0, 0, 0.22)"
+            : "0 8px 24px rgba(57, 42, 92, 0.08)",
         userSelect: "none",
         WebkitUserSelect: "none",
+        animation: "mobile-composer-dock-enter 180ms ease-out both",
+        "@keyframes mobile-composer-dock-enter": {
+          from: { opacity: 0, transform: "translateY(6px)" },
+          to: { opacity: 1, transform: "translateY(0)" },
+        },
+        "@media (prefers-reduced-motion: reduce)": { animation: "none" },
       }}
     >
-      <Stack
-        data-mobile-composer-format-actions
-        direction="row"
-        alignItems="center"
-        spacing={0.125}
-        sx={{
-          minHeight: 48,
-          minWidth: 0,
-          px: 0.75,
-          borderBottom: 1,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.34),
-          overflowX: "auto",
-          overscrollBehaviorX: "contain",
-          scrollbarWidth: "none",
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
-      >
-        {formatActions}
-      </Stack>
-
       <Stack
         data-mobile-composer-message-actions
         direction="row"
         alignItems="center"
         spacing={0.125}
-        sx={{ minWidth: 0, px: 0.75 }}
+        sx={{
+          minWidth: 0,
+          px: 0.75,
+          borderBottom: 1,
+          borderColor: (theme) => alpha(theme.palette.divider, 0.34),
+        }}
       >
         {utilityActions}
         <Box sx={{ flex: 1, minWidth: 8 }} />
@@ -97,26 +94,28 @@ export function MobileComposerAccessoryDock({
             </IconButton>
           </span>
         </Tooltip>
+      </Stack>
+
+      <Stack
+        data-mobile-composer-format-actions
+        direction="row"
+        alignItems="center"
+        spacing={0.125}
+        sx={{
+          minHeight: 48,
+          minWidth: 0,
+          px: 0.75,
+          overflowX: "auto",
+          overscrollBehaviorX: "contain",
+          scrollbarWidth: "none",
+          "&::-webkit-scrollbar": { display: "none" },
+        }}
+      >
+        {formatActions}
+        <Box sx={{ flex: 1, minWidth: 8 }} />
         <Box
           data-mobile-composer-fixed-action
-          sx={{
-            position: "relative",
-            flex: "0 0 45px",
-            width: 45,
-            height: 44,
-            ml: 0.25,
-            pl: 0.25,
-            "&::before": {
-              content: '""',
-              position: "absolute",
-              left: 0,
-              top: 10,
-              bottom: 10,
-              width: "1px",
-              borderRadius: 1,
-              bgcolor: (theme) => alpha(theme.palette.divider, 0.42),
-            },
-          }}
+          sx={{ flex: "0 0 44px", width: 44, height: 44 }}
         >
           {fixedAction}
         </Box>
