@@ -1568,12 +1568,16 @@ export function ComposerWorkspace({
           }),
           ...(touchInput && {
             transition:
-              "border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease",
+              "border-color 180ms ease, border-radius 220ms cubic-bezier(.2,.8,.2,1), background-color 180ms ease, box-shadow 220ms ease, margin 220ms cubic-bezier(.2,.8,.2,1)",
             "&:focus-within": {
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
+              borderRadius: 3.25,
+              mx: 0.75,
+              mb: 0.5,
               bgcolor: (t) =>
-                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.18 : 0.3),
-              boxShadow: (t) => `0 -1px 0 ${alpha(t.palette.primary.main, 0.12)}`,
+                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.58 : 0.82),
+              boxShadow: (t) =>
+                `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
             },
             "&:focus-within [data-mobile-focus-format-row]": {
               maxHeight: 48,
@@ -1581,6 +1585,9 @@ export function ComposerWorkspace({
               transform: "translateY(0)",
               pointerEvents: "auto",
               borderTopColor: (t) => alpha(t.palette.divider, 0.42),
+            },
+            "@media (prefers-reduced-motion: reduce)": {
+              transition: "none",
             },
           }),
         }}

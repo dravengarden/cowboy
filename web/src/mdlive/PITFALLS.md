@@ -659,7 +659,10 @@ here says otherwise.
     bridge. Compact compose reuses this interaction model as one adaptive dock:
     its message-action track is present at rest, and the formatting track expands
     while the persistent editor owns focus. Coordinate the bottom session-nav
-    exit with CSS `:focus-within`; never mirror focus through controlled editor
+    exit with CSS `:focus-within`; the same focus transition may inset and round
+    the whole composer into a keyboard-adjacent input card, but must preserve
+    Cowboy's complete action rows rather than substituting another product's
+    button model. Never mirror focus through controlled editor
     state. Toolbar changes must not add focus retries, controlled editor state,
     editor remounts, or a second floating compact-composer toolbar.
 
