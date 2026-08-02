@@ -128,6 +128,9 @@ pub async fn prepare(
     tokio::fs::create_dir_all(worktree_root)
         .await
         .with_context(|| format!("creating worktree root {}", worktree_root.display()))?;
+    if branch_existed {
+        remove_stale_destination_registration(&repository, &destination).await?;
+    }
     let added = if branch_existed {
         git_output(
             &repository,
@@ -207,6 +210,52 @@ pub async fn prepare(
         isolated: true,
         created: true,
     })
+}
+
+async fn remove_stale_destination_registration(
+    repository: &Path,
+    destination: &Path,
+) -> Result<()> {
+    if tokio::fs::try_exists(destination).await? {
+        bail!(
+            "session worktree {} appeared while it was being prepared; retry to reuse it",
+            destination.display()
+        );
+    }
+    let listed = git_output(repository, ["worktree", "list", "--porcelain", "-z"])
+        .await
+        .context("listing registered Git worktrees")?;
+    let registered = listed.split('\0').any(|field| {
+        field
+            .strip_prefix("worktree ")
+            .is_some_and(|path| Path::new(path) == destination)
+    });
+    if !registered {
+        return Ok(());
+    }
+    if tokio::fs::try_exists(destination).await? {
+        bail!(
+            "session worktree {} reappeared before stale registration cleanup; retry to reuse it",
+            destination.display()
+        );
+    }
+    git_output(
+        repository,
+        [
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            destination.as_os_str(),
+        ],
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "removing stale Git registration for missing session worktree {}",
+            destination.display()
+        )
+    })?;
+    Ok(())
 }
 
 async fn cleanup_failed_creation(
@@ -641,15 +690,7 @@ mod tests {
         let unpublished_revision = git_output(Path::new(&recoverable.path), ["rev-parse", "HEAD"])
             .await
             .unwrap();
-        git(
-            &source,
-            &[
-                "worktree",
-                "remove",
-                "--force",
-                managed.join("sess-recoverable").to_str().unwrap(),
-            ],
-        );
+        std::fs::remove_dir_all(managed.join("sess-recoverable")).unwrap();
         let restored = prepare(
             PrepareWorkspaceRequest {
                 root: source.display().to_string(),
