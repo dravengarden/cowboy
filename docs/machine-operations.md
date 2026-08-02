@@ -116,10 +116,12 @@ launch environment is rebuilt atomically. Detached worker services and their
 session generations remain alive and are adopted by the new broker.
 
 Codex device login and Claude browser login can be initiated from Machines.
-Gemini does not expose a stable login/status command, so complete its official
-CLI setup once on the execution Machine and press Refresh. Cowboy recognizes
-OAuth credential presence or configured API-key/Vertex metadata without
-reading, storing, or transmitting secret contents.
+Gemini exposes two explicit Cowboy flows: an API key is submitted directly to
+the target Machine and stored in its CLI-owned `~/.gemini/.env` with mode 0600;
+Standard/Enterprise Google Login is enabled only when that Machine has a
+`GOOGLE_CLOUD_PROJECT`. Consumer Google Login credentials without a project are
+retired and never make the provider ready. A controller refuses Gemini login
+commands from older Machine hosts that cannot advertise these semantics.
 
 ## Ownership
 

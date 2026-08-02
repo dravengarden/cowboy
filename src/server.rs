@@ -1822,6 +1822,34 @@ async fn api_machine_login(
         )
             .into_response();
     }
+    if request.provider == "gemini" {
+        let supports_current_auth = match state.store.as_ref() {
+            Some(store) => store
+                .list_machines()
+                .await
+                .ok()
+                .and_then(|machines| {
+                    machines
+                        .into_iter()
+                        .find(|machine| machine.id == machine_id)
+                })
+                .and_then(|machine| machine.inventory.get("components").cloned())
+                .and_then(|value| {
+                    serde_json::from_value::<Vec<crate::machine_protocol::ComponentInventory>>(
+                        value,
+                    )
+                    .ok()
+                })
+                .is_some_and(|components| gemini_machine_auth_is_current(&components)),
+            None => false,
+        };
+        if !supports_current_auth {
+            return (
+                StatusCode::CONFLICT,
+                "This Machine must update cowboy-machine before using the current Gemini authentication flows",
+            ).into_response();
+        }
+    }
     let request_id = machine_request_id("login");
     match state.machine_control.send(
         &machine_id,
@@ -2608,12 +2636,22 @@ fn machine_supports_provider(
         return false;
     }
     if provider == "gemini" {
-        return true;
+        return gemini_machine_auth_is_current(components);
     }
     components.iter().any(|component| {
         component.id.kind == ComponentKind::ProviderAdapter
             && matches!(component.id.slot.as_str(), candidate if candidate == slot || candidate == provider)
             && component.state == ComponentState::Active
+    })
+}
+
+fn gemini_machine_auth_is_current(
+    components: &[crate::machine_protocol::ComponentInventory],
+) -> bool {
+    components.iter().any(|component| {
+        component.id.kind == crate::machine_protocol::ComponentKind::ProviderCli
+            && component.id.slot == "gemini"
+            && component.detail.is_some()
     })
 }
 
@@ -2683,6 +2721,7 @@ mod machine_provider_tests {
         ));
         let authenticated = ComponentInventory {
             auth: Some(AuthState::SignedIn),
+            detail: Some("Gemini API key".to_owned()),
             ..cli
         };
         assert!(machine_supports_provider(&[authenticated], "gemini"));

@@ -2,6 +2,7 @@ export type MachineProviderComponent = {
   id: { kind: string; slot?: string };
   state: string;
   auth?: string;
+  detail?: string;
 };
 
 export function machineProviderAvailable(
@@ -13,6 +14,7 @@ export function machineProviderAvailable(
     component.id.kind === "provider_cli" &&
     component.id.slot === slot &&
     component.state === "active" &&
-    component.auth === "signed_in"
+    component.auth === "signed_in" &&
+    (provider !== "gemini" || typeof component.detail === "string")
   );
 }

@@ -21,4 +21,21 @@ Deno.test("requires an active and confirmed signed-in provider", () => {
     }]),
     false,
   );
+  assertEquals(
+    machineProviderAvailable("gemini", [{
+      id: { kind: "provider_cli", slot: "gemini" },
+      state: "active",
+      auth: "signed_in",
+    }]),
+    false,
+  );
+  assertEquals(
+    machineProviderAvailable("gemini", [{
+      id: { kind: "provider_cli", slot: "gemini" },
+      state: "active",
+      auth: "signed_in",
+      detail: "Gemini API key",
+    }]),
+    true,
+  );
 });

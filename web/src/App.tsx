@@ -3987,6 +3987,7 @@ function MachinesContent(): React.JSX.Element {
                                                     (authEvent?.event === "login_state" && authEvent.state === "pending");
                                                 const loginBusyKey = `${machine.id}:login:${provider ?? ""}`;
                                                 const loginBusy = busy[loginBusyKey] || loginPending;
+                                                const legacyGeminiAuth = provider === "gemini" && component.detail == null;
                                                 const npmUpdateKey = `${machine.id}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
                                                 const npmUpdating = busy[npmUpdateKey];
                                                 const npmInstallable = update?.available === true && update.installable;
@@ -4030,10 +4031,13 @@ function MachinesContent(): React.JSX.Element {
                                                                 </Typography>
                                                             )}
                                                         </Box>
-                                                        {provider && component.auth === "signed_in" && (
+                                                        {provider && component.auth === "signed_in" && !legacyGeminiAuth && (
                                                             <Chip size="small" color="success" variant="outlined" label="Signed in" />
                                                         )}
-                                                        {provider && component.auth !== "signed_in" && provider === "gemini" && (
+                                                        {provider === "gemini" && legacyGeminiAuth && (
+                                                            <Chip size="small" variant="outlined" color="warning" label="Machine update required" />
+                                                        )}
+                                                        {provider && component.auth !== "signed_in" && provider === "gemini" && !legacyGeminiAuth && (
                                                             <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                                                                 <Button
                                                                     size="small"
