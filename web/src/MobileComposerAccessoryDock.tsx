@@ -34,7 +34,10 @@ export function MobileComposerAccessoryDock({
         display: "grid",
         gridTemplateRows: "48px 48px",
         mx: embedded ? 0 : 1,
-        mb: embedded ? 0 : 0.75,
+        // Keyboard separation belongs to the surface that positions the whole
+        // composer. Keeping a second margin here doubled the gap in fullscreen
+        // while embedded/inline compose still had no gap at all.
+        mb: 0,
         ...(embedded
           ? { borderTop: 1, borderColor: "divider", overflow: "hidden" }
           : mobileComposerPanelFrameSx),

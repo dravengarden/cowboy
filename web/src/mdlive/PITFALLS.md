@@ -685,7 +685,12 @@ here says otherwise.
     Keep every action in an equal 44pt slot:
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard, with a 6px outer breathing
-    gap rather than padding either action track. Moving it into a native
+    gap rather than padding either action track. That gap is owned by the surface
+    positioning the complete composer, never by `MobileComposerAccessoryDock`
+    itself: otherwise fullscreen compose double-counts it while an embedded dock
+    gets none. In the native shell, a focused fullscreen editor must not add
+    `safe-area-inset-bottom` above the already-resized WKWebView; use the 6px gap
+    alone until focus leaves. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Compact compose reuses this interaction model as one adaptive dock:
     its message-action track is present at rest, and the formatting track expands

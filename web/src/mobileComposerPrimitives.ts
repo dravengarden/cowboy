@@ -10,3 +10,6 @@ export const mobileComposerPanelFrameSx = {
 
 /** Matches the compact native composer input's minimum touch height. */
 export const mobileComposerPanelHeaderMinHeight = 44;
+
+/** Quiet separation between a focused Mobile composer and the native keyboard. */
+export const mobileComposerKeyboardGap = 6;

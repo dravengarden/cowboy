@@ -34,6 +34,8 @@ import {
   MobileComposerAccessoryButton,
   MobileComposerAccessoryDock,
 } from "./MobileComposerAccessoryDock";
+import { mobileComposerKeyboardGap } from "./mobileComposerPrimitives";
+import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -112,6 +114,7 @@ export function FullscreenComposer({
   onForcePush?: ((anchor: HTMLElement) => void) | undefined;
   forcePushEnabled?: boolean;
 }): React.JSX.Element {
+  const nativeShell = isNativeShell();
   const theme = useTheme();
 
   // UNCONTROLLED, exactly like the inline composer: freeze the open-time text as a
@@ -203,7 +206,16 @@ export function FullscreenComposer({
         // Keep a narrow breathing gap between the composer card and the native
         // keyboard. The gap belongs outside the dock: padding either track would
         // disturb the shared 44pt action rhythm and make compact/fullscreen drift.
-        pb: "calc(max(var(--kb-inset, 0px), env(safe-area-inset-bottom, 0px)) + 6px)",
+        // Browser/PWA needs the measured keyboard overlap. The native shell
+        // already resizes WKWebView, so adding its home-indicator safe area here
+        // creates a conspicuous second gap above the keyboard. In that focused
+        // native state, keep only the shared quiet separation.
+        pb: nativeShell
+          ? `max(env(safe-area-inset-bottom, 0px), ${mobileComposerKeyboardGap}px)`
+          : `calc(max(var(--kb-inset, 0px), env(safe-area-inset-bottom, 0px)) + ${mobileComposerKeyboardGap}px)`,
+        ...(nativeShell && {
+          "&:focus-within": { pb: `${mobileComposerKeyboardGap}px` },
+        }),
       }}
     >
       {onDiscard && (
