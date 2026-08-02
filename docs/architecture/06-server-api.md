@@ -28,9 +28,16 @@ so a release binary is fully self-contained — no static-file directory to depl
 
 ## The `/api/workspaces` picker
 
-The New Session picker lets you open a session in **any Columbus project's
-worktree**. The chosen `cwd` becomes the agent's working directory, so Codex
-loads that project's guidance files and trusted project configuration.
+The New Session picker lets you choose **any registered Columbus project**.
+Those values are discovery roots, not task directories. When creating a
+Machine-backed session, the controller resolves the trusted workspace id and
+the Machine fetches the remote default branch into a worktree keyed by the
+reserved Cowboy session id. Only that prepared path becomes the persisted
+`cwd`, so Codex loads the right guidance without inheriting another task's
+uncommitted files. Preparation fails closed; it never silently falls back to
+the stable checkout. The old WebSocket creation command is rejected because it
+cannot express Machine placement. Direct API/ACP callers may still supply a
+caller-owned local workspace. `/etc/nixos` is deliberately not selectable.
 
 ## History pagination
 

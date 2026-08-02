@@ -1143,14 +1143,10 @@ function SessionList({
     );
 }
 
-// Hard-coded workspace choices for v0. Each entry's `value` is what the
-// daemon receives as `cwd`; the resolver in supervisor.rs honours absolute
-// paths as-is and joins relative ones to `--workspace-root` (defaults to
-// `/home/draven`). To expose more roots later, either bump this list or
-// fetch a list from the daemon.
+// Fallback used only while Machine inventory is unavailable. Machine-backed
+// creation resolves this stable source root and prepares a session worktree.
 const WORKING_DIRS = [
     { value: "columbus", label: "columbus", help: "/home/draven/columbus", active_work_items: [] },
-    { value: "/etc/nixos", label: "/etc/nixos", help: "NixOS host config", active_work_items: [] },
 ] as const;
 
 type WorkspaceWorkItem = {
@@ -1214,9 +1210,11 @@ function NewSessionDialog({
     const desktop = useSurfaceProfile().kind === "desktop";
     const [cwd, setCwd] = useState<string>(WORKING_DIRS[0].value);
     const [workItemId, setWorkItemId] = useState<string>("");
+    const [creating, setCreating] = useState(false);
+    const [createError, setCreateError] = useState("");
     // Working-dir choices: start from the hard-coded fallback, then replace with
-    // the daemon's `/api/workspaces` (host roots + every columbus-managed
-    // project) once the dialog opens. Falling back keeps the dialog usable if
+    // the daemon's `/api/workspaces` (stable source roots for Columbus and its
+    // projects) once the dialog opens. Falling back keeps the dialog usable if
     // the endpoint is unreachable (older daemon / fetch error).
     const [workspaces, setWorkspaces] =
         useState<readonly WorkspaceChoice[]>(WORKING_DIRS);
@@ -1257,6 +1255,8 @@ function NewSessionDialog({
         setProvider("codex");
         setMachineId("");
         setWorkItemId("");
+        setCreating(false);
+        setCreateError("");
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus();
             titleRef.current?.select();
@@ -1297,41 +1297,51 @@ function NewSessionDialog({
     }, [open, machineId, machines]);
     const navbarAtBottom = useNavbarAtBottom();
     const create = (): void => {
+        if (creating) return;
         // POST (not the fire-and-forget WS `new_session`) so we get the assigned
         // id back synchronously and can focus the new session the moment it's
         // created.
-        void fetch("/api/sessions", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider, machine_id: machineId, cwd, origin: "web" }),
-        })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: { session_id?: string } | null) => {
-                if (data?.session_id) {
-                    // Known-empty: no history is coming (the agent only starts on the
-                    // first prompt, and OpenSession doesn't snapshot), so mark it
-                    // hydrated now — otherwise the transcript skeleton spins forever.
-                    markSessionHydrated(data.session_id);
-                    // Apply the title set in the modal. renameSession trims +
-                    // no-ops on empty, so a cleared title falls back to the
-                    // daemon default + first-prompt auto-title.
-                    renameSession(data.session_id, title);
-                    onCreated(data.session_id);
-                    if (selectedWorkItem) {
-                        void fetch(`/api/sessions/${encodeURIComponent(data.session_id)}/prompt`, {
-                            method: "POST",
-                            headers: { "content-type": "application/json" },
-                            body: JSON.stringify({
-                                text: `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native Codex goal. Keep plan, progress, review, and session state in Codex.`,
-                            }),
-                        });
-                    }
+        setCreating(true);
+        setCreateError("");
+        void (async (): Promise<void> => {
+            try {
+                const response = await fetch("/api/sessions", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ provider, machine_id: machineId, cwd, origin: "web" }),
+                });
+                if (!response.ok) {
+                    const detail = (await response.text()).trim();
+                    throw new Error(detail || `Session creation failed (${response.status})`);
                 }
-            })
-            .catch(() => {
-                // Network/daemon error surfaces via the WS error channel.
-            });
-        onClose();
+                const data = await response.json() as { session_id?: string };
+                if (!data.session_id) throw new Error("Session creation returned no id");
+
+                // Known-empty: no history is coming (the agent only starts on the
+                // first prompt, and OpenSession doesn't snapshot), so mark it
+                // hydrated now — otherwise the transcript skeleton spins forever.
+                markSessionHydrated(data.session_id);
+                // Apply the title set in the modal. renameSession trims +
+                // no-ops on empty, so a cleared title falls back to the
+                // daemon default + first-prompt auto-title.
+                renameSession(data.session_id, title);
+                onCreated(data.session_id);
+                if (selectedWorkItem) {
+                    void fetch(`/api/sessions/${encodeURIComponent(data.session_id)}/prompt`, {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({
+                            text: `Resume Columbus work item ${selectedWorkItem.id}. Read its durable metadata and relevant artifact, then set the native Codex goal. Keep plan, progress, review, and session state in Codex.`,
+                        }),
+                    });
+                }
+                onClose();
+            } catch (error) {
+                setCreateError(error instanceof Error ? error.message : "Session creation failed");
+            } finally {
+                setCreating(false);
+            }
+        })();
     };
     // Desktop confirmations consistently require Mod+Enter. Keep bare Enter
     // available to the Select controls in this form; the title field and
@@ -1344,12 +1354,12 @@ function NewSessionDialog({
         <Sheet
             forceSheet={navbarAtBottom}
             open={open}
-            onClose={onClose}
+            onClose={creating ? (): void => {} : onClose}
             title="New session"
             mobileDismiss="none"
             actions={
                 <>
-                    <Button onClick={onClose} color="inherit">
+                    <Button onClick={onClose} color="inherit" disabled={creating}>
                         Cancel
                         <Kbd keys="Esc" />
                     </Button>
@@ -1363,14 +1373,16 @@ function NewSessionDialog({
                             ) e.preventDefault();
                         }}
                         variant="contained"
+                        disabled={creating}
                     >
-                        Create
+                        {creating ? "Preparing…" : "Create"}
                         <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
                     </Button>
                 </>
             }
         >
             <Stack spacing={2} sx={{ mt: 1 }}>
+                {createError ? <Alert severity="error">{createError}</Alert> : null}
                 <TextField
                     label="Title"
                     value={title}

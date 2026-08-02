@@ -5,6 +5,11 @@ connection. It always routes through a connected `cowboy-machine` runtime to
 detached per-session workers. The supervisor also holds the shared Hub,
 workspace root, and monotonic id counter.
 
+For HTTP-created Machine sessions, the server reserves that monotonic id first.
+The selected Machine uses it as the durable worktree key, then the Supervisor
+persists the prepared path and launches the worker. A preparation failure never
+falls back to the advertised stable checkout.
+
 The guiding rule: **a client disconnecting never stops the agent.** Close the
 phone, the agent keeps running. In production, restarting the HTTP daemon does
 not restart a live agent.
@@ -13,7 +18,8 @@ not restart a live agent.
 
 | Method | What it does |
 |---|---|
-| `new_session(provider, cwd, origin, system)` | create the session in the Hub, then `spawn_agent()` |
+| `reserve_session_id()` | reserve the stable id before Machine-local workspace preparation |
+| `new_session_on_with_id(...)` | persist the prepared path, then create the worker on its Machine |
 | `spawn_agent(session_id, spec, cwd, resume)` | send an idempotent `EnsureSession` to the session's Machine runtime |
 | `send(session_id, cmd)` | emit an idempotent command through the Machine runtime |
 | `ensure_alive(session_id)` | revive **without** sending a turn — warm the agent on open/reconnect |

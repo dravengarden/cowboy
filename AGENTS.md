@@ -13,12 +13,12 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   linker wrapper is an environment failure, not a product-code failure.
 
 ## Deploy (read before deploying)
-- cowboy is a NixOS service (`services/cowboy` on hawk), consumed via a
-  `git+file://` flake input from this repo. To ship: commit here, then on hawk
-  update the nested input with
-  `nix flake update hawk/cowboy --flake /home/draven/columbus/machines`, then
-  rebuild `/home/draven/columbus/machines#hawk`. The standalone `/etc/nixos`
-  checkout is not a deployment source.
+- cowboy is a NixOS service (`services/cowboy` on hawk), consumed from its Git
+  remote by a locked flake input. To ship: commit and publish the Cowboy source,
+  then use an isolated Columbus worktree to update and commit the nested
+  `hawk/cowboy` input before rebuilding that worktree's `machines#hawk`. The standalone
+  `/etc/nixos` checkout and the Columbus stable checkout are not deployment
+  sources.
 - **Deploying restarts the daemon you may be driving Codex through.** Build
   first from `/home/draven/columbus/machines/hawk/nixos`, then use its
   `just sys-activate ./result`: it validates the canonical deployment marker and
@@ -49,11 +49,21 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
 - cowboy does not own agent memory. Codex uses its native local-memory feature
   through the normal user `CODEX_HOME`; required project guidance stays in
   `AGENTS.md`, docs, tests, hooks, and skills.
-- The New Session picker (`GET /api/workspaces`) opens sessions in a Columbus
-  project's worktree so the correct project guidance and trusted config load.
-  It also projects matching central Columbus work items. Selecting one sends a
-  resume prompt into a native Codex task; Cowboy never stores item lifecycle or
-  binds it to the session.
+- The Web New Session picker (`GET /api/workspaces`) lists stable source roots,
+  but a selected Machine must fetch the remote default branch and prepare or
+  reuse a session-owned worktree before starting the ACP worker. The legacy
+  WebSocket creation path fails closed. Direct API/ACP callers retain their
+  caller-owned local workspace for compatibility. Never turn the stable
+  checkout or `/etc/nixos` back into a Web task workspace.
+- If a project task needs Hawk NixOS integration, create a second isolated
+  Columbus worktree from freshly fetched `origin/main`. Commit the full machine
+  configuration there, integrate the active deployment revision, and use the
+  machine-owned build/activation commands. A clean commit may deploy before it
+  is pushed; the task that deployed it retains responsibility for publication
+  or a committed revert.
+- The picker also projects matching central Columbus work items. Selecting one
+  sends a resume prompt into a native Codex task; Cowboy never stores item
+  lifecycle or binds it to the session.
 
 ## Frontend
 Composer (mdlive / CM6), optimistic-send, transcript (column-reverse scroll),

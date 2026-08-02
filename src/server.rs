@@ -1729,30 +1729,22 @@ fn project_worktree(columbus: &std::path::Path, name: &str) -> Option<std::path:
 }
 
 /// `GET /api/workspaces` — the selectable session roots for the New Session
-/// dialog: the two host roots (columbus, /etc/nixos) plus one entry per
+/// dialog: Columbus plus one entry per
 /// columbus-managed project, read from `<workspace-root>/columbus/project-defs/*`
 /// (the registry is the source of truth for which projects exist) and resolved
-/// to each project's worktree. The frontend keeps a hard-coded fallback for when
+/// to each project's stable checkout. The selected Machine prepares an isolated
+/// session worktree before the worker starts. The frontend keeps a fallback for when
 /// this is unreachable.
 async fn api_workspaces(State(state): State<Arc<AppState>>) -> Response {
     let columbus = state.supervisor.workspace_root().join("columbus");
     let work_items = projected_work_items(&columbus);
-    let mut out = vec![
-        Workspace {
-            value: "columbus".to_owned(),
-            label: "columbus".to_owned(),
-            help: columbus.display().to_string(),
-            project: None,
-            active_work_items: Vec::new(),
-        },
-        Workspace {
-            value: "/etc/nixos".to_owned(),
-            label: "/etc/nixos".to_owned(),
-            help: "NixOS host config".to_owned(),
-            project: None,
-            active_work_items: Vec::new(),
-        },
-    ];
+    let mut out = vec![Workspace {
+        value: "columbus".to_owned(),
+        label: "columbus".to_owned(),
+        help: columbus.display().to_string(),
+        project: None,
+        active_work_items: Vec::new(),
+    }];
     if let Ok(entries) = std::fs::read_dir(columbus.join("project-defs")) {
         let mut names: Vec<String> = entries
             .filter_map(Result::ok)
@@ -2651,22 +2643,21 @@ async fn api_session_prompt(
 
 /// Request body for `POST /api/sessions`.
 ///
-/// WS `Inbound::NewSession` is fire-and-forget without a `sessionId` reply, so
-/// an external HTTP caller would have to diff `Outbound::Sessions` broadcasts
-/// to learn their id — racey. This endpoint exists so a single synchronous HTTP
-/// request returns the assigned id directly. Web UI clients can keep using the
-/// WS path; this is purely additive.
+/// The retired WS `Inbound::NewSession` was fire-and-forget without a
+/// `sessionId` reply or Machine placement. This endpoint is the only Web
+/// creation path so workspace preparation completes before the id is returned.
 #[derive(Debug, Deserialize)]
 struct NewSessionRequest {
     provider: String,
-    /// Stable machine placement. Older clients omit it and remain local.
+    /// Stable machine placement. API/ACP compatibility callers may omit it and
+    /// retain their caller-owned local workspace; Web creation must select a
+    /// registered Machine.
     #[serde(default = "default_machine_id")]
     machine_id: String,
     #[serde(default)]
     cwd: Option<String>,
     /// Which surface opened the session — defaults to `Api` for direct
-    /// `curl`/test callers. The Web UI uses the WS `Inbound::NewSession` path
-    /// (which always tags `Web`), not this endpoint.
+    /// `curl`/test callers. The Web UI sends `Web` through this endpoint.
     #[serde(default)]
     origin: SessionOrigin,
     /// Create a view-only machine-driven system session. Defaults false; the Web
@@ -2679,10 +2670,23 @@ fn default_machine_id() -> String {
     "local".to_owned()
 }
 
+fn web_session_is_missing_machine(machine_id: &str, origin: &SessionOrigin) -> bool {
+    machine_id == "local" && matches!(origin, SessionOrigin::Web)
+}
+
 /// Response body for `POST /api/sessions`.
 #[derive(Debug, Serialize)]
 struct NewSessionResponse {
     session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreparedMachineWorkspace {
+    path: String,
+    source_path: String,
+    revision: Option<String>,
+    isolated: bool,
+    created: bool,
 }
 
 /// Request body used by a Columbus checkout migration after the replacement
@@ -2736,6 +2740,14 @@ async fn api_new_session(
     Json(req): Json<NewSessionRequest>,
 ) -> Response {
     let mut cwd = req.cwd;
+    let session_id = state.supervisor.reserve_session_id();
+    if web_session_is_missing_machine(&req.machine_id, &req.origin) {
+        return (
+            StatusCode::CONFLICT,
+            "Web session creation requires a connected Machine so its workspace can be isolated",
+        )
+            .into_response();
+    }
     if req.machine_id != "local" {
         let Some(store) = state.store.as_ref() else {
             return (
@@ -2803,8 +2815,58 @@ async fn api_new_session(
             )
                 .into_response();
         }
+
+        let Some(source_path) = cwd.as_deref() else {
+            return (
+                StatusCode::BAD_REQUEST,
+                "remote session requires a trusted workspace",
+            )
+                .into_response();
+        };
+        let prepared = match state
+            .machine_control
+            .adapter_request(
+                &req.machine_id,
+                "workspace",
+                serde_json::json!({
+                    "root": source_path,
+                    "session_id": &session_id,
+                }),
+            )
+            .await
+        {
+            Ok(value) => match serde_json::from_value::<PreparedMachineWorkspace>(value) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return (
+                        StatusCode::CONFLICT,
+                        format!("Machine returned invalid workspace metadata: {error}"),
+                    )
+                        .into_response();
+                }
+            },
+            Err(error) => {
+                return (
+                    StatusCode::CONFLICT,
+                    format!("Machine could not prepare an isolated workspace: {error}"),
+                )
+                    .into_response();
+            }
+        };
+        tracing::info!(
+            session_id,
+            machine_id = %req.machine_id,
+            source_path = %prepared.source_path,
+            prepared_path = %prepared.path,
+            revision = ?prepared.revision,
+            isolated = prepared.isolated,
+            created = prepared.created,
+            "prepared Machine workspace for session"
+        );
+        cwd = Some(prepared.path);
     }
-    match state.supervisor.new_session_on(
+    match state.supervisor.new_session_on_with_id(
+        &session_id,
         &req.provider,
         cwd,
         req.origin,
@@ -2872,7 +2934,10 @@ fn gemini_machine_auth_is_current(
 
 #[cfg(test)]
 mod machine_provider_tests {
-    use super::{machine_supports_provider, resolve_machine_workspace};
+    use super::{
+        machine_supports_provider, resolve_machine_workspace, web_session_is_missing_machine,
+    };
+    use crate::core::SessionOrigin;
     use crate::machine_protocol::{
         AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState,
     };
@@ -2893,6 +2958,16 @@ mod machine_provider_tests {
             detail: None,
             update: None,
         }
+    }
+
+    #[test]
+    fn web_creation_cannot_use_the_legacy_shared_local_workspace() {
+        assert!(web_session_is_missing_machine("local", &SessionOrigin::Web));
+        assert!(!web_session_is_missing_machine(
+            "local",
+            &SessionOrigin::Api
+        ));
+        assert!(!web_session_is_missing_machine("hawk", &SessionOrigin::Web));
     }
 
     #[test]
@@ -5105,10 +5180,10 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
         return;
     }
     let result = match cmd {
-        Inbound::NewSession { provider, cwd } => state
-            .supervisor
-            .new_session(&provider, cwd, SessionOrigin::Web, false)
-            .map(|_| ()),
+        Inbound::NewSession { .. } => Err(
+            "legacy WebSocket session creation is disabled; use POST /api/sessions with a connected Machine"
+                .to_owned(),
+        ),
         Inbound::Prompt {
             session_id,
             text,

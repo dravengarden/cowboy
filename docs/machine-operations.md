@@ -5,6 +5,13 @@ identity, the detached ACP broker, signed component activation, provider login
 orchestration, trusted workspace roots, and stable product-adapter tunnelling.
 Cowboy remains the controller and never receives provider credentials.
 
+For a new Git-backed session, the host fetches the advertised repository's
+remote default branch and creates a detached worktree at
+`<state-root>/worktrees/<session-id>`. Repeating preparation for the same
+session reuses that path without discarding edits. Cowboy does not automatically
+prune it: unpublished changes and resumable session state must survive client,
+controller, and Machine restarts.
+
 ## Bootstrap
 
 The initial host binary is installed out of band. Later payload updates use the

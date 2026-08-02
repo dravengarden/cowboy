@@ -106,9 +106,12 @@ idle.
 
 ## NixOS service shape
 
-cowboy is consumed by the hawk config via a `git+file://` flake input from this
-repo. To ship a change: commit here, then on hawk `nix flake update cowboy` +
-`nixos-rebuild`. The system `cowboy.service` runs **as the human SSH user** (so
+cowboy is consumed by the hawk config through a remote Git flake input. To ship
+a change: commit and publish here, then update the Cowboy input and commit the
+lock file in an isolated Columbus worktree before using Hawk's deployment
+transaction. Publishing the application source makes its lock reproducible;
+the Columbus machine-config commit itself may still deploy before push. The
+system `cowboy.service` runs **as the human SSH user** (so
 the API and Zed-over-SSH share one identity). A lingered user manager owns
 `cowboy-machine.service`, `cowboy-agents.slice`, and the
 transient per-session workers. Agent-owned local state remains in the user's
@@ -125,18 +128,20 @@ system profile moved but before `/run/current-system` and restarted units
 converged. A dropped approval channel therefore proves neither success nor
 failure.
 
-Build as the normal user, then dispatch activation into an independent root
-systemd unit:
+After committing the complete Columbus integration, build from that clean task
+worktree and dispatch activation into an independent root systemd unit:
 
 ```bash
-cd /etc/nixos
-sudo nixos-rebuild build
+cd /home/draven/worktrees/columbus/<task>/machines/hawk/nixos
+just sys-build
 just sys-activate ./result
 ```
 
 `hawk activate` resolves the already-built closure, then the transient unit sets
 the system profile and runs that closure's `switch-to-configuration`. The unit is
 under `system.slice`, not `cowboy.service`, so a cowboy restart cannot kill it.
-Verify the unit journal and `/run/current-system`; never blindly re-run a switch.
+The target serializes activation, rejects a candidate that does not descend from
+the active revision, rolls back new unit failures, and writes a receipt. Verify
+that receipt, the unit journal, and `/run/current-system`; never blindly re-run a switch.
 Web changes still require a `sw.js` VERSION bump so installed PWAs reload, but
 they do not restart Cowboy or the detached runtime.

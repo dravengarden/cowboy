@@ -183,8 +183,12 @@ filesystem ownership and peer credentials and does not require enrollment.
 
 The server authorizes canonical workspace roots per machine. A session request
 contains a `machine_id` and a machine-local workspace id; arbitrary client-sent
-absolute paths are rejected. The Machine Agent resolves the workspace id to a
-canonical path and rechecks it before launching a worker or Zed worktree.
+absolute paths are rejected. After the server reserves the session id, the
+Machine Agent rechecks the canonical source root, fetches its remote default
+branch, and prepares a session-owned Git worktree under its private state root.
+The prepared path is separately trusted for worker and adapter requests. A
+non-Git root remains shared and is reported as non-isolated; a Git fetch or
+worktree failure aborts creation instead of falling back to the source root.
 
 ## Protocol layers
 
@@ -218,7 +222,7 @@ reports:
 - sufficient free capacity for a new worker.
 
 Once created, a session never silently migrates to another machine: the agent's
-native session store, worktree, credentials, and running tools are local. A
+native session store, session worktree, credentials, and running tools are local. A
 future explicit migration operation must first prove provider resume support,
 workspace identity, and credential compatibility. Offline sessions remain
 bound and show a recoverable Machine Offline state.
@@ -263,8 +267,8 @@ enrolled online machine before removing an old version.
 ## Implemented boundary
 
 The controller and Machine now implement immutable session placement, outbound
-authenticated WSS enrollment, epoch fencing, runtime replay, trusted remote
-workspaces, provider inventory/login actions, signed independently activated
+authenticated WSS enrollment, epoch fencing, runtime replay, session-owned Git
+worktrees from trusted remote workspaces, provider inventory/login actions, signed independently activated
 components, Code Adapter routing, isolated Zed adapter/server supervision,
 capacity/drain-aware scheduling, Machines UI, and user-scoped macOS/Linux
 installation. The stable Machine wire remains additive and distinct from ACP

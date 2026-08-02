@@ -48,6 +48,7 @@
           ./src/machine_install.rs
           ./src/machine_protocol.rs
           ./src/runtime_wire.rs
+          ./src/session_workspace.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
         ];
@@ -242,6 +243,7 @@
         test ! -e ${cowboy-src}/docs
         test ! -e ${cowboy-src}/web/public
         test -e ${cowboy-src}/web/src/protocol.ts
+        test -e ${machine-src}/src/session_workspace.rs
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
         test -x ${cowboy-machine}/bin/cowboy-machine
@@ -327,6 +329,7 @@
           cargo-machete
           cargo-sweep
           just
+          jq
           go
           nodejs_24
         ] ++ [ shared.deno ];

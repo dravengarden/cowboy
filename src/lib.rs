@@ -65,6 +65,8 @@ pub mod runtime_wire;
 mod scheduler;
 #[cfg(feature = "full")]
 mod server;
+#[cfg(feature = "machine-host")]
+mod session_workspace;
 #[cfg(feature = "full")]
 mod skills;
 #[cfg(feature = "full")]

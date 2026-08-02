@@ -45,6 +45,7 @@ struct ControllerConfig {
     components: Arc<ComponentStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
+    worktree_root: PathBuf,
     capacity: MachineCapacity,
     local: bool,
 }
@@ -212,6 +213,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     }
     let code_adapter_socket = args.code_adapter_socket.clone();
     let zed_adapter_socket = args.zed_adapter_socket.clone();
+    let worktree_root = args.state_dir.join("worktrees");
     let controller = controller_loop(ControllerConfig {
         controller_url,
         machine_id: args.machine_id,
@@ -222,6 +224,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         components: Arc::clone(&components),
         zed_adapter_socket: zed_adapter_socket.clone(),
         code_adapter_socket: code_adapter_socket.clone(),
+        worktree_root,
         capacity: MachineCapacity {
             max_sessions: args.max_sessions.max(1),
             draining: args.draining,
@@ -606,7 +609,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                             .context("parsing Machine controller frame")?;
                         match frame {
                             MachineFrame::Runtime { frame } => {
-                                if let Some(rejection) = reject_untrusted_workspace(&frame, &config.workspaces) {
+                                if let Some(rejection) = reject_untrusted_workspace(
+                                    &frame,
+                                    &config.workspaces,
+                                    &config.worktree_root,
+                                ) {
                                     send_frame(&mut socket, &MachineFrame::Runtime { frame: rejection }).await?;
                                     continue;
                                 }
@@ -618,6 +625,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                     components: Arc::clone(&config.components),
                                     zed_adapter_socket: config.zed_adapter_socket.clone(),
                                     code_adapter_socket: config.code_adapter_socket.clone(),
+                                    worktree_root: config.worktree_root.clone(),
                                     workspaces: config.workspaces.clone(),
                                     login_sessions: Arc::clone(&login_sessions),
                                     runtime_commands: runtime_command_tx.clone(),
@@ -1159,6 +1167,7 @@ struct MachineCommandContext {
     components: Arc<ComponentStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
+    worktree_root: PathBuf,
     workspaces: Vec<MachineWorkspace>,
     login_sessions: LoginSessions,
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
@@ -1170,6 +1179,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
         components,
         zed_adapter_socket,
         code_adapter_socket,
+        worktree_root,
         workspaces,
         login_sessions,
         runtime_commands,
@@ -1227,10 +1237,13 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 request_id,
                 adapter,
                 payload,
-                zed_adapter_socket,
-                code_adapter_socket,
-                workspaces,
-                events,
+                AdapterRequestContext {
+                    zed_adapter_socket,
+                    code_adapter_socket,
+                    worktree_root,
+                    workspaces,
+                    events,
+                },
             ));
         }
         MachineCommand::Reconcile {
@@ -1337,16 +1350,38 @@ fn component_requires_host_restart(kind: &ComponentKind) -> bool {
     )
 }
 
+struct AdapterRequestContext {
+    zed_adapter_socket: Option<PathBuf>,
+    code_adapter_socket: Option<PathBuf>,
+    worktree_root: PathBuf,
+    workspaces: Vec<MachineWorkspace>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+}
+
 async fn run_adapter_request(
     request_id: String,
     adapter: String,
     payload: serde_json::Value,
-    zed_adapter_socket: Option<PathBuf>,
-    code_adapter_socket: Option<PathBuf>,
-    workspaces: Vec<MachineWorkspace>,
-    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    context: AdapterRequestContext,
 ) {
+    let AdapterRequestContext {
+        zed_adapter_socket,
+        code_adapter_socket,
+        worktree_root,
+        workspaces,
+        events,
+    } = context;
     let result = async {
+        if adapter == "workspace" {
+            let request: crate::session_workspace::PrepareWorkspaceRequest =
+                serde_json::from_value(payload)
+                    .context("decoding workspace preparation request")?;
+            validate_session_workspace_root(&request.root, &workspaces)?;
+            return serde_json::to_value(
+                crate::session_workspace::prepare(request, &worktree_root).await?,
+            )
+            .context("encoding prepared workspace");
+        }
         let socket = match adapter.as_str() {
             "zed" => zed_adapter_socket.context("Zed adapter is not configured on this Machine")?,
             "code" => {
@@ -1355,7 +1390,7 @@ async fn run_adapter_request(
             _ => bail!("unknown Machine adapter {adapter:?}"),
         };
         if adapter == "zed" {
-            validate_adapter_workspace(&payload, &workspaces)?;
+            validate_adapter_workspace(&payload, &workspaces, &worktree_root)?;
         }
         let stream = tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(&socket))
             .await
@@ -1403,9 +1438,26 @@ async fn run_adapter_request(
     let _ = events.send(event);
 }
 
+fn validate_session_workspace_root(
+    value: &str,
+    workspaces: &[MachineWorkspace],
+) -> anyhow::Result<()> {
+    let canonical = PathBuf::from(value)
+        .canonicalize()
+        .with_context(|| format!("canonicalizing session workspace {value}"))?;
+    if !workspaces
+        .iter()
+        .any(|workspace| canonical == Path::new(&workspace.canonical_path))
+    {
+        bail!("session workspace is not an advertised Machine root");
+    }
+    Ok(())
+}
+
 fn validate_adapter_workspace(
     payload: &serde_json::Value,
     workspaces: &[MachineWorkspace],
+    worktree_root: &Path,
 ) -> anyhow::Result<()> {
     for key in ["path", "worktree"] {
         let Some(value) = payload.get(key).and_then(serde_json::Value::as_str) else {
@@ -1418,10 +1470,7 @@ fn validate_adapter_workspace(
         let canonical = path
             .canonicalize()
             .with_context(|| format!("canonicalizing {value}"))?;
-        if !workspaces.iter().any(|workspace| {
-            let trusted = PathBuf::from(&workspace.canonical_path);
-            canonical == trusted || canonical.starts_with(trusted)
-        }) {
+        if !workspace_path_allowed(&canonical, workspaces, worktree_root) {
             bail!("adapter path is outside the trusted Machine workspaces");
         }
     }
@@ -1850,6 +1899,7 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
 fn reject_untrusted_workspace(
     frame: &crate::runtime_wire::Frame,
     workspaces: &[MachineWorkspace],
+    worktree_root: &Path,
 ) -> Option<crate::runtime_wire::Frame> {
     let crate::runtime_wire::Frame::CoreCommand {
         command: crate::runtime_wire::CoreCommand::EnsureSession { session },
@@ -1859,12 +1909,7 @@ fn reject_untrusted_workspace(
     };
     let allowed = std::fs::canonicalize(&session.cwd)
         .ok()
-        .is_some_and(|target| {
-            workspaces.iter().any(|workspace| {
-                let root = std::path::Path::new(&workspace.canonical_path);
-                target == root || target.starts_with(root)
-            })
-        });
+        .is_some_and(|target| workspace_path_allowed(&target, workspaces, worktree_root));
     (!allowed).then(|| crate::runtime_wire::Frame::CommandAck {
         session_id: session.session_id.clone(),
         command_id: format!("ensure:{}", session.session_id),
@@ -1874,6 +1919,19 @@ fn reject_untrusted_workspace(
             session.cwd
         )),
     })
+}
+
+fn workspace_path_allowed(
+    target: &Path,
+    workspaces: &[MachineWorkspace],
+    worktree_root: &Path,
+) -> bool {
+    workspaces.iter().any(|workspace| {
+        let root = Path::new(&workspace.canonical_path);
+        target == root || target.starts_with(root)
+    }) || worktree_root
+        .canonicalize()
+        .is_ok_and(|root| target.starts_with(root))
 }
 
 fn unix_ms() -> i64 {
@@ -2105,7 +2163,10 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("cowboy-machine-workspace-{}", std::process::id()));
         let nested = root.join("nested");
+        let managed = root.join("managed");
+        let managed_session = managed.join("sess-1");
         std::fs::create_dir_all(&nested).expect("workspace");
+        std::fs::create_dir_all(&managed_session).expect("managed workspace");
         let workspaces = parse_workspaces(&[format!("main={}", root.display())]).expect("parse");
         let ensure = |cwd: String| Frame::CoreCommand {
             command: CoreCommand::EnsureSession {
@@ -2122,13 +2183,26 @@ mod tests {
             },
         };
         assert!(
-            reject_untrusted_workspace(&ensure(nested.display().to_string()), &workspaces)
-                .is_none()
+            reject_untrusted_workspace(
+                &ensure(nested.display().to_string()),
+                &workspaces,
+                &managed,
+            )
+            .is_none()
+        );
+        assert!(
+            reject_untrusted_workspace(
+                &ensure(managed_session.display().to_string()),
+                &[],
+                &managed,
+            )
+            .is_none()
         );
         assert!(
             reject_untrusted_workspace(
                 &ensure("/definitely/not/a/workspace".to_owned()),
-                &workspaces
+                &workspaces,
+                &managed,
             )
             .is_some()
         );

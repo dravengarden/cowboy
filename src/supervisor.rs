@@ -91,27 +91,16 @@ impl Supervisor {
         &self.workspace_root
     }
 
-    /// Create a new session for `provider`, optionally rooted at `cwd`
-    /// (resolved under the workspace root), tagged with the surface
-    /// (`origin`) that opened it. Returns the cowboy session id.
-    ///
-    /// # Errors
-    /// If the provider is unknown or the agent thread cannot be spawned.
-    pub fn new_session(
-        &self,
-        provider: &str,
-        cwd: Option<String>,
-        origin: SessionOrigin,
-        system: bool,
-    ) -> Result<String, String> {
-        self.new_session_on(provider, cwd, origin, system, "local")
+    /// Reserve the stable Cowboy id before a selected Machine prepares its
+    /// session-specific workspace.
+    pub fn reserve_session_id(&self) -> String {
+        format!("sess-{}", self.counter.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Create a session with immutable machine placement. Phase one only
-    /// schedules the local machine; accepting an unknown id would otherwise
-    /// make a remote-looking session run locally with the wrong credentials.
-    pub fn new_session_on(
+    /// Create a session after Machine-local workspace preparation has completed.
+    pub fn new_session_on_with_id(
         &self,
+        id: &str,
         provider: &str,
         cwd: Option<String>,
         origin: SessionOrigin,
@@ -125,12 +114,9 @@ impl Supervisor {
             provider::lookup(provider).ok_or_else(|| format!("unknown provider {provider:?}"))?;
 
         // Resolve cwd. Relative paths join the workspace_root; absolute
-        // paths are honoured as-is. We dropped the starts_with(root) clamp
-        // (v1) because cowboy is LAN-only + runs as the human user, and the
-        // user explicitly wants to open sessions in workspaces outside the
-        // default root (e.g. `/etc/nixos`). The agent already inherits the
-        // user's full filesystem permissions, so the clamp was security
-        // theatre rather than a real boundary.
+        // paths are honoured as-is. Remote paths have already been validated
+        // and prepared by the selected Machine; local legacy sessions retain
+        // the original full-user filesystem boundary.
         let cwd = match cwd {
             Some(rel) => {
                 let p = PathBuf::from(&rel);
@@ -143,10 +129,9 @@ impl Supervisor {
             None => self.workspace_root.clone(),
         };
 
-        let id = format!("sess-{}", self.counter.fetch_add(1, Ordering::Relaxed));
         let title = format!("{provider} · {}", cwd.display());
         self.hub.create_session(SessionRegistration {
-            id: id.clone(),
+            id: id.to_owned(),
             provider: provider.to_owned(),
             machine_id: machine_id.to_owned(),
             cwd: cwd.display().to_string(),
@@ -156,8 +141,8 @@ impl Supervisor {
         });
 
         // Fresh session — no agent id to resume.
-        self.ensure_worker(&id, &spec, &cwd, None)?;
-        Ok(id)
+        self.ensure_worker(id, &spec, &cwd, None)?;
+        Ok(id.to_owned())
     }
 
     /// Ensure the selected Machine owns a detached worker for `session_id`.
