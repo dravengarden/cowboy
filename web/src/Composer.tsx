@@ -96,6 +96,7 @@ import {
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { shouldExpandInlineComposer } from "./composer/mobileCompactEditorPolicy";
+import { pendingPanelDisclosureDecision } from "./pendingEditLifecycle";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ShortcutKeycap } from "./ShortcutKeycap";
@@ -3017,6 +3018,7 @@ function ConfirmButton({
   confirmColor,
   color = "inherit",
   muted = false,
+  disabled = false,
   onConfirm,
 }: {
   label: string;
@@ -3025,9 +3027,13 @@ function ConfirmButton({
   confirmColor: "primary" | "error" | "warning";
   color?: "inherit" | "primary";
   muted?: boolean;
+  disabled?: boolean;
   onConfirm: () => Promise<void> | void;
 }): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (disabled) setAnchor(null);
+  }, [disabled]);
   const confirm = async (): Promise<void> => {
     // Destructive confirmation (error, e.g. Clear All) is high-consequence;
     // benign bulk confirmation (Send all) remains lightweight navigation.
@@ -3044,6 +3050,7 @@ function ConfirmButton({
       <Button
         size="small"
         color={color}
+        disabled={disabled}
         onClick={(e): void => setAnchor(e.currentTarget)}
         sx={{
           textTransform: "none",
@@ -3092,6 +3099,12 @@ function ConfirmButton({
   );
 }
 
+interface PendingEditController {
+  isDirty: () => boolean;
+  save: () => void;
+  discard: () => void;
+}
+
 // Collapsible header ("N Queued Messages" / "N Drafts" + Clear All, plus Send all
 // for drafts) over a scroll-capped list of rows. Drafts sit BELOW the queue and
 // above the composer (see the Composer render).
@@ -3137,24 +3150,70 @@ function PendingPanel({
   // `cowboy:plan-expanded`). Default expanded; the count stays visible either way.
   const collapse = collapseStore(`cowboy:${kind}-collapsed`);
   const collapsed = usePrefStore(collapse);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editControllerRef = useRef<PendingEditController | null>(null);
+  const suppressEditFocusRestoreRef = useRef(false);
+  const registerEditController = useCallback(
+    (controller: PendingEditController | null): void => {
+      editControllerRef.current = controller;
+    },
+    [],
+  );
+  const [confirmCollapseEdit, setConfirmCollapseEdit] = useState(false);
+  // Accordion disclosure is a view preference; edit ownership is a transaction.
+  // A transaction always wins visually so persisted/local disclosure state can
+  // never hide the only active Mobile composer.
+  const visuallyCollapsed = collapsed && editingId === null;
+  const settleEditAndCollapse = (resolution: "save" | "discard"): void => {
+    const controller = editControllerRef.current;
+    if (controller === null) return;
+    suppressEditFocusRestoreRef.current = true;
+    if (resolution === "save") controller.save();
+    else controller.discard();
+    setConfirmCollapseEdit(false);
+    collapse.set(true);
+  };
+  useConfirmEnter(confirmCollapseEdit, () => settleEditAndCollapse("save"));
   const toggleCollapsed = (): void => {
     // Explicit haptic: the collapse/expand header is a custom clickable row, NOT a
     // MuiButtonBase, so the global delegation doesn't see it. Light disclosure tap.
     haptic();
-    collapse.set(!collapsed);
-    if (desktop && collapsed) {
-      requestAnimationFrame(() => {
+    const decision = pendingPanelDisclosureDecision({
+      collapsed,
+      editing: editingId !== null,
+      // Missing controller is treated as dirty: a transient registration race
+      // must fail safe and keep the edit visible rather than lose its buffer.
+      dirty: editControllerRef.current?.isDirty() ?? true,
+    });
+    if (decision === "confirm-dirty-edit") {
+      setConfirmCollapseEdit(true);
+      return;
+    }
+    if (decision === "discard-clean-edit-and-collapse") {
+      settleEditAndCollapse("discard");
+      return;
+    }
+    const nextCollapsed = decision === "collapse";
+    collapse.set(nextCollapsed);
+    if (desktop && !nextCollapsed) {
+      requestAnimationFrame(() =>
         scrollRef.current?.querySelector<HTMLElement>("[data-desktop-item]")
-          ?.focus({ preventScroll: true });
-      });
+          ?.focus({ preventScroll: true })
+      );
     }
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggleCollapsed);
-  const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => {
     onEditingChange?.(editingId !== null);
     return (): void => onEditingChange?.(false);
   }, [editingId, onEditingChange]);
+  useEffect(() => {
+    if (editingId !== null && !items.some((item) => item.id === editingId)) {
+      editControllerRef.current = null;
+      setConfirmCollapseEdit(false);
+      setEditingId(null);
+    }
+  }, [editingId, items]);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by
   // default (they'd waste ~40px on every row of a narrow phone) and revealed
   // only in this opt-in "reorder mode" (iOS list-Edit pattern). Local + ephemeral
@@ -3317,8 +3376,10 @@ function PendingPanel({
           disableRipple
           data-desktop-item-action="default"
           data-desktop-collapse-toggle={desktop ? kind : undefined}
-          aria-label={`${collapsed ? "Expand" : "Collapse"} ${noun.toLowerCase()}s`}
-          aria-expanded={!collapsed}
+          aria-label={editingId !== null
+            ? `Finish editing ${noun.toLowerCase()}`
+            : `${visuallyCollapsed ? "Expand" : "Collapse"} ${noun.toLowerCase()}s`}
+          aria-expanded={!visuallyCollapsed}
           sx={{
             alignSelf: "stretch",
             flex: 1,
@@ -3335,7 +3396,9 @@ function PendingPanel({
           }}
         >
           <Box sx={{ width: 40, display: "inline-flex", justifyContent: "center", flexShrink: 0 }}>
-            {collapsed
+            {editingId !== null
+              ? <EditOutlined fontSize="small" color="primary" />
+              : visuallyCollapsed
               ? <ChevronRight fontSize="small" />
               : <ExpandMore fontSize="small" />}
           </Box>
@@ -3343,6 +3406,15 @@ function PendingPanel({
             {count} {noun}
             {count === 1 ? "" : "s"}
           </Typography>
+          {editingId !== null && (
+            <Typography
+              variant="caption"
+              color="primary.main"
+              sx={{ ml: 0.75, fontWeight: 700, flexShrink: 0 }}
+            >
+              Editing
+            </Typography>
+          )}
           {desktop && (
             <Suspense
               fallback={
@@ -3392,7 +3464,7 @@ function PendingPanel({
                   <DesktopRegionShortcut
                     shortcut="Mod+Y"
                     title={
-                      collapsed
+                      visuallyCollapsed
                         ? "Open and focus queue"
                         : "Close queue when focused"
                     }
@@ -3430,6 +3502,7 @@ function PendingPanel({
         {count >= 2 && (
           <IconButton
             size="small"
+            disabled={editingId !== null}
             aria-label={reordering ? "done reordering" : "reorder"}
             title={reordering ? "Done" : "Reorder"}
             color={reordering ? "primary" : "default"}
@@ -3450,6 +3523,7 @@ function PendingPanel({
             confirmLabel="Send all"
             confirmColor="primary"
             color="primary"
+            disabled={editingId !== null}
             onConfirm={() => activateAllDrafts(sessionId)}
           />
         )}
@@ -3461,15 +3535,17 @@ function PendingPanel({
           confirmLabel="Clear all"
           confirmColor="error"
           muted
+          disabled={editingId !== null}
           onConfirm={() =>
             kind === "queued" ? clearQueue(sessionId) : clearDrafts(sessionId)}
         />
       </Stack>
-      {/* Match PlanDock's disclosure motion. Collapse keeps the rows mounted, so
-          draft/queue editor state survives, while the shared persistent composer
-          ResizeObserver follows the animated height without remounting observers. */}
+      {/* Match PlanDock's disclosure motion. Non-editing rows stay mounted for
+          preview/sort stability, but an active edit forces the panel open until
+          its transaction is saved or discarded. Hiding an unresolved edit would
+          strand Mobile's sole composer ownership and remove the main input too. */}
       <Collapse
-        in={!collapsed}
+        in={!visuallyCollapsed}
         sx={{
           willChange: "height",
           // Large attachment previews otherwise re-enter layout + paint on
@@ -3606,15 +3682,23 @@ function PendingPanel({
                         status={status}
                         commands={commands}
                         editing={editingId === m.id}
-                        onEdit={(): void => setEditingId(m.id)}
-                        onEditDone={(): void => {
-                          setEditingId(null);
-                          requestAnimationFrame(() =>
-                            scrollRef.current?.querySelector<HTMLElement>(
-                              `[data-desktop-item="${CSS.escape(m.id)}"]`,
-                            )?.focus({ preventScroll: true })
-                          );
+                        onEdit={(): void => {
+                          setReordering(false);
+                          setEditingId(m.id);
                         }}
+                        onEditDone={(): void => {
+                          const restoreFocus = !suppressEditFocusRestoreRef.current;
+                          suppressEditFocusRestoreRef.current = false;
+                          setEditingId(null);
+                          if (restoreFocus) {
+                            requestAnimationFrame(() =>
+                              scrollRef.current?.querySelector<HTMLElement>(
+                                `[data-desktop-item="${CSS.escape(m.id)}"]`,
+                              )?.focus({ preventScroll: true })
+                            );
+                          }
+                        }}
+                        onEditController={registerEditController}
                         onMove={onMoveDraft
                           ? (): void => onMoveDraft(m.id)
                           : undefined}
@@ -3629,6 +3713,36 @@ function PendingPanel({
           })}
         </Stack>
       </Collapse>
+      <Dialog
+        open={confirmCollapseEdit}
+        onClose={(): void => setConfirmCollapseEdit(false)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>Save edits before closing?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This {kind === "queued" ? "queued message" : "draft"} has unsaved changes.
+            Save or discard them before collapsing the panel.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ flexWrap: "wrap", gap: 0.5 }}>
+          <Button color="inherit" onClick={(): void => setConfirmCollapseEdit(false)}>
+            Keep editing
+            <Kbd keys="Esc" />
+          </Button>
+          <Button color="error" onClick={(): void => settleEditAndCollapse("discard")}>
+            Discard
+          </Button>
+          <Button
+            variant="contained"
+            onClick={(): void => settleEditAndCollapse("save")}
+          >
+            Save &amp; collapse
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
@@ -3659,6 +3773,7 @@ function PendingRow({
   editing,
   onEdit,
   onEditDone,
+  onEditController,
   onMove,
   onSchedule,
 }: {
@@ -3671,6 +3786,7 @@ function PendingRow({
   editing: boolean;
   onEdit: () => void;
   onEditDone: () => void;
+  onEditController: (controller: PendingEditController | null) => void;
   /** Open the move-to-another-session picker for this row (draft kind only). */
   onMove?: (() => void) | undefined;
   /** Open the schedule picker for this row (draft kind only) — set/reschedule
@@ -3770,6 +3886,41 @@ function PendingRow({
     setOverlayOpen(false);
     onEditDone();
   };
+  const saveEdit = (): void => {
+    if (kind === "draft") {
+      editDraft(sessionId, message.id, draft, editAttachments);
+    } else editQueued(sessionId, message.id, draft, editAttachments);
+    setOverlayOpen(false);
+    onEditDone();
+  };
+  const editDirty = draft !== message.text ||
+    editAttachments.length !== message.attachments.length ||
+    editAttachments.some((attachment, index) =>
+      attachment.id !== message.attachments[index]?.id
+    );
+  // Register one stable controller for the lifetime of the active edit. Its
+  // methods read this ref, so the panel header always resolves the latest text
+  // and attachments without turning every keystroke into parent React state.
+  const latestEditTransactionRef = useRef<{
+    dirty: boolean;
+    save: () => void;
+    discard: () => void;
+  } | null>(null);
+  latestEditTransactionRef.current = {
+    dirty: editDirty,
+    save: saveEdit,
+    discard: discardEdit,
+  };
+  useLayoutEffect(() => {
+    if (!editing) return undefined;
+    const controller: PendingEditController = {
+      isDirty: () => latestEditTransactionRef.current?.dirty ?? true,
+      save: () => latestEditTransactionRef.current?.save(),
+      discard: () => latestEditTransactionRef.current?.discard(),
+    };
+    onEditController(controller);
+    return () => onEditController(null);
+  }, [editing, onEditController]);
   // Open after the initiating Escape has finished bubbling. Mounting MUI's
   // Dialog synchronously inside that same key event lets its escape listener
   // observe the trigger and immediately close the brand-new confirmation.
@@ -3808,12 +3959,6 @@ function PendingRow({
     return () => globalThis.cancelAnimationFrame(frame);
   }, [editing, touchInput]);
   if (editing) {
-    const save = (): void => {
-      if (kind === "draft") {
-        editDraft(sessionId, message.id, draft, editAttachments);
-      } else editQueued(sessionId, message.id, draft, editAttachments);
-      onEditDone();
-    };
     const addEditFiles = (files: File[]): void => {
       if (files.length === 0) return;
       void filesToAttachments(files).then((added) => {
@@ -3848,7 +3993,7 @@ function PendingRow({
           setEditAttachments((prev) => prev.filter((a) => a.id !== id))}
         onTrigger={(t): void => editorRef.current?.insertTrigger(t)}
         onAttach={(): void => editFileInputRef.current?.click()}
-        onSend={save}
+        onSend={saveEdit}
         submitLabel="Done editing"
         submitIcon={<Check />}
         onExpand={(): void => setOverlayOpen(true)}
@@ -3928,7 +4073,7 @@ function PendingRow({
                 onSlash={(): void => editorRef.current?.insertTrigger("/")}
                 onReference={(): void => editorRef.current?.insertTrigger("@")}
                 onAttach={(): void => editFileInputRef.current?.click()}
-                onDone={save}
+                onDone={saveEdit}
                 onExpand={(): void => setOverlayOpen(true)}
               />
             </Suspense>
@@ -3948,7 +4093,7 @@ function PendingRow({
               vim={touchInput ? false : vim}
               onVimMode={setVimMode}
               onChange={updateEditDraft}
-              onSubmit={save}
+              onSubmit={saveEdit}
               sessionId={sessionId}
               commands={commands}
               placeholder="Edit message…"
@@ -3956,7 +4101,7 @@ function PendingRow({
               onSelectionChange={setHasEditSelection}
               onEscape={(): boolean => {
                 if (desktop) requestDiscardEdit();
-                else save();
+                else saveEdit();
                 return true;
               }}
             />
@@ -4010,31 +4155,30 @@ function PendingRow({
                 }
                 primaryLabel="Done editing"
                 primaryDisabled={!draft.trim() && editAttachments.length === 0}
-                onPrimary={save}
+                onPrimary={saveEdit}
                 primaryIcon={<Check />}
               />
             ))}
         </Paper>
         {/* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
-            inline images, native caret) — NOT a bespoke DetentSheet, so editing a
-            queued/draft message is identical to composing one. Touch: the overlay
-            IS the edit, so collapse commits (it's live-saved anyway). Desktop:
-            collapse returns to the inline box (the shared `draft` is preserved). */}
+            inline images, native caret) — NOT a bespoke DetentSheet. The edit is
+            transactional on every surface: Done saves, discard cancels, and the
+            panel cannot hide it until one of those outcomes is resolved. */}
         {overlayOpen && (
           <FullscreenComposer
             editorRef={overlayEditorRef}
             value={draft}
             onChange={updateEditDraft}
             onSubmit={(): void => {
-              save();
+              saveEdit();
               setOverlayOpen(false);
             }}
             onSaveDraft={(): void => {
-              save();
+              saveEdit();
               setOverlayOpen(false);
             }}
-            onCollapse={touchInput ? save : (): void => setOverlayOpen(false)}
+            onCollapse={touchInput ? saveEdit : (): void => setOverlayOpen(false)}
             onAttach={(): void => editFileInputRef.current?.click()}
             onPasteFiles={addEditFiles}
             sessionId={sessionId}

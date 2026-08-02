@@ -419,12 +419,18 @@ here says otherwise.
     physical-key rule outside editable targets; real composition inside
     `.cm-content`, input, or textarea remains exclusively owned by the IME.
 
-17. **Queue/Draft disclosure motion must preserve mounted editor state.** These
-    panels use the same MUI `Collapse` motion as Plan. Keep its default mounted
-    children behavior so an inline queued/draft editor, attachment preview, and
-    sortable registration are not recreated by every fold. Composer height is
-    observed by the single persistent ResizeObserver in `App.tsx`; do not add a
-    panel-local observer or per-frame React state. The Collapse height layer uses
+17. **Queue/Draft disclosure and edit ownership are separate state machines.**
+    These panels use the same MUI `Collapse` motion as Plan, and non-editing rows
+    stay mounted so attachment previews and sortable registration are not
+    recreated by every fold. An active edit is different: it owns Mobile's only
+    writing surface and therefore always forces the panel visually open. Never
+    let a persisted disclosure preference hide an unresolved editor while the
+    parent still suppresses the ordinary composer. A clean edit may be abandoned
+    and folded immediately; a dirty edit must resolve through Keep editing,
+    Discard, or Save and collapse. Bulk send, clear, and reorder actions stay
+    disabled until that transaction resolves. Composer height is observed by the
+    single persistent ResizeObserver in `App.tsx`; do not add a panel-local
+    observer or per-frame React state. The Collapse height layer uses
     `will-change: height`, and its wrapper inner uses `contain: layout paint` so a
     large attachment preview is laid out once instead of producing a long paint
     stall during every reveal frame. Re-verify touch scrolling and inline-editor
@@ -432,15 +438,15 @@ here says otherwise.
     card instead of navigating directly to fullscreen. The card uses the shared
     two-track accessory primitive and exposes one explicit expand action; opening
     fullscreen transfers the same draft and attachment state without changing
-    save semantics.
+    transaction semantics.
 
-18. **Fullscreen row edits expose one completion action.** A queued/draft edit
-    is live-saved, so both Collapse and Done previously committed the same state
-    and closed the overlay. Hide Collapse for row edits and retain the top-right
-    Done check as the single explicit completion action. The main new-message
-    composer still needs both controls because Collapse preserves the draft while
-    Send submits it. Keep this distinction explicit through `showCollapse`; do
-    not infer it from labels or alter editor, focus, or IME behavior.
+18. **Queued/Draft row edits are explicit transactions.** Local text and
+    attachments do not mutate the queued item until Done or Save and collapse.
+    Fullscreen row edits expose Done as their single completion action; discard
+    cancels the buffer. The main new-message composer still needs both Collapse
+    and Send because Collapse preserves a new draft while Send submits it. Keep
+    this distinction explicit through `showCollapse`; do not infer it from labels
+    or alter editor, focus, or IME behavior.
 
 19. **Slash commands require explicit completion provenance.** ACP transports
     commands and ordinary prompt text through the same string field, so text
@@ -808,6 +814,12 @@ fullscreen editor:
 - [ ] No stray dot near the caret / rendered markdown (pitfall #4).
 - [ ] `**`/`(`/`` ` ``/`[` then Backspace clears the whole pair (pitfall #5).
 - [ ] Type inline → expand → type → collapse: text is preserved (pitfall #6).
+- [ ] Edit a Queue/Draft row, change text, then tap the panel header: the edit
+      stays visible behind a Save/Discard/Keep decision; no hidden editor owns
+      the composer slot. Save or Discard collapses the panel and restores the
+      ordinary new-message composer (pitfall #17).
+- [ ] Start an unchanged Queue/Draft edit and tap the panel header: it closes and
+      folds directly without a confirmation flash (pitfall #17).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
