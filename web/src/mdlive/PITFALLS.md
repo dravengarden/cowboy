@@ -658,7 +658,10 @@ here says otherwise.
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Compact compose reuses this interaction model as one adaptive dock:
     its message-action track is present at rest, and the formatting track expands
-    while the persistent editor owns focus. Coordinate the bottom session-nav
+    below it, nearest the keyboard, while the persistent editor owns focus.
+    Settings remains an ordinary equal-width formatting action, never a sticky
+    contrasting block. Focus may increase the editor canvas, but the card radius
+    stays on the shared Mobile panel token. Coordinate the bottom session-nav
     exit with CSS `:focus-within`; the same focus transition may inset and round
     the whole composer into a keyboard-adjacent input card, but must preserve
     Cowboy's complete action rows rather than substituting another product's

@@ -1571,13 +1571,18 @@ export function ComposerWorkspace({
               "border-color 180ms ease, border-radius 220ms cubic-bezier(.2,.8,.2,1), background-color 180ms ease, box-shadow 220ms ease, margin 220ms cubic-bezier(.2,.8,.2,1)",
             "&:focus-within": {
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
-              borderRadius: 3.25,
+              // Match Plan / Queue / Draft instead of introducing a one-off
+              // ChatGPT-like pill silhouette.
+              borderRadius: mobileComposerPanelFrameSx.borderRadius,
               mx: 0.75,
               mb: 0.5,
               bgcolor: (t) =>
                 alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.58 : 0.82),
               boxShadow: (t) =>
                 `0 10px 28px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.09)}`,
+            },
+            "&:focus-within [data-mobile-editor-area]": {
+              minHeight: 132,
             },
             "&:focus-within [data-mobile-focus-format-row]": {
               maxHeight: 48,
@@ -1649,10 +1654,16 @@ export function ComposerWorkspace({
           // CM6 as soon as a token needs its widget. Fullscreen/column stays CM6.
           <Box
             ref={editorAreaRef}
+            data-mobile-editor-area={touchInput ? "true" : undefined}
             sx={{
               display: "flex",
               flexDirection: "column",
               minHeight: 0,
+              ...(touchInput && {
+                transition: "min-height 220ms cubic-bezier(.2,.8,.2,1)",
+                "& > *": { flex: 1 },
+                "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+              }),
               ...(column && { flex: 1 }),
             }}
           >
@@ -2006,6 +2017,7 @@ export function ComposerWorkspace({
             alignItems="center"
             spacing={0.125}
             sx={{
+              order: 2,
               maxHeight: 0,
               minHeight: 0,
               px: 0.75,
@@ -2050,13 +2062,8 @@ export function ComposerWorkspace({
             <Box sx={{ flex: 1, minWidth: 6 }} />
             <Box
               sx={{
-                position: "sticky",
-                right: 0,
                 flexShrink: 0,
-                pl: 0.5,
-                bgcolor: "background.default",
-                borderLeft: 1,
-                borderColor: (t) => alpha(t.palette.divider, 0.34),
+                pl: 0.25,
               }}
             >
               <MobileComposerAccessoryButton
@@ -2069,6 +2076,7 @@ export function ComposerWorkspace({
           </Stack>
         )}
         <Stack
+          data-mobile-action-row={touchInput ? "true" : undefined}
           direction="row"
           alignItems="center"
           // Compact (mobile) is tight, so spread the icons space-evenly across the
@@ -2077,6 +2085,7 @@ export function ComposerWorkspace({
           // + config chips + the right-pinned action cluster.
           spacing={compact ? 0 : 0.5}
           sx={{
+            order: touchInput ? 1 : undefined,
             px: 0.5,
             pb: 0.5,
             // Compact (mobile): spread the icons when they fit, but let the row
