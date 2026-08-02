@@ -5,6 +5,7 @@ import type { PendingPermission } from "./derive";
 import { send } from "./store";
 import { requestStickToBottom, useSticky } from "./stickyStore";
 import { frostedPanel, frostedPill } from "./frostedGlass";
+import { FLOATING_OVERLAY_BOUNDARY_GAP_PX } from "./floatingOverlayPolicy";
 import { haptic } from "./haptic";
 
 // The pending tool-permission overlay — a sticky frosted surface floating just
@@ -83,6 +84,7 @@ export function PermissionOverlay({
   return (
     <Box
       ref={measureRef}
+      data-permission-overlay
       sx={{
         // Same anchor as TurnStatusOverlay: floats just above the composer (its
         // relative container), so it's positioned correctly in BOTH the mobile
@@ -94,9 +96,10 @@ export function PermissionOverlay({
         display: "flex",
         justifyContent: "center",
         px: 2,
-        // ComposerWorkspace owns the single inter-panel gap. Keep this
-        // absolutely positioned overlay from contributing a second gap.
-        pb: 0,
+        // Match TurnStatusOverlay's narrow boundary seam only while occupying
+        // the absolute mobile slot. The desktop inline panel already receives
+        // spacing from its normal layout flow.
+        pb: inline ? 0 : `${FLOATING_OVERLAY_BOUNDARY_GAP_PX}px`,
         pointerEvents: "none",
         zIndex: 3,
         fontFamily: "var(--cowboy-reading-font, inherit)",

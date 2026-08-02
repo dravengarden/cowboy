@@ -14,6 +14,8 @@ import {
 } from "./store";
 import { openJudgeInspector } from "./JudgeInspector";
 import { confirmationHaptic } from "./haptic";
+import { frostedPill } from "./frostedGlass";
+import { FLOATING_OVERLAY_BOUNDARY_GAP_PX } from "./floatingOverlayPolicy";
 
 type Kind =
   | "offline"
@@ -226,6 +228,7 @@ export function TurnStatusOverlay({
   return (
     <Box
       ref={measureRef}
+      data-turn-status-overlay
       sx={{
         position: "absolute",
         left: 0,
@@ -234,11 +237,10 @@ export function TurnStatusOverlay({
         display: "flex",
         justifyContent: "center",
         px: 2,
-        // The Composer already owns the stack's top gap. Adding that token here
-        // as well double-counted status -> Queue/Draft spacing and left a large
-        // empty band around the slab boundary. Keep this absolute layer flush
-        // with the boundary; the normal Composer padding supplies the one gap.
-        pb: 0,
+        // This absolute layer does not participate in the Composer's rowGap.
+        // Preserve only a narrow seam so the pill never merges with the card's
+        // top edge; the old full 8px stack token double-counted the spacing.
+        pb: `${FLOATING_OVERLAY_BOUNDARY_GAP_PX}px`,
         pointerEvents: "none",
         zIndex: 3,
       }}
@@ -319,6 +321,7 @@ export function TurnStatusOverlay({
         )}
         <Stack
           role="status"
+          data-turn-status-pill
           direction="row"
           alignItems="center"
           spacing={1}
@@ -335,7 +338,7 @@ export function TurnStatusOverlay({
             }
             onFocusComposer();
           }}
-          sx={{
+          sx={(t) => ({
             cursor: "text",
             maxWidth: "100%",
             // Press-and-hold grows the pill; release/settle snaps it back.
@@ -353,44 +356,10 @@ export function TurnStatusOverlay({
             py: 0.5,
             minHeight: 36,
             borderRadius: 999,
-            // iOS "liquid glass" — true backdrop refraction needs an SVG
-            // displacement filter that iOS Safari won't run, so we fake the LENS
-            // depth with layered light: a heavy blur+saturate+brightness for the
-            // vibrancy, a top specular glow (the glass catching light), a bright
-            // hairline rim, and a bottom inner shadow for glass THICKNESS — then a
-            // soft drop shadow floats it. Legibility is from the blur, not opacity.
-            backgroundColor: (t) =>
-              alpha(
-                t.palette.background.default,
-                t.palette.mode === "dark" ? 0.34 : 0.4,
-              ),
-            backgroundImage: (t) => {
-              const tint = alpha(
-                tone(t).main,
-                t.palette.mode === "dark" ? 0.16 : 0.2,
-              );
-              return `linear-gradient(0deg, ${tint}, ${tint})`;
-            },
-            backdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
-            WebkitBackdropFilter: "blur(40px) saturate(180%) brightness(1.06)",
-            // No white edge lines (read as cheap). Just a float shadow + a soft dark
-            // inner shadow at the bottom for glass thickness.
-            boxShadow: (t) =>
-              [
-                `0 10px 30px ${
-                  alpha(
-                    t.palette.common.black,
-                    t.palette.mode === "dark" ? 0.5 : 0.18,
-                  )
-                }`,
-                `inset 0 -9px 14px -8px ${
-                  alpha(
-                    t.palette.common.black,
-                    t.palette.mode === "dark" ? 0.4 : 0.12,
-                  )
-                }`,
-              ].join(", "),
-          }}
+            // Shared with PermissionOverlay so every occupant of this floating
+            // slot has the same glass depth and boundary-safe elevation.
+            ...frostedPill(t, tone(t).main),
+          })}
         >
           {(kind === "judging" || kind === "offline") && (
             <CircularProgress

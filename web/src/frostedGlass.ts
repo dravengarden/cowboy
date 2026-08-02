@@ -5,10 +5,9 @@
 // tone tint. Legibility comes from the blur, not opacity.
 //
 // Returned as plain style objects so a caller spreads them into ONE `sx={(t) =>
-// ({ ...frostedPill(t, tone), ...local })}` theme callback. TurnStatusOverlay
-// still inlines an identical recipe (pre-dating this module); migrate it here
-// next time it's touched so the material stays single-sourced.
+// ({ ...frostedPill(t, tone), ...local })}` theme callback.
 import { alpha, type Theme } from "@mui/material/styles";
+import { FROSTED_PILL_DROP_SHADOW_GEOMETRY } from "./floatingOverlayPolicy";
 
 const BLUR = "blur(40px) saturate(180%) brightness(1.06)";
 
@@ -34,7 +33,11 @@ export function frostedPill(t: Theme, toneMain: string): Record<string, unknown>
     backdropFilter: BLUR,
     WebkitBackdropFilter: BLUR,
     boxShadow: [
-      `0 10px 30px ${alpha(t.palette.common.black, dark ? 0.5 : 0.18)}`,
+      // Keep the elevation close to the pill. A broad downward shadow used to
+      // cross the boundary seam and visually merge Judging with the Composer.
+      `${FROSTED_PILL_DROP_SHADOW_GEOMETRY} ${
+        alpha(t.palette.common.black, dark ? 0.5 : 0.18)
+      }`,
       `inset 0 -9px 14px -8px ${alpha(t.palette.common.black, dark ? 0.4 : 0.12)}`,
     ].join(", "),
   };
