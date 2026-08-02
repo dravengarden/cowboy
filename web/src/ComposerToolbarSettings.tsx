@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   IconButton,
@@ -44,6 +44,26 @@ export function ComposerToolbarSettings({
   const [query, setQuery] = useState("");
   const [drag, setDrag] = useState<{ id: string; overIndex: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // This control opens a full-cover modal sheet, unlike the inline formatting
+  // and attachment actions which deliberately preserve editor focus. End the
+  // active editing session before the sheet paints so the compact Composer's
+  // `:focus-within` geometry cannot outlive the keyboard that the sheet hides.
+  // Without this, iOS leaves the editor as document.activeElement while closing
+  // its keyboard, and the background card remains expanded behind/after the
+  // sheet as a large empty canvas.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      (active.isContentEditable ||
+        active.tagName === "TEXTAREA" ||
+        active.closest(".cm-editor") !== null)
+    ) {
+      active.blur();
+    }
+  }, [open]);
 
   // The order shown: the persisted list, with the in-flight dragged id floated to
   // its hover slot so rows rearrange live under the finger (no commit yet).

@@ -758,6 +758,18 @@ here says otherwise.
     pointer-down selection dispatch or delayed focus; both cancel UIKit's active
     long-press recognizer.
 
+37. **A modal Composer settings sheet must end the editor focus session before
+    it paints.** Accessory actions normally prevent pointer-down default so
+    formatting, attachment, and inline controls do not dismiss the iOS keyboard.
+    Toolbar Settings is different: it opens a full-cover DetentSheet, which hides
+    the keyboard. If the old textarea/CM contenteditable remains
+    `document.activeElement`, the compact card's `:focus-within` height survives
+    without a keyboard and leaves a large empty Composer after the sheet closes.
+    `ComposerToolbarSettings` therefore blurs only an active native textarea or
+    CM contenteditable in a layout effect when opening. Do not move that blur to
+    the shared accessory button primitive: ordinary actions must continue to
+    preserve keyboard focus.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
