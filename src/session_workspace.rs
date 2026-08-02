@@ -75,12 +75,20 @@ pub async fn prepare(
         .await
         .context("resolving origin default branch")?;
     let head_ref = parse_remote_head(&remote_head)?;
-    let branch = head_ref
+    let remote_branch = head_ref
         .strip_prefix("refs/heads/")
         .context("origin HEAD is not a branch")?;
-    git_output(&repository, ["check-ref-format", "--branch", branch])
+    git_output(&repository, ["check-ref-format", "--branch", remote_branch])
         .await
         .context("validating origin default branch")?;
+    let session_branch = format!("cowboy/{}", request.session_id);
+    git_output(
+        &repository,
+        ["check-ref-format", "--branch", session_branch.as_str()],
+    )
+    .await
+    .context("validating session branch")?;
+    let session_branch_ref = format!("refs/heads/{session_branch}");
     let base_ref = format!("refs/cowboy/session-bases/{}", request.session_id);
     let refspec = format!("+{head_ref}:{base_ref}");
     git_output(&repository, ["fetch", "origin", refspec.as_str()])
@@ -100,7 +108,8 @@ pub async fn prepare(
             [
                 OsStr::new("worktree"),
                 OsStr::new("add"),
-                OsStr::new("--detach"),
+                OsStr::new("-b"),
+                OsStr::new(&session_branch),
                 destination.as_os_str(),
                 OsStr::new(&revision),
             ],
@@ -131,7 +140,8 @@ pub async fn prepare(
     let path = match created {
         Ok(value) => value,
         Err(error) => {
-            cleanup_failed_creation(&repository, &destination, &base_ref).await;
+            cleanup_failed_creation(&repository, &destination, &base_ref, &session_branch_ref)
+                .await;
             return Err(error);
         }
     };
@@ -145,7 +155,12 @@ pub async fn prepare(
     })
 }
 
-async fn cleanup_failed_creation(repository: &Path, destination: &Path, base_ref: &str) {
+async fn cleanup_failed_creation(
+    repository: &Path,
+    destination: &Path,
+    base_ref: &str,
+    session_branch_ref: &str,
+) {
     let _ = git_command(
         repository,
         [
@@ -160,6 +175,7 @@ async fn cleanup_failed_creation(repository: &Path, destination: &Path, base_ref
         let _ = tokio::fs::remove_dir_all(destination).await;
     }
     let _ = git_command(repository, ["update-ref", "-d", base_ref]).await;
+    let _ = git_command(repository, ["update-ref", "-d", session_branch_ref]).await;
 }
 
 async fn reuse_existing(
@@ -383,6 +399,15 @@ mod tests {
         assert_ne!(prepared.path, source.display().to_string());
         assert_eq!(
             git_output(
+                Path::new(&prepared.path),
+                ["symbolic-ref", "--short", "HEAD"]
+            )
+            .await
+            .unwrap(),
+            "cowboy/sess-1"
+        );
+        assert_eq!(
+            git_output(
                 &source,
                 ["rev-parse", "refs/cowboy/session-bases/sess-1^{commit}"],
             )
@@ -419,6 +444,20 @@ mod tests {
                     "show-ref",
                     "--verify",
                     "refs/cowboy/session-bases/sess-missing-subdir"
+                ],
+            )
+            .await
+            .unwrap()
+            .status
+            .success()
+        );
+        assert!(
+            !git_command(
+                &source,
+                [
+                    "show-ref",
+                    "--verify",
+                    "refs/heads/cowboy/sess-missing-subdir"
                 ],
             )
             .await
