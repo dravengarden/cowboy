@@ -224,6 +224,7 @@ async fn acquire_session_lock(worktree_root: &Path, session_id: &str) -> Result<
             .with_context(|| format!("creating session lock directory {}", parent.display()))?;
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
