@@ -6,6 +6,7 @@ export function MobileComposerAccessoryDock({
   mode,
   formatActions,
   utilityActions,
+  fixedAction,
   primaryLabel,
   primaryDisabled,
   onPrimary,
@@ -14,6 +15,7 @@ export function MobileComposerAccessoryDock({
   mode: "insert" | "selection";
   formatActions: ReactNode;
   utilityActions: ReactNode;
+  fixedAction: ReactNode;
   primaryLabel: string;
   primaryDisabled: boolean;
   onPrimary: () => void;
@@ -57,18 +59,6 @@ export function MobileComposerAccessoryDock({
         }}
       >
         {formatActions}
-      </Stack>
-
-      <Stack
-        data-mobile-composer-utility-actions
-        direction="row"
-        alignItems="center"
-        spacing={0.125}
-        sx={{
-          flex: "0 0 auto",
-          minWidth: 0,
-        }}
-      >
         {utilityActions}
         <Tooltip title={primaryLabel}>
           <span>
@@ -96,6 +86,34 @@ export function MobileComposerAccessoryDock({
           </span>
         </Tooltip>
       </Stack>
+
+      <Box
+        data-mobile-composer-fixed-action
+        sx={{
+          position: "relative",
+          flex: "0 0 44px",
+          width: 44,
+          height: 44,
+          ml: 0.5,
+          bgcolor: (theme) =>
+            alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.96 : 0.94),
+          "&::before": {
+            content: '""',
+            position: "absolute",
+            pointerEvents: "none",
+            top: 3,
+            bottom: 3,
+            left: -10,
+            width: 10,
+            background: (theme) =>
+              `linear-gradient(90deg, transparent, ${
+                alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.12 : 0.055)
+              })`,
+          },
+        }}
+      >
+        {fixedAction}
+      </Box>
     </Box>
   );
 }

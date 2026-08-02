@@ -643,12 +643,13 @@ here says otherwise.
     detached glass Send/Done island, while compact compose already had its own
     action row. This created two visual grammars and made row editing look like
     a different editor. `MobileComposerAccessoryDock` now owns one 52px material:
-    formatting scrolls at the leading edge; keyboard, attachment, settings, and
-    the contextual Send/Done action remain fixed at the trailing edge. Main
+    formatting, keyboard, attachment, and the contextual Send/Done action scroll
+    together at the leading edge; only Settings remains fixed at the trailing edge. Main
     fullscreen compose no longer duplicates Save Draft in this bar; Draft and
-    Queue reuse the same component with Done editing. Keep all trailing actions
-    in equal 44pt slots: Send/Done uses primary color for hierarchy, not a
-    circular container or a divider that splits the continuous dock. Keep this dock in the
+    Queue reuse the same component with Done editing. Keep every action in an
+    equal 44pt slot: Send/Done uses primary color for hierarchy, not a circular
+    container. Separate fixed Settings from the scroll rail with a quiet edge
+    shadow rather than a hard divider. Keep this dock in the
     WebView and adjacent to the native-resized keyboard. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
     bridge. Toolbar changes must not add focus retries, controlled editor state,

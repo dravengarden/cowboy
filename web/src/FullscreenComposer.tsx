@@ -273,8 +273,7 @@ export function FullscreenComposer({
       </Box>
 
       {/* One keyboard-adjacent dock shared by main compose and row editing.
-          Formatting scrolls independently while utilities and the contextual
-          Send/Done action remain stable at the trailing edge. */}
+          Commands scroll together while Settings remains stable at the trailing edge. */}
       <MobileComposerAccessoryDock
         mode={hasSelection ? "selection" : "insert"}
         formatActions={actions}
@@ -293,13 +292,15 @@ export function FullscreenComposer({
             <MobileComposerAccessoryButton title="Attach file" onClick={act(onAttach)}>
               <AttachFile />
             </MobileComposerAccessoryButton>
-            <MobileComposerAccessoryButton
-              title="Customize toolbar"
-              onClick={act(() => setSettingsOpen(true))}
-            >
-              <Tune />
-            </MobileComposerAccessoryButton>
           </>
+        }
+        fixedAction={
+          <MobileComposerAccessoryButton
+            title="Customize toolbar"
+            onClick={act(() => setSettingsOpen(true))}
+          >
+            <Tune />
+          </MobileComposerAccessoryButton>
         }
         primaryLabel={submitLabel}
         primaryDisabled={!sendable}
