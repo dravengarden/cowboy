@@ -9,7 +9,6 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
-  Stack,
   Toolbar,
   Tooltip,
   useTheme,
@@ -19,7 +18,6 @@ import {
   Check,
   Close,
   CloseFullscreen,
-  EditNoteOutlined,
   KeyboardHide,
   Send,
   Tune,
@@ -31,9 +29,12 @@ import {
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
+import {
+  MobileComposerAccessoryButton,
+  MobileComposerAccessoryDock,
+} from "./MobileComposerAccessoryDock";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
-import { FloatingActionIsland } from "./_shell";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
@@ -153,9 +154,13 @@ export function FullscreenComposer({
     .map((id) => COMPOSER_COMMANDS_BY_ID[id])
     .filter((c): c is ComposerCommand => c !== undefined)
     .map((cmd) => (
-      <ToolBtn key={cmd.id} title={cmd.label} onClick={act(() => runCmd(cmd))}>
+      <MobileComposerAccessoryButton
+        key={cmd.id}
+        title={cmd.label}
+        onClick={act(() => runCmd(cmd))}
+      >
         {cmd.icon}
-      </ToolBtn>
+      </MobileComposerAccessoryButton>
     ));
 
   // Portal to <body>: the composer is rendered deep inside the app's flex layout,
@@ -267,79 +272,40 @@ export function FullscreenComposer({
         />
       </Box>
 
-      {/* One keyboard dock shared by main compose and queued/draft editing:
-          formatting on the left, the exact-centre primary action, and contextual
-          utilities on the right. Equal outer tracks keep the liquid-glass action
-          geometrically centred even when either side contains more controls. */}
-      <Box
-        data-toolbar-mode={hasSelection ? "wrap" : "insert"}
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
-          alignItems: "center",
-          gap: 0.5,
-          px: 1,
-          py: 0.5,
-          bgcolor: "transparent",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-        }}
-      >
-        <Stack
-          direction="row"
-          alignItems="center"
-          spacing={0.25}
-          sx={{ minWidth: 0, overflowX: "auto", flexWrap: "nowrap", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}
-        >
-          {actions}
-        </Stack>
-        <FloatingActionIsland maxWidth={54}>
-          <IconButton
-            aria-label={submitLabel.toLowerCase()}
-            disabled={!sendable}
-            onClick={act(onSubmit)}
-            color="inherit"
-            sx={{
-              width: 46,
-              height: 46,
-              justifySelf: "center",
-              borderRadius: 999,
-              color: "text.primary",
-            }}
-          >
-            {submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
-          </IconButton>
-        </FloatingActionIsland>
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="flex-end"
-          spacing={0.25}
-          sx={{ justifySelf: "stretch", minWidth: 0 }}
-        >
-          <ToolBtn
-            title="Hide keyboard"
-            onClick={act(() => {
-              if (document.activeElement instanceof HTMLElement) {
-                document.activeElement.blur();
-              }
-            })}
-          >
-            <KeyboardHide />
-          </ToolBtn>
-          {!onDiscard && (
-            <ToolBtn title="Save as draft" onClick={act(onSaveDraft)}>
-              <EditNoteOutlined />
-            </ToolBtn>
-          )}
-          <ToolBtn title="Attach file" onClick={act(onAttach)}>
-            <AttachFile />
-          </ToolBtn>
-          <ToolBtn title="Customize toolbar" onClick={act(() => setSettingsOpen(true))}>
-            <Tune />
-          </ToolBtn>
-        </Stack>
-      </Box>
+      {/* One keyboard-adjacent dock shared by main compose and row editing.
+          Formatting scrolls independently while utilities and the contextual
+          Send/Done action remain stable at the trailing edge. */}
+      <MobileComposerAccessoryDock
+        mode={hasSelection ? "selection" : "insert"}
+        formatActions={actions}
+        utilityActions={
+          <>
+            <MobileComposerAccessoryButton
+              title="Hide keyboard"
+              onClick={act(() => {
+                if (document.activeElement instanceof HTMLElement) {
+                  document.activeElement.blur();
+                }
+              })}
+            >
+              <KeyboardHide />
+            </MobileComposerAccessoryButton>
+            <MobileComposerAccessoryButton title="Attach file" onClick={act(onAttach)}>
+              <AttachFile />
+            </MobileComposerAccessoryButton>
+            <MobileComposerAccessoryButton
+              title="Customize toolbar"
+              onClick={act(() => setSettingsOpen(true))}
+            >
+              <Tune />
+            </MobileComposerAccessoryButton>
+          </>
+        }
+        primaryLabel={submitLabel}
+        primaryDisabled={!sendable}
+        onPrimary={act(onSubmit)}
+        primaryIcon={submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
+      />
 
       <ComposerToolbarSettings
         open={settingsOpen}
@@ -361,35 +327,5 @@ export function FullscreenComposer({
       </Dialog>
     </Box>,
     document.body,
-  );
-}
-
-// One toolbar button — fixed 40px tap target, secondary tint, glyph forced to a
-// touch-friendly size (beats the global MuiIconButton override).
-function ToolBtn({
-  title,
-  onClick,
-  children,
-}: {
-  title: string;
-  onClick: () => void;
-  children: ReactNode;
-}): React.JSX.Element {
-  return (
-    <Tooltip title={title}>
-      <IconButton
-        aria-label={title}
-        onClick={onClick}
-        sx={{
-          width: 40,
-          height: 40,
-          flexShrink: 0,
-          color: "text.secondary",
-          "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
-        }}
-      >
-        {children}
-      </IconButton>
-    </Tooltip>
   );
 }

@@ -638,6 +638,20 @@ here says otherwise.
     paper over an inert inset with delayed focus, pointer-down selection writes,
     or a larger non-editable wrapper.
 
+33. **Mobile formatting and completion actions share one keyboard accessory
+    dock.** The former fullscreen footer split commands around an oversized
+    detached glass Send/Done island, while compact compose already had its own
+    action row. This created two visual grammars and made row editing look like
+    a different editor. `MobileComposerAccessoryDock` now owns one 52px material:
+    formatting scrolls at the leading edge; keyboard, attachment, settings, and
+    the contextual Send/Done action remain fixed at the trailing edge. Main
+    fullscreen compose no longer duplicates Save Draft in this bar; Draft and
+    Queue reuse the same component with Done editing. Keep this dock in the
+    WebView and adjacent to the native-resized keyboard. Moving it into a native
+    `inputAccessoryView` would split CM6 command/selection authority across a
+    bridge. Toolbar changes must not add focus retries, controlled editor state,
+    or a second compact-composer toolbar.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
