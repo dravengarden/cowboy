@@ -117,6 +117,13 @@ the API and Zed-over-SSH share one identity). A lingered user manager owns
 transient per-session workers. Agent-owned local state remains in the user's
 normal tool-managed home.
 
+Do not hot-deploy Cowboy with `systemctl edit --runtime` or a store-path
+`ExecStart` override. Such a drop-in outranks the newly activated NixOS unit and
+can leave an older controller running behind a healthy endpoint. Temporary
+integration releases still use a committed Columbus machine worktree and its
+normal activation transaction; push remains optional until that transaction
+has passed.
+
 See [Zero-interruption rolling updates](12-rolling-updates.md) for ownership,
 drain, rollback, monitoring, and failure semantics.
 
