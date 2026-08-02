@@ -86,6 +86,10 @@ import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
+import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
+import { useComposerToolbar } from "./composerToolbarConfig";
+import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
+import { MobileComposerAccessoryButton } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -890,6 +894,8 @@ export function ComposerWorkspace({
   // the sheet pattern wins on every sub-desktop viewport. Desktop keeps the
   // inline chip row — there's room.
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
+  const mobileToolbarIds = useComposerToolbar();
+  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(false);
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
   // inline expand instead (composeFs is never set true there).
@@ -1537,6 +1543,7 @@ export function ComposerWorkspace({
             tabIndex: -1,
           }
           : {})}
+        data-mobile-focus-composer={touchInput ? "true" : undefined}
         // Column mode is a dedicated writing workspace. Its subtle card boundary
         // makes an empty tall editor read as an intentional canvas, not a blank
         // hole between the session rail and transcript.
@@ -1558,6 +1565,23 @@ export function ComposerWorkspace({
             flex: 1,
             minHeight: 0,
             overflow: "hidden",
+          }),
+          ...(touchInput && {
+            transition:
+              "border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease",
+            "&:focus-within": {
+              borderColor: (t) => alpha(t.palette.primary.main, 0.42),
+              bgcolor: (t) =>
+                alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.18 : 0.3),
+              boxShadow: (t) => `0 -1px 0 ${alpha(t.palette.primary.main, 0.12)}`,
+            },
+            "&:focus-within [data-mobile-focus-format-row]": {
+              maxHeight: 48,
+              opacity: 1,
+              transform: "translateY(0)",
+              pointerEvents: "auto",
+              borderTopColor: (t) => alpha(t.palette.divider, 0.42),
+            },
           }),
         }}
       >
@@ -1967,6 +1991,76 @@ export function ComposerWorkspace({
             </Stack>
           </>
         ) : (
+        <>
+        {touchInput && (
+          <Stack
+            data-mobile-focus-format-row
+            direction="row"
+            alignItems="center"
+            spacing={0.125}
+            sx={{
+              maxHeight: 0,
+              minHeight: 0,
+              px: 0.75,
+              opacity: 0,
+              overflowX: "auto",
+              overflowY: "hidden",
+              overscrollBehaviorX: "contain",
+              scrollbarWidth: "none",
+              pointerEvents: "none",
+              transform: "translateY(8px)",
+              borderTop: 1,
+              borderTopColor: "transparent",
+              transition:
+                "max-height 160ms cubic-bezier(.2,.8,.2,1), opacity 120ms ease 24ms, transform 160ms cubic-bezier(.2,.8,.2,1), border-color 120ms ease",
+              "&::-webkit-scrollbar": { display: "none" },
+              "@media (prefers-reduced-motion: reduce)": {
+                transition: "none",
+                transform: "none",
+              },
+            }}
+          >
+            {mobileToolbarIds
+              .map((id) => COMPOSER_COMMANDS_BY_ID[id])
+              .filter((command): command is ComposerCommand => command !== undefined)
+              .map((command) => (
+                <MobileComposerAccessoryButton
+                  key={command.id}
+                  title={command.label}
+                  onClick={(): void => {
+                    const editor = editorRef.current;
+                    if (editor === null) return;
+                    haptic();
+                    command.run({
+                      editor,
+                      attach: (): void => fileInputRef.current?.click(),
+                    });
+                  }}
+                >
+                  {command.icon}
+                </MobileComposerAccessoryButton>
+              ))}
+            <Box sx={{ flex: 1, minWidth: 6 }} />
+            <Box
+              sx={{
+                position: "sticky",
+                right: 0,
+                flexShrink: 0,
+                pl: 0.5,
+                bgcolor: "background.default",
+                borderLeft: 1,
+                borderColor: (t) => alpha(t.palette.divider, 0.34),
+              }}
+            >
+              <MobileComposerAccessoryButton
+                title="Customize toolbar"
+                onClick={(): void => setMobileToolbarSettingsOpen(true)}
+              >
+                <Tune />
+              </MobileComposerAccessoryButton>
+            </Box>
+          </Stack>
+        )}
         <Stack
           direction="row"
           alignItems="center"
@@ -2216,6 +2310,13 @@ export function ComposerWorkspace({
           </span>
         </Tooltip>
         </Stack>
+        {touchInput && (
+          <ComposerToolbarSettings
+            open={mobileToolbarSettingsOpen}
+            onClose={(): void => setMobileToolbarSettingsOpen(false)}
+          />
+        )}
+        </>
         )}
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}

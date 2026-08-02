@@ -656,8 +656,12 @@ here says otherwise.
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
-    bridge. Toolbar changes must not add focus retries, controlled editor state,
-    or a second compact-composer toolbar.
+    bridge. Compact compose reuses this interaction model as one adaptive dock:
+    its message-action track is present at rest, and the formatting track expands
+    while the persistent editor owns focus. Coordinate the bottom session-nav
+    exit with CSS `:focus-within`; never mirror focus through controlled editor
+    state. Toolbar changes must not add focus retries, controlled editor state,
+    editor remounts, or a second floating compact-composer toolbar.
 
 34. **Mobile scrollback batches are measured in visible rows, not cursor
     pages.** History cursors are byte bounded, so a tool-heavy page may render

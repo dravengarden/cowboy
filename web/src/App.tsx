@@ -2450,6 +2450,20 @@ export function App({
                     // group (composer, or the navbar in bottom mode) rises clear
                     // of the keyboard. 0 when no keyboard.
                     pb: "var(--kb-inset, 0px)",
+                    // Keyboard Focus Mode is one coordinated transition: the
+                    // persistent composer grows its formatting track while this
+                    // session nav yields the scarce keyboard-adjacent space. CSS
+                    // :has keeps editor focus/IME state out of React render state.
+                    "&:has([data-mobile-focus-composer='true']:focus-within) [data-mobile-session-nav='true']": {
+                        minHeight: 0,
+                        maxHeight: 0,
+                        opacity: 0,
+                        transform: "translateY(10px)",
+                        pointerEvents: "none",
+                        overflow: "hidden",
+                        paddingTop: 0,
+                        paddingBottom: 0,
+                    },
                 }}
             >
                 {mobile && (
@@ -2630,6 +2644,7 @@ export function App({
                 />
                 )}
                 <AppBar
+                    data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
                     ref={appBarRef}
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT
@@ -2656,6 +2671,12 @@ export function App({
                         position: "relative",
                         zIndex: 2,
                         color: "text.primary",
+                        maxHeight: navbarAtBottom ? 96 : undefined,
+                        transition:
+                            "max-height 160ms cubic-bezier(.2,.8,.2,1), min-height 160ms cubic-bezier(.2,.8,.2,1), opacity 120ms ease, transform 160ms cubic-bezier(.2,.8,.2,1), padding 160ms cubic-bezier(.2,.8,.2,1)",
+                        "@media (prefers-reduced-motion: reduce)": {
+                            transition: "none",
+                        },
                         // Split mode: the frosted slab that drew the bar's bottom
                         // hairline is dropped, so the bar owns its own divider here
                         // (it's a solid top bar above the two columns, not a float).
