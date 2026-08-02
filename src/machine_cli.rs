@@ -1,7 +1,7 @@
 //! CLI for the stable Machine host.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -748,17 +748,24 @@ async fn collect_inventory(
             ),
         };
         let kind = ComponentKind::ProviderCli;
-        let auth = match slot {
-            "codex" => probe_exit_auth("codex", &["login", "status"]).await,
-            "claude" => probe_exit_auth("claude", &["auth", "status", "--json"]).await,
-            "gemini" => probe_gemini_auth(),
-            _ => AuthState::Unsupported,
+        let (auth, auth_detail) = match slot {
+            "codex" => (probe_exit_auth("codex", &["login", "status"]).await, None),
+            "claude" => (
+                probe_exit_auth("claude", &["auth", "status", "--json"]).await,
+                None,
+            ),
+            "gemini" => {
+                let probe = probe_gemini_auth();
+                (probe.state, probe.detail)
+            }
+            _ => (AuthState::Unsupported, None),
         };
         if let Some(existing) = inventory
             .iter_mut()
             .find(|component| component.id.kind == kind && component.id.slot == slot)
         {
             existing.auth = Some(auth);
+            existing.detail = auth_detail.or(existing.detail.take());
             continue;
         }
         inventory.push(ComponentInventory {
@@ -773,7 +780,7 @@ async fn collect_inventory(
             rollback_generation: None,
             active_leases: 0,
             auth: Some(auth),
-            detail,
+            detail: auth_detail.or(detail),
             update: None,
         });
     }
@@ -1043,24 +1050,30 @@ async fn probe_exit_auth(command: &str, args: &[&str]) -> AuthState {
     }
 }
 
-fn probe_gemini_auth() -> AuthState {
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    let vertex = std::env::var("GOOGLE_GENAI_USE_VERTEXAI")
-        .ok()
-        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
-        && std::env::var("GOOGLE_CLOUD_PROJECT")
-            .ok()
-            .is_some_and(|value| !value.trim().is_empty());
+const GEMINI_CONSUMER_LOGIN_RETIRED: &str = "Personal Google Login is no longer supported by Gemini CLI. Use Antigravity for personal, Google AI Pro, or Google AI Ultra accounts. Cowboy Gemini sessions require GEMINI_API_KEY or a Code Assist Standard/Enterprise Google Cloud project.";
+
+#[derive(Debug, PartialEq, Eq)]
+struct GeminiAuthProbe {
+    state: AuthState,
+    detail: Option<String>,
+}
+
+fn probe_gemini_auth() -> GeminiAuthProbe {
     let Some(home) = std::env::var_os("HOME") else {
-        return if api_key || vertex {
-            AuthState::SignedIn
-        } else {
-            AuthState::SignedOut
+        return GeminiAuthProbe {
+            state: AuthState::SignedOut,
+            detail: Some(
+                "HOME is not configured, so Gemini credentials cannot be discovered.".to_owned(),
+            ),
         };
     };
     let root = PathBuf::from(home).join(".gemini");
+    let api_key = gemini_env_configured(&root, "GEMINI_API_KEY");
+    let vertex_enabled = gemini_env_value(&root, "GOOGLE_GENAI_USE_VERTEXAI")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let vertex = vertex_enabled
+        && (gemini_env_configured(&root, "GOOGLE_CLOUD_PROJECT")
+            || gemini_env_configured(&root, "GOOGLE_API_KEY"));
     let selected = std::fs::read(root.join("settings.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -1073,13 +1086,43 @@ fn probe_gemini_auth() -> AuthState {
     let gateway = std::env::var("GOOGLE_GEMINI_BASE_URL")
         .ok()
         .is_some_and(|value| !value.trim().is_empty());
+    let code_assist_project = gemini_env_configured(&root, "GOOGLE_CLOUD_PROJECT");
     gemini_auth_from_metadata(
         selected.as_deref(),
         root.join("oauth_creds.json").is_file(),
         api_key,
         vertex,
         gateway,
+        code_assist_project,
     )
+}
+
+fn gemini_env_configured(root: &Path, key: &str) -> bool {
+    gemini_env_value(root, key).is_some_and(|value| !value.trim().is_empty())
+}
+
+fn gemini_env_value(root: &Path, key: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(key)
+        && !value.trim().is_empty()
+    {
+        return Some(value);
+    }
+    let contents = std::fs::read_to_string(root.join(".env")).ok()?;
+    gemini_env_value_from(&contents, key)
+}
+
+fn gemini_env_value_from(contents: &str, key: &str) -> Option<String> {
+    contents.lines().find_map(|line| {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let (candidate, value) = line.split_once('=')?;
+        (candidate.trim() == key).then(|| {
+            value
+                .trim()
+                .trim_matches(|character| character == '\'' || character == '"')
+                .to_owned()
+        })
+    })
 }
 
 fn gemini_auth_from_metadata(
@@ -1088,14 +1131,26 @@ fn gemini_auth_from_metadata(
     api_key: bool,
     vertex: bool,
     gateway: bool,
-) -> AuthState {
+    code_assist_project: bool,
+) -> GeminiAuthProbe {
     match selected {
-        Some("oauth-personal") if oauth_credentials => AuthState::SignedIn,
-        Some("gemini-api-key") if api_key => AuthState::SignedIn,
-        Some("vertex-ai" | "compute-default-credentials") if vertex => AuthState::SignedIn,
-        Some("gateway") if gateway => AuthState::SignedIn,
-        None if api_key || vertex => AuthState::SignedIn,
-        Some(_) | None => AuthState::SignedOut,
+        Some("oauth-personal") if oauth_credentials && code_assist_project => GeminiAuthProbe {
+            state: AuthState::SignedIn,
+            detail: Some("Code Assist Standard/Enterprise Google Login".to_owned()),
+        },
+        Some("oauth-personal") if oauth_credentials => GeminiAuthProbe {
+            state: AuthState::SignedOut,
+            detail: Some(GEMINI_CONSUMER_LOGIN_RETIRED.to_owned()),
+        },
+        Some("gemini-api-key") if api_key => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Gemini API key".to_owned()) },
+        Some("vertex-ai" | "compute-default-credentials") if vertex => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Vertex AI".to_owned()) },
+        Some("gateway") if gateway => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Gemini API gateway".to_owned()) },
+        None if api_key => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Gemini API key".to_owned()) },
+        None if vertex => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Vertex AI".to_owned()) },
+        Some(_) | None => GeminiAuthProbe {
+            state: AuthState::SignedOut,
+            detail: Some("Configure GEMINI_API_KEY, Vertex AI, or a Code Assist Standard/Enterprise Google Cloud project.".to_owned()),
+        },
     }
 }
 
@@ -1138,6 +1193,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
         MachineCommand::BeginLogin {
             request_id,
             provider,
+            auth_method,
         } => {
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
             let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1151,6 +1207,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
             tokio::spawn(run_login(
                 request_id,
                 provider,
+                auth_method,
                 events,
                 components,
                 zed_adapter_socket,
@@ -1405,11 +1462,24 @@ async fn reconcile_components(
 async fn run_login(
     request_id: String,
     provider: String,
+    auth_method: Option<String>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
     zed_adapter_socket: Option<PathBuf>,
     mut login: LoginIo,
 ) {
+    if provider == "gemini" && auth_method.as_deref() == Some("api_key") {
+        run_gemini_api_key_login(
+            request_id,
+            provider,
+            events,
+            components,
+            zed_adapter_socket,
+            login,
+        )
+        .await;
+        return;
+    }
     let (command, args): (&str, &[&str]) = match provider.as_str() {
         "codex" => ("codex", &["login", "--device-auth"]),
         "claude" => ("claude", &["auth", "login"]),
@@ -1426,14 +1496,25 @@ async fn run_login(
             return;
         }
     };
+    if provider == "gemini" && !gemini_code_assist_project_configured() {
+        login.sessions.lock().remove(&request_id);
+        let _ = events.send(MachineEvent::CommandResult {
+            request_id,
+            accepted: false,
+            detail: Some(GEMINI_CONSUMER_LOGIN_RETIRED.to_owned()),
+        });
+        return;
+    }
     if provider == "gemini"
-        && let Err(error) = select_gemini_oauth()
+        && let Err(error) = select_gemini_code_assist_oauth()
     {
         login.sessions.lock().remove(&request_id);
         let _ = events.send(MachineEvent::CommandResult {
             request_id,
             accepted: false,
-            detail: Some(format!("preparing Gemini OAuth failed: {error:#}")),
+            detail: Some(format!(
+                "preparing Gemini Code Assist login failed: {error:#}"
+            )),
         });
         return;
     }
@@ -1530,7 +1611,10 @@ async fn run_login(
             }
             continue;
         };
-        if provider == "gemini" && challenge_sent && probe_gemini_auth() == AuthState::SignedIn {
+        if provider == "gemini"
+            && challenge_sent
+            && probe_gemini_auth().state == AuthState::SignedIn
+        {
             login_completed = true;
             let _ = child.kill().await;
             break;
@@ -1561,6 +1645,8 @@ async fn run_login(
                 verification_url: url,
                 user_code: user_code.clone(),
                 input_required: provider != "codex",
+                input_label: None,
+                secret_input: false,
                 expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
             });
             challenge_sent = true;
@@ -1589,7 +1675,111 @@ async fn run_login(
     }
 }
 
-fn select_gemini_oauth() -> anyhow::Result<()> {
+async fn run_gemini_api_key_login(
+    request_id: String,
+    provider: String,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    components: Arc<ComponentStore>,
+    zed_adapter_socket: Option<PathBuf>,
+    mut login: LoginIo,
+) {
+    let _ = events.send(MachineEvent::LoginState {
+        request_id: request_id.clone(),
+        provider: provider.clone(),
+        state: AuthState::Pending,
+        account_label: None,
+        detail: Some("waiting for a Gemini API key".to_owned()),
+    });
+    let _ = events.send(MachineEvent::LoginChallenge {
+        request_id: request_id.clone(),
+        provider: provider.clone(),
+        verification_url: "https://aistudio.google.com/apikey".to_owned(),
+        user_code: None,
+        input_required: true,
+        input_label: Some("Gemini API key".to_owned()),
+        secret_input: true,
+        expires_at_ms: unix_ms().saturating_add(15 * 60 * 1_000),
+    });
+    let result = tokio::select! {
+        changed = login.cancel.changed() => {
+            if changed.is_ok() && *login.cancel.borrow() { Err(anyhow::anyhow!("login cancelled")) }
+            else { Err(anyhow::anyhow!("login interrupted")) }
+        },
+        input = login.input.recv() => match input {
+            Some(api_key) => store_gemini_api_key(&api_key),
+            None => Err(anyhow::anyhow!("login input closed")),
+        },
+    };
+    login.sessions.lock().remove(&request_id);
+    let signed_in = result.is_ok();
+    let _ = events.send(MachineEvent::LoginState {
+        request_id: request_id.clone(),
+        provider,
+        state: if signed_in {
+            AuthState::SignedIn
+        } else {
+            AuthState::Error
+        },
+        account_label: None,
+        detail: result.err().map(|error| error.to_string()),
+    });
+    if signed_in {
+        let inventory = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
+        let _ = events.send(MachineEvent::Inventory {
+            components: inventory,
+            observed_at_ms: unix_ms(),
+        });
+    }
+}
+
+fn store_gemini_api_key(api_key: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let api_key = api_key.trim();
+    anyhow::ensure!(!api_key.is_empty(), "Gemini API key is empty");
+    anyhow::ensure!(
+        !api_key.contains(['\r', '\n']),
+        "Gemini API key contains a line break"
+    );
+    let home = std::env::var_os("HOME").context("HOME is not configured")?;
+    let root = PathBuf::from(home).join(".gemini");
+    std::fs::create_dir_all(&root).context("creating Gemini state directory")?;
+    let env_path = root.join(".env");
+    let existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|line| {
+            let candidate = line.trim().strip_prefix("export ").unwrap_or(line.trim());
+            !candidate.starts_with("GEMINI_API_KEY=")
+        })
+        .map(str::to_owned)
+        .collect();
+    lines.push(format!("GEMINI_API_KEY={api_key}"));
+    let temporary = root.join(".env.cowboy-login");
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temporary).context("staging Gemini API key")?;
+    writeln!(file, "{}", lines.join("\n")).context("writing Gemini API key")?;
+    file.sync_all().context("syncing Gemini API key")?;
+    std::fs::rename(&temporary, &env_path).context("activating Gemini API key")?;
+    select_gemini_auth_type("gemini-api-key")
+}
+
+fn gemini_code_assist_project_configured() -> bool {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .is_some_and(|home| gemini_env_configured(&home.join(".gemini"), "GOOGLE_CLOUD_PROJECT"))
+}
+
+fn select_gemini_code_assist_oauth() -> anyhow::Result<()> {
+    select_gemini_auth_type("oauth-personal")
+}
+
+fn select_gemini_auth_type(selected_type: &str) -> anyhow::Result<()> {
     let home = std::env::var_os("HOME").context("HOME is not configured")?;
     let root = PathBuf::from(home).join(".gemini");
     std::fs::create_dir_all(&root).context("creating Gemini state directory")?;
@@ -1615,7 +1805,7 @@ fn select_gemini_oauth() -> anyhow::Result<()> {
         .context("Gemini auth settings must be a JSON object")?;
     auth.insert(
         "selectedType".to_owned(),
-        serde_json::Value::String("oauth-personal".to_owned()),
+        serde_json::Value::String(selected_type.to_owned()),
     );
     let temporary = root.join("settings.json.cowboy-login");
     std::fs::write(&temporary, serde_json::to_vec_pretty(&settings)?)
@@ -1725,9 +1915,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        disabled_provider_slots_from, gemini_auth_from_metadata, managed_provider_environment,
-        npm_package_for_component, parse_workspaces, provider_for_component,
-        reject_untrusted_workspace, selected_zed_pair, validate_controller_url,
+        disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
+        managed_provider_environment, npm_package_for_component, parse_workspaces,
+        provider_for_component, reject_untrusted_workspace, selected_zed_pair,
+        validate_controller_url,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_protocol::{ArtifactFormat, ComponentId, ComponentKind, DesiredComponent};
@@ -1746,23 +1937,36 @@ mod tests {
     }
 
     #[test]
-    fn gemini_auth_requires_non_secret_credential_evidence() {
+    fn gemini_auth_rejects_retired_consumer_oauth() {
         assert_eq!(
-            gemini_auth_from_metadata(Some("oauth-personal"), true, false, false, false),
-            crate::machine_protocol::AuthState::SignedIn
-        );
-        assert_eq!(
-            gemini_auth_from_metadata(Some("oauth-personal"), false, false, false, false),
+            gemini_auth_from_metadata(Some("oauth-personal"), true, false, false, false, false)
+                .state,
             crate::machine_protocol::AuthState::SignedOut
         );
         assert_eq!(
-            gemini_auth_from_metadata(Some("gemini-api-key"), false, true, false, false),
+            gemini_auth_from_metadata(Some("oauth-personal"), true, false, false, false, true)
+                .state,
             crate::machine_protocol::AuthState::SignedIn
         );
         assert_eq!(
-            gemini_auth_from_metadata(None, false, false, false, false),
+            gemini_auth_from_metadata(Some("gemini-api-key"), false, true, false, false, false)
+                .state,
+            crate::machine_protocol::AuthState::SignedIn
+        );
+        assert_eq!(
+            gemini_auth_from_metadata(None, false, false, false, false, false).state,
             crate::machine_protocol::AuthState::SignedOut
         );
+    }
+
+    #[test]
+    fn gemini_env_reader_accepts_exported_values_without_exposing_other_keys() {
+        let contents = "IGNORED=value\nexport GOOGLE_CLOUD_PROJECT='enterprise-project'\n";
+        assert_eq!(
+            gemini_env_value_from(contents, "GOOGLE_CLOUD_PROJECT").as_deref(),
+            Some("enterprise-project")
+        );
+        assert_eq!(gemini_env_value_from(contents, "GEMINI_API_KEY"), None);
     }
 
     #[test]

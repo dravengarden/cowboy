@@ -3591,7 +3591,7 @@ function AutoResumeSettings({ showToggle = true }: { showToggle?: boolean } = {}
 }
 
 type MachineEventView =
-    | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; input_required?: boolean; expires_at_ms: number }
+    | { event: "login_challenge"; request_id: string; provider: string; verification_url: string; user_code?: string; input_required?: boolean; input_label?: string; secret_input?: boolean; expires_at_ms: number }
     | { event: "login_state"; request_id: string; provider: string; state: string; account_label?: string; detail?: string }
     | { event: "command_result"; request_id: string; accepted: boolean; detail?: string }
     | { event: "inventory"; observed_at_ms: number; components: unknown[] };
@@ -3648,13 +3648,13 @@ function MachinesContent(): React.JSX.Element {
         const timer = globalThis.setInterval(refresh, 2_000);
         return () => globalThis.clearInterval(timer);
     }, [refresh]);
-    const command = (machineId: string, action: "refresh" | "login" | "components/reconcile", provider?: string): void => {
+    const command = (machineId: string, action: "refresh" | "login" | "components/reconcile", provider?: string, authMethod?: string): void => {
         const busyKey = `${machineId}:${action}:${provider ?? ""}`;
         setBusy((current) => ({ ...current, [busyKey]: true }));
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/${action}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            ...(action === "login" ? { body: JSON.stringify({ provider }) } : {}),
+            ...(action === "login" ? { body: JSON.stringify({ provider, auth_method: authMethod }) } : {}),
         }).finally(() => {
             setBusy((current) => ({ ...current, [busyKey]: false }));
             globalThis.setTimeout(() => {
@@ -4020,11 +4020,37 @@ function MachinesContent(): React.JSX.Element {
                                                                 {component.auth ? ` · ${component.auth.replaceAll("_", " ")}` : ""}
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
+                                                            {provider === "gemini" && component.detail && (
+                                                                <Typography
+                                                                    variant="caption"
+                                                                    color={component.auth === "signed_in" ? "success.main" : "text.secondary"}
+                                                                    sx={{ display: "block", mt: 0.25, maxWidth: 720 }}
+                                                                >
+                                                                    {component.detail}
+                                                                </Typography>
+                                                            )}
                                                         </Box>
                                                         {provider && component.auth === "signed_in" && (
                                                             <Chip size="small" color="success" variant="outlined" label="Signed in" />
                                                         )}
-                                                        {provider && component.auth !== "signed_in" && (
+                                                        {provider && component.auth !== "signed_in" && provider === "gemini" && (
+                                                            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                                                <Button
+                                                                    size="small"
+                                                                    variant={loginBusy ? "outlined" : "contained"}
+                                                                    disabled={loginBusy}
+                                                                    startIcon={loginBusy ? <DelayedNetworkProgress size={14} /> : undefined}
+                                                                    onClick={() => command(machine.id, "login", provider, "api_key")}
+                                                                >{loginBusy ? "Waiting" : "Use API key"}</Button>
+                                                                <Button
+                                                                    size="small"
+                                                                    variant="outlined"
+                                                                    disabled={loginBusy}
+                                                                    onClick={() => command(machine.id, "login", provider, "code_assist")}
+                                                                >Standard / Enterprise</Button>
+                                                            </Stack>
+                                                        )}
+                                                        {provider && component.auth !== "signed_in" && provider !== "gemini" && (
                                                             <Button
                                                                 size="small"
                                                                 variant={loginBusy ? "outlined" : "contained"}
@@ -4087,7 +4113,9 @@ function MachinesContent(): React.JSX.Element {
                                                                     </Typography>
                                                                     <Typography variant="caption" color="text.secondary">
                                                                         {loginChallenge.input_required
-                                                                            ? "Open the sign-in page, approve access, then paste the authorization code shown by the browser."
+                                                                            ? loginChallenge.secret_input
+                                                                                ? "Create or copy a Gemini API key, then paste it below. It is stored only on this Machine with user-only permissions."
+                                                                                : "Open the sign-in page, approve access, then paste the authorization code shown by the browser."
                                                                             : "Open the sign-in page and enter the device code. Cowboy will finish automatically."}
                                                                     </Typography>
                                                                     <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
@@ -4122,7 +4150,8 @@ function MachinesContent(): React.JSX.Element {
                                                                             <TextField
                                                                                 size="small"
                                                                                 fullWidth
-                                                                                label="Authorization code"
+                                                                                label={loginChallenge.input_label ?? "Authorization code"}
+                                                                                type={loginChallenge.secret_input ? "password" : "text"}
                                                                                 value={loginCodes[loginChallenge.request_id] ?? ""}
                                                                                 autoComplete="off"
                                                                                 onChange={(event) => setLoginCodes((current) => ({

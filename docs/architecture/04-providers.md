@@ -21,11 +21,24 @@ contract a provider must satisfy to start; everything downstream
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
-or Code Assist Standard/Enterprise credentials. Cowboy recognizes the upstream
-retirement response as a terminal startup error: selecting the crashed session
-does not create a restart loop, while an explicit Retry remains available after
-the user changes credentials. Antigravity CLI is not a drop-in replacement
-until it publishes an ACP server mode.
+or Code Assist Standard/Enterprise credentials. Machine authentication therefore
+has two explicit paths:
+
+- **Gemini API key** writes `GEMINI_API_KEY` to the target user's
+  `~/.gemini/.env` with user-only permissions and selects `gemini-api-key` in
+  Gemini settings.
+- **Standard/Enterprise Google Login** is offered only when
+  `GOOGLE_CLOUD_PROJECT` is configured on the target Machine. The project is the
+  non-secret evidence that the OAuth credentials belong to a still-supported
+  Code Assist deployment.
+
+An old `oauth-personal` credential file without that project is never reported
+as signed in. Cowboy recognizes the upstream retirement response as a terminal
+startup error: selecting the crashed session does not create a restart loop,
+while an explicit Retry remains available after the user changes credentials.
+Personal, Google AI Pro, and AI Ultra accounts belong to Antigravity;
+Antigravity CLI is not a drop-in Cowboy provider until it publishes an ACP
+server mode.
 
 ## Resume is discovered, not declared
 

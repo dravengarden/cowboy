@@ -258,6 +258,8 @@ pub enum MachineCommand {
     BeginLogin {
         request_id: String,
         provider: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_method: Option<String>,
     },
     CancelLogin {
         request_id: String,
@@ -303,6 +305,10 @@ pub enum MachineEvent {
         user_code: Option<String>,
         #[serde(default)]
         input_required: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_label: Option<String>,
+        #[serde(default)]
+        secret_input: bool,
         expires_at_ms: i64,
     },
     LoginState {

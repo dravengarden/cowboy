@@ -1721,6 +1721,8 @@ async fn api_machine_events(
 #[derive(Debug, Deserialize)]
 struct MachineLoginRequest {
     provider: String,
+    #[serde(default)]
+    auth_method: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1805,12 +1807,28 @@ async fn api_machine_login(
     if !matches!(request.provider.as_str(), "codex" | "claude" | "gemini") {
         return (StatusCode::BAD_REQUEST, "unknown provider").into_response();
     }
+    if request.provider == "gemini"
+        && !matches!(
+            request.auth_method.as_deref(),
+            Some("api_key" | "code_assist")
+        )
+    {
+        return (StatusCode::BAD_REQUEST, "Gemini auth method is required").into_response();
+    }
+    if request.provider != "gemini" && request.auth_method.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "auth method is not supported for this provider",
+        )
+            .into_response();
+    }
     let request_id = machine_request_id("login");
     match state.machine_control.send(
         &machine_id,
         crate::machine_protocol::MachineCommand::BeginLogin {
             request_id: request_id.clone(),
             provider: request.provider,
+            auth_method: request.auth_method,
         },
     ) {
         Ok(()) => Json(MachineCommandResponse { request_id }).into_response(),

@@ -56,7 +56,10 @@ const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
 ///   login in `~/.codex`, or `CODEX_API_KEY` / `OPENAI_API_KEY`).
 /// - `gemini`: the Gemini CLI's own ACP mode — `@google/gemini-cli --acp`, run via
 ///   `npx` (the CLI is the adapter; no separate package). Requires Gemini auth (a
-///   prior `gemini` OAuth login in `~/.gemini`, or `GEMINI_API_KEY`).
+///   `GEMINI_API_KEY`, Vertex AI, or a Code Assist Standard/Enterprise Google
+///   Login with `GOOGLE_CLOUD_PROJECT`. Consumer Google Login is retired and
+///   belongs to Antigravity, which does not currently expose Cowboy's ACP
+///   session transport.
 #[must_use]
 pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
     builtin_with_env(|key| std::env::var(key).ok())
