@@ -62,6 +62,10 @@ pub struct Args {
     // Keep this stable path for detached workers that survive Machine upgrades.
     #[arg(long, default_value = "/run/user/1000/cowboy/cowboy-machine.sock")]
     socket: PathBuf,
+    /// Additional older broker endpoints accepted during a bounded migration.
+    /// Newly launched workers always receive `--socket` instead.
+    #[arg(long = "compat-socket")]
+    compatibility_sockets: Vec<PathBuf>,
     #[arg(long, default_value = "cowboy-acp-worker")]
     worker_command: PathBuf,
     /// Optional bootstrap generation. Production leaves this empty and lets
@@ -180,6 +184,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let worker_environment = managed_provider_environment(&components)?;
     let broker = MachineBrokerArgs {
         socket: args.socket,
+        compatibility_sockets: args.compatibility_sockets,
         worker_command,
         desired_generation,
         spawn_mode: match args.spawn_mode {
