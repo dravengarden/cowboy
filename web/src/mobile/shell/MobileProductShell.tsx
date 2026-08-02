@@ -77,6 +77,12 @@ function modalOwnsGesture(): boolean {
     globalThis.document?.querySelector(MODAL_OVERLAY_SELECTOR) != null;
 }
 
+function spatialDrawerOwnsGesture(shell: HTMLElement): boolean {
+  return shell.querySelector(
+    "[data-mobile-drawer-open='true'], [data-mobile-drawer-moving='true']",
+  ) != null;
+}
+
 export function MobileProductShell({
   themeMode,
   onSetThemeMode,
@@ -216,6 +222,7 @@ export function MobileProductShell({
       const ignored = ignoredGestureTarget(event.target, shell);
       const overlayOwnsGesture =
         modalOwnsGesture() ||
+        spatialDrawerOwnsGesture(shell) ||
         (productRef.current === "agent" && agentDrawerOpenRef.current) ||
         (productRef.current === "review" && reviewDrawerOpenRef.current);
       if (!shouldReservePagerStart(ignored, overlayOwnsGesture)) {
@@ -242,7 +249,10 @@ export function MobileProductShell({
       if (!gesture || !touch) return;
       if (
         expandedSelection(globalThis.getSelection?.() ?? null) ||
-        modalOwnsGesture()
+        modalOwnsGesture() ||
+        spatialDrawerOwnsGesture(shell) ||
+        (productRef.current === "agent" && agentDrawerOpenRef.current) ||
+        (productRef.current === "review" && reviewDrawerOpenRef.current)
       ) {
         if (gesture.locked) settle(gesture.product, 0, gesture.width);
         gesture = null;

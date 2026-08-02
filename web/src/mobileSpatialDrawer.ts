@@ -160,6 +160,12 @@ export function bindMobileSpatialDrawer({
     cachedWidth,
   ): void => {
     globalThis.clearTimeout(settleTimer);
+    // Publish gesture ownership synchronously, before React state/effects can
+    // run. Closing a left drawer uses the same direction as Agent -> Review;
+    // closing a right drawer uses the same direction as Review -> Agent. Keep
+    // the drawer marked open through its complete close animation so the
+    // outer product pager can never steal either gesture.
+    if (open) gestureTarget.setAttribute("data-mobile-drawer-open", "true");
     const releaseOffset = renderFrame !== 0 ? pendingOffset : currentOffset;
     if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
     renderFrame = 0;
@@ -199,6 +205,7 @@ export function bindMobileSpatialDrawer({
       clearTransitions();
       if (!open) {
         setOpen(false);
+        gestureTarget.removeAttribute("data-mobile-drawer-open");
         // A closed surface is the native full-screen viewport. Let UIKit and
         // WKWebView clip it to the real device corners instead of leaving a
         // guessed phone/tablet radius that cuts a visible wedge from iPad.
@@ -361,8 +368,13 @@ export function bindMobileSpatialDrawer({
     render(getOpen() ? presentationWidth : 0);
   };
 
-  if (getOpen()) applyOpenDepth();
-  else clearOpenDepth();
+  if (getOpen()) {
+    gestureTarget.setAttribute("data-mobile-drawer-open", "true");
+    applyOpenDepth();
+  } else {
+    gestureTarget.removeAttribute("data-mobile-drawer-open");
+    clearOpenDepth();
+  }
   presentationWidth = drawerWidth();
   render(getOpen() ? presentationWidth : 0);
   gestureTarget.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -388,6 +400,7 @@ export function bindMobileSpatialDrawer({
       globalThis.clearTimeout(settleTimer);
       if (renderFrame !== 0) cancelAnimationFrame(renderFrame);
       gestureTarget.removeAttribute("data-mobile-drawer-moving");
+      gestureTarget.removeAttribute("data-mobile-drawer-open");
       if (releaseFrame !== 0) cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {
         if (typeof globalThis.cancelIdleCallback === "function") {

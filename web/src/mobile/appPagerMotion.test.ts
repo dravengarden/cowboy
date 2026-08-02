@@ -30,10 +30,14 @@ Deno.test("pager motion follows the finger and clamps at both products", () => {
   assertEquals(pagerTargetOffset("review", 390), -390);
 });
 
-Deno.test("interactive and horizontally scrolling content keeps its gesture", () => {
+Deno.test("interactive content and open spatial drawers keep their gesture", () => {
   assertEquals(shouldReservePagerStart(false), true);
   assertEquals(shouldReservePagerStart(true), false);
+  // Agent's left drawer closes leftward and Review's right drawer closes
+  // rightward: both directions overlap the product pager, so drawer ownership
+  // must disable pager reservation symmetrically.
   assertEquals(shouldReservePagerStart(false, true), false);
+  assertEquals(shouldReservePagerStart(true, true), false);
 });
 
 Deno.test("product transitions are symmetric", () => {
