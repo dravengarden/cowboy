@@ -50,16 +50,6 @@ export function historyPrefetchTransition(
   return { armed: false, request: false };
 }
 
-export function shouldShowHistoryLoading(
-  requestOwned: boolean,
-  requestPending: boolean,
-): boolean {
-  // Visibility is delayed by the caller to avoid flashing for cache hits. Once
-  // that delay expires, both ownership and a genuinely pending request are
-  // required; a completed/no-op fetch must never masquerade as loading.
-  return requestOwned && requestPending;
-}
-
 export function scrollbackFillRemaining(input: {
   targetHeight: number;
   baseScrollHeight: number;

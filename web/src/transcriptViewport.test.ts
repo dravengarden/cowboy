@@ -5,7 +5,6 @@ import {
   scrollbackFillRemaining,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
-  shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
 
@@ -182,13 +181,6 @@ Deno.test("history prefetch requests once per entry into the top threshold", () 
     }),
     { armed: true, request: false },
   );
-});
-
-Deno.test("history loading requires a currently owned pending request", () => {
-  assertEquals(shouldShowHistoryLoading(true, true), true);
-  assertEquals(shouldShowHistoryLoading(true, false), false);
-  assertEquals(shouldShowHistoryLoading(false, true), false);
-  assertEquals(shouldShowHistoryLoading(false, false), false);
 });
 
 Deno.test("page projection never invokes transcript-managed history loading", () => {

@@ -113,7 +113,6 @@ import {
   scrollbackFillRemaining,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
-  shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
 import {
@@ -391,7 +390,13 @@ function TranscriptLoadingFill({
 // transcript, not in a floating overlay. This bounded in-flow outline is
 // replaced from its lower edge by real older rows; column-reverse keeps the
 // reader's current item anchored while the history grows above it.
-function ScrollbackLoadingSkeleton({ height }: { height: number }): React.JSX.Element {
+function ScrollbackLoadingSkeleton({
+  height,
+  loading,
+}: {
+  height: number;
+  loading: boolean;
+}): React.JSX.Element {
   const rows = [
     { title: "42%", card: "100%" },
     { title: "58%", card: "100%" },
@@ -432,7 +437,7 @@ function ScrollbackLoadingSkeleton({ height }: { height: number }): React.JSX.El
           <Stack key={index} spacing={0.7}>
             <Skeleton
               variant="rounded"
-              animation={index >= rows.length - 3 ? "wave" : false}
+              animation={loading && index >= rows.length - 3 ? "wave" : false}
               width={row.title}
               height={10}
               sx={{
@@ -443,7 +448,7 @@ function ScrollbackLoadingSkeleton({ height }: { height: number }): React.JSX.El
             />
             <Skeleton
               variant="rounded"
-              animation={index >= rows.length - 3 ? "wave" : false}
+              animation={loading && index >= rows.length - 3 ? "wave" : false}
               width={row.card}
               height={58}
               sx={{ borderRadius: 2.25 }}
@@ -3230,8 +3235,6 @@ export function Transcript({
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
-  const historyLoadingRevealTimerRef = useRef<number | null>(null);
-  const historyLoadingRequestRef = useRef(0);
   const scrollbackFillActiveRef = useRef(false);
   const scrollbackFillRunRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
@@ -3296,31 +3299,25 @@ export function Transcript({
       !managesScrollHistoryRef.current || !el ||
       scrollbackFillActiveRef.current
     ) return;
-    if (historyLoadingRevealTimerRef.current !== null) {
-      globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
-      historyLoadingRevealTimerRef.current = null;
-    }
-    const request = ++historyLoadingRequestRef.current;
     const run = ++scrollbackFillRunRef.current;
     scrollbackFillActiveRef.current = true;
     const targetHeight = Math.min(420, Math.max(180, el.clientHeight * 0.42));
-    const baseScrollHeight = el.scrollHeight;
+    const idleBandHeight = el.querySelector<HTMLElement>(
+      "[data-transcript-scrollback-fill]",
+    )?.getBoundingClientRect().height ?? 0;
+    const baseScrollHeight = Math.max(0, el.scrollHeight - idleBandHeight);
     const baseRowCount = el.querySelectorAll<HTMLElement>("[data-key]").length;
-    let pending = true;
-    setScrollbackLoading(false);
+    // The boundary already exists at the visual page head. Promote it to its
+    // active height before starting I/O so loaded rows replace a visible
+    // placeholder instead of making a late spinner flash above them.
+    setScrollbackLoading(true);
     setScrollbackFillHeight(targetHeight);
-    // Fast cache hits should replace the unloaded edge directly. Reveal the
-    // in-flow skeleton only when this bounded fill run remains pending long
-    // enough to be perceptible.
-    historyLoadingRevealTimerRef.current = globalThis.setTimeout(() => {
-      historyLoadingRevealTimerRef.current = null;
-      setScrollbackLoading(shouldShowHistoryLoading(
-        historyLoadingRequestRef.current === request,
-        pending,
-      ));
-    }, 160);
     void (async (): Promise<void> => {
       try {
+        // Give React/WebKit one paint with the promoted boundary before the
+        // first network request can resolve and prepend rows.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        if (scrollbackFillRunRef.current !== run) return;
         for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
           await loadOlder(sessionIdRef.current);
           await new Promise<void>((resolve) => {
@@ -3337,7 +3334,9 @@ export function Transcript({
             currentScrollHeight: el.scrollHeight,
             skeletonHeight: bandHeight,
           });
-          setScrollbackFillHeight(remaining);
+          // A remaining cursor always owns a small page-head boundary. Real
+          // rows consume the expanded part, never the boundary itself.
+          setScrollbackFillHeight(Math.max(112, remaining));
           const currentPaging = pagingRef.current;
           const loadedRows = Math.max(
             0,
@@ -3361,13 +3360,8 @@ export function Transcript({
           })) break;
         }
       } finally {
-        pending = false;
         if (scrollbackFillRunRef.current === run) {
           scrollbackFillActiveRef.current = false;
-          if (historyLoadingRevealTimerRef.current !== null) {
-            globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
-            historyLoadingRevealTimerRef.current = null;
-          }
           setScrollbackLoading(false);
           setScrollbackFillHeight(0);
         }
@@ -3385,18 +3379,12 @@ export function Transcript({
     viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_LIMIT;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
-    historyLoadingRequestRef.current += 1;
     scrollbackFillRunRef.current += 1;
     scrollbackFillActiveRef.current = false;
     requestViewportBackfillRef.current(false);
     return () => {
-      historyLoadingRequestRef.current += 1;
       scrollbackFillRunRef.current += 1;
       scrollbackFillActiveRef.current = false;
-      if (historyLoadingRevealTimerRef.current !== null) {
-        globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
-        historyLoadingRevealTimerRef.current = null;
-      }
       if (viewportBackfillSettleTimerRef.current !== null) {
         globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
         viewportBackfillSettleTimerRef.current = null;
@@ -4549,9 +4537,12 @@ export function Transcript({
                     />
                   </Box>
                 ))}
-              {managesScrollHistory && scrollbackLoading &&
-                !backfillingViewport && scrollbackFillHeight > 0 && (
-                <ScrollbackLoadingSkeleton height={scrollbackFillHeight} />
+              {managesScrollHistory && !backfillingViewport && paging != null &&
+                  paging.beforeSeq !== null && !paging.reachedStart && (
+                <ScrollbackLoadingSkeleton
+                  height={scrollbackLoading ? scrollbackFillHeight : 112}
+                  loading={scrollbackLoading}
+                />
               )}
               {!desktopNavigation &&
                 showHistoryLoadingFill && (

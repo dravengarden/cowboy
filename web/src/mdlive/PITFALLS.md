@@ -657,9 +657,11 @@ here says otherwise.
     only a few cards. One upward gesture keeps fetching sequentially until at
     least ten new `[data-key]` transcript rows have mounted and the reserved
     skeleton band is filled, or history ends. Keep the ten-page ceiling as a
-    pathological-session safety bound. The in-flow placeholder should resemble
-    compact thought headings plus tool cards; do not regress to detached pills
-    or a floating loading overlay.
+    pathological-session safety bound. While `beforeSeq` exists, a quiet
+    skeleton boundary remains at the visual page head; promote it before I/O and
+    replace it from its lower edge as older rows mount. The in-flow placeholder
+    should resemble compact thought headings plus tool cards; do not regress to
+    a delayed, detached, or floating loading overlay.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
