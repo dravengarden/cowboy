@@ -4589,7 +4589,6 @@ export function Transcript({
             // item's STABLE key (first envelope seq) so prepending older history
             // doesn't re-mount/jump rows.
             <>
-              {pageFooter}
               {shortContentAtTop && (
                 <Box
                   aria-hidden
@@ -4603,6 +4602,12 @@ export function Transcript({
                   }}
                 />
               )}
+              {/* In column-reverse the first DOM child is visually lowest. Keep
+                  the flexible short-page remainder BELOW the footer, not between
+                  the final answer and its page-turn actions. The footer therefore
+                  reads as the end of the page while unused viewport space stays
+                  quiet above the persistent Mobile Page Dock. */}
+              {pageFooter}
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
                 working turn, surface the silence (count-up) + a REAL red Stop button.
