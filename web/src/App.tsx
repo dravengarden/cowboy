@@ -3880,17 +3880,18 @@ function MachinesContent(): React.JSX.Element {
                                         <Typography variant="overline" color="text.secondary" sx={{ width: 72, flexShrink: 0, pt: 0.35 }}>Agents</Typography>
                                         <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
                                             {providerComponents.map((component) => {
+                                                const legacyGeminiAuth = component.id.slot === "gemini" && component.detail == null;
                                                 const unavailable = component.state === "missing";
                                                 const failed = component.state === "failed" || component.auth === "error" || component.auth === "expired";
-                                                const ready = component.state === "active" && component.auth === "signed_in";
+                                                const ready = !legacyGeminiAuth && component.state === "active" && component.auth === "signed_in";
                                                 const updateAvailable = component.update?.available === true;
-                                                const state = unavailable ? "unavailable" : failed ? "error" : component.auth === "signed_out" ? "sign in" : updateAvailable ? "update" : ready ? "ready" : component.state;
+                                                const state = legacyGeminiAuth ? "update machine" : unavailable ? "unavailable" : failed ? "error" : component.auth === "signed_out" ? "sign in" : updateAvailable ? "update" : ready ? "ready" : component.state;
                                                 return (
                                                     <Chip
                                                         key={component.id.slot}
                                                         size="small"
                                                         variant="outlined"
-                                                        color={failed ? "error" : updateAvailable ? "warning" : ready ? "success" : "default"}
+                                                        color={failed ? "error" : legacyGeminiAuth || updateAvailable ? "warning" : ready ? "success" : "default"}
                                                         label={`${machineProviderName(component.id.slot)} · ${state}`}
                                                     />
                                                 );
@@ -4026,7 +4027,11 @@ function MachinesContent(): React.JSX.Element {
                                                                 sx={{ display: "block", overflowWrap: "anywhere" }}
                                                             >
                                                                 {release.version}
-                                                                {component.auth ? ` · ${component.auth.replaceAll("_", " ")}` : ""}
+                                                                {legacyGeminiAuth
+                                                                    ? " · authentication status unavailable"
+                                                                    : component.auth
+                                                                    ? ` · ${component.auth.replaceAll("_", " ")}`
+                                                                    : ""}
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
                                                             {provider === "gemini" && component.detail && (
