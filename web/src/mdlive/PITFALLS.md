@@ -816,7 +816,12 @@ here says otherwise.
     controlled `onChange`, then pass it as CM6's initial `selection` in the same
     render that transfers the token-bearing document and keyboard focus. A
     later `focusEnd()` is incorrect: it moves past unrelated trailing text and
-    is too late to make the native-to-CM6 handoff atomic.
+    is too late to make the native-to-CM6 handoff atomic. Treat the previous
+    editor kind and the pending caret as commit-owned state: React may replay or
+    supersede render attempts, so mutating/clearing those refs during render can
+    make the committed attempt see "already CM6" and fall back to offset 0.
+    Release the one-shot caret and paste-focus claim only from a layout effect
+    after the CM6 child has committed its initial EditorState.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

@@ -82,3 +82,15 @@ export function shouldFocusPromotedEditor(
   return wasNative && !nativeNow &&
     (activeElementIsTextarea || pastePromotionPending);
 }
+
+/** Keep the native caret claim available for every render attempt until the
+ * native -> CM6 transition actually commits. React may replay or supersede a
+ * render before commit; consuming this value during render strands CM6 at its
+ * default selection (document offset 0). */
+export function nativePromotionSelection(
+  committedNative: boolean,
+  nativeNow: boolean,
+  caret: number | null,
+): number | undefined {
+  return committedNative && !nativeNow && caret !== null ? caret : undefined;
+}

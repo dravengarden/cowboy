@@ -6,6 +6,7 @@ import {
 import {
   composerEditorMountSeed,
   insertNativeInlineImages,
+  nativePromotionSelection,
   shouldExpandInlineComposer,
   shouldFocusPromotedEditor,
   shouldUseNativeTouchEditor,
@@ -120,4 +121,13 @@ Deno.test("native batch image promotion replaces selection and lands after every
     "![one.png](cowboy-att:image-1)\n![two.png](cowboy-att:image-2)\n tail",
   );
   assertEquals(edit.caret, edit.value.indexOf(" tail"));
+});
+
+Deno.test("replayed native promotion renders retain the image caret until commit", () => {
+  // `committedNative` deliberately stays true for both render attempts. The
+  // transition is consumed only by PlatformComposerEditor's layout effect.
+  assertEquals(nativePromotionSelection(true, false, 41), 41);
+  assertEquals(nativePromotionSelection(true, false, 41), 41);
+  assertEquals(nativePromotionSelection(false, false, 41), undefined);
+  assertEquals(nativePromotionSelection(true, true, 41), undefined);
 });

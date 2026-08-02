@@ -2,6 +2,7 @@ import {
   type ComponentPropsWithoutRef,
   forwardRef,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -19,6 +20,7 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
+  nativePromotionSelection,
   shouldFocusPromotedEditor,
   shouldUseNativeTouchEditor,
 } from "./mobileCompactEditorPolicy";
@@ -57,7 +59,10 @@ export const PlatformComposerEditor = forwardRef<
     surface.kind,
     touchValue,
   );
-  const wasNativeTouchRef = useRef(nativeTouch);
+  // This ref describes the LAST COMMITTED editor, not the last render attempt.
+  // React can replay a render before commit; mutating it during render consumed
+  // the one-shot native -> CM6 transition and reset image-paste selection to 0.
+  const committedNativeTouchRef = useRef(nativeTouch);
   const promotionCaretRef = useRef<number | null>(null);
   // The iOS paste-permission alert temporarily owns focus. When the accepted
   // paste event returns, `document.activeElement` can therefore be BODY even
@@ -70,7 +75,7 @@ export const PlatformComposerEditor = forwardRef<
   // same discrete UIKit gesture; a later rAF focus cannot inherit the keyboard.
   // The explicit paste intent covers the system permission alert's transient
   // focus loss without weakening ordinary attachment/file-picker semantics.
-  const wasNativeTouch = wasNativeTouchRef.current;
+  const wasNativeTouch = committedNativeTouchRef.current;
   const focusPromotedEditor = shouldFocusPromotedEditor(
     wasNativeTouch,
     nativeTouch,
@@ -85,11 +90,25 @@ export const PlatformComposerEditor = forwardRef<
     cmSeedRef.current,
     touchValue,
   );
-  wasNativeTouchRef.current = nativeTouch;
-  if (focusPromotedEditor) pastePromotionPendingRef.current = false;
+  const initialSelection = nativePromotionSelection(
+    wasNativeTouch,
+    nativeTouch,
+    promotionCaretRef.current,
+  );
   const [runtimeState, setRuntimeState] = useState<DesktopVimRuntimeState>(
     () => isDesktopVimRuntimeLoaded() ? "ready" : "pending",
   );
+
+  useLayoutEffect(() => {
+    const promoted = committedNativeTouchRef.current && !nativeTouch;
+    committedNativeTouchRef.current = nativeTouch;
+    if (promoted) {
+      // The child CM6 state has now committed with the supplied selection. Only
+      // now is it safe to release the one-shot paste/focus claim.
+      promotionCaretRef.current = null;
+      pastePromotionPendingRef.current = false;
+    }
+  }, [nativeTouch]);
 
   useEffect(() => {
     if (!shouldPreloadDesktopVim(surface.kind, vim, runtimeState)) {
@@ -145,7 +164,12 @@ export const PlatformComposerEditor = forwardRef<
               );
               props.onPasteFiles?.(files);
               queueMicrotask(() => {
-                pastePromotionPendingRef.current = false;
+                // A successful synchronous image insert records its caret and
+                // keeps this claim through the committed CM6 mount. Clear only
+                // no-op/error paste attempts that never started promotion.
+                if (promotionCaretRef.current === null) {
+                  pastePromotionPendingRef.current = false;
+                }
               });
             },
           }
@@ -163,8 +187,8 @@ export const PlatformComposerEditor = forwardRef<
       {...props}
       value={cmSeedRef.current}
       autoFocus={props.autoFocus || focusPromotedEditor}
-      {...(wasNativeTouch && promotionCaretRef.current !== null
-        ? { initialSelection: promotionCaretRef.current }
+      {...(initialSelection !== undefined
+        ? { initialSelection }
         : {})}
       // The loading editor is deliberately a separate, non-interactive CM6
       // lifetime. The real editor mounts only after Vim can be included in its
