@@ -89,7 +89,10 @@ import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
-import { MobileComposerAccessoryButton } from "./MobileComposerAccessoryDock";
+import {
+  MobileComposerAccessoryButton,
+  MobileComposerAccessoryDock,
+} from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -121,7 +124,6 @@ import {
 } from "./composerExpand";
 import { setVimMode } from "./vimModeStore";
 import { requestStickToBottom, setSticky, useSticky } from "./stickyStore";
-import { claimKeyboard } from "./keyboardClaim";
 import { useVimSetting } from "./vimSetting";
 import { useCompactionContext } from "./useCompactionContext";
 import {
@@ -3695,6 +3697,9 @@ function PendingRow({
   // editor surface, so it gets vim too.
   const vim = useVimSetting();
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(false);
+  const [hasEditSelection, setHasEditSelection] = useState(false);
+  const mobileToolbarIds = useComposerToolbar();
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const beginEdit = (): void => {
@@ -3734,20 +3739,9 @@ function PendingRow({
   }, [overlayOpen, touchInput]);
   useLayoutEffect(() => {
     if (!editing) return undefined;
-    // On TOUCH, editing a queued/draft message goes straight to the fullscreen
-    // overlay — no cramped inline edit on a phone (the mobile fullscreen-first
-    // design). Desktop keeps the inline edit + the ↗ to expand.
-    if (touchInput) {
-      // Raise the keyboard IN this gesture's tick (the editing→overlay layout
-      // effect runs synchronously in the Edit tap's task, before paint — same
-      // window the inline focus below relies on). The overlay's later focusEnd
-      // only transfers focus between inputs; iOS won't raise the keyboard from
-      // that passive timer, so without this the fullscreen edit opened with the
-      // keyboard DOWN (it should default to the typing state, like compose).
-      claimKeyboard();
-      setOverlayOpen(true);
-      return undefined;
-    }
+    // Queue/Draft edits begin in the compact card on every surface. Fullscreen
+    // remains an explicit action for long-form work rather than an automatic
+    // navigation caused by a small Edit tap.
     // focusEnd, not focus: opening an existing draft/queued message should put
     // the caret at the end of its text so you continue typing, not at the start.
     // Desktop's editor chunk can mount one frame after the row switches state;
@@ -3790,7 +3784,7 @@ function PendingRow({
     };
     // Editing reuses the composer surface, but Desktop treats it as a transaction:
     // Mod+Enter commits and Esc asks before throwing away the local buffer.
-    const editBar = (
+    const desktopEditBar = (
       <ComposeBar
         desktop={desktop}
         dead={false}
@@ -3806,6 +3800,28 @@ function PendingRow({
         onExpand={(): void => setOverlayOpen(true)}
       />
     );
+    const editFormatActions = (hasEditSelection
+      ? ["bold", "italic", "code", "link"]
+      : mobileToolbarIds)
+      .map((id) => COMPOSER_COMMANDS_BY_ID[id])
+      .filter((command): command is ComposerCommand => command !== undefined)
+      .map((command) => (
+        <MobileComposerAccessoryButton
+          key={command.id}
+          title={command.label}
+          onClick={(): void => {
+            const editor = editorRef.current;
+            if (editor === null) return;
+            haptic();
+            command.run({
+              editor,
+              attach: (): void => editFileInputRef.current?.click(),
+            });
+          }}
+        >
+          {command.icon}
+        </MobileComposerAccessoryButton>
+      ));
     return (
       <>
         {/* One file input for BOTH the inline edit and the overlay's attach button. */}
@@ -3824,7 +3840,18 @@ function PendingRow({
           ref={rowRef}
           variant="outlined"
           tabIndex={desktop ? -1 : undefined}
-          sx={{ p: 0.75 }}
+          data-mobile-focus-composer={touchInput ? "true" : undefined}
+          sx={{
+            position: "relative",
+            overflow: "hidden",
+            ...(desktop
+              ? { p: 0.75 }
+              : {
+                borderRadius: mobileComposerPanelFrameSx.borderRadius,
+                bgcolor: "transparent",
+                borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
+              }),
+          }}
           onKeyDownCapture={desktop
             ? (event): void => {
               if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
@@ -3863,6 +3890,7 @@ function PendingRow({
               // live-preview editor on every surface now (vim desktop-only).
               value={draft}
               borderless
+              {...(touchInput ? { endInset: 36 } : {})}
               vim={touchInput ? false : vim}
               onVimMode={setVimMode}
               onChange={updateEditDraft}
@@ -3871,6 +3899,7 @@ function PendingRow({
               commands={commands}
               placeholder="Edit message…"
               onPasteFiles={addEditFiles}
+              onSelectionChange={setHasEditSelection}
               onEscape={(): boolean => {
                 if (desktop) requestDiscardEdit();
                 else save();
@@ -3878,7 +3907,59 @@ function PendingRow({
               }}
             />
           )}
-          {!overlayOpen && editBar}
+          {!overlayOpen && touchInput && (
+            <Tooltip title="Fullscreen editor">
+              <IconButton
+                size="small"
+                aria-label="fullscreen editor"
+                onPointerDown={(event): void => event.preventDefault()}
+                onClick={(): void => {
+                  haptic();
+                  flushSync(() => setOverlayOpen(true));
+                  overlayEditorRef.current?.focusEnd();
+                }}
+                sx={{
+                  position: "absolute",
+                  top: 2,
+                  right: 2,
+                  zIndex: 2,
+                  color: "text.secondary",
+                  "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+                }}
+              >
+                <OpenInFull />
+              </IconButton>
+            </Tooltip>
+          )}
+          {!overlayOpen && (desktop
+            ? desktopEditBar
+            : (
+              <MobileComposerAccessoryDock
+                embedded
+                mode={hasEditSelection ? "selection" : "insert"}
+                formatActions={editFormatActions}
+                utilityActions={
+                  <MobileComposerAccessoryButton
+                    title="Attach file"
+                    onClick={(): void => editFileInputRef.current?.click()}
+                  >
+                    <AttachFile />
+                  </MobileComposerAccessoryButton>
+                }
+                fixedAction={
+                  <MobileComposerAccessoryButton
+                    title="Customize toolbar"
+                    onClick={(): void => setMobileToolbarSettingsOpen(true)}
+                  >
+                    <Tune />
+                  </MobileComposerAccessoryButton>
+                }
+                primaryLabel="Done editing"
+                primaryDisabled={!draft.trim() && editAttachments.length === 0}
+                onPrimary={save}
+                primaryIcon={<Check />}
+              />
+            ))}
         </Paper>
         {/* Focused edit overlay: the row's expanded edit reuses the SAME component
             as the main input's expand — FullscreenComposer (the toolbar registry,
@@ -3925,6 +4006,10 @@ function PendingRow({
               : undefined}
           />
         )}
+        <ComposerToolbarSettings
+          open={mobileToolbarSettingsOpen}
+          onClose={(): void => setMobileToolbarSettingsOpen(false)}
+        />
         <Dialog
           open={confirmDiscardEdit}
           onClose={(): void => setConfirmDiscardEdit(false)}

@@ -428,7 +428,11 @@ here says otherwise.
     `will-change: height`, and its wrapper inner uses `contain: layout paint` so a
     large attachment preview is laid out once instead of producing a long paint
     stall during every reveal frame. Re-verify touch scrolling and inline-editor
-    focus after changing this animation.
+    focus after changing this animation. Mobile row edits begin in this compact
+    card instead of navigating directly to fullscreen. The card uses the shared
+    two-track accessory primitive and exposes one explicit expand action; opening
+    fullscreen transfers the same draft and attachment state without changing
+    save semantics.
 
 18. **Fullscreen row edits expose one completion action.** A queued/draft edit
     is live-saved, so both Collapse and Done previously committed the same state

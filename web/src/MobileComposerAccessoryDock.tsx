@@ -12,6 +12,7 @@ export function MobileComposerAccessoryDock({
   primaryDisabled,
   onPrimary,
   primaryIcon,
+  embedded = false,
 }: {
   mode: "insert" | "selection";
   formatActions: ReactNode;
@@ -21,6 +22,8 @@ export function MobileComposerAccessoryDock({
   primaryDisabled: boolean;
   onPrimary: () => void;
   primaryIcon: ReactNode;
+  /** Nest the two tracks inside an existing composer card. */
+  embedded?: boolean;
 }): React.JSX.Element {
   return (
     <Box
@@ -30,9 +33,11 @@ export function MobileComposerAccessoryDock({
         minHeight: 96,
         display: "grid",
         gridTemplateRows: "48px 48px",
-        mx: 1,
-        mb: 0.75,
-        ...mobileComposerPanelFrameSx,
+        mx: embedded ? 0 : 1,
+        mb: embedded ? 0 : 0.75,
+        ...(embedded
+          ? { borderTop: 1, borderColor: "divider", overflow: "hidden" }
+          : mobileComposerPanelFrameSx),
         borderColor: (theme) => alpha(theme.palette.divider, 0.5),
         bgcolor: (theme) =>
           alpha(
@@ -41,13 +46,15 @@ export function MobileComposerAccessoryDock({
           ),
         backdropFilter: "blur(18px) saturate(135%)",
         WebkitBackdropFilter: "blur(18px) saturate(135%)",
-        boxShadow: (theme) =>
-          theme.palette.mode === "dark"
-            ? "0 8px 26px rgba(0, 0, 0, 0.22)"
-            : "0 8px 24px rgba(57, 42, 92, 0.08)",
+        boxShadow: embedded
+          ? "none"
+          : (theme) =>
+            theme.palette.mode === "dark"
+              ? "0 8px 26px rgba(0, 0, 0, 0.22)"
+              : "0 8px 24px rgba(57, 42, 92, 0.08)",
         userSelect: "none",
         WebkitUserSelect: "none",
-        animation: "mobile-composer-dock-enter 180ms ease-out both",
+        animation: embedded ? "none" : "mobile-composer-dock-enter 180ms ease-out both",
         "@keyframes mobile-composer-dock-enter": {
           from: { opacity: 0, transform: "translateY(6px)" },
           to: { opacity: 1, transform: "translateY(0)" },
