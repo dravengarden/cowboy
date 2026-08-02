@@ -15,7 +15,6 @@ import {
   Box,
   Chip,
   CircularProgress,
-  IconButton,
   List,
   ListItemButton,
   ListItemIcon,
@@ -25,6 +24,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MobileSheetDismiss } from "../../_shell";
+import { NetworkIconButton } from "../../NetworkActionFeedback";
 import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
 import {
   type GitReviewEntry,
@@ -316,13 +316,13 @@ export function ReviewChanges({
             <Alert
               severity="error"
               action={
-                <IconButton
+                <NetworkIconButton
                   size="small"
                   aria-label="Retry Git changes"
-                  onClick={() => void load()}
+                  networkAction={load}
                 >
                   <Refresh fontSize="small" />
-                </IconButton>
+                </NetworkIconButton>
               }
             >
               Git changes are unavailable

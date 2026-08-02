@@ -22,6 +22,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MobileSheetDismiss } from "../../_shell";
+import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
 import {
   fetchGitCommit,
@@ -271,22 +272,21 @@ export function ReviewRepository({
     () => buildGitGraph(repository?.commits ?? []),
     [repository?.commits],
   );
-  const load = useCallback((signal?: AbortSignal): void => {
+  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
     if (!sessionId) return;
     setLoading(true);
     setError(false);
-    void fetchGitRepository(sessionId, signal)
-      .then(setRepository)
-      .catch((reason) => {
-        if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(true);
-      })
-      .finally(() => {
-        if (!signal?.aborted) setLoading(false);
-      });
+    try {
+      setRepository(await fetchGitRepository(sessionId, signal));
+    } catch (reason) {
+      if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(true);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }, [sessionId]);
   useEffect(() => {
     const controller = new AbortController();
-    load(controller.signal);
+    void load(controller.signal);
     return () => controller.abort();
   }, [load, refreshToken]);
 
@@ -335,7 +335,7 @@ export function ReviewRepository({
           : loading
           ? <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}><CircularProgress size={24} /></Box>
           : error
-          ? <Alert severity="error" action={<IconButton onClick={() => load()}><Refresh /></IconButton>}>Repository history is unavailable</Alert>
+          ? <Alert severity="error" action={<NetworkIconButton aria-label="Retry repository history" networkAction={load}><Refresh /></NetworkIconButton>}>Repository history is unavailable</Alert>
           : section === "history"
           ? (
             <Box sx={{ height: 1, overflowY: "auto", px: 0.75, pb: 10 }}>

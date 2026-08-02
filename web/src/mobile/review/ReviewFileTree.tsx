@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MobileSheetActionGroup } from "../../_shell";
+import { NetworkIconButton } from "../../NetworkActionFeedback";
 import {
   type CodeTreeEntry as FileTreeEntry,
   type CodeTreePage,
@@ -636,13 +637,13 @@ export function ReviewFileTree({
             <Alert
               severity="error"
               action={
-                <IconButton
+                <NetworkIconButton
                   size="small"
                   aria-label="Retry"
-                  onClick={() => void load()}
+                  networkAction={() => load(true)}
                 >
                   <Refresh fontSize="small" />
-                </IconButton>
+                </NetworkIconButton>
               }
             >
               Could not load the worktree

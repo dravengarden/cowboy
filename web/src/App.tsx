@@ -70,7 +70,7 @@ import { MobileComposer } from "./mobile/MobileComposer";
 import { claimKeyboard } from "./keyboardClaim";
 import { machineProviderAvailable } from "./machineProvider";
 import { machineVersionPresentation, type MachineComponentUpdate } from "./machineVersions";
-import { DelayedNetworkProgress } from "./NetworkActionFeedback";
+import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
@@ -3642,21 +3642,41 @@ function MachinesContent(): React.JSX.Element {
                 setEvents((current) => ({ ...current, [machineId]: Array.isArray(value) ? value : [] }));
             });
     }, []);
-    const refresh = useCallback((): void => {
-        void fetch("/api/machines")
-            .then((response) => response.ok ? response.json() : [])
-            .then((value: MachineChoice[]) => {
-                const next = Array.isArray(value) ? value : [];
-                setMachines(next);
-                next.forEach((machine) => loadEvents(machine.id));
-            });
+    const refresh = useCallback(async (): Promise<void> => {
+        const response = await fetch("/api/machines");
+        if (!response.ok) throw new Error(await response.text() || "Could not refresh Machines");
+        const value = await response.json() as MachineChoice[];
+        const next = Array.isArray(value) ? value : [];
+        setMachines(next);
+        next.forEach((machine) => loadEvents(machine.id));
     }, [loadEvents]);
     useEffect(() => {
-        refresh();
-        const timer = globalThis.setInterval(refresh, 2_000);
+        void refresh().catch(() => undefined);
+        const timer = globalThis.setInterval(() => void refresh().catch(() => undefined), 2_000);
         return () => globalThis.clearInterval(timer);
     }, [refresh]);
-    const command = (machineId: string, action: "refresh" | "login" | "components/reconcile", provider?: string, authMethod?: string): void => {
+    const refreshMachine = useCallback(async (machineId: string): Promise<void> => {
+        const response = await fetch(`/api/machines/${encodeURIComponent(machineId)}/refresh`, { method: "POST" });
+        if (!response.ok) throw new Error(await response.text() || "Could not refresh Machine inventory");
+        const { request_id: requestId } = await response.json() as { request_id: string };
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+            await new Promise((resolve) => globalThis.setTimeout(resolve, 150));
+            const eventResponse = await fetch(`/api/machines/${encodeURIComponent(machineId)}/events`);
+            if (!eventResponse.ok) continue;
+            const machineEvents = await eventResponse.json() as MachineEventView[];
+            const result = machineEvents.find((event) =>
+                event.event === "command_result" && event.request_id === requestId
+            );
+            if (result?.event === "command_result") {
+                if (!result.accepted) throw new Error(result.detail || "Machine inventory refresh failed");
+                await refresh();
+                loadEvents(machineId);
+                return;
+            }
+        }
+        throw new Error("Machine did not confirm the inventory refresh");
+    }, [loadEvents, refresh]);
+    const command = (machineId: string, action: "login" | "components/reconcile", provider?: string, authMethod?: string): void => {
         const busyKey = `${machineId}:${action}:${provider ?? ""}`;
         setBusy((current) => ({ ...current, [busyKey]: true }));
         void fetch(`/api/machines/${encodeURIComponent(machineId)}/${action}`, {
@@ -3666,7 +3686,7 @@ function MachinesContent(): React.JSX.Element {
         }).finally(() => {
             setBusy((current) => ({ ...current, [busyKey]: false }));
             globalThis.setTimeout(() => {
-                refresh();
+                void refresh().catch(() => undefined);
                 loadEvents(machineId);
             }, 500);
         });
@@ -3680,7 +3700,7 @@ function MachinesContent(): React.JSX.Element {
             body: JSON.stringify({ kind: component.id.kind, slot: component.id.slot ?? "" }),
         }).finally(() => {
             setBusy((current) => ({ ...current, [key]: false }));
-            globalThis.setTimeout(refresh, 500);
+            globalThis.setTimeout(() => void refresh().catch(() => undefined), 500);
         });
     };
     const submitLoginCode = (machineId: string, requestId: string): void => {
@@ -3721,7 +3741,7 @@ function MachinesContent(): React.JSX.Element {
                     );
                     if (result?.event === "command_result") {
                         if (!result.accepted) throw new Error(result.detail || "Update failed");
-                        refresh();
+                        void refresh().catch(() => undefined);
                         loadEvents(machineId);
                         return;
                     }
@@ -3920,41 +3940,33 @@ function MachinesContent(): React.JSX.Element {
                                     Update all ({pending.length})
                                 </Button>
                             )}
-                            <ButtonBase
-                                onClick={() => setExpanded((current) => ({ ...current, [machine.id]: !open }))}
-                                sx={{
-                                    alignSelf: "stretch",
-                                    justifyContent: "space-between",
-                                    minHeight: 40,
-                                    px: 0.5,
-                                    borderRadius: 1.5,
-                                    color: "text.secondary",
-                                }}
-                            >
-                                <Typography variant="body2" fontWeight={650}>
-                                    {open ? "Hide details" : "Details & versions"}
-                                </Typography>
-                                <Stack direction="row" spacing={0.5} alignItems="center">
-                                    <Tooltip title="Recheck projects, versions, and sign-in status">
-                                        <span>
-                                            <IconButton
-                                                size="small"
-                                                aria-label={`Refresh ${machine.display_name} inventory`}
-                                                disabled={busy[`${machine.id}:refresh:`]}
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                    command(machine.id, "refresh");
-                                                }}
-                                            >
-                                                {busy[`${machine.id}:refresh:`]
-                                                    ? <DelayedNetworkProgress size={16} />
-                                                    : <RefreshIcon fontSize="small" />}
-                                            </IconButton>
-                                        </span>
-                                    </Tooltip>
+                            <Stack direction="row" alignItems="center" spacing={0.5}>
+                                <ButtonBase
+                                    onClick={() => setExpanded((current) => ({ ...current, [machine.id]: !open }))}
+                                    sx={{
+                                        flex: 1,
+                                        justifyContent: "space-between",
+                                        minHeight: 40,
+                                        px: 0.5,
+                                        borderRadius: 1.5,
+                                        color: "text.secondary",
+                                    }}
+                                >
+                                    <Typography variant="body2" fontWeight={650}>
+                                        {open ? "Hide details" : "Details & versions"}
+                                    </Typography>
                                     {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                                </Stack>
-                            </ButtonBase>
+                                </ButtonBase>
+                                <Tooltip title="Recheck projects, versions, and sign-in status">
+                                    <NetworkIconButton
+                                        size="small"
+                                        aria-label={`Refresh ${machine.display_name} inventory`}
+                                        networkAction={() => refreshMachine(machine.id)}
+                                    >
+                                        <RefreshIcon fontSize="small" />
+                                    </NetworkIconButton>
+                                </Tooltip>
+                            </Stack>
                             {open && (
                                 <Stack spacing={1.25} sx={{ pt: 0.25 }}>
                                     <Stack spacing={0.75}>

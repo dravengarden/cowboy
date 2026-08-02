@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { alpha, Box, Button, CircularProgress, Divider, Stack, Typography } from "@mui/material";
+import { alpha, Box, Divider, Stack, Typography } from "@mui/material";
 import { Refresh } from "@mui/icons-material";
+import { NetworkButton } from "./NetworkActionFeedback";
 
 export interface ProviderActionLog {
   id: number;
@@ -53,7 +54,14 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           <Typography variant={dense ? "subtitle2" : "overline"} fontWeight={750}>Automation logs</Typography>
           <Typography variant="caption" color="text.secondary" display="block">Persistent reset scheduling and execution audit</Typography>
         </Box>
-        <Button size="small" onClick={() => void load()} disabled={loading} startIcon={loading ? <CircularProgress size={13} /> : <Refresh fontSize="small" />}>Refresh</Button>
+        <NetworkButton
+          size="small"
+          disabled={loading}
+          startIcon={<Refresh fontSize="small" />}
+          networkAction={load}
+        >
+          Refresh
+        </NetworkButton>
       </Stack>
       <Divider />
       {error && <Typography variant="caption" color="error.main">{error}</Typography>}
