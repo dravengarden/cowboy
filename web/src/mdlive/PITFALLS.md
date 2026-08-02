@@ -646,7 +646,10 @@ here says otherwise.
     Settings occupies only the lower trailing 44pt slot and uses a short,
     low-contrast hairline, never a full-height selected-looking rail or wide
     gradient shadow. Main fullscreen compose also moves Collapse into the lower
-    message-action track; do not restore a mostly empty top app bar. Draft and
+    message-action track; do not restore a mostly empty top app bar. The overlay
+    itself must retain `safe-area-inset-top`: removing the app bar also removes
+    the inset it used to consume, otherwise the first editor line sits beneath
+    the iPhone status bar/Dynamic Island. Draft and
     Queue keep their separate overlay discard action and reuse the dock with Done
     editing. Main fullscreen compose no longer duplicates Save Draft in this bar.
     Keep every action in an equal 44pt slot:
