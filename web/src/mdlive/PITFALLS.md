@@ -670,7 +670,11 @@ here says otherwise.
     boundary instead of leaving Mobile behind a permanent expanded skeleton.
     Permit one delayed automatic retry while the boundary remains near the
     viewport; after that, expose an explicit Retry action. Do not leave the
-    threshold consumed with an inert loading-shaped block.
+    threshold consumed with an inert loading-shaped block. The unloaded cursor
+    owns only a quiet 32px idle boundary. A request may expand it into compact
+    thought-plus-tool rows, but mounted content must consume that expansion all
+    the way back to the idle boundary; a failure replaces the skeleton with a
+    visible Retry row rather than clipping the action above placeholder cards.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

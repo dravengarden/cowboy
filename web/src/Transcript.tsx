@@ -151,6 +151,7 @@ const VIEWPORT_BACKFILL_SETTLE_MS = 96;
 const SCROLLBACK_FILL_MINIMUM_ROWS = 10;
 const SCROLLBACK_FILL_PAGE_LIMIT = 10;
 const SCROLLBACK_FILL_SETTLE_MS = 96;
+const SCROLLBACK_IDLE_BOUNDARY_HEIGHT = 32;
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -401,13 +402,7 @@ function ScrollbackLoadingSkeleton({
   failed: boolean;
   onRetry: () => void;
 }): React.JSX.Element {
-  const rows = [
-    { title: "42%", card: "100%" },
-    { title: "58%", card: "100%" },
-    { title: "36%", card: "100%" },
-    { title: "52%", card: "100%" },
-    { title: "44%", card: "100%" },
-  ];
+  const rows = ["58%", "42%", "51%"];
   return (
     <Box
       data-transcript-scrollback-fill
@@ -422,59 +417,61 @@ function ScrollbackLoadingSkeleton({
         userSelect: "none",
         WebkitUserSelect: "none",
         transition: "height 160ms ease-out, opacity 140ms ease",
-        opacity: 0.72,
+        opacity: failed ? 1 : loading ? 0.68 : 0.38,
       }}
     >
-      <Stack
-        spacing={1.35}
-        sx={{
-          height: "100%",
-          justifyContent: "flex-end",
-          py: 1.25,
-          maskImage:
-            "linear-gradient(to bottom, transparent 0%, black 20%, black 100%)",
-          WebkitMaskImage:
-            "linear-gradient(to bottom, transparent 0%, black 20%, black 100%)",
-        }}
-      >
-        {failed && (
+      {failed
+        ? (
           <Button
             size="small"
             variant="text"
             onClick={onRetry}
             sx={{
-              alignSelf: "center",
-              minHeight: 36,
+              width: "100%",
+              height: "100%",
+              minHeight: 32,
               textTransform: "none",
-              bgcolor: "background.paper",
+              color: "text.secondary",
             }}
           >
             Retry earlier messages
           </Button>
-        )}
-        {rows.map((row, index) => (
-          <Stack key={index} spacing={0.7}>
-            <Skeleton
-              variant="rounded"
-              animation={loading && index >= rows.length - 3 ? "wave" : false}
-              width={row.title}
-              height={10}
-              sx={{
-                ml: 1.5,
-                borderRadius: 99,
-                opacity: 0.72,
-              }}
-            />
-            <Skeleton
-              variant="rounded"
-              animation={loading && index >= rows.length - 3 ? "wave" : false}
-              width={row.card}
-              height={58}
-              sx={{ borderRadius: 2.25 }}
-            />
+        )
+        : (
+          <Stack
+            spacing={1.15}
+            sx={{
+              height: "100%",
+              justifyContent: "flex-end",
+              py: 0.75,
+              maskImage:
+                "linear-gradient(to bottom, transparent 0%, black 24%, black 100%)",
+              WebkitMaskImage:
+                "linear-gradient(to bottom, transparent 0%, black 24%, black 100%)",
+            }}
+          >
+            {rows.map((title, index) => (
+              <Stack key={title} spacing={0.55}>
+                <Skeleton
+                  variant="text"
+                  animation={loading && index >= rows.length - 2 ? "wave" : false}
+                  width={title}
+                  height={13}
+                  sx={{ ml: 1.5, transform: "none" }}
+                />
+                {loading && (
+                  <Skeleton
+                    variant="rounded"
+                    animation={index >= rows.length - 2 ? "wave" : false}
+                    width="100%"
+                    height={44}
+                    sx={{ borderRadius: 1.75 }}
+                  />
+                )}
+              </Stack>
+            ))}
           </Stack>
-        ))}
-      </Stack>
+        )}
     </Box>
   );
 }
@@ -3383,7 +3380,9 @@ export function Transcript({
           });
           // A remaining cursor always owns a small page-head boundary. Real
           // rows consume the expanded part, never the boundary itself.
-          setScrollbackFillHeight(Math.max(112, remaining));
+          setScrollbackFillHeight(
+            Math.max(SCROLLBACK_IDLE_BOUNDARY_HEIGHT, remaining),
+          );
           const currentPaging = pagingRef.current;
           const loadedRows = Math.max(
             0,
@@ -3410,7 +3409,7 @@ export function Transcript({
         if (scrollbackFillRunRef.current === run) {
           scrollbackFillActiveRef.current = false;
           setScrollbackLoading(false);
-          setScrollbackFillHeight(0);
+          setScrollbackFillHeight(SCROLLBACK_IDLE_BOUNDARY_HEIGHT);
         }
       }
     })();
@@ -4593,7 +4592,9 @@ export function Transcript({
               {managesScrollHistory && !backfillingViewport && paging != null &&
                   paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton
-                  height={scrollbackLoading ? scrollbackFillHeight : 72}
+                  height={scrollbackLoading
+                    ? scrollbackFillHeight
+                    : SCROLLBACK_IDLE_BOUNDARY_HEIGHT}
                   loading={scrollbackLoading}
                   failed={scrollbackFailed}
                   onRetry={() => {
