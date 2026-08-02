@@ -652,8 +652,8 @@ here says otherwise.
     accessory dock.** The former single rail mixed Markdown transformations with
     keyboard, attachment, and Send/Done lifecycle actions; overflow then made the
     stable Settings area look like a selected column. `MobileComposerAccessoryDock`
-    now owns one 96px material with two semantic tracks: formatting scrolls alone
-    above, while keyboard/attachment and contextual Send/Done remain stable on
+    now owns one 96px material with two semantic tracks: keyboard/attachment and
+    contextual Send/Done remain stable above, while formatting scrolls alone on
     the track nearest the keyboard. Fullscreen editors render that material as
     the same inset, rounded panel used by the compact composer, not as two
     edge-to-edge system bars. Both surfaces use the same 8px Mobile composer

@@ -63,33 +63,6 @@ export function MobileComposerAccessoryDock({
       }}
     >
       <Stack
-        data-mobile-composer-format-actions
-        direction="row"
-        alignItems="center"
-        spacing={0.125}
-        sx={{
-          minHeight: 48,
-          minWidth: 0,
-          px: 0.75,
-          overflowX: "auto",
-          overscrollBehaviorX: "contain",
-          scrollbarWidth: "none",
-          borderBottom: 1,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.34),
-          "&::-webkit-scrollbar": { display: "none" },
-        }}
-      >
-        {formatActions}
-        <Box sx={{ flex: 1, minWidth: 8 }} />
-        <Box
-          data-mobile-composer-fixed-action
-          sx={{ flex: "0 0 44px", width: 44, height: 44 }}
-        >
-          {fixedAction}
-        </Box>
-      </Stack>
-
-      <Stack
         data-mobile-composer-message-actions
         direction="row"
         alignItems="center"
@@ -97,6 +70,8 @@ export function MobileComposerAccessoryDock({
         sx={{
           minWidth: 0,
           px: 0.75,
+          borderBottom: 1,
+          borderColor: (theme) => alpha(theme.palette.divider, 0.34),
         }}
       >
         {utilityActions}
@@ -127,6 +102,31 @@ export function MobileComposerAccessoryDock({
             </IconButton>
           </span>
         </Tooltip>
+      </Stack>
+
+      <Stack
+        data-mobile-composer-format-actions
+        direction="row"
+        alignItems="center"
+        spacing={0.125}
+        sx={{
+          minHeight: 48,
+          minWidth: 0,
+          px: 0.75,
+          overflowX: "auto",
+          overscrollBehaviorX: "contain",
+          scrollbarWidth: "none",
+          "&::-webkit-scrollbar": { display: "none" },
+        }}
+      >
+        {formatActions}
+        <Box sx={{ flex: 1, minWidth: 8 }} />
+        <Box
+          data-mobile-composer-fixed-action
+          sx={{ flex: "0 0 44px", width: 44, height: 44 }}
+        >
+          {fixedAction}
+        </Box>
       </Stack>
     </Box>
   );
