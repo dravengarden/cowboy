@@ -1300,7 +1300,7 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
         let fields = String::from_utf8_lossy(&output.stdout);
         let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
         let active_state = systemd_show_value(&fields, "ActiveState").unwrap_or_default();
-        if !output.status.success() || load_state.is_empty() || load_state == "not-found" {
+        if transient_unit_collected(output.status.success(), &load_state) {
             return Ok(());
         }
         // Reaching spawn_worker means this broker has no attached peer and no
@@ -1316,7 +1316,24 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
                 .await
                 .with_context(|| format!("stopping orphaned transient worker unit {unit}"))?;
             if !status.success() {
-                anyhow::bail!("systemctl stop {unit} exited {status}");
+                // `show` and `stop` are necessarily separate systemd calls. A
+                // transient unit can finish and be collected between them, in
+                // which case `stop` returns "unit not loaded" even though the
+                // state we need has already been reached. Re-check before
+                // treating the stop status as a launch failure.
+                let output = Command::new("systemctl")
+                    .args(["--user", "show", unit, "--property=LoadState"])
+                    .output()
+                    .await
+                    .with_context(|| {
+                        format!("rechecking transient worker unit {unit} after stop")
+                    })?;
+                let fields = String::from_utf8_lossy(&output.stdout);
+                let load_state = systemd_show_value(&fields, "LoadState").unwrap_or_default();
+                if transient_unit_collected(output.status.success(), &load_state) {
+                    return Ok(());
+                }
+                anyhow::bail!("systemctl stop {unit} exited {status} (LoadState={load_state})");
             }
             stopped_orphan = true;
             continue;
@@ -1328,6 +1345,10 @@ async fn prepare_transient_unit(unit: &str) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+fn transient_unit_collected(status_success: bool, load_state: &str) -> bool {
+    !status_success || load_state.is_empty() || load_state == "not-found"
 }
 
 fn systemd_show_value(output: &str, key: &str) -> Option<String> {
@@ -1847,6 +1868,13 @@ mod tests {
             Some("active")
         );
         assert_eq!(systemd_show_value(output, "SubState"), None);
+    }
+
+    #[test]
+    fn collected_unit_wins_the_show_stop_race() {
+        assert!(transient_unit_collected(false, ""));
+        assert!(transient_unit_collected(true, "not-found"));
+        assert!(!transient_unit_collected(true, "loaded"));
     }
     use crate::runtime_wire::{RuntimeEvent, WorkerState};
 
