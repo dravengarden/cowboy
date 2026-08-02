@@ -5,16 +5,7 @@ import {
   shouldBackfillTranscriptViewport,
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
-  transcriptViewportBackfillBudget,
 } from "./transcriptViewport.ts";
-
-Deno.test("viewport refill budget covers sparse image history without becoming unbounded", () => {
-  assertEquals(transcriptViewportBackfillBudget(0), 16);
-  assertEquals(transcriptViewportBackfillBudget(780), 17);
-  assertEquals(transcriptViewportBackfillBudget(1_020), 19);
-  assertEquals(transcriptViewportBackfillBudget(10_000), 24);
-  assertEquals(transcriptViewportBackfillBudget(Number.NaN), 16);
-});
 
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {
   assertEquals(
@@ -28,7 +19,34 @@ Deno.test("mobile transcript refills when an iPad viewport grows", () => {
       beforeSeq: 854_903,
       scrollHeight: 760,
       clientHeight: 1_020,
+      loadingFillHeight: 260,
     }),
+    true,
+  );
+});
+
+Deno.test("mounted skeleton height drives incremental viewport refill", () => {
+  const base = {
+    managed: true,
+    allowed: true,
+    desktop: false,
+    fromResize: false,
+    reachedStart: false,
+    loadingOlder: false,
+    beforeSeq: 854_903,
+    scrollHeight: 1_020,
+    clientHeight: 1_020,
+  };
+  assertEquals(
+    shouldBackfillTranscriptViewport({ ...base, loadingFillHeight: 180 }),
+    true,
+  );
+  assertEquals(
+    shouldBackfillTranscriptViewport({ ...base, loadingFillHeight: 12 }),
+    false,
+  );
+  assertEquals(
+    shouldBackfillTranscriptViewport({ ...base, loadingFillHeight: null }),
     true,
   );
 });
@@ -45,6 +63,7 @@ Deno.test("viewport resize refill leaves Desktop navigation unchanged", () => {
       beforeSeq: 854_903,
       scrollHeight: 760,
       clientHeight: 1_020,
+      loadingFillHeight: 260,
     }),
     false,
   );
@@ -59,6 +78,7 @@ Deno.test("transcript refill stops while a page is loading or history is exhaust
     beforeSeq: 854_903,
     scrollHeight: 760,
     clientHeight: 1_020,
+    loadingFillHeight: 260,
   };
   assertEquals(
     shouldBackfillTranscriptViewport({
@@ -139,6 +159,7 @@ Deno.test("page projection never invokes transcript-managed history loading", ()
       beforeSeq: 854_903,
       scrollHeight: 320,
       clientHeight: 1_020,
+      loadingFillHeight: 700,
     }),
     false,
   );

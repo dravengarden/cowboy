@@ -8,18 +8,7 @@ export interface TranscriptViewportBackfillInput {
   beforeSeq: number | null;
   scrollHeight: number;
   clientHeight: number;
-}
-
-/**
- * Bound automatic history hydration by the viewport it needs to fill rather
- * than one device-independent page count. History pages are byte-bounded, so
- * an image-heavy turn can legitimately contain only one renderable event per
- * page. A small fixed allowance can therefore stop with a short transcript
- * and expose the unused flex area as an apparent blank screen.
- */
-export function transcriptViewportBackfillBudget(clientHeight: number): number {
-  const height = Number.isFinite(clientHeight) ? Math.max(0, clientHeight) : 0;
-  return Math.min(24, Math.max(16, 8 + Math.ceil(height / 96)));
+  loadingFillHeight: number | null;
 }
 
 export function shouldBackfillTranscriptViewport(
@@ -35,6 +24,11 @@ export function shouldBackfillTranscriptViewport(
   ) {
     return false;
   }
+  // Once mounted, the flex filler is the exact unused reading area. Ignore a
+  // tiny remainder so fractional layout and safe-area rounding cannot create a
+  // load/stop oscillation. Before it mounts, a non-overflowing scroll box is
+  // enough to start the first small request and reveal the filler.
+  if (input.loadingFillHeight !== null) return input.loadingFillHeight > 16;
   return input.scrollHeight <= input.clientHeight + 1;
 }
 

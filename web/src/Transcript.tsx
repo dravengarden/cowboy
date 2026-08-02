@@ -113,7 +113,6 @@ import {
   shouldBackfillTranscriptViewport,
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
-  transcriptViewportBackfillBudget,
 } from "./transcriptViewport";
 import {
   advanceTimelinePresentation,
@@ -139,7 +138,12 @@ const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // viewport half empty. Keep the bootstrap bounded because one history page may
 // approach 512 KiB, but allow enough cursor steps to reach useful prose/tool
 // boundaries; geometry stops the chain immediately once the viewport fills.
-const INITIAL_VIEWPORT_BACKFILL_PAGE_BUDGET = 16;
+// Pages are fetched one at a time and only while the measured skeleton still
+// has meaningful height. This is a safety limit, not a preload target: ordinary
+// sessions stop after one or two pages; pathological non-rendering histories
+// cannot turn a mount into an unbounded full-log download.
+const VIEWPORT_BACKFILL_PAGE_LIMIT = 24;
+const VIEWPORT_BACKFILL_SETTLE_MS = 96;
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -259,8 +263,12 @@ function TranscriptSkeleton({
 // overflows. It therefore never adds scroll range or disturbs iOS' anchor.
 function TranscriptLoadingFill({
   label,
+  paused = false,
+  onContinue,
 }: {
   label: string;
+  paused?: boolean;
+  onContinue?: (() => void) | undefined;
 }): React.JSX.Element {
   return (
     <Box
@@ -269,7 +277,7 @@ function TranscriptLoadingFill({
       aria-live="polite"
       aria-label={label}
       sx={{
-        pointerEvents: "none",
+        pointerEvents: paused ? "auto" : "none",
         userSelect: "none",
         WebkitUserSelect: "none",
         position: "relative",
@@ -303,18 +311,32 @@ function TranscriptLoadingFill({
         }}
       >
         <Stack direction="row" spacing={1} alignItems="center">
-          <CircularProgress
-            size={13}
-            thickness={4}
-            color="inherit"
-            aria-hidden
-          />
+          {paused
+            ? null
+            : (
+              <CircularProgress
+                size={13}
+                thickness={4}
+                color="inherit"
+                aria-hidden
+              />
+            )}
           <Typography
             variant="caption"
             sx={{ color: "text.secondary", fontWeight: 600 }}
           >
             {label}
           </Typography>
+          {paused && onContinue && (
+            <Button
+              size="small"
+              variant="text"
+              onClick={onContinue}
+              sx={{ minHeight: 34, textTransform: "none" }}
+            >
+              Continue
+            </Button>
+          )}
         </Stack>
         {LOADING_FILL_TURNS.map(({ mine, lines }, turn) => (
           <Stack
@@ -3124,9 +3146,10 @@ export function Transcript({
   const lastScrollableRef = useRef<boolean | null>(null);
   const reportScrollableRef = useRef<() => void>(() => undefined);
   const viewportBackfillRafRef = useRef(0);
+  const viewportBackfillSettleTimerRef = useRef<number | null>(null);
   const viewportBackfillCursorRef = useRef<number | null>(null);
   const viewportBackfillAllowanceRef = useRef(
-    INITIAL_VIEWPORT_BACKFILL_PAGE_BUDGET,
+    VIEWPORT_BACKFILL_PAGE_LIMIT,
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
@@ -3172,6 +3195,7 @@ export function Transcript({
   // screen. Keep this distinct from ordinary scrollback loading: it is only the
   // automatic, followed-mode viewport bootstrap below.
   const [backfillingViewport, setBackfillingViewport] = useState(false);
+  const [viewportBackfillPaused, setViewportBackfillPaused] = useState(false);
   const [scrollbackLoading, setScrollbackLoading] = useState(false);
   const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
   useEffect(() => {
@@ -3218,8 +3242,9 @@ export function Transcript({
     setBackfillingViewport(false);
     setScrollbackLoading(false);
     setShowHistoryLoadingFill(false);
+    setViewportBackfillPaused(false);
     viewportBackfillCursorRef.current = null;
-    viewportBackfillAllowanceRef.current = INITIAL_VIEWPORT_BACKFILL_PAGE_BUDGET;
+    viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_LIMIT;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
     historyLoadingRequestRef.current += 1;
@@ -3230,13 +3255,22 @@ export function Transcript({
         globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
         historyLoadingRevealTimerRef.current = null;
       }
+      if (viewportBackfillSettleTimerRef.current !== null) {
+        globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
+        viewportBackfillSettleTimerRef.current = null;
+      }
+      if (viewportBackfillRafRef.current !== 0) {
+        cancelAnimationFrame(viewportBackfillRafRef.current);
+        viewportBackfillRafRef.current = 0;
+      }
     };
   }, [sessionId]);
 
-  // Bootstrap a small, hard-bounded chain of history pages for a newly opened
-  // session. Each page landing re-measures real geometry: stop as soon as the
-  // viewport fills, otherwise continue only while budget remains. This avoids
-  // both the one-page blank-screen failure and an unbounded full-history fetch.
+  // Hydrate one immutable history page at a time. The flex skeleton is both the
+  // visual placeholder and the feedback signal: its measured height is exactly
+  // the still-unused reading area. Each page is rendered and allowed to settle
+  // before deciding whether another is useful, so ordinary conversations fetch
+  // very little while sparse generated-image histories converge without blanks.
   requestViewportBackfillRef.current = (fromResize: boolean): void => {
     if (!managesScrollHistoryRef.current) {
       setBackfillingViewport(false);
@@ -3250,15 +3284,25 @@ export function Transcript({
         setBackfillingViewport(false);
         return;
       }
-      // Byte-bounded history pages may each contain one large generated image.
-      // Size the finite chain from the real viewport before deciding that its
-      // allowance is exhausted; geometry still stops immediately once filled.
       if (viewportHeightRef.current === null) {
         viewportHeightRef.current = el.clientHeight;
-        viewportBackfillAllowanceRef.current = transcriptViewportBackfillBudget(
-          el.clientHeight,
-        );
       }
+      const loadingFill = el.querySelector<HTMLElement>(
+        "[data-transcript-loading-fill]",
+      );
+      const loadingFillHeight = loadingFill?.getBoundingClientRect().height ?? null;
+      const hasVisibleGap = shouldBackfillTranscriptViewport({
+        managed: managesScrollHistoryRef.current,
+        allowed: true,
+        desktop: desktopNavigation,
+        fromResize,
+        reachedStart: paging.reachedStart,
+        loadingOlder: false,
+        beforeSeq: paging.beforeSeq,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        loadingFillHeight,
+      });
       const needsOlderPage = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
         allowed: viewportBackfillAllowanceRef.current > 0,
@@ -3269,8 +3313,15 @@ export function Transcript({
         beforeSeq: paging.beforeSeq,
         scrollHeight: el.scrollHeight,
         clientHeight: el.clientHeight,
+        loadingFillHeight,
       });
-      setBackfillingViewport(needsOlderPage);
+      const requestOwned = viewportBackfillCursorRef.current !== null ||
+        paging.loadingOlder;
+      setBackfillingViewport(hasVisibleGap);
+      setViewportBackfillPaused(
+        hasVisibleGap && !requestOwned &&
+          viewportBackfillAllowanceRef.current <= 0,
+      );
       if (
         needsOlderPage &&
         paging.beforeSeq !== viewportBackfillCursorRef.current
@@ -3281,11 +3332,16 @@ export function Transcript({
         void loadOlder(sessionId).finally(() => {
           if (viewportBackfillCursorRef.current === requestedCursor) {
             viewportBackfillCursorRef.current = null;
-            // The store update can render before this promise's finally runs;
-            // that layout pass correctly refuses a duplicate while the cursor
-            // is owned. Re-measure once ownership is released so a still-short
-            // viewport can spend its next bounded page.
-            requestViewportBackfillRef.current(false);
+            // Let the new rows, images and Markdown establish real geometry
+            // before spending another page. Later image decode/fallback changes
+            // are covered by the row ResizeObserver below.
+            if (viewportBackfillSettleTimerRef.current !== null) {
+              globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
+            }
+            viewportBackfillSettleTimerRef.current = globalThis.setTimeout(() => {
+              viewportBackfillSettleTimerRef.current = null;
+              requestViewportBackfillRef.current(false);
+            }, VIEWPORT_BACKFILL_SETTLE_MS);
           }
         });
       }
@@ -3853,9 +3909,8 @@ export function Transcript({
         previousHeight !== null &&
         nextHeight > previousHeight + 1
       ) {
-        viewportBackfillAllowanceRef.current = transcriptViewportBackfillBudget(
-          nextHeight,
-        );
+        viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_LIMIT;
+        setViewportBackfillPaused(false);
         requestViewportBackfillRef.current(true);
       }
       if (!stick.current) {
@@ -4350,7 +4405,20 @@ export function Transcript({
                 ))}
               {!desktopNavigation &&
                 showHistoryLoadingFill && (
-                <TranscriptLoadingFill label="Loading conversation data" />
+                <TranscriptLoadingFill
+                  label={viewportBackfillPaused
+                    ? "Earlier conversation is available"
+                    : "Loading conversation data"}
+                  paused={viewportBackfillPaused}
+                  onContinue={viewportBackfillPaused
+                    ? () => {
+                      viewportBackfillAllowanceRef.current =
+                        VIEWPORT_BACKFILL_PAGE_LIMIT;
+                      setViewportBackfillPaused(false);
+                      requestViewportBackfillRef.current(false);
+                    }
+                    : undefined}
+                />
               )}
             </>
           )}
