@@ -393,9 +393,13 @@ function TranscriptLoadingFill({
 function ScrollbackLoadingSkeleton({
   height,
   loading,
+  failed,
+  onRetry,
 }: {
   height: number;
   loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
 }): React.JSX.Element {
   const rows = [
     { title: "42%", card: "100%" },
@@ -414,7 +418,7 @@ function ScrollbackLoadingSkeleton({
         height: `${Math.max(0, height)}px`,
         minHeight: 0,
         overflow: "hidden",
-        pointerEvents: "none",
+        pointerEvents: failed ? "auto" : "none",
         userSelect: "none",
         WebkitUserSelect: "none",
         transition: "height 160ms ease-out, opacity 140ms ease",
@@ -433,6 +437,21 @@ function ScrollbackLoadingSkeleton({
             "linear-gradient(to bottom, transparent 0%, black 20%, black 100%)",
         }}
       >
+        {failed && (
+          <Button
+            size="small"
+            variant="text"
+            onClick={onRetry}
+            sx={{
+              alignSelf: "center",
+              minHeight: 36,
+              textTransform: "none",
+              bgcolor: "background.paper",
+            }}
+          >
+            Retry earlier messages
+          </Button>
+        )}
         {rows.map((row, index) => (
           <Stack key={index} spacing={0.7}>
             <Skeleton
@@ -3235,6 +3254,8 @@ export function Transcript({
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
+  const scrollbackRetryCountRef = useRef(0);
+  const scrollbackRetryTimerRef = useRef<number | null>(null);
   const scrollbackFillActiveRef = useRef(false);
   const scrollbackFillRunRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
@@ -3281,6 +3302,7 @@ export function Transcript({
   const [backfillingViewport, setBackfillingViewport] = useState(false);
   const [viewportBackfillPaused, setViewportBackfillPaused] = useState(false);
   const [scrollbackLoading, setScrollbackLoading] = useState(false);
+  const [scrollbackFailed, setScrollbackFailed] = useState(false);
   const [scrollbackFillHeight, setScrollbackFillHeight] = useState(0);
   const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
   useEffect(() => {
@@ -3301,7 +3323,8 @@ export function Transcript({
     ) return;
     const run = ++scrollbackFillRunRef.current;
     scrollbackFillActiveRef.current = true;
-    const targetHeight = Math.min(300, Math.max(160, el.clientHeight * 0.3));
+    setScrollbackFailed(false);
+    const targetHeight = Math.min(240, Math.max(144, el.clientHeight * 0.24));
     const idleBandHeight = el.querySelector<HTMLElement>(
       "[data-transcript-scrollback-fill]",
     )?.getBoundingClientRect().height ?? 0;
@@ -3320,7 +3343,30 @@ export function Transcript({
         if (scrollbackFillRunRef.current !== run) return;
         for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
           const progressed = await loadOlder(sessionIdRef.current);
-          if (!progressed) break;
+          if (!progressed) {
+            const currentPaging = pagingRef.current;
+            if (
+              currentPaging && !currentPaging.reachedStart &&
+              currentPaging.beforeSeq !== null &&
+              scrollbackRetryCountRef.current < 1
+            ) {
+              scrollbackRetryCountRef.current += 1;
+              scrollbackRetryTimerRef.current = globalThis.setTimeout(() => {
+                scrollbackRetryTimerRef.current = null;
+                const currentEl = parentRef.current;
+                if (!currentEl) return;
+                const fromBottom = Math.abs(currentEl.scrollTop);
+                const fromTop = currentEl.scrollHeight - currentEl.clientHeight - fromBottom;
+                if (fromTop <= currentEl.clientHeight * 3) {
+                  requestOlderPageRef.current();
+                }
+              }, 700);
+            } else if (currentPaging && !currentPaging.reachedStart) {
+              setScrollbackFailed(true);
+            }
+            break;
+          }
+          scrollbackRetryCountRef.current = 0;
           await new Promise<void>((resolve) => {
             globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
               SCROLLBACK_FILL_SETTLE_MS);
@@ -3372,6 +3418,7 @@ export function Transcript({
   useEffect(() => {
     setBackfillingViewport(false);
     setScrollbackLoading(false);
+    setScrollbackFailed(false);
     setScrollbackFillHeight(0);
     setShowHistoryLoadingFill(false);
     setViewportBackfillPaused(false);
@@ -3380,12 +3427,17 @@ export function Transcript({
     viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_LIMIT;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
+    scrollbackRetryCountRef.current = 0;
     scrollbackFillRunRef.current += 1;
     scrollbackFillActiveRef.current = false;
     requestViewportBackfillRef.current(false);
     return () => {
       scrollbackFillRunRef.current += 1;
       scrollbackFillActiveRef.current = false;
+      if (scrollbackRetryTimerRef.current !== null) {
+        globalThis.clearTimeout(scrollbackRetryTimerRef.current);
+        scrollbackRetryTimerRef.current = null;
+      }
       if (viewportBackfillSettleTimerRef.current !== null) {
         globalThis.clearTimeout(viewportBackfillSettleTimerRef.current);
         viewportBackfillSettleTimerRef.current = null;
@@ -4541,8 +4593,14 @@ export function Transcript({
               {managesScrollHistory && !backfillingViewport && paging != null &&
                   paging.beforeSeq !== null && !paging.reachedStart && (
                 <ScrollbackLoadingSkeleton
-                  height={scrollbackLoading ? scrollbackFillHeight : 112}
+                  height={scrollbackLoading ? scrollbackFillHeight : 72}
                   loading={scrollbackLoading}
+                  failed={scrollbackFailed}
+                  onRetry={() => {
+                    scrollbackRetryCountRef.current = 0;
+                    setScrollbackFailed(false);
+                    requestOlderPageRef.current();
+                  }}
                 />
               )}
               {!desktopNavigation &&

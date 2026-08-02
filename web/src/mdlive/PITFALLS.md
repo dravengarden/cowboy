@@ -665,6 +665,9 @@ here says otherwise.
     bounded by a client timeout and report cursor progress: a suspended fetch or
     unchanged cursor must collapse the active band back to its retryable idle
     boundary instead of leaving Mobile behind a permanent expanded skeleton.
+    Permit one delayed automatic retry while the boundary remains near the
+    viewport; after that, expose an explicit Retry action. Do not leave the
+    threshold consumed with an inert loading-shaped block.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
