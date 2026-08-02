@@ -110,7 +110,9 @@ import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 import {
   historyPrefetchTransition,
   magneticHapticTransition,
+  scrollbackFillRemaining,
   shouldBackfillTranscriptViewport,
+  shouldContinueScrollbackFill,
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
@@ -144,6 +146,8 @@ const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // cannot turn a mount into an unbounded full-log download.
 const VIEWPORT_BACKFILL_PAGE_LIMIT = 24;
 const VIEWPORT_BACKFILL_SETTLE_MS = 96;
+const SCROLLBACK_FILL_PAGE_LIMIT = 3;
+const SCROLLBACK_FILL_SETTLE_MS = 96;
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -373,6 +377,57 @@ function TranscriptLoadingFill({
               />
             ))}
           </Stack>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
+// In ordinary scrollback the unloaded area belongs at the visual top of the
+// transcript, not in a floating overlay. This bounded in-flow outline is
+// replaced from its lower edge by real older rows; column-reverse keeps the
+// reader's current item anchored while the history grows above it.
+function ScrollbackLoadingSkeleton({ height }: { height: number }): React.JSX.Element {
+  return (
+    <Box
+      data-transcript-scrollback-fill
+      role="status"
+      aria-live="polite"
+      aria-label="Loading earlier messages"
+      sx={{
+        height: `${Math.max(0, height)}px`,
+        minHeight: 0,
+        overflow: "hidden",
+        pointerEvents: "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        transition: "height 160ms ease-out, opacity 140ms ease",
+        opacity: 0.72,
+      }}
+    >
+      <Stack
+        spacing={1}
+        sx={{
+          height: "100%",
+          justifyContent: "flex-end",
+          py: 1,
+          maskImage: "linear-gradient(to bottom, transparent 0%, black 28%, black 100%)",
+          WebkitMaskImage:
+            "linear-gradient(to bottom, transparent 0%, black 28%, black 100%)",
+        }}
+      >
+        {[0.58, 0.82, 0.7].map((width, index) => (
+          <Skeleton
+            key={index}
+            variant="rounded"
+            animation="wave"
+            sx={{
+              alignSelf: index === 1 ? "stretch" : "flex-start",
+              width: index === 1 ? "100%" : `${width * 100}%`,
+              height: index === 1 ? 52 : 18,
+              borderRadius: 1.5,
+            }}
+          />
         ))}
       </Stack>
     </Box>
@@ -3156,6 +3211,8 @@ export function Transcript({
   const historyPrefetchArmedRef = useRef(true);
   const historyLoadingRevealTimerRef = useRef<number | null>(null);
   const historyLoadingRequestRef = useRef(0);
+  const scrollbackFillActiveRef = useRef(false);
+  const scrollbackFillRunRef = useRef(0);
   const requestOlderPageRef = useRef<() => void>(() => undefined);
   const requestViewportBackfillRef = useRef<
     (fromResize: boolean) => void
@@ -3182,6 +3239,8 @@ export function Transcript({
   const paging = useStoreSelector((snapshot) =>
     snapshot.pagination.get(sessionId)
   );
+  const pagingRef = useRef(paging);
+  pagingRef.current = paging;
 
   // Tool details deliberately browses only the retained history window. Never
   // page an entire long-running session merely to make its denominator exact:
@@ -3198,6 +3257,7 @@ export function Transcript({
   const [backfillingViewport, setBackfillingViewport] = useState(false);
   const [viewportBackfillPaused, setViewportBackfillPaused] = useState(false);
   const [scrollbackLoading, setScrollbackLoading] = useState(false);
+  const [scrollbackFillHeight, setScrollbackFillHeight] = useState(0);
   const [showHistoryLoadingFill, setShowHistoryLoadingFill] = useState(false);
   useEffect(() => {
     if (!backfillingViewport) {
@@ -3210,18 +3270,26 @@ export function Transcript({
     return undefined;
   }, [backfillingViewport]);
   requestOlderPageRef.current = (): void => {
-    if (!managesScrollHistoryRef.current) return;
+    const el = parentRef.current;
+    if (
+      !managesScrollHistoryRef.current || !el ||
+      scrollbackFillActiveRef.current
+    ) return;
     if (historyLoadingRevealTimerRef.current !== null) {
       globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
       historyLoadingRevealTimerRef.current = null;
     }
     const request = ++historyLoadingRequestRef.current;
+    const run = ++scrollbackFillRunRef.current;
+    scrollbackFillActiveRef.current = true;
+    const targetHeight = Math.min(420, Math.max(180, el.clientHeight * 0.42));
+    const baseScrollHeight = el.scrollHeight;
     let pending = true;
     setScrollbackLoading(false);
-    // Fast cache hits and requests already owned by viewport backfill should
-    // never flash a loading pill. Reveal only when this exact request is still
-    // pending after a short perceptual delay; completion always hides it
-    // immediately, so the widget remains an honest network-state indicator.
+    setScrollbackFillHeight(targetHeight);
+    // Fast cache hits should replace the unloaded edge directly. Reveal the
+    // in-flow skeleton only when this bounded fill run remains pending long
+    // enough to be perceptible.
     historyLoadingRevealTimerRef.current = globalThis.setTimeout(() => {
       historyLoadingRevealTimerRef.current = null;
       setScrollbackLoading(shouldShowHistoryLoading(
@@ -3229,19 +3297,55 @@ export function Transcript({
         pending,
       ));
     }, 160);
-    void loadOlder(sessionIdRef.current).finally(() => {
-      pending = false;
-      if (historyLoadingRequestRef.current !== request) return;
-      if (historyLoadingRevealTimerRef.current !== null) {
-        globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
-        historyLoadingRevealTimerRef.current = null;
+    void (async (): Promise<void> => {
+      try {
+        for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
+          await loadOlder(sessionIdRef.current);
+          await new Promise<void>((resolve) => {
+            globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
+              SCROLLBACK_FILL_SETTLE_MS);
+          });
+          if (scrollbackFillRunRef.current !== run) return;
+          const bandHeight = el.querySelector<HTMLElement>(
+            "[data-transcript-scrollback-fill]",
+          )?.getBoundingClientRect().height ?? 0;
+          const remaining = scrollbackFillRemaining({
+            targetHeight,
+            baseScrollHeight,
+            currentScrollHeight: el.scrollHeight,
+            skeletonHeight: bandHeight,
+          });
+          setScrollbackFillHeight(remaining);
+          const currentPaging = pagingRef.current;
+          const fromBottom = Math.abs(el.scrollTop);
+          const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
+          if (!currentPaging || !shouldContinueScrollbackFill({
+            remaining,
+            fromTop,
+            viewportHeight: el.clientHeight,
+            reachedStart: currentPaging.reachedStart,
+            loadingOlder: currentPaging.loadingOlder,
+            beforeSeq: currentPaging.beforeSeq,
+          })) break;
+        }
+      } finally {
+        pending = false;
+        if (scrollbackFillRunRef.current === run) {
+          scrollbackFillActiveRef.current = false;
+          if (historyLoadingRevealTimerRef.current !== null) {
+            globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
+            historyLoadingRevealTimerRef.current = null;
+          }
+          setScrollbackLoading(false);
+          setScrollbackFillHeight(0);
+        }
       }
-      setScrollbackLoading(false);
-    });
+    })();
   };
   useEffect(() => {
     setBackfillingViewport(false);
     setScrollbackLoading(false);
+    setScrollbackFillHeight(0);
     setShowHistoryLoadingFill(false);
     setViewportBackfillPaused(false);
     viewportBackfillCursorRef.current = null;
@@ -3250,9 +3354,13 @@ export function Transcript({
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
     historyLoadingRequestRef.current += 1;
+    scrollbackFillRunRef.current += 1;
+    scrollbackFillActiveRef.current = false;
     requestViewportBackfillRef.current(false);
     return () => {
       historyLoadingRequestRef.current += 1;
+      scrollbackFillRunRef.current += 1;
+      scrollbackFillActiveRef.current = false;
       if (historyLoadingRevealTimerRef.current !== null) {
         globalThis.clearTimeout(historyLoadingRevealTimerRef.current);
         historyLoadingRevealTimerRef.current = null;
@@ -3630,9 +3738,9 @@ export function Transcript({
         detached: true,
         armed: historyPrefetchArmedRef.current,
         fromTop: el.scrollHeight - el.clientHeight - fromBottom,
-        // Begin both the fetch and its geometry-neutral overlay before the
-        // reader reaches the retained boundary. Three viewports gives mobile
-        // radios and WebKit enough lead time without draining history.
+        // Begin the bounded skeleton fill before the reader reaches the
+        // retained boundary. Three viewports gives mobile radios and WebKit
+        // enough lead time without draining history.
         threshold: el.clientHeight * 3,
       });
       historyPrefetchArmedRef.current = prefetch.armed;
@@ -4409,6 +4517,10 @@ export function Transcript({
                     />
                   </Box>
                 ))}
+              {managesScrollHistory && scrollbackLoading &&
+                !backfillingViewport && scrollbackFillHeight > 0 && (
+                <ScrollbackLoadingSkeleton height={scrollbackFillHeight} />
+              )}
               {!desktopNavigation &&
                 showHistoryLoadingFill && (
                 <TranscriptLoadingFill
@@ -4441,59 +4553,6 @@ export function Transcript({
         onLocate={locateTool}
         historyComplete={paging?.reachedStart ?? true}
       />
-      {
-        /* "Loading older history" — an ABSOLUTE overlay at the top (not in the
-          scroll flow) so it gives feedback without adding height that would
-          shift the viewport. Rarely seen thanks to the 2-screen prefetch. */
-      }
-      {managesScrollHistory && !backfillingViewport && (
-        <Box
-          role="status"
-          aria-live="polite"
-          aria-label="Loading earlier messages"
-          aria-hidden={!scrollbackLoading}
-          data-transcript-history-loading={scrollbackLoading ? "visible" : "hidden"}
-          sx={{
-            position: "absolute",
-            top: desktopNavigation ? 12 : "max(env(safe-area-inset-top), 12px)",
-            left: "50%",
-            transform: scrollbackLoading
-              ? "translate(-50%, 0)"
-              : "translate(-50%, -8px)",
-            zIndex: 5,
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            px: 1.5,
-            minHeight: 34,
-            borderRadius: 999,
-            color: "text.secondary",
-            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.78),
-            border: 1,
-            borderColor: "divider",
-            boxShadow: 2,
-            backdropFilter: "blur(16px) saturate(1.25)",
-            WebkitBackdropFilter: "blur(16px) saturate(1.25)",
-            pointerEvents: "none",
-            opacity: scrollbackLoading ? 1 : 0,
-            visibility: scrollbackLoading ? "visible" : "hidden",
-            transition:
-              "opacity 140ms ease, transform 160ms ease, visibility 0s linear 160ms",
-            ...(scrollbackLoading && {
-              transition: "opacity 140ms ease, transform 160ms ease",
-            }),
-          }}
-        >
-          <CircularProgress
-            size={15}
-            thickness={5}
-            color="inherit"
-          />
-          <Typography variant="caption" sx={{ fontWeight: 650, whiteSpace: "nowrap" }}>
-            Loading earlier messages
-          </Typography>
-        </Box>
-      )}
       {
         /* Persistent bottom strip: interrupted / crashed / dormant / disconnected.
           In-flow (flexShrink:0) so it sits below the scroll area, above the

@@ -2,10 +2,48 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   historyPrefetchTransition,
   magneticHapticTransition,
+  scrollbackFillRemaining,
   shouldBackfillTranscriptViewport,
+  shouldContinueScrollbackFill,
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
+
+Deno.test("scrollback skeleton is replaced by measured older content", () => {
+  assertEquals(
+    scrollbackFillRemaining({
+      targetHeight: 360,
+      baseScrollHeight: 2_000,
+      currentScrollHeight: 2_520,
+      skeletonHeight: 240,
+    }),
+    80,
+  );
+  assertEquals(
+    scrollbackFillRemaining({
+      targetHeight: 360,
+      baseScrollHeight: 2_000,
+      currentScrollHeight: 2_520,
+      skeletonHeight: 120,
+    }),
+    0,
+  );
+});
+
+Deno.test("scrollback heuristic fills only a nearby unfinished skeleton", () => {
+  const base = {
+    remaining: 120,
+    fromTop: 300,
+    viewportHeight: 800,
+    reachedStart: false,
+    loadingOlder: false,
+    beforeSeq: 80_000,
+  };
+  assertEquals(shouldContinueScrollbackFill(base), true);
+  assertEquals(shouldContinueScrollbackFill({ ...base, remaining: 20 }), false);
+  assertEquals(shouldContinueScrollbackFill({ ...base, fromTop: 2_500 }), false);
+  assertEquals(shouldContinueScrollbackFill({ ...base, reachedStart: true }), false);
+});
 
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {
   assertEquals(

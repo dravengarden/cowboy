@@ -60,6 +60,34 @@ export function shouldShowHistoryLoading(
   return requestOwned && requestPending;
 }
 
+export function scrollbackFillRemaining(input: {
+  targetHeight: number;
+  baseScrollHeight: number;
+  currentScrollHeight: number;
+  skeletonHeight: number;
+}): number {
+  const addedHeight = Math.max(
+    0,
+    input.currentScrollHeight - input.baseScrollHeight - input.skeletonHeight,
+  );
+  return Math.max(0, input.targetHeight - addedHeight);
+}
+
+export function shouldContinueScrollbackFill(input: {
+  remaining: number;
+  fromTop: number;
+  viewportHeight: number;
+  reachedStart: boolean;
+  loadingOlder: boolean;
+  beforeSeq: number | null;
+}): boolean {
+  return input.remaining > 24 &&
+    !input.reachedStart &&
+    !input.loadingOlder &&
+    input.beforeSeq !== null &&
+    input.fromTop <= input.viewportHeight * 3;
+}
+
 export interface TranscriptMagnetInput {
   history: boolean;
   working: boolean;
