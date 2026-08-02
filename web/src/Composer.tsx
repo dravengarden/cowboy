@@ -1567,15 +1567,15 @@ export function ComposerWorkspace({
             overflow: "hidden",
           }),
           ...(touchInput && {
+            borderRadius: mobileComposerPanelFrameSx.borderRadius,
             transition:
-              "border-color 180ms ease, border-radius 220ms cubic-bezier(.2,.8,.2,1), background-color 180ms ease, box-shadow 220ms ease, margin 220ms cubic-bezier(.2,.8,.2,1)",
+              "border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease",
             "&:focus-within": {
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
-              // Match Plan / Queue / Draft instead of introducing a one-off
-              // ChatGPT-like pill silhouette.
+              // Focus changes hierarchy inside the same card. Keep the outer
+              // edge fixed so opening the keyboard does not look like a second
+              // component replacing the compact composer.
               borderRadius: mobileComposerPanelFrameSx.borderRadius,
-              mx: 0.75,
-              mb: 0.5,
               bgcolor: (t) =>
                 alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.58 : 0.82),
               boxShadow: (t) =>

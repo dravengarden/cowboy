@@ -664,7 +664,9 @@ here says otherwise.
     below it, nearest the keyboard, while the persistent editor owns focus.
     Settings remains an ordinary equal-width formatting action, never a sticky
     contrasting block. Focus may increase the editor canvas, but the card radius
-    stays on the shared Mobile panel token. Coordinate the bottom session-nav
+    and horizontal outer edge stay on the shared Mobile panel geometry. Do not
+    animate margin or width on focus: that makes the right border jump and reads
+    as a different component replacing the compact composer. Coordinate the bottom session-nav
     exit with CSS `:focus-within`; the same focus transition may inset and round
     the whole composer into a keyboard-adjacent input card, but must preserve
     Cowboy's complete action rows rather than substituting another product's
