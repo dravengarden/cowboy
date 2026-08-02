@@ -234,10 +234,11 @@ export function TurnStatusOverlay({
         display: "flex",
         justifyContent: "center",
         px: 2,
-        // This layer is absolutely positioned outside the composer's normal
-        // stack, so it does not receive the container rowGap. Reuse the same
-        // token explicitly to keep status -> queue/editor spacing consistent.
-        pb: "var(--mobile-composer-stack-gap, 8px)",
+        // The Composer already owns the stack's top gap. Adding that token here
+        // as well double-counted status -> Queue/Draft spacing and left a large
+        // empty band around the slab boundary. Keep this absolute layer flush
+        // with the boundary; the normal Composer padding supplies the one gap.
+        pb: 0,
         pointerEvents: "none",
         zIndex: 3,
       }}
