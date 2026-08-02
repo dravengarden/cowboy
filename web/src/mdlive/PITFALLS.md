@@ -544,7 +544,8 @@ here says otherwise.
     touch text with no image token mounts the native textarea so UIKit owns the
     caret and long-press menu; inserting the first image writes its placement
     token at the native caret and promotes the unchanged document to CM6 so the
-    widget renders inline. Fullscreen and fill layouts always use CM6. Keep Vim
+    widget renders inline. Fullscreen and fill layouts follow the same hybrid:
+    native while token-free, CM6 while an inline token needs its widget. Keep Vim
     disabled on touch and treat the token as the placement authority across
     compact → fullscreen → compact remounts. The attachment tray is only for
     ordinary files and legacy images without a token. Never delete placement
@@ -769,6 +770,19 @@ here says otherwise.
     CM contenteditable in a layout effect when opening. Do not move that blur to
     the shared accessory button primitive: ordinary actions must continue to
     preserve keyboard focus.
+
+38. **A full-height touch Composer without inline images stays a native
+    textarea.** Resolving the complete CM6 height chain makes the blank canvas a
+    real `contenteditable` hit target, but physical iPhone testing shows that
+    WebKit still anchors its edit menu unreliably when a long press is far from
+    the nearest real text line. The compact editor did not reproduce the bug
+    because UIKit owned a native textarea. Fullscreen and expanded touch editors
+    now use that same native control for token-free text, including literal
+    Markdown toolbar transformations and selection reporting. An inline-image
+    token still promotes the document synchronously to CM6 so its widget remains
+    in flow. Keep the live native value separate from CM6's frozen mount seed;
+    never emulate this with a transparent overlay, synthetic pointer selection,
+    or delayed refocus.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

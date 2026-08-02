@@ -5,9 +5,9 @@ import {
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
-  shouldFocusPromotedEditor,
   shouldExpandInlineComposer,
-  shouldUseNativeCompactEditor,
+  shouldFocusPromotedEditor,
+  shouldUseNativeTouchEditor,
 } from "./mobileCompactEditorPolicy";
 
 Deno.test("only a pending Desktop Vim runtime starts the preload promise", () => {
@@ -45,10 +45,10 @@ Deno.test("a failed Vim chunk leaves the Desktop composer usable", () => {
   });
 });
 
-Deno.test("compact touch text uses the native editor for the iOS long-press menu", () => {
-  assertEquals(shouldUseNativeCompactEditor("mobile", false, false, "hello"), true);
-  assertEquals(shouldUseNativeCompactEditor("tablet", false, false, ""), true);
-  assertEquals(shouldUseNativeCompactEditor("desktop", false, false, "hello"), false);
+Deno.test("touch text uses the native editor for the iOS long-press menu", () => {
+  assertEquals(shouldUseNativeTouchEditor("mobile", "hello"), true);
+  assertEquals(shouldUseNativeTouchEditor("tablet", ""), true);
+  assertEquals(shouldUseNativeTouchEditor("desktop", "hello"), false);
 });
 
 Deno.test("the persisted Desktop expansion preference never expands Mobile inline compose", () => {
@@ -58,17 +58,20 @@ Deno.test("the persisted Desktop expansion preference never expands Mobile inlin
   assertEquals(shouldExpandInlineComposer("tablet", true), false);
 });
 
-Deno.test("inline images and expanded touch composers stay on CM6", () => {
+Deno.test("only inline-image touch composers promote to CM6", () => {
   const token = "before\n![shot.png](cowboy-att:image-1)\nafter";
-  assertEquals(shouldUseNativeCompactEditor("mobile", false, false, token), false);
-  assertEquals(shouldUseNativeCompactEditor("mobile", true, false, "hello"), false);
-  assertEquals(shouldUseNativeCompactEditor("tablet", false, true, "hello"), false);
+  assertEquals(shouldUseNativeTouchEditor("mobile", token), false);
+  assertEquals(shouldUseNativeTouchEditor("mobile", "hello"), true);
+  assertEquals(shouldUseNativeTouchEditor("tablet", "hello"), true);
 });
 
 Deno.test("native to CM6 promotion freezes the token-bearing live document", () => {
   const frozen = "old mount seed";
   const promoted = "live text\n![shot](cowboy-att:image-1)\n";
-  assertEquals(composerEditorMountSeed(true, false, frozen, promoted), promoted);
+  assertEquals(
+    composerEditorMountSeed(true, false, frozen, promoted),
+    promoted,
+  );
   assertEquals(
     composerEditorMountSeed(false, false, promoted, "later React echo"),
     promoted,

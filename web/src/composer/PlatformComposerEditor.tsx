@@ -13,14 +13,14 @@ import {
   preloadDesktopVimRuntime,
 } from "../desktop/vim/runtimeLoader";
 import {
-  type DesktopVimRuntimeState,
   desktopVimMountPolicy,
+  type DesktopVimRuntimeState,
   shouldPreloadDesktopVim,
 } from "./desktopVimMountPolicy";
 import {
   composerEditorMountSeed,
   shouldFocusPromotedEditor,
-  shouldUseNativeCompactEditor,
+  shouldUseNativeTouchEditor,
 } from "./mobileCompactEditorPolicy";
 
 type ComposerEditorProps = ComponentPropsWithoutRef<typeof ComposerEditor>;
@@ -30,8 +30,9 @@ export interface PlatformComposerEditorProps
   /** Desktop preference. Touch surfaces always force this off. */
   vim?: boolean;
   /**
-   * Live React value used only by the native compact touch editor. CM6 keeps
-   * the frozen `value` seed so React updates cannot bounce its caret or IME.
+   * Live React value used only by the native touch editor, including fullscreen.
+   * CM6 keeps the frozen `value` seed so React updates cannot bounce its caret
+   * or IME.
    */
   nativeValue?: string;
 }
@@ -39,9 +40,10 @@ export interface PlatformComposerEditorProps
 // The only editor gateway used by product shells, including fullscreen/expanded
 // pending-message editors. It deliberately does
 // not alter the CM6 extension set or controlled/uncontrolled behaviour. On
-// compact touch surfaces it gives token-free text to a native textarea (UIKit
-// owns the long-press menu), promoting the same document to CM6 when an inline
-// image token requires a widget.
+// touch surfaces it gives token-free text to a native textarea (UIKit owns the
+// long-press menu), promoting the same document to CM6 when an inline image
+// token requires a widget. This includes fullscreen: WebKit contenteditable is
+// not a reliable edit-menu anchor far away from its nearest real text line.
 export const PlatformComposerEditor = forwardRef<
   ComposerEditorHandle,
   PlatformComposerEditorProps
@@ -51,13 +53,11 @@ export const PlatformComposerEditor = forwardRef<
 ): React.JSX.Element {
   const surface = useSurfaceProfile();
   const touchValue = nativeValue ?? props.value;
-  const nativeCompact = shouldUseNativeCompactEditor(
+  const nativeTouch = shouldUseNativeTouchEditor(
     surface.kind,
-    props.expanded ?? false,
-    props.fill ?? false,
     touchValue,
   );
-  const wasNativeCompactRef = useRef(nativeCompact);
+  const wasNativeTouchRef = useRef(nativeTouch);
   // The iOS paste-permission alert temporarily owns focus. When the accepted
   // paste event returns, `document.activeElement` can therefore be BODY even
   // though UIKit still considers this one native paste transaction. Preserve
@@ -70,27 +70,29 @@ export const PlatformComposerEditor = forwardRef<
   // The explicit paste intent covers the system permission alert's transient
   // focus loss without weakening ordinary attachment/file-picker semantics.
   const focusPromotedEditor = shouldFocusPromotedEditor(
-    wasNativeCompactRef.current,
-    nativeCompact,
+    wasNativeTouchRef.current,
+    nativeTouch,
     typeof document !== "undefined" &&
       document.activeElement instanceof HTMLTextAreaElement,
     pastePromotionPendingRef.current,
   );
   const cmSeedRef = useRef(props.value);
   cmSeedRef.current = composerEditorMountSeed(
-    wasNativeCompactRef.current,
-    nativeCompact,
+    wasNativeTouchRef.current,
+    nativeTouch,
     cmSeedRef.current,
     touchValue,
   );
-  wasNativeCompactRef.current = nativeCompact;
+  wasNativeTouchRef.current = nativeTouch;
   if (focusPromotedEditor) pastePromotionPendingRef.current = false;
   const [runtimeState, setRuntimeState] = useState<DesktopVimRuntimeState>(
     () => isDesktopVimRuntimeLoaded() ? "ready" : "pending",
   );
 
   useEffect(() => {
-    if (!shouldPreloadDesktopVim(surface.kind, vim, runtimeState)) return undefined;
+    if (!shouldPreloadDesktopVim(surface.kind, vim, runtimeState)) {
+      return undefined;
+    }
     let alive = true;
     void preloadDesktopVimRuntime().then((loaded) => {
       if (alive) setRuntimeState(loaded ? "ready" : "failed");
@@ -106,7 +108,7 @@ export const PlatformComposerEditor = forwardRef<
     runtimeState === "ready",
     runtimeState === "failed",
   );
-  if (nativeCompact) {
+  if (nativeTouch) {
     return (
       <ComposerTextarea
         ref={ref}
@@ -116,10 +118,17 @@ export const PlatformComposerEditor = forwardRef<
         sessionId={props.sessionId}
         commands={props.commands}
         {...(props.onSaveDraft ? { onSaveDraft: props.onSaveDraft } : {})}
-        {...(props.placeholder !== undefined ? { placeholder: props.placeholder } : {})}
+        {...(props.placeholder !== undefined
+          ? { placeholder: props.placeholder }
+          : {})}
         {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-        {...(props.autoFocus !== undefined ? { autoFocus: props.autoFocus } : {})}
+        {...(props.autoFocus !== undefined
+          ? { autoFocus: props.autoFocus }
+          : {})}
         {...(props.onEscape ? { onEscape: props.onEscape } : {})}
+        {...(props.onSelectionChange
+          ? { onSelectionChange: props.onSelectionChange }
+          : {})}
         {...(props.onPasteFiles
           ? {
             onPasteFiles: (files: File[]): void => {
@@ -137,8 +146,10 @@ export const PlatformComposerEditor = forwardRef<
           }
           : {})}
         {...(props.endInset !== undefined ? { endInset: props.endInset } : {})}
-        {...(props.borderless !== undefined ? { borderless: props.borderless } : {})}
-        {...(props.expanded !== undefined ? { expanded: props.expanded } : {})}
+        {...(props.borderless !== undefined
+          ? { borderless: props.borderless }
+          : {})}
+        expanded={(props.expanded ?? false) || (props.fill ?? false)}
       />
     );
   }

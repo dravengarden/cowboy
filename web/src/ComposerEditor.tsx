@@ -94,8 +94,9 @@ export interface ComposerEditorHandle {
   // Returns one command only when its slash completion was explicitly selected.
   // Typed `/`, `/dir`, and paths deliberately have no command intent.
   consumeSelectedSlashCommand: () => string | null;
-  // Markdown toolbar actions (the fullscreen keyboard toolbar). All dispatch CM6
-  // transactions on the literal doc — live-preview re-renders automatically.
+  // Markdown toolbar actions (the fullscreen keyboard toolbar). Both editor
+  // engines transform the same literal Markdown document: CM6 dispatches a
+  // transaction, while the native touch textarea preserves its UIKit selection.
   /// Wrap the selection (or insert the marker pair at the caret) — bold `**`,
   /// italic `*`, inline code `` ` ``.
   wrap: (before: string, after: string) => void;

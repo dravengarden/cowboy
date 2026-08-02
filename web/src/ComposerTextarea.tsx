@@ -8,10 +8,23 @@ import {
 } from "react";
 import { Box, Paper, TextField, Typography } from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
-import { clipboardFiles, type Attachment } from "./attachments";
+import { type Attachment, clipboardFiles } from "./attachments";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import {
+  cycleNativeHeading,
+  indentNativeLines,
+  insertNativeCodeBlock,
+  insertNativeLink,
+  type NativeTextEdit,
+  outdentNativeLines,
+  setNativeHeading,
+  toggleNativeCheckbox,
+  toggleNativeLinePrefix,
+  toggleNativeWrap,
+  wrapNativeSelection,
+} from "./composer/nativeTextareaEditing";
 
 // Compatibility hook for composer call sites. Platform classification is owned
 // centrally by SurfaceProvider so every part of the app agrees on the active
@@ -124,6 +137,7 @@ export const ComposerTextarea = forwardRef<
     autoFocus?: boolean;
     onEscape?: () => boolean;
     onPasteFiles?: (files: File[]) => void;
+    onSelectionChange?: (hasSelection: boolean) => void;
     /// Right padding (px) reserved on the text so it never runs under the action
     /// buttons the composer overlays at the input's bottom-right. 0 when none.
     endInset?: number;
@@ -148,6 +162,7 @@ export const ComposerTextarea = forwardRef<
     autoFocus = false,
     onEscape,
     onPasteFiles,
+    onSelectionChange,
     endInset = 0,
     borderless = false,
     expanded = false,
@@ -184,6 +199,38 @@ export const ComposerTextarea = forwardRef<
   }, [pickerOpen, value]);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
+
+  const publishSelection = (ta: HTMLTextAreaElement): void => {
+    onSelectionChange?.(ta.selectionStart !== ta.selectionEnd);
+  };
+
+  const currentTextSelection = (): {
+    value: string;
+    from: number;
+    to: number;
+  } => {
+    const ta = inputRef.current;
+    const current = ta?.value ?? value;
+    const from = ta?.selectionStart ?? current.length;
+    const to = ta?.selectionEnd ?? from;
+    return { value: current, from, to };
+  };
+
+  // Accessory buttons prevent pointer-down default, so the native textarea is
+  // still UIKit's first responder when this runs. Commit literal Markdown to the
+  // controlled value, then restore the transformed selection after React paints;
+  // there is no delayed focus handoff and therefore no keyboard/menu reset.
+  const applyTextEdit = (edit: NativeTextEdit): void => {
+    inputRef.current?.focus();
+    onChange(edit.value);
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      const ta = inputRef.current;
+      if (!ta) return;
+      ta.setSelectionRange(edit.from, edit.to);
+      publishSelection(ta);
+    });
+  };
 
   const sync = (v: string, caret: number): void =>
     setTrigger(computeTrigger(v, caret));
@@ -251,6 +298,7 @@ export const ComposerTextarea = forwardRef<
     },
     clear: (): void => {
       selectedSlashCommandRef.current = null;
+      applyTextEdit({ value: "", from: 0, to: 0 });
     },
     consumeSelectedSlashCommand: (): string | null => {
       const command = selectedSlashCommandRef.current;
@@ -289,22 +337,98 @@ export const ComposerTextarea = forwardRef<
     },
     refreshImages: (): void => undefined,
     deleteImage: (): void => undefined,
-    // Markdown toolbar actions are CM6-only (the fullscreen toolbar always mounts
-    // ComposerEditor, never this textarea). No-ops here just satisfy the shared
-    // ComposerEditorHandle — this component is retained solely as the documented
-    // iOS-IME fallback for the collapsed mobile input (see plan Risks).
-    wrap: (): void => undefined,
-    toggleWrap: (): void => undefined,
-    indent: (): void => undefined,
-    outdent: (): void => undefined,
-    toggleLinePrefix: (): void => undefined,
-    cycleHeading: (): void => undefined,
-    setHeading: (): void => undefined,
-    toggleCheckbox: (): void => undefined,
-    insertLink: (): void => undefined,
-    insertCodeBlock: (): void => undefined,
-    undo: (): void => undefined,
-    redo: (): void => undefined,
+    // The fullscreen touch editor deliberately remains a native textarea while
+    // it has no inline-image widget. Apply the same literal Markdown operations
+    // as CM6 without replacing the native first responder.
+    wrap: (before: string, after: string): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        wrapNativeSelection(
+          current.value,
+          current.from,
+          current.to,
+          before,
+          after,
+        ),
+      );
+    },
+    toggleWrap: (marker: string): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        toggleNativeWrap(current.value, current.from, current.to, marker),
+      );
+    },
+    indent: (): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        indentNativeLines(current.value, current.from, current.to),
+      );
+    },
+    outdent: (): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        outdentNativeLines(current.value, current.from, current.to),
+      );
+    },
+    toggleLinePrefix: (prefix: string): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        toggleNativeLinePrefix(current.value, current.from, current.to, prefix),
+      );
+    },
+    cycleHeading: (): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        cycleNativeHeading(current.value, current.from, current.to),
+      );
+    },
+    setHeading: (level: number): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        setNativeHeading(current.value, current.from, current.to, level),
+      );
+    },
+    toggleCheckbox: (): void => {
+      const current = currentTextSelection();
+      const edit = toggleNativeCheckbox(
+        current.value,
+        current.from,
+        current.to,
+      );
+      if (edit) applyTextEdit(edit);
+    },
+    insertLink: (): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        insertNativeLink(current.value, current.from, current.to),
+      );
+    },
+    insertCodeBlock: (): void => {
+      const current = currentTextSelection();
+      applyTextEdit(
+        insertNativeCodeBlock(current.value, current.from, current.to),
+      );
+    },
+    undo: (): void => {
+      const ta = inputRef.current;
+      if (!ta) return;
+      ta.focus();
+      document.execCommand("undo");
+      requestAnimationFrame(() => {
+        onChange(ta.value);
+        publishSelection(ta);
+      });
+    },
+    redo: (): void => {
+      const ta = inputRef.current;
+      if (!ta) return;
+      ta.focus();
+      document.execCommand("redo");
+      requestAnimationFrame(() => {
+        onChange(ta.value);
+        publishSelection(ta);
+      });
+    },
   }));
 
   const popup = trigger && options.length > 0 && (
@@ -389,7 +513,8 @@ export const ComposerTextarea = forwardRef<
         // `expanded` (fullscreen compose / edit sheet): fill the sheet so the
         // textarea is a full-height writing canvas, not a fixed block with blank
         // space below it.
-        ...(expanded && { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }),
+        ...(expanded &&
+          { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }),
       }}
     >
       {popup}
@@ -417,6 +542,7 @@ export const ComposerTextarea = forwardRef<
         onSelect={(e): void => {
           const ta = e.target as HTMLTextAreaElement;
           sync(ta.value, ta.selectionStart ?? ta.value.length);
+          publishSelection(ta);
         }}
         onKeyDown={(e): void => {
           if (e.key === "Escape" && trigger) {
@@ -480,14 +606,17 @@ export const ComposerTextarea = forwardRef<
             lineHeight: "var(--cowboy-reading-line-height, 1.5)",
             // Clear the overlaid send/kebab buttons at the bottom-right.
             ...(endInset > 0 && { paddingRight: `${String(14 + endInset)}px` }),
-            ...(expanded && { height: "100% !important", overflowY: "auto !important" }),
+            ...(expanded &&
+              { height: "100% !important", overflowY: "auto !important" }),
           },
           // Inside the composer's outlined Paper card the card draws the box, so
           // drop the TextField's own outline in all three states (rest/hover/focus).
           ...(borderless && {
             "& .MuiOutlinedInput-notchedOutline": { border: "none" },
             "&:hover .MuiOutlinedInput-notchedOutline": { border: "none" },
-            "& .Mui-focused .MuiOutlinedInput-notchedOutline": { border: "none" },
+            "& .Mui-focused .MuiOutlinedInput-notchedOutline": {
+              border: "none",
+            },
           }),
         }}
       />

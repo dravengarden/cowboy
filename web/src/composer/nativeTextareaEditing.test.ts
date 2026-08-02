@@ -1,0 +1,81 @@
+import { assertEquals } from "jsr:@std/assert";
+import {
+  cycleNativeHeading,
+  indentNativeLines,
+  insertNativeCodeBlock,
+  insertNativeLink,
+  outdentNativeLines,
+  setNativeHeading,
+  toggleNativeCheckbox,
+  toggleNativeLinePrefix,
+  toggleNativeWrap,
+  wrapNativeSelection,
+} from "./nativeTextareaEditing";
+
+Deno.test("native toolbar wraps a caret or selected text", () => {
+  assertEquals(wrapNativeSelection("hello", 5, 5, "**", "**"), {
+    value: "hello****",
+    from: 7,
+    to: 7,
+  });
+  assertEquals(toggleNativeWrap("hello", 0, 5, "**"), {
+    value: "**hello**",
+    from: 2,
+    to: 7,
+  });
+  assertEquals(toggleNativeWrap("**hello**", 2, 7, "**"), {
+    value: "hello",
+    from: 0,
+    to: 5,
+  });
+});
+
+Deno.test("native toolbar keeps the caret with line prefixes and headings", () => {
+  assertEquals(toggleNativeLinePrefix("hello", 5, 5, "> "), {
+    value: "> hello",
+    from: 7,
+    to: 7,
+  });
+  assertEquals(cycleNativeHeading("hello", 2, 2), {
+    value: "# hello",
+    from: 4,
+    to: 4,
+  });
+  assertEquals(setNativeHeading("## hello", 5, 5, 0), {
+    value: "hello",
+    from: 2,
+    to: 2,
+  });
+});
+
+Deno.test("native toolbar indents and outdents every selected line", () => {
+  const indented = indentNativeLines("one\ntwo", 0, 7);
+  assertEquals(indented, {
+    value: "  one\n  two",
+    from: 2,
+    to: 11,
+  });
+  assertEquals(outdentNativeLines(indented.value, indented.from, indented.to), {
+    value: "one\ntwo",
+    from: 0,
+    to: 7,
+  });
+});
+
+Deno.test("native toolbar toggles task state and inserts link and code block", () => {
+  assertEquals(toggleNativeCheckbox("- [ ] task", 7, 7), {
+    value: "- [x] task",
+    from: 7,
+    to: 7,
+  });
+  assertEquals(insertNativeLink("hello", 0, 5), {
+    value: "[hello](url)",
+    from: 8,
+    to: 11,
+  });
+  assertEquals(insertNativeCodeBlock("hello", 0, 5), {
+    value: "```\nhello\n```",
+    from: 9,
+    to: 9,
+  });
+});

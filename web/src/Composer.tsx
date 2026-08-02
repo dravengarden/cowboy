@@ -1693,7 +1693,9 @@ export function ComposerWorkspace({
       {!composeFs && (
           // PlatformComposerEditor owns the compact-touch hybrid: native textarea
           // for UIKit long-press editing while there is no inline image token,
-          // CM6 as soon as a token needs its widget. Fullscreen/column stays CM6.
+          // CM6 as soon as a token needs its widget. The fullscreen touch surface
+          // follows the same rule so its distant blank canvas remains a reliable
+          // native Paste-menu target.
           <Box
             ref={editorAreaRef}
             data-mobile-editor-area={touchInput ? "true" : undefined}
@@ -3937,9 +3939,9 @@ function PendingRow({
             <PlatformComposerEditor
               ref={editorRef}
               // Seeds from the shared `draft` and re-mounts on overlay close, so
-              // it reflects edits made in the overlay. Uncontrolled thereafter —
-              // onChange feeds `draft`, never back into `value`. Same CM6 +
-              // live-preview editor on every surface now (vim desktop-only).
+              // it reflects edits made in the overlay. Desktop CM6 remains
+              // uncontrolled thereafter; touch uses the controlled native editor
+              // until an inline image token requires CM6 (vim desktop-only).
               value={draft}
               borderless
               {...(touchInput ? { endInset: 36 } : {})}

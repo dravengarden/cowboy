@@ -1,4 +1,10 @@
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   Box,
@@ -24,10 +30,13 @@ import {
   Tune,
 } from "@mui/icons-material";
 import {
-  PlatformComposerEditor,
   type ComposerEditorHandle,
+  PlatformComposerEditor,
 } from "./composer/PlatformComposerEditor";
-import { COMPOSER_COMMANDS_BY_ID, type ComposerCommand } from "./composerCommands";
+import {
+  COMPOSER_COMMANDS_BY_ID,
+  type ComposerCommand,
+} from "./composerCommands";
 import { useComposerToolbar } from "./composerToolbarConfig";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import {
@@ -42,8 +51,8 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
-// 100dvh overlay modeled on Obsidian's mobile note editor — a full-height CM6 +
-// mdlive live-preview canvas and a
+// 100dvh overlay modeled on Obsidian's mobile note editor — a full-height native
+// text canvas on touch (promoted to CM6 only for inline-image widgets) and a
 // SELECTION-AWARE markdown toolbar pinned just above the keyboard. The editor is
 // the same engine as every other surface, so markdown stays the literal value and
 // nothing re-serializes on open/close. The native iOS keyboard accessory bar is
@@ -117,8 +126,8 @@ export function FullscreenComposer({
   const nativeShell = isNativeShell();
   const theme = useTheme();
 
-  // UNCONTROLLED, exactly like the inline composer: freeze the open-time text as a
-  // one-shot seed and let `onChange` flow text OUT only. Passing the live
+  // CM6 is UNCONTROLLED, exactly like the inline composer: freeze the open-time
+  // text as a one-shot seed and let `onChange` flow text OUT only. Passing the live
   // `value={text}` (what we used to do) makes @uiw/react-codemirror reconcile the
   // doc on EVERY keystroke — and worse, on every IME composition update — which
   // bounces the iOS caret and corrupts mid-composition pinyin ("状态错乱"). The
@@ -137,7 +146,7 @@ export function FullscreenComposer({
     return (): void => globalThis.clearTimeout(timer);
   }, [autoFocus]);
 
-  const act = (fn: () => void): (() => void) => () => {
+  const act = (fn: () => void): () => void => () => {
     haptic();
     fn();
   };
@@ -257,6 +266,10 @@ export function FullscreenComposer({
         <PlatformComposerEditor
           ref={editorRef}
           value={seed}
+          // The token-free touch path is a controlled native textarea. Keep its
+          // live value separate from CM6's frozen mount seed so typing cannot be
+          // reset by the next React render.
+          nativeValue={value}
           onChange={onChange}
           onSubmit={onSubmit}
           onSaveDraft={onSaveDraft}
@@ -274,15 +287,16 @@ export function FullscreenComposer({
               // Keep the Escape that requests confirmation separate from the
               // Escape MUI uses to close an already-open dialog.
               globalThis.requestAnimationFrame(() => setDiscardOpen(true));
-            }
-            else onCollapse();
+            } else onCollapse();
             return true;
           }}
         />
       </Box>
 
-      {/* One inset keyboard-adjacent card shared by main compose and row editing.
-          Message actions stay above formatting, which is nearest the keyboard. */}
+      {
+        /* One inset keyboard-adjacent card shared by main compose and row editing.
+          Message actions stay above formatting, which is nearest the keyboard. */
+      }
       <MobileComposerAccessoryDock
         mode={hasSelection ? "selection" : "insert"}
         formatActions={actions}
@@ -298,7 +312,10 @@ export function FullscreenComposer({
             >
               <KeyboardHide />
             </MobileComposerAccessoryButton>
-            <MobileComposerAccessoryButton title="Attach file" onClick={act(onAttach)}>
+            <MobileComposerAccessoryButton
+              title="Attach file"
+              onClick={act(onAttach)}
+            >
               <AttachFile />
             </MobileComposerAccessoryButton>
             {showCollapse && (
@@ -353,14 +370,20 @@ export function FullscreenComposer({
         primaryLabel={submitLabel}
         primaryDisabled={!sendable}
         onPrimary={act(onSubmit)}
-        primaryIcon={submitIcon ?? (submitLabel === "Done editing" ? <Check /> : <Send />)}
+        primaryIcon={submitIcon ??
+          (submitLabel === "Done editing" ? <Check /> : <Send />)}
       />
 
       <ComposerToolbarSettings
         open={settingsOpen}
         onClose={(): void => setSettingsOpen(false)}
       />
-      <Dialog open={discardOpen} onClose={(): void => setDiscardOpen(false)} fullWidth maxWidth="xs">
+      <Dialog
+        open={discardOpen}
+        onClose={(): void => setDiscardOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
         <DialogTitle>Ignore modifications?</DialogTitle>
         <DialogContent>Your unsaved changes will be discarded.</DialogContent>
         <DialogActions>
