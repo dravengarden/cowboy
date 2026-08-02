@@ -1586,6 +1586,19 @@ export function ComposerWorkspace({
             "&:focus-within [data-mobile-editor-area]": {
               minHeight: 132,
             },
+            // An inline image promotes the compact native textarea to CM6. Keep
+            // the complete focused canvas inside the same contenteditable height
+            // chain; otherwise CM6 collapses to its 14px text line while the
+            // surrounding card remains tall, so an iOS long-press in the visible
+            // blank area lands on an inert wrapper and cannot open Paste/AutoFill.
+            "&:focus-within [data-mobile-editor-area] > *, &:focus-within [data-mobile-editor-area] .cm-theme-none, &:focus-within [data-mobile-editor-area] .cm-editor, &:focus-within [data-mobile-editor-area] .cm-scroller": {
+              flex: 1,
+              minHeight: 0,
+              height: "100%",
+            },
+            "&:focus-within [data-mobile-editor-area] .cm-content": {
+              minHeight: "100%",
+            },
             "&:focus-within [data-mobile-focus-format-row]": {
               maxHeight: 48,
               opacity: 1,

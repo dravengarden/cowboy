@@ -641,6 +641,13 @@ here says otherwise.
     paper over an inert inset with delayed focus, pointer-down selection writes,
     or a larger non-editable wrapper.
 
+    The same rule applies after an inline image promotes the focused compact
+    textarea to CM6: propagate the expanded editor area's height through
+    `.cm-theme-none`, `.cm-editor`, and `.cm-scroller` so `.cm-content` truly
+    fills the visible canvas. A `min-height: 100%` contenteditable without that
+    resolvable ancestor height still collapses to one text line and leaves the
+    apparent writing area inert.
+
 33. **Mobile formatting and completion actions share one two-track keyboard
     accessory dock.** The former single rail mixed Markdown transformations with
     keyboard, attachment, and Send/Done lifecycle actions; overflow then made the
