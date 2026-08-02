@@ -6,12 +6,29 @@ import {
   useRef,
   useState,
 } from "react";
-import { Box, Paper, TextField, Typography } from "@mui/material";
+import ContentPasteRounded from "@mui/icons-material/ContentPasteRounded";
+import {
+  Box,
+  ButtonBase,
+  CircularProgress,
+  Paper,
+  TextField,
+  Typography,
+} from "@mui/material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
+import { readComposerClipboard } from "./clipboard";
+import {
+  BLANK_CANVAS_LONG_PRESS_MS,
+  isBlankCanvasPress,
+  longPressMoved,
+  measureTextareaContentHeight,
+} from "./composer/mobileBlankCanvasPaste";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { navigationHaptic } from "./haptic";
+import { useNetworkActionState } from "./NetworkActionFeedback";
 import {
   cycleNativeHeading,
   indentNativeLines,
@@ -46,6 +63,19 @@ interface Trigger {
   type: "@" | "/";
   from: number;
   query: string;
+}
+
+interface PendingBlankCanvasPress {
+  identifier: number;
+  clientX: number;
+  clientY: number;
+  textareaScrollTop: number;
+  fired: boolean;
+}
+
+interface BlankPasteAnchor {
+  left: number;
+  top: number;
 }
 
 // Find an active trigger token immediately before the caret — mirrors the desktop
@@ -169,7 +199,14 @@ export const ComposerTextarea = forwardRef<
   },
   ref,
 ): React.JSX.Element {
+  const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const blankPressTimerRef = useRef<number | null>(null);
+  const pendingBlankPressRef = useRef<PendingBlankCanvasPress | null>(null);
+  const [blankPasteAnchor, setBlankPasteAnchor] = useState<
+    BlankPasteAnchor | null
+  >(null);
+  const pasteFeedback = useNetworkActionState();
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
@@ -214,6 +251,80 @@ export const ComposerTextarea = forwardRef<
     const from = ta?.selectionStart ?? current.length;
     const to = ta?.selectionEnd ?? from;
     return { value: current, from, to };
+  };
+
+  const cancelBlankPressTimer = (): void => {
+    if (blankPressTimerRef.current != null) {
+      globalThis.clearTimeout(blankPressTimerRef.current);
+      blankPressTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return (): void => cancelBlankPressTimer();
+  }, []);
+
+  useEffect(() => {
+    if (!blankPasteAnchor) return undefined;
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("[data-mobile-blank-paste-menu]")
+      ) return;
+      setBlankPasteAnchor(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return (): void => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+    };
+  }, [blankPasteAnchor]);
+
+  const showBlankPasteMenu = (
+    press: PendingBlankCanvasPress,
+  ): void => {
+    const root = rootRef.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    const halfMenuWidth = 54;
+    press.fired = true;
+    setBlankPasteAnchor({
+      left: Math.max(
+        halfMenuWidth + 8,
+        Math.min(rect.width - halfMenuWidth - 8, press.clientX - rect.left),
+      ),
+      top: Math.max(
+        8,
+        Math.min(rect.height - 52, press.clientY - rect.top - 54),
+      ),
+    });
+    navigationHaptic();
+  };
+
+  const pasteFromBlankCanvas = async (): Promise<void> => {
+    const selection = currentTextSelection();
+    const content = await readComposerClipboard();
+    if (content.files.length > 0) {
+      if (!onPasteFiles) throw new Error("This composer cannot paste files");
+      onPasteFiles(content.files);
+      return;
+    }
+    if (!content.text) throw new Error("The clipboard is empty");
+
+    const textarea = inputRef.current;
+    const current = textarea?.value ?? selection.value;
+    const from = Math.min(selection.from, current.length);
+    const to = Math.min(selection.to, current.length);
+    const next = current.slice(0, from) + content.text + current.slice(to);
+    const caret = from + content.text.length;
+    onChange(next);
+    setTrigger(null);
+    requestAnimationFrame(() => {
+      const currentTextarea = inputRef.current;
+      if (!currentTextarea) return;
+      currentTextarea.setSelectionRange(caret, caret);
+      publishSelection(currentTextarea);
+    });
   };
 
   // Accessory buttons prevent pointer-down default, so the native textarea is
@@ -506,6 +617,7 @@ export const ComposerTextarea = forwardRef<
 
   return (
     <Box
+      ref={rootRef}
       data-mobile-pager-ignore
       data-mobile-drawer-ignore
       sx={{
@@ -518,10 +630,66 @@ export const ComposerTextarea = forwardRef<
       }}
     >
       {popup}
+      {blankPasteAnchor && (
+        <Paper
+          data-mobile-blank-paste-menu
+          role="menu"
+          elevation={5}
+          sx={{
+            position: "absolute",
+            left: blankPasteAnchor.left,
+            top: blankPasteAnchor.top,
+            transform: "translateX(-50%)",
+            zIndex: 6,
+            border: "1px solid",
+            borderColor: "divider",
+            borderRadius: 2,
+            overflow: "hidden",
+            bgcolor: "background.paper",
+            color: "text.primary",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+          }}
+        >
+          <ButtonBase
+            role="menuitem"
+            disabled={pasteFeedback.pending}
+            disableRipple
+            onPointerDown={(event): void => {
+              // This menu is deliberately non-modal. Keep the textarea as
+              // UIKit's first responder while the trusted tap reads clipboard.
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(): void => {
+              void pasteFeedback.run(pasteFromBlankCanvas).then((pasted) => {
+                if (pasted) setBlankPasteAnchor(null);
+              });
+            }}
+            sx={{
+              minWidth: 108,
+              minHeight: 44,
+              px: 1.5,
+              gap: 0.875,
+              justifyContent: "flex-start",
+              fontSize: "0.875rem",
+              transition: "opacity 120ms ease, background-color 120ms ease",
+              ...(pasteFeedback.pending && { opacity: 0.56 }),
+              "&:active": { bgcolor: "action.selected" },
+            }}
+          >
+            {pasteFeedback.progress
+              ? <CircularProgress size={17} thickness={4.5} color="inherit" />
+              : <ContentPasteRounded sx={{ fontSize: "1.125rem" }} />}
+            <Box component="span">Paste</Box>
+          </ButtonBase>
+        </Paper>
+      )}
       <TextField
         inputRef={inputRef}
         value={value}
         onChange={(e): void => {
+          setBlankPasteAnchor(null);
           const command = selectedSlashCommandRef.current;
           if (command) {
             const next = e.target.value;
@@ -540,6 +708,7 @@ export const ComposerTextarea = forwardRef<
           );
         }}
         onSelect={(e): void => {
+          setBlankPasteAnchor(null);
           const ta = e.target as HTMLTextAreaElement;
           sync(ta.value, ta.selectionStart ?? ta.value.length);
           publishSelection(ta);
@@ -563,6 +732,82 @@ export const ComposerTextarea = forwardRef<
           }
         }}
         onBlur={(): void => setTrigger(null)}
+        onTouchStart={(event): void => {
+          setBlankPasteAnchor(null);
+          cancelBlankPressTimer();
+          pendingBlankPressRef.current = null;
+          if (!expanded || disabled || event.touches.length !== 1) return;
+          const textarea = inputRef.current;
+          const touch = event.touches[0];
+          if (!textarea || !touch) return;
+          const rect = textarea.getBoundingClientRect();
+          if (
+            !isBlankCanvasPress({
+              clientY: touch.clientY,
+              textareaTop: rect.top,
+              textareaHeight: rect.height,
+              textareaScrollTop: textarea.scrollTop,
+              naturalContentHeight: measureTextareaContentHeight(textarea),
+            })
+          ) return;
+
+          const press: PendingBlankCanvasPress = {
+            identifier: touch.identifier,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            textareaScrollTop: textarea.scrollTop,
+            fired: false,
+          };
+          pendingBlankPressRef.current = press;
+          blankPressTimerRef.current = globalThis.setTimeout(() => {
+            blankPressTimerRef.current = null;
+            if (
+              pendingBlankPressRef.current === press &&
+              inputRef.current?.scrollTop === press.textareaScrollTop
+            ) {
+              showBlankPasteMenu(press);
+            }
+          }, BLANK_CANVAS_LONG_PRESS_MS);
+        }}
+        onTouchMove={(event): void => {
+          const press = pendingBlankPressRef.current;
+          if (!press) return;
+          const touch = Array.from(event.touches).find((candidate) =>
+            candidate.identifier === press.identifier
+          );
+          if (
+            !touch ||
+            longPressMoved(
+              press.clientX,
+              press.clientY,
+              touch.clientX,
+              touch.clientY,
+            )
+          ) {
+            cancelBlankPressTimer();
+            pendingBlankPressRef.current = null;
+          }
+        }}
+        onTouchEnd={(event): void => {
+          const press = pendingBlankPressRef.current;
+          if (
+            press &&
+            Array.from(event.changedTouches).some((touch) =>
+              touch.identifier === press.identifier
+            )
+          ) {
+            cancelBlankPressTimer();
+            pendingBlankPressRef.current = null;
+          }
+        }}
+        onTouchCancel={(): void => {
+          // WebKit may cancel DOM touch delivery while its own long-press
+          // recognizer decides there is no nearby text anchor. Keep an unmoved
+          // blank-canvas timer alive so Cowboy's fallback still appears.
+          if (pendingBlankPressRef.current?.fired) {
+            pendingBlankPressRef.current = null;
+          }
+        }}
         onPaste={(e): void => {
           const files = clipboardFiles(e.clipboardData);
           if (files.length > 0 && onPasteFiles) {

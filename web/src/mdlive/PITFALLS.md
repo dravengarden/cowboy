@@ -780,9 +780,20 @@ here says otherwise.
     now use that same native control for token-free text, including literal
     Markdown toolbar transformations and selection reporting. An inline-image
     token still promotes the document synchronously to CM6 so its widget remains
-    in flow. Keep the live native value separate from CM6's frozen mount seed;
-    never emulate this with a transparent overlay, synthetic pointer selection,
-    or delayed refocus.
+    in flow. Keep the live native value separate from CM6's frozen mount seed.
+
+    A native textarea fixes first-responder ownership, but UIKit still declines
+    to anchor its edit menu when the held point is well below the final laid-out
+    text line. The visible textarea can therefore be the correct full-height hit
+    target while the lower canvas still appears inert. Measure the wrapped text
+    height without touching the live control. A stationary long press below that
+    boundary opens Cowboy's small non-modal Paste menu; a second trusted tap uses
+    the async Clipboard API while pointer-down remains non-focusing. Text-near
+    presses stay entirely native, movement cancels the fallback, and the menu
+    never writes selection or focus during the original hold. Do not replace this
+    with a transparent overlay, synthetic pointer selection, `contextmenu`, or
+    delayed refocus: those either suppress native selection/IME or cannot summon
+    iOS's menu reliably.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
@@ -792,6 +803,8 @@ fullscreen editor:
 - [ ] Type pinyin on a `**`/`# ` marker line — no dropped/garbled chars (pitfall #1).
 - [ ] Caret is visible + stays visible while typing/scrolling (pitfall #2).
 - [ ] Long-press → the Paste/Select menu appears; Paste works (pitfall #3).
+- [ ] In fullscreen, long-press near text keeps the native menu; long-press far
+      below text opens Cowboy Paste, and tapping it keeps the keyboard visible.
 - [ ] No stray dot near the caret / rendered markdown (pitfall #4).
 - [ ] `**`/`(`/`` ` ``/`[` then Backspace clears the whole pair (pitfall #5).
 - [ ] Type inline → expand → type → collapse: text is preserved (pitfall #6).
