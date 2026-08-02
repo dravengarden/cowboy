@@ -692,26 +692,34 @@ function mergeEvents(
 // url on the build id means a new version's pages are fresh fetches, while
 // reloads of the SAME build stay cache hits. (`conn.version()` is the id the tab
 // loaded against; until the first /version probe lands it's a harmless "0".)
-export async function loadOlder(sessionId: string): Promise<void> {
+const HISTORY_FETCH_TIMEOUT_MS = 6_000;
+
+export async function loadOlder(sessionId: string): Promise<boolean> {
   const pg = state.pagination.get(sessionId);
-  if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return;
+  if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return false;
   const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const beforeSeq = pg.beforeSeq;
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(
+    () => controller.abort("history request timed out"),
+    HISTORY_FETCH_TIMEOUT_MS,
+  );
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
     const res = await fetch(
       `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&v=${encodeURIComponent(conn.version() ?? "0")}`,
+      { signal: controller.signal },
     );
     if (!res.ok) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
-      return;
+      return false;
     }
     const data = (await res.json()) as {
       events: Envelope[];
       next_before_seq: number | null;
       reached_start: boolean;
     };
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return;
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
     // Always step to the next OLDER page (don't recompute from the oldest seq —
     // a gap at a boundary would re-request the same page forever). Page 0 was
@@ -721,8 +729,13 @@ export async function loadOlder(sessionId: string): Promise<void> {
       loadingOlder: false,
       beforeSeq: data.next_before_seq,
     });
+    return data.reached_start || data.next_before_seq !== beforeSeq ||
+      data.events.length > 0;
   } catch {
     setPagination(sessionId, { ...pg, loadingOlder: false });
+    return false;
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
 }
 

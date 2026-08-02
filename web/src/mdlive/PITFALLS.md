@@ -661,7 +661,10 @@ here says otherwise.
     skeleton boundary remains at the visual page head; promote it before I/O and
     replace it from its lower edge as older rows mount. The in-flow placeholder
     should resemble compact thought headings plus tool cards; do not regress to
-    a delayed, detached, or floating loading overlay.
+    a delayed, detached, or floating loading overlay. `loadOlder` must remain
+    bounded by a client timeout and report cursor progress: a suspended fetch or
+    unchanged cursor must collapse the active band back to its retryable idle
+    boundary instead of leaving Mobile behind a permanent expanded skeleton.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 

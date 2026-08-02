@@ -3301,7 +3301,7 @@ export function Transcript({
     ) return;
     const run = ++scrollbackFillRunRef.current;
     scrollbackFillActiveRef.current = true;
-    const targetHeight = Math.min(420, Math.max(180, el.clientHeight * 0.42));
+    const targetHeight = Math.min(300, Math.max(160, el.clientHeight * 0.3));
     const idleBandHeight = el.querySelector<HTMLElement>(
       "[data-transcript-scrollback-fill]",
     )?.getBoundingClientRect().height ?? 0;
@@ -3319,7 +3319,8 @@ export function Transcript({
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         if (scrollbackFillRunRef.current !== run) return;
         for (let page = 0; page < SCROLLBACK_FILL_PAGE_LIMIT; page += 1) {
-          await loadOlder(sessionIdRef.current);
+          const progressed = await loadOlder(sessionIdRef.current);
+          if (!progressed) break;
           await new Promise<void>((resolve) => {
             globalThis.setTimeout(() => requestAnimationFrame(() => resolve()),
               SCROLLBACK_FILL_SETTLE_MS);
