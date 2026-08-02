@@ -670,6 +670,10 @@ here says otherwise.
     the iPhone status bar/Dynamic Island. Draft and
     Queue keep their separate overlay discard action and reuse the dock with Done
     editing, omitting the main composer's delivery actions.
+    An inline Queue/Draft editor is the sole Mobile writing focus while active:
+    the ordinary new-message composer yields its slot and the shared pending
+    scrollport may grow to 56vh. Do not stack two complete composers above the
+    keyboard or retain the ordinary 40vh list cap around the active editor.
     Keep every action in an equal 44pt slot:
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard, with a 6px outer breathing

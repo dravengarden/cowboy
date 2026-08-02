@@ -898,6 +898,21 @@ export function ComposerWorkspace({
   const compact = useMediaQuery(theme.breakpoints.down("lg"));
   const mobileToolbarIds = useComposerToolbar();
   const [mobileToolbarSettingsOpen, setMobileToolbarSettingsOpen] = useState(false);
+  // A Queue/Draft edit is itself a complete composer. Mobile must expose one
+  // writing focus at a time: leaving the new-message composer underneath the
+  // active row editor creates two large, nearly identical cards above the
+  // keyboard and makes the lower one look actionable even though focus belongs
+  // to the row. Keep each panel's local edit ownership, but project it here so
+  // the ordinary composer can yield its visual slot until editing completes.
+  const [mobileQueuedEditing, setMobileQueuedEditing] = useState(false);
+  const [mobileDraftEditing, setMobileDraftEditing] = useState(false);
+  const mobilePendingEditing = mobileQueuedEditing || mobileDraftEditing;
+  const onMobileQueuedEditingChange = useCallback((editing: boolean): void => {
+    setMobileQueuedEditing(editing);
+  }, []);
+  const onMobileDraftEditingChange = useCallback((editing: boolean): void => {
+    setMobileDraftEditing(editing);
+  }, []);
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
   // inline expand instead (composeFs is never set true there).
@@ -1412,7 +1427,8 @@ export function ComposerWorkspace({
             // direction lock continues to recognise deliberate horizontal drawer
             // gestures.
             minHeight: 0,
-            maxHeight: "40vh",
+            maxHeight: mobilePendingEditing ? "56vh" : "40vh",
+            transition: "max-height 180ms cubic-bezier(.2,.8,.2,1)",
             flexShrink: 1,
             touchAction: "pan-y",
             WebkitOverflowScrolling: "touch",
@@ -1438,6 +1454,7 @@ export function ComposerWorkspace({
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
+              onEditingChange={onMobileQueuedEditingChange}
             />
           )}
           {/* Drafts: parked messages the user holds + activates on demand. */}
@@ -1450,6 +1467,7 @@ export function ComposerWorkspace({
               status={status}
               commands={(): AvailableCommand[] => availableCommands}
               unbounded
+              onEditingChange={onMobileDraftEditingChange}
               // Only offer "move" when there's somewhere to move to.
               onMoveDraft={otherSessions.length > 0
                 ? (id: string): void => setMoveSrcId(id)
@@ -1502,7 +1520,7 @@ export function ComposerWorkspace({
       )}
       {/* CM6 renders token-backed images at their document position. The tray is
           reserved for files and legacy images that have no placement token. */}
-      {compactTrayAttachments.length > 0 && (
+      {!mobilePendingEditing && compactTrayAttachments.length > 0 && (
         <AttachmentPreviews
           attachments={compactTrayAttachments}
           onRemove={removeAttachment}
@@ -1553,7 +1571,7 @@ export function ComposerWorkspace({
         elevation={0}
         sx={{
           position: "relative",
-          display: "flex",
+          display: !desktop && mobilePendingEditing ? "none" : "flex",
           flexDirection: "column",
           ...(surface === "desktop" && {
             ...desktopSurfaceSx({ interactive: false, focusWithin: true }),
@@ -3075,6 +3093,7 @@ function PendingPanel({
   commands,
   onMoveDraft,
   onScheduleDraft,
+  onEditingChange,
   unbounded,
 }: {
   desktop: boolean;
@@ -3092,6 +3111,9 @@ function PendingPanel({
   /** Open the schedule picker for a draft (draft kind only) — set/reschedule/
       cancel its future auto-send. Owned by the Composer (survives unmount). */
   onScheduleDraft?: ((id: string) => void) | undefined;
+  /** Mobile parent projection used to yield the ordinary composer while this
+   *  panel owns the only active writing surface. */
+  onEditingChange?: ((editing: boolean) => void) | undefined;
   /** Rendered inside the composer's SHARED queue+drafts scroll region, so this
    *  panel must NOT apply its own maxHeight/overflow — nesting scrollers would
    *  trap the gesture. The outer region owns the cap + scroll. */
@@ -3118,6 +3140,10 @@ function PendingPanel({
   };
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(toggleCollapsed);
   const [editingId, setEditingId] = useState<string | null>(null);
+  useEffect(() => {
+    onEditingChange?.(editingId !== null);
+    return (): void => onEditingChange?.(false);
+  }, [editingId, onEditingChange]);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by
   // default (they'd waste ~40px on every row of a narrow phone) and revealed
   // only in this opt-in "reorder mode" (iOS list-Edit pattern). Local + ephemeral
