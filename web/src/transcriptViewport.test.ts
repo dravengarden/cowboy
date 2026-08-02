@@ -5,7 +5,16 @@ import {
   shouldBackfillTranscriptViewport,
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
+  transcriptViewportBackfillBudget,
 } from "./transcriptViewport.ts";
+
+Deno.test("viewport refill budget covers sparse image history without becoming unbounded", () => {
+  assertEquals(transcriptViewportBackfillBudget(0), 16);
+  assertEquals(transcriptViewportBackfillBudget(780), 17);
+  assertEquals(transcriptViewportBackfillBudget(1_020), 19);
+  assertEquals(transcriptViewportBackfillBudget(10_000), 24);
+  assertEquals(transcriptViewportBackfillBudget(Number.NaN), 16);
+});
 
 Deno.test("mobile transcript refills when an iPad viewport grows", () => {
   assertEquals(

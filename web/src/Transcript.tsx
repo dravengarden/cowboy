@@ -113,6 +113,7 @@ import {
   shouldBackfillTranscriptViewport,
   shouldShowHistoryLoading,
   shouldMagnetizeTranscript,
+  transcriptViewportBackfillBudget,
 } from "./transcriptViewport";
 import {
   advanceTimelinePresentation,
@@ -138,7 +139,7 @@ const EMPTY_OPTIMISTIC_MESSAGES: QueuedMessage[] = [];
 // viewport half empty. Keep the bootstrap bounded because one history page may
 // approach 512 KiB, but allow enough cursor steps to reach useful prose/tool
 // boundaries; geometry stops the chain immediately once the viewport fills.
-const VIEWPORT_BACKFILL_PAGE_BUDGET = 6;
+const INITIAL_VIEWPORT_BACKFILL_PAGE_BUDGET = 16;
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -3125,7 +3126,7 @@ export function Transcript({
   const viewportBackfillRafRef = useRef(0);
   const viewportBackfillCursorRef = useRef<number | null>(null);
   const viewportBackfillAllowanceRef = useRef(
-    VIEWPORT_BACKFILL_PAGE_BUDGET,
+    INITIAL_VIEWPORT_BACKFILL_PAGE_BUDGET,
   );
   const viewportHeightRef = useRef<number | null>(null);
   const historyPrefetchArmedRef = useRef(true);
@@ -3218,7 +3219,7 @@ export function Transcript({
     setScrollbackLoading(false);
     setShowHistoryLoadingFill(false);
     viewportBackfillCursorRef.current = null;
-    viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_BUDGET;
+    viewportBackfillAllowanceRef.current = INITIAL_VIEWPORT_BACKFILL_PAGE_BUDGET;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
     historyLoadingRequestRef.current += 1;
@@ -3248,6 +3249,15 @@ export function Transcript({
       if (!el || !paging) {
         setBackfillingViewport(false);
         return;
+      }
+      // Byte-bounded history pages may each contain one large generated image.
+      // Size the finite chain from the real viewport before deciding that its
+      // allowance is exhausted; geometry still stops immediately once filled.
+      if (viewportHeightRef.current === null) {
+        viewportHeightRef.current = el.clientHeight;
+        viewportBackfillAllowanceRef.current = transcriptViewportBackfillBudget(
+          el.clientHeight,
+        );
       }
       const needsOlderPage = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
@@ -3822,7 +3832,9 @@ export function Transcript({
         previousHeight !== null &&
         nextHeight > previousHeight + 1
       ) {
-        viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_BUDGET;
+        viewportBackfillAllowanceRef.current = transcriptViewportBackfillBudget(
+          nextHeight,
+        );
         requestViewportBackfillRef.current(true);
       }
       if (!stick.current) {

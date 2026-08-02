@@ -10,6 +10,18 @@ export interface TranscriptViewportBackfillInput {
   clientHeight: number;
 }
 
+/**
+ * Bound automatic history hydration by the viewport it needs to fill rather
+ * than one device-independent page count. History pages are byte-bounded, so
+ * an image-heavy turn can legitimately contain only one renderable event per
+ * page. A small fixed allowance can therefore stop with a short transcript
+ * and expose the unused flex area as an apparent blank screen.
+ */
+export function transcriptViewportBackfillBudget(clientHeight: number): number {
+  const height = Number.isFinite(clientHeight) ? Math.max(0, clientHeight) : 0;
+  return Math.min(24, Math.max(16, 8 + Math.ceil(height / 96)));
+}
+
 export function shouldBackfillTranscriptViewport(
   input: TranscriptViewportBackfillInput,
 ): boolean {
