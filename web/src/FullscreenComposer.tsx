@@ -1,7 +1,6 @@
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  AppBar,
   Box,
   Button,
   Dialog,
@@ -9,7 +8,6 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
-  Toolbar,
   Tooltip,
   useTheme,
 } from "@mui/material";
@@ -39,8 +37,8 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
 // Brand-new full-screen mobile compose surface (NOT a DetentSheet): a fixed
-// 100dvh overlay modeled on Obsidian's mobile note editor — a light top bar
-// (collapse), a full-height CM6 + mdlive live-preview canvas, and a
+// 100dvh overlay modeled on Obsidian's mobile note editor — a full-height CM6 +
+// mdlive live-preview canvas and a
 // SELECTION-AWARE markdown toolbar pinned just above the keyboard. The editor is
 // the same engine as every other surface, so markdown stays the literal value and
 // nothing re-serializes on open/close. The native iOS keyboard accessory bar is
@@ -191,46 +189,30 @@ export function FullscreenComposer({
         pb: "max(var(--kb-inset, 0px), env(safe-area-inset-bottom, 0px))",
       }}
     >
-      <AppBar
-        position="static"
-        color="transparent"
-        elevation={0}
-        sx={{
-          // No bottom divider: a hard hairline on the near-white surface read as a
-          // cheap seam under a bare top bar. The collapse button floats on the same
-          // calm writing surface — a seamless, focused editor (Bear / iA Writer
-          // style) instead of a boxed-off pale band.
-          bgcolor: "background.default",
-          pt: "env(safe-area-inset-top, 0px)",
-        }}
-      >
-        <Toolbar variant="dense" sx={{ minHeight: 48, gap: 1 }}>
-          {showCollapse && (
-            <Tooltip title="Collapse">
-              <IconButton aria-label="collapse editor" onClick={act(onCollapse)}>
-                <CloseFullscreen />
-              </IconButton>
-            </Tooltip>
-          )}
-          <Box sx={{ flex: 1 }} />
-          {onDiscard && (
-            <Tooltip title="Ignore modifications">
-              <IconButton
-                aria-label="ignore modifications"
-                onClick={act(() => setDiscardOpen(true))}
-              >
-                <Close />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Toolbar>
-      </AppBar>
+      {onDiscard && (
+        <Tooltip title="Ignore modifications">
+          <IconButton
+            aria-label="ignore modifications"
+            onClick={act(() => setDiscardOpen(true))}
+            sx={{
+              position: "absolute",
+              zIndex: 1,
+              top: "calc(env(safe-area-inset-top, 0px) + 4px)",
+              right: 8,
+              width: 44,
+              height: 44,
+            }}
+          >
+            <Close />
+          </IconButton>
+        </Tooltip>
+      )}
 
       {attachmentsSlot != null && (
         <Box sx={{ px: 1.5, pt: 1 }}>{attachmentsSlot}</Box>
       )}
 
-      {/* The writing canvas — fills the space between the top bar and the toolbar. */}
+      {/* The writing canvas — fills the space above the keyboard dock. */}
       <Box
         sx={{
           flex: 1,
@@ -292,6 +274,14 @@ export function FullscreenComposer({
             <MobileComposerAccessoryButton title="Attach file" onClick={act(onAttach)}>
               <AttachFile />
             </MobileComposerAccessoryButton>
+            {showCollapse && (
+              <MobileComposerAccessoryButton
+                title="Collapse editor"
+                onClick={act(onCollapse)}
+              >
+                <CloseFullscreen />
+              </MobileComposerAccessoryButton>
+            )}
           </>
         }
         fixedAction={

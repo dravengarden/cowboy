@@ -30,7 +30,7 @@ export function MobileComposerAccessoryDock({
         display: "grid",
         gridTemplateRows: "48px 48px",
         borderTop: 1,
-        borderColor: "divider",
+        borderColor: (theme) => alpha(theme.palette.divider, 0.42),
         bgcolor: (theme) =>
           alpha(
             theme.palette.background.paper,
@@ -38,8 +38,7 @@ export function MobileComposerAccessoryDock({
           ),
         backdropFilter: "blur(18px) saturate(135%)",
         WebkitBackdropFilter: "blur(18px) saturate(135%)",
-        boxShadow: (theme) =>
-          `0 -1px 0 ${alpha(theme.palette.text.primary, 0.035)}`,
+        boxShadow: "none",
         userSelect: "none",
         WebkitUserSelect: "none",
       }}
@@ -54,7 +53,7 @@ export function MobileComposerAccessoryDock({
           minWidth: 0,
           px: 0.75,
           borderBottom: 1,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.72),
+          borderColor: (theme) => alpha(theme.palette.divider, 0.34),
           overflowX: "auto",
           overscrollBehaviorX: "contain",
           scrollbarWidth: "none",
@@ -101,13 +100,22 @@ export function MobileComposerAccessoryDock({
         <Box
           data-mobile-composer-fixed-action
           sx={{
+            position: "relative",
             flex: "0 0 45px",
             width: 45,
             height: 44,
             ml: 0.25,
             pl: 0.25,
-            borderLeft: 1,
-            borderColor: (theme) => alpha(theme.palette.divider, 0.78),
+            "&::before": {
+              content: '""',
+              position: "absolute",
+              left: 0,
+              top: 10,
+              bottom: 10,
+              width: "1px",
+              borderRadius: 1,
+              bgcolor: (theme) => alpha(theme.palette.divider, 0.42),
+            },
           }}
         >
           {fixedAction}

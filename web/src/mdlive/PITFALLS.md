@@ -643,10 +643,13 @@ here says otherwise.
     stable Settings area look like a selected column. `MobileComposerAccessoryDock`
     now owns one 96px material with two semantic tracks: formatting scrolls alone
     above, while keyboard/attachment and contextual Send/Done remain stable below.
-    Settings occupies only the lower trailing 44pt slot and uses a low-contrast
-    one-pixel boundary, never a wide gradient shadow. Main fullscreen compose no
-    longer duplicates Save Draft in this bar; Draft and Queue reuse the same
-    component with Done editing. Keep every action in an equal 44pt slot:
+    Settings occupies only the lower trailing 44pt slot and uses a short,
+    low-contrast hairline, never a full-height selected-looking rail or wide
+    gradient shadow. Main fullscreen compose also moves Collapse into the lower
+    message-action track; do not restore a mostly empty top app bar. Draft and
+    Queue keep their separate overlay discard action and reuse the dock with Done
+    editing. Main fullscreen compose no longer duplicates Save Draft in this bar.
+    Keep every action in an equal 44pt slot:
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard. Moving it into a native
     `inputAccessoryView` would split CM6 command/selection authority across a
