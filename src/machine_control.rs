@@ -10,10 +10,10 @@ use tokio::sync::{mpsc, oneshot};
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 
 const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
-// Workspace preparation can run six sequential Git commands, each bounded to
+// Workspace preparation can run ten sequential Git commands, each bounded to
 // 30 seconds on the Machine. Keep the controller alive beyond that complete
 // Machine-side envelope so it never abandons a still-running preparation.
-const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(210);
+const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(330);
 
 fn adapter_timeout(adapter: &str) -> std::time::Duration {
     if adapter == "workspace" {
@@ -151,7 +151,7 @@ mod tests {
     fn workspace_requests_cover_the_complete_machine_preparation_envelope() {
         assert_eq!(
             adapter_timeout("workspace"),
-            std::time::Duration::from_secs(210)
+            std::time::Duration::from_secs(330)
         );
         assert_eq!(adapter_timeout("zed"), std::time::Duration::from_secs(40));
     }

@@ -66,21 +66,6 @@ pub async fn prepare(
         })?
         .to_path_buf();
     let destination = worktree_root.join(&request.session_id);
-
-    if tokio::fs::try_exists(&destination).await? {
-        return reuse_existing(&repository, &source, &relative_path, &destination).await;
-    }
-
-    let remote_head = git_output(&repository, ["ls-remote", "--symref", "origin", "HEAD"])
-        .await
-        .context("resolving origin default branch")?;
-    let head_ref = parse_remote_head(&remote_head)?;
-    let remote_branch = head_ref
-        .strip_prefix("refs/heads/")
-        .context("origin HEAD is not a branch")?;
-    git_output(&repository, ["check-ref-format", "--branch", remote_branch])
-        .await
-        .context("validating origin default branch")?;
     let session_branch = format!("cowboy/{}", request.session_id);
     git_output(
         &repository,
@@ -89,20 +74,72 @@ pub async fn prepare(
     .await
     .context("validating session branch")?;
     let session_branch_ref = format!("refs/heads/{session_branch}");
+
+    if tokio::fs::try_exists(&destination).await? {
+        return reuse_existing(
+            &repository,
+            &source,
+            &relative_path,
+            &destination,
+            &session_branch,
+            &session_branch_ref,
+        )
+        .await;
+    }
+
     let base_ref = format!("refs/cowboy/session-bases/{}", request.session_id);
-    let refspec = format!("+{head_ref}:{base_ref}");
-    git_output(&repository, ["fetch", "origin", refspec.as_str()])
-        .await
-        .context("fetching origin default branch for isolated session")?;
-    let revision_spec = format!("{base_ref}^{{commit}}");
-    let revision = git_output(&repository, ["rev-parse", revision_spec.as_str()])
-        .await
-        .context("resolving fetched session base")?;
+    let branch_existed = git_ref_exists(&repository, &session_branch_ref).await?;
+    let (revision, head_ref, base_ref_created) = if branch_existed {
+        (
+            git_output(
+                &repository,
+                ["rev-parse", &format!("{session_branch_ref}^{{commit}}")],
+            )
+            .await
+            .context("resolving existing session branch")?,
+            None,
+            false,
+        )
+    } else {
+        let remote_head = git_output(&repository, ["ls-remote", "--symref", "origin", "HEAD"])
+            .await
+            .context("resolving origin default branch")?;
+        let head_ref = parse_remote_head(&remote_head)?;
+        let remote_branch = head_ref
+            .strip_prefix("refs/heads/")
+            .context("origin HEAD is not a branch")?;
+        git_output(&repository, ["check-ref-format", "--branch", remote_branch])
+            .await
+            .context("validating origin default branch")?;
+        let refspec = format!("+{head_ref}:{base_ref}");
+        git_output(&repository, ["fetch", "origin", refspec.as_str()])
+            .await
+            .context("fetching origin default branch for isolated session")?;
+        let revision_spec = format!("{base_ref}^{{commit}}");
+        (
+            git_output(&repository, ["rev-parse", revision_spec.as_str()])
+                .await
+                .context("resolving fetched session base")?,
+            Some(head_ref),
+            true,
+        )
+    };
 
     tokio::fs::create_dir_all(worktree_root)
         .await
         .with_context(|| format!("creating worktree root {}", worktree_root.display()))?;
-    let created = async {
+    let added = if branch_existed {
+        git_output(
+            &repository,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                destination.as_os_str(),
+                OsStr::new(&session_branch_ref),
+            ],
+        )
+        .await
+    } else {
         git_output(
             &repository,
             [
@@ -115,12 +152,22 @@ pub async fn prepare(
             ],
         )
         .await
-        .with_context(|| {
-            format!(
-                "creating isolated session worktree {}",
-                destination.display()
-            )
-        })?;
+    };
+    if let Err(error) = added.with_context(|| {
+        format!(
+            "creating isolated session worktree {}",
+            destination.display()
+        )
+    }) {
+        // The command may have created a branch or a recoverable partial
+        // worktree before failing. Preserve both; a retry can prove and reuse
+        // them. Only the internal fetched-base ref is disposable here.
+        if base_ref_created {
+            let _ = git_command(&repository, ["update-ref", "-d", &base_ref]).await;
+        }
+        return Err(error);
+    }
+    let validated = async {
         let checkout = destination
             .canonicalize()
             .with_context(|| format!("canonicalizing new worktree {}", destination.display()))?;
@@ -137,11 +184,18 @@ pub async fn prepare(
         Ok::<_, anyhow::Error>(path)
     }
     .await;
-    let path = match created {
+    let path = match validated {
         Ok(value) => value,
         Err(error) => {
-            cleanup_failed_creation(&repository, &destination, &base_ref, &session_branch_ref)
-                .await;
+            cleanup_failed_creation(
+                &repository,
+                &destination,
+                &base_ref,
+                &session_branch_ref,
+                base_ref_created,
+                !branch_existed,
+            )
+            .await;
             return Err(error);
         }
     };
@@ -149,7 +203,7 @@ pub async fn prepare(
         path: path.display().to_string(),
         source_path: source.display().to_string(),
         revision: Some(revision),
-        upstream_ref: Some(head_ref),
+        upstream_ref: head_ref,
         isolated: true,
         created: true,
     })
@@ -160,6 +214,8 @@ async fn cleanup_failed_creation(
     destination: &Path,
     base_ref: &str,
     session_branch_ref: &str,
+    remove_base_ref: bool,
+    remove_session_branch: bool,
 ) {
     let _ = git_command(
         repository,
@@ -174,8 +230,12 @@ async fn cleanup_failed_creation(
     if tokio::fs::try_exists(destination).await.unwrap_or(false) {
         let _ = tokio::fs::remove_dir_all(destination).await;
     }
-    let _ = git_command(repository, ["update-ref", "-d", base_ref]).await;
-    let _ = git_command(repository, ["update-ref", "-d", session_branch_ref]).await;
+    if remove_base_ref {
+        let _ = git_command(repository, ["update-ref", "-d", base_ref]).await;
+    }
+    if remove_session_branch {
+        let _ = git_command(repository, ["update-ref", "-d", session_branch_ref]).await;
+    }
 }
 
 async fn reuse_existing(
@@ -183,6 +243,8 @@ async fn reuse_existing(
     source: &Path,
     relative_path: &Path,
     destination: &Path,
+    session_branch: &str,
+    session_branch_ref: &str,
 ) -> Result<PreparedWorkspace> {
     let checkout = destination
         .canonicalize()
@@ -209,6 +271,29 @@ async fn reuse_existing(
             "existing session path {} belongs to another repository",
             checkout.display()
         );
+    }
+    if current_branch(&checkout).await?.is_none() {
+        if git_ref_exists(repository, session_branch_ref).await? {
+            let detached_revision = git_output(&checkout, ["rev-parse", "HEAD^{commit}"]).await?;
+            let branch_revision = git_output(
+                repository,
+                ["rev-parse", &format!("{session_branch_ref}^{{commit}}")],
+            )
+            .await?;
+            if detached_revision != branch_revision {
+                bail!(
+                    "legacy detached session {} diverges from existing task branch {session_branch}; preserving both",
+                    checkout.display()
+                );
+            }
+            git_output(&checkout, ["switch", session_branch])
+                .await
+                .context("attaching legacy session worktree to its existing task branch")?;
+        } else {
+            git_output(&checkout, ["switch", "-c", session_branch])
+                .await
+                .context("anchoring legacy detached session worktree on a task branch")?;
+        }
     }
     let revision = git_output(&checkout, ["rev-parse", "HEAD^{commit}"]).await?;
     let path = checkout
@@ -252,6 +337,32 @@ fn parse_remote_head(output: &str) -> Result<String> {
             (target == "HEAD" && reference.starts_with("refs/heads/")).then(|| reference.to_owned())
         })
         .context("origin did not advertise a default branch")
+}
+
+async fn git_ref_exists(repository: &Path, reference: &str) -> Result<bool> {
+    let output = git_command(repository, ["show-ref", "--verify", "--quiet", reference]).await?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!(
+            "checking Git ref {reference:?} failed in {}: {}",
+            repository.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+async fn current_branch(repository: &Path) -> Result<Option<String>> {
+    let output = git_command(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;
+    match output.status.code() {
+        Some(0) => Ok(Some(String::from_utf8(output.stdout)?.trim().to_owned())),
+        Some(1) => Ok(None),
+        _ => bail!(
+            "checking current Git branch failed in {}: {}",
+            repository.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
 }
 
 async fn git_maybe<I, S>(repository: &Path, args: I) -> Result<Option<String>>
@@ -507,6 +618,122 @@ mod tests {
         assert!(!reused.created);
         assert_eq!(reused.path, prepared.path);
         assert!(Path::new(&reused.path).join("local.txt").is_file());
+
+        let recoverable = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-recoverable".to_owned(),
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
+        std::fs::write(
+            Path::new(&recoverable.path).join("unpublished.txt"),
+            "keep this commit\n",
+        )
+        .unwrap();
+        git(Path::new(&recoverable.path), &["add", "unpublished.txt"]);
+        git(
+            Path::new(&recoverable.path),
+            &["commit", "-m", "unpublished session work"],
+        );
+        let unpublished_revision = git_output(Path::new(&recoverable.path), ["rev-parse", "HEAD"])
+            .await
+            .unwrap();
+        git(
+            &source,
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                managed.join("sess-recoverable").to_str().unwrap(),
+            ],
+        );
+        let restored = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-recoverable".to_owned(),
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            restored.revision.as_deref(),
+            Some(unpublished_revision.as_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&restored.path).join("unpublished.txt")).unwrap(),
+            "keep this commit\n"
+        );
+
+        let legacy = managed.join("sess-legacy");
+        git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                legacy.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        std::fs::write(legacy.join("legacy-dirty.txt"), "preserve me\n").unwrap();
+        let migrated = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-legacy".to_owned(),
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
+        assert!(!migrated.created);
+        assert_eq!(
+            git_output(
+                Path::new(&migrated.path),
+                ["symbolic-ref", "--short", "HEAD"]
+            )
+            .await
+            .unwrap(),
+            "cowboy/sess-legacy"
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&migrated.path).join("legacy-dirty.txt")).unwrap(),
+            "preserve me\n"
+        );
+
+        let divergent = managed.join("sess-divergent");
+        git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                divergent.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        let detached_revision = git_output(&divergent, ["rev-parse", "HEAD"]).await.unwrap();
+        git(
+            &source,
+            &["update-ref", "refs/heads/cowboy/sess-divergent", "HEAD~1"],
+        );
+        let divergent_result = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-divergent".to_owned(),
+            },
+            &managed,
+        )
+        .await;
+        assert!(divergent_result.is_err());
+        assert!(current_branch(&divergent).await.unwrap().is_none());
+        assert_eq!(
+            git_output(&divergent, ["rev-parse", "HEAD"]).await.unwrap(),
+            detached_revision
+        );
     }
 
     #[tokio::test]
