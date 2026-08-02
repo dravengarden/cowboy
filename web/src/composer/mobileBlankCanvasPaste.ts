@@ -11,6 +11,12 @@ export interface BlankCanvasPressGeometry {
   textBuffer?: number;
 }
 
+export interface BlankCanvasPressClaim extends BlankCanvasPressGeometry {
+  expanded: boolean;
+  disabled: boolean;
+  touchCount: number;
+}
+
 /**
  * The iOS edit menu can only anchor reliably near laid-out text. A fullscreen
  * textarea is still the correct native editor, but the visually empty part
@@ -25,6 +31,17 @@ export function isBlankCanvasPress(
   const documentY = localY + geometry.textareaScrollTop;
   const buffer = geometry.textBuffer ?? BLANK_CANVAS_TEXT_BUFFER_PX;
   return documentY > geometry.naturalContentHeight + buffer;
+}
+
+/**
+ * Claim only the part of a fullscreen touch editor where UIKit cannot place an
+ * edit-menu anchor. Compact editors and real text stay entirely native.
+ */
+export function shouldClaimBlankCanvasPress(
+  claim: BlankCanvasPressClaim,
+): boolean {
+  return claim.expanded && !claim.disabled && claim.touchCount === 1 &&
+    isBlankCanvasPress(claim);
 }
 
 export function longPressMoved(

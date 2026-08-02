@@ -801,6 +801,14 @@ here says otherwise.
     delayed refocus: those either suppress native selection/IME or cannot summon
     iOS's menu reliably.
 
+    Register the blank-canvas hold directly on the textarea with a non-passive
+    `touchstart` listener. React delegates `touchstart` passively, so UIKit's
+    text recognizer can cancel or suspend the synthetic event sequence before a
+    JavaScript hold timer runs. Only after geometry proves the press is below
+    laid-out text should the listener prevent the unusable native default and
+    own the gesture through `touchend`/`touchcancel`. Never prevent presses near
+    text: they must retain native Select/Paste and selection handles.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -20,9 +21,9 @@ import { type Attachment, clipboardFiles } from "./attachments";
 import { readComposerClipboard } from "./clipboard";
 import {
   BLANK_CANVAS_LONG_PRESS_MS,
-  isBlankCanvasPress,
   longPressMoved,
   measureTextareaContentHeight,
+  shouldClaimBlankCanvasPress,
 } from "./composer/mobileBlankCanvasPaste";
 import { hasDraftMod, hasSendMod } from "./platform";
 import type { AvailableCommand } from "./protocol";
@@ -253,16 +254,16 @@ export const ComposerTextarea = forwardRef<
     return { value: current, from, to };
   };
 
-  const cancelBlankPressTimer = (): void => {
+  const cancelBlankPressTimer = useCallback((): void => {
     if (blankPressTimerRef.current != null) {
       globalThis.clearTimeout(blankPressTimerRef.current);
       blankPressTimerRef.current = null;
     }
-  };
+  }, []);
 
   useEffect(() => {
     return (): void => cancelBlankPressTimer();
-  }, []);
+  }, [cancelBlankPressTimer]);
 
   useEffect(() => {
     if (!blankPasteAnchor) return undefined;
@@ -280,7 +281,7 @@ export const ComposerTextarea = forwardRef<
     };
   }, [blankPasteAnchor]);
 
-  const showBlankPasteMenu = (
+  const showBlankPasteMenu = useCallback((
     press: PendingBlankCanvasPress,
   ): void => {
     const root = rootRef.current;
@@ -299,7 +300,113 @@ export const ComposerTextarea = forwardRef<
       ),
     });
     navigationHaptic();
-  };
+  }, []);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea || !expanded || disabled) return undefined;
+
+    const resetPendingPress = (): void => {
+      cancelBlankPressTimer();
+      pendingBlankPressRef.current = null;
+    };
+    const onTouchStart = (event: TouchEvent): void => {
+      setBlankPasteAnchor(null);
+      resetPendingPress();
+      const touch = event.touches[0];
+      if (!touch) return;
+      const rect = textarea.getBoundingClientRect();
+      if (
+        !shouldClaimBlankCanvasPress({
+          expanded,
+          disabled: Boolean(disabled),
+          touchCount: event.touches.length,
+          clientY: touch.clientY,
+          textareaTop: rect.top,
+          textareaHeight: rect.height,
+          textareaScrollTop: textarea.scrollTop,
+          naturalContentHeight: measureTextareaContentHeight(textarea),
+        })
+      ) return;
+
+      // React delegates touchstart passively, so its synthetic handler cannot
+      // stop WKWebView's native text recognizer. On the distant blank canvas
+      // that recognizer has no glyph to anchor to and may suspend/cancel the DOM
+      // sequence before our timer fires. Claim only this unusable native region
+      // with a non-passive listener; presses near text still go wholly to UIKit.
+      event.preventDefault();
+      if (!event.defaultPrevented) return;
+
+      const press: PendingBlankCanvasPress = {
+        identifier: touch.identifier,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        textareaScrollTop: textarea.scrollTop,
+        fired: false,
+      };
+      pendingBlankPressRef.current = press;
+      blankPressTimerRef.current = globalThis.setTimeout(() => {
+        blankPressTimerRef.current = null;
+        if (
+          pendingBlankPressRef.current === press &&
+          inputRef.current?.scrollTop === press.textareaScrollTop
+        ) {
+          showBlankPasteMenu(press);
+        }
+      }, BLANK_CANVAS_LONG_PRESS_MS);
+    };
+    const onTouchMove = (event: TouchEvent): void => {
+      const press = pendingBlankPressRef.current;
+      if (!press) return;
+      const touch = Array.from(event.touches).find((candidate) =>
+        candidate.identifier === press.identifier
+      );
+      if (
+        !touch ||
+        longPressMoved(
+          press.clientX,
+          press.clientY,
+          touch.clientX,
+          touch.clientY,
+        )
+      ) {
+        resetPendingPress();
+      }
+    };
+    const onTouchEnd = (event: TouchEvent): void => {
+      const press = pendingBlankPressRef.current;
+      if (
+        press &&
+        Array.from(event.changedTouches).some((touch) =>
+          touch.identifier === press.identifier
+        )
+      ) {
+        resetPendingPress();
+      }
+    };
+    const onTouchCancel = (): void => {
+      // Once the blank region is claimed, cancellation is terminal. Never let a
+      // suspended timer surface a stale Paste menu after an OS interruption.
+      resetPendingPress();
+    };
+
+    textarea.addEventListener("touchstart", onTouchStart, { passive: false });
+    textarea.addEventListener("touchmove", onTouchMove, { passive: true });
+    textarea.addEventListener("touchend", onTouchEnd, { passive: true });
+    textarea.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    return (): void => {
+      resetPendingPress();
+      textarea.removeEventListener("touchstart", onTouchStart);
+      textarea.removeEventListener("touchmove", onTouchMove);
+      textarea.removeEventListener("touchend", onTouchEnd);
+      textarea.removeEventListener("touchcancel", onTouchCancel);
+    };
+  }, [
+    cancelBlankPressTimer,
+    disabled,
+    expanded,
+    showBlankPasteMenu,
+  ]);
 
   const pasteFromBlankCanvas = async (): Promise<void> => {
     const selection = currentTextSelection();
@@ -732,82 +839,6 @@ export const ComposerTextarea = forwardRef<
           }
         }}
         onBlur={(): void => setTrigger(null)}
-        onTouchStart={(event): void => {
-          setBlankPasteAnchor(null);
-          cancelBlankPressTimer();
-          pendingBlankPressRef.current = null;
-          if (!expanded || disabled || event.touches.length !== 1) return;
-          const textarea = inputRef.current;
-          const touch = event.touches[0];
-          if (!textarea || !touch) return;
-          const rect = textarea.getBoundingClientRect();
-          if (
-            !isBlankCanvasPress({
-              clientY: touch.clientY,
-              textareaTop: rect.top,
-              textareaHeight: rect.height,
-              textareaScrollTop: textarea.scrollTop,
-              naturalContentHeight: measureTextareaContentHeight(textarea),
-            })
-          ) return;
-
-          const press: PendingBlankCanvasPress = {
-            identifier: touch.identifier,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            textareaScrollTop: textarea.scrollTop,
-            fired: false,
-          };
-          pendingBlankPressRef.current = press;
-          blankPressTimerRef.current = globalThis.setTimeout(() => {
-            blankPressTimerRef.current = null;
-            if (
-              pendingBlankPressRef.current === press &&
-              inputRef.current?.scrollTop === press.textareaScrollTop
-            ) {
-              showBlankPasteMenu(press);
-            }
-          }, BLANK_CANVAS_LONG_PRESS_MS);
-        }}
-        onTouchMove={(event): void => {
-          const press = pendingBlankPressRef.current;
-          if (!press) return;
-          const touch = Array.from(event.touches).find((candidate) =>
-            candidate.identifier === press.identifier
-          );
-          if (
-            !touch ||
-            longPressMoved(
-              press.clientX,
-              press.clientY,
-              touch.clientX,
-              touch.clientY,
-            )
-          ) {
-            cancelBlankPressTimer();
-            pendingBlankPressRef.current = null;
-          }
-        }}
-        onTouchEnd={(event): void => {
-          const press = pendingBlankPressRef.current;
-          if (
-            press &&
-            Array.from(event.changedTouches).some((touch) =>
-              touch.identifier === press.identifier
-            )
-          ) {
-            cancelBlankPressTimer();
-            pendingBlankPressRef.current = null;
-          }
-        }}
-        onTouchCancel={(): void => {
-          // WebKit may cancel DOM touch delivery while its own long-press
-          // recognizer decides there is no nearby text anchor. Keep an unmoved
-          // blank-canvas timer alive so Cowboy's fallback still appears.
-          if (pendingBlankPressRef.current?.fired) {
-            pendingBlankPressRef.current = null;
-          }
-        }}
         onPaste={(e): void => {
           const files = clipboardFiles(e.clipboardData);
           if (files.length > 0 && onPasteFiles) {
