@@ -660,20 +660,19 @@ here says otherwise.
     only a few cards. One upward gesture keeps fetching sequentially until at
     least ten new `[data-key]` transcript rows have mounted and the reserved
     skeleton band is filled, or history ends. Keep the ten-page ceiling as a
-    pathological-session safety bound. While `beforeSeq` exists, a quiet
-    skeleton boundary remains at the visual page head; promote it before I/O and
-    replace it from its lower edge as older rows mount. The in-flow placeholder
+    pathological-session safety bound. A remaining `beforeSeq` is an invisible
+    page-head trigger, not persistent loading chrome. Promote an in-flow skeleton
+    before I/O and replace it from its lower edge as older rows mount. The placeholder
     should resemble compact thought headings plus tool cards; do not regress to
     a delayed, detached, or floating loading overlay. `loadOlder` must remain
     bounded by a client timeout and report cursor progress: a suspended fetch or
-    unchanged cursor must collapse the active band back to its retryable idle
-    boundary instead of leaving Mobile behind a permanent expanded skeleton.
+    unchanged cursor must remove the active band instead of leaving Mobile
+    behind a permanent expanded skeleton.
     Permit one delayed automatic retry while the boundary remains near the
     viewport; after that, expose an explicit Retry action. Do not leave the
-    threshold consumed with an inert loading-shaped block. The unloaded cursor
-    owns only a quiet 32px idle boundary. A request may expand it into compact
-    thought-plus-tool rows, but mounted content must consume that expansion all
-    the way back to the idle boundary; a failure replaces the skeleton with a
+    threshold consumed with an inert loading-shaped block. A request uses compact
+    thought-plus-tool rows, but mounted content must consume that expansion and
+    then unmount it completely; a failure replaces the skeleton with a
     visible Retry row rather than clipping the action above placeholder cards.
 
 ## Verification matrix (run the WHOLE thing after any editor change)

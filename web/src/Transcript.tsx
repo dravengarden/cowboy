@@ -151,7 +151,6 @@ const VIEWPORT_BACKFILL_SETTLE_MS = 96;
 const SCROLLBACK_FILL_MINIMUM_ROWS = 10;
 const SCROLLBACK_FILL_PAGE_LIMIT = 10;
 const SCROLLBACK_FILL_SETTLE_MS = 96;
-const SCROLLBACK_IDLE_BOUNDARY_HEIGHT = 32;
 
 // --- Loading primitives -----------------------------------------------------
 
@@ -3378,11 +3377,9 @@ export function Transcript({
             currentScrollHeight: el.scrollHeight,
             skeletonHeight: bandHeight,
           });
-          // A remaining cursor always owns a small page-head boundary. Real
-          // rows consume the expanded part, never the boundary itself.
-          setScrollbackFillHeight(
-            Math.max(SCROLLBACK_IDLE_BOUNDARY_HEIGHT, remaining),
-          );
+          // Real rows consume the visible placeholder. A remaining cursor is
+          // an invisible trigger after this request, never persistent chrome.
+          setScrollbackFillHeight(remaining);
           const currentPaging = pagingRef.current;
           const loadedRows = Math.max(
             0,
@@ -3409,7 +3406,7 @@ export function Transcript({
         if (scrollbackFillRunRef.current === run) {
           scrollbackFillActiveRef.current = false;
           setScrollbackLoading(false);
-          setScrollbackFillHeight(SCROLLBACK_IDLE_BOUNDARY_HEIGHT);
+          setScrollbackFillHeight(0);
         }
       }
     })();
@@ -4590,11 +4587,10 @@ export function Transcript({
                   </Box>
                 ))}
               {managesScrollHistory && !backfillingViewport && paging != null &&
-                  paging.beforeSeq !== null && !paging.reachedStart && (
+                  paging.beforeSeq !== null && !paging.reachedStart &&
+                  (scrollbackLoading || scrollbackFailed) && (
                 <ScrollbackLoadingSkeleton
-                  height={scrollbackLoading
-                    ? scrollbackFillHeight
-                    : SCROLLBACK_IDLE_BOUNDARY_HEIGHT}
+                  height={scrollbackFailed ? 44 : scrollbackFillHeight}
                   loading={scrollbackLoading}
                   failed={scrollbackFailed}
                   onRetry={() => {
