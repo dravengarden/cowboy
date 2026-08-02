@@ -12,7 +12,6 @@ import {
   EditorView,
   keymap,
   placeholder as placeholderExt,
-  scrollPastEnd,
 } from "@codemirror/view";
 import { type Extension, Prec } from "@codemirror/state";
 import {
@@ -645,18 +644,14 @@ export const ComposerEditor = forwardRef<
 
   const extensions = useMemo<Extension[]>(
     () => [
-      // Fill editor (fullscreen composer) ONLY: scrollPastEnd adds a `padding-bottom`
-      // (≈ one viewport) below the text, exactly like Obsidian's mobile editor — the
-      // long-pressable empty area. Obsidian's setup is just THIS + the native
-      // (visible) caret; iOS owns the long-press gesture from there.
-      //
       // Do NOT add a pointerdown handler that places the caret at the doc end on an
       // empty-area press: dispatching a selection change at pointerdown CANCELS iOS's
       // in-progress long-press recognizer, so the empty-area Paste menu never opens
       // (it then only worked when long-pressing directly ON the placeholder/text).
-      // A prior build tried exactly that and it broke the very thing it meant to fix.
-      // The compact composer is content-height, so it gets neither.
-      ...(fill ? [scrollPastEnd()] : []),
+      // Fill mode instead resolves the full height chain to `.cm-content`, making
+      // the visible blank canvas the native contenteditable hit target. Do not use
+      // `scrollPastEnd()` here: its viewport-sized padding looks editable but is an
+      // unreliable UIKit menu anchor away from real lines.
       EditorView.lineWrapping,
       // Publish selection-empty state to the fullscreen keyboard toolbar so it can
       // swap insert↔wrap actions. Ref-routed so the memo never rebuilds for it.
@@ -829,7 +824,7 @@ export const ComposerEditor = forwardRef<
       ...livePreviewExtensions(),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vim, vimExt, aboveCursor, fill],
+    [theme, sessionId, placeholder, vim, vimExt, aboveCursor],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather
@@ -861,7 +856,17 @@ export const ComposerEditor = forwardRef<
         // Fill mode (column layout): stretch to the flex parent's height and let
         // the inner CodeMirror own the scroll. `minHeight: 0` lets it shrink
         // below content inside the flex column so the scroller, not the page, grows.
-        ...(fill && { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }),
+        ...(fill && {
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          "& > *, & .cm-theme-none, & .cm-editor, & .cm-scroller": {
+            flex: 1,
+            minHeight: 0,
+            height: "100%",
+          },
+        }),
         // Put the visual input padding ON the editable element. Keeping it on
         // this non-editable wrapper made the compact composer look like one
         // large text field while iOS could only long-press the 14px-high glyph
@@ -871,7 +876,7 @@ export const ComposerEditor = forwardRef<
         // target and WebKit owns the long-press menu end to end.
         "& .cm-content": {
           boxSizing: "border-box",
-          minHeight: "24px",
+          minHeight: fill ? "100%" : "24px",
           paddingTop: "8.5px",
           paddingBottom: "8.5px",
           paddingLeft: "14px",

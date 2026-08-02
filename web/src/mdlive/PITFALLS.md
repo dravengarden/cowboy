@@ -746,6 +746,18 @@ here says otherwise.
     empty Mobile native textarea to a 48vh CM6 canvas, producing a large blank
     composer while the UI still presents Mobile's fullscreen affordance.
 
+36. **Fullscreen Mobile blank space must be real contenteditable height, not
+    `scrollPastEnd()` padding.** `scrollPastEnd()` writes a viewport-sized inline
+    bottom padding onto CM6 content. It is useful for reading/scroll positioning,
+    but on iOS the visually empty area is an unreliable native edit-menu anchor:
+    long press works near a real line yet often does nothing across the expanded
+    canvas. The compact image-promoted editor was reliable because its complete
+    height chain resolved to `.cm-content`. Fill mode now follows that same model:
+    wrapper, theme, editor, scroller, and content all resolve to the visible height,
+    while the `scrollPastEnd()` extension is omitted. Never compensate with a
+    pointer-down selection dispatch or delayed focus; both cancel UIKit's active
+    long-press recognizer.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

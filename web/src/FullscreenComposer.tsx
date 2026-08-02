@@ -249,11 +249,9 @@ export function FullscreenComposer({
           p: 1.5,
           display: "flex",
           flexDirection: "column",
-          // NO content/line fill here. The empty long-pressable area below the text
-          // is now Obsidian's `scrollPastEnd` padding (ComposerEditor, fill mode) —
-          // a long-press in that padding snaps the caret to the line end and the iOS
-          // Paste menu appears. A flex content-fill (the old approach) made the press
-          // land mid-air on the `.cm-line` element → no menu; scrollPastEnd is the fix.
+          // ComposerEditor resolves this height through to `.cm-content`, so the
+          // entire visible canvas is a real native editing target. Keep this wrapper
+          // free of pointer handlers: UIKit must own long-press selection end to end.
         }}
       >
         <PlatformComposerEditor

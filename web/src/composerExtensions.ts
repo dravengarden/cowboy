@@ -59,8 +59,8 @@ export function livePreviewExtensions(
     // callout flicker up and dismiss on a real device. It — plus dropCursor and the
     // `.cm-composing` dance — only ever existed to compensate for the PWA's
     // `translateZ(0)` repaint layer, which the native shell (normal flow) no longer
-    // has. All removed at the root. Paired with `scrollPastEnd` (ComposerEditor fill
-    // mode) so an empty-area long-press still snaps the caret to a real position.
+    // has. All removed at the root. Fill editors resolve their visible canvas to
+    // the real `.cm-content`, so empty-area long presses retain a native anchor.
     // Do NOT re-add drawSelection / dropCursor / the composition dance.
     highlightActiveLine(),
     indentOnInput(),
