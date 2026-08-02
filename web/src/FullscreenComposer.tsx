@@ -13,10 +13,13 @@ import {
 } from "@mui/material";
 import {
   AttachFile,
+  Bolt,
   Check,
   Close,
   CloseFullscreen,
+  EditNoteOutlined,
   KeyboardHide,
+  Schedule,
   Send,
   Tune,
 } from "@mui/icons-material";
@@ -64,6 +67,9 @@ export function FullscreenComposer({
   vim = false,
   onVimMode,
   onDiscard,
+  onSchedule,
+  onForcePush,
+  forcePushEnabled = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -101,6 +107,10 @@ export function FullscreenComposer({
   onVimMode?: (mode: string) => void;
   /** Edit mode: save explicitly in the footer; abandoning edits requires confirmation. */
   onDiscard?: (() => void) | undefined;
+  /** Main-composer delivery actions. Row edits intentionally omit them. */
+  onSchedule?: (() => void) | undefined;
+  onForcePush?: ((anchor: HTMLElement) => void) | undefined;
+  forcePushEnabled?: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
 
@@ -278,6 +288,37 @@ export function FullscreenComposer({
             <MobileComposerAccessoryButton title="Attach file" onClick={act(onAttach)}>
               <AttachFile />
             </MobileComposerAccessoryButton>
+            {showCollapse && (
+              <MobileComposerAccessoryButton
+                title="Save as draft"
+                disabled={!sendable}
+                onClick={act(onSaveDraft)}
+              >
+                <EditNoteOutlined />
+              </MobileComposerAccessoryButton>
+            )}
+            {showCollapse && onSchedule && (
+              <MobileComposerAccessoryButton
+                title="Schedule send"
+                disabled={!sendable}
+                onClick={act(onSchedule)}
+              >
+                <Schedule />
+              </MobileComposerAccessoryButton>
+            )}
+            {showCollapse && onForcePush && (
+              <MobileComposerAccessoryButton
+                title="Force push"
+                color="warning"
+                disabled={!sendable || !forcePushEnabled}
+                onClick={(event): void => {
+                  haptic();
+                  onForcePush(event.currentTarget);
+                }}
+              >
+                <Bolt />
+              </MobileComposerAccessoryButton>
+            )}
             {showCollapse && (
               <MobileComposerAccessoryButton
                 title="Collapse editor"

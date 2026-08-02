@@ -2567,6 +2567,10 @@ export function ComposerWorkspace({
             saveDraft();
             setComposeFs(false);
           }}
+          onSchedule={(): void =>
+            setScheduleTarget({ id: undefined, initial: null })}
+          onForcePush={(anchor): void => setForceAnchor(anchor)}
+          forcePushEnabled={busy || starting || paused}
           onCollapse={(): void => {
             // Carry fullscreen edits back to the inline editor. The inline editor
             // REMOUNTS on close (it only renders while !composeFs) and seeds from

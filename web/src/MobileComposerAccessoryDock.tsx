@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
 import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
 
@@ -137,15 +137,21 @@ export function MobileComposerAccessoryButton({
   title,
   onClick,
   children,
+  disabled = false,
+  color = "default",
 }: {
   title: string;
-  onClick: () => void;
+  onClick: MouseEventHandler<HTMLButtonElement>;
   children: ReactNode;
+  disabled?: boolean;
+  color?: "default" | "warning";
 }): React.JSX.Element {
   return (
     <Tooltip title={title}>
       <IconButton
         aria-label={title}
+        color={color}
+        disabled={disabled}
         onPointerDown={(event): void => event.preventDefault()}
         onClick={onClick}
         sx={{
@@ -153,7 +159,9 @@ export function MobileComposerAccessoryButton({
           height: 44,
           flexShrink: 0,
           color: "text.secondary",
+          ...(color === "warning" && { color: "warning.main" }),
           "&:active": { transform: "scale(0.94)" },
+          "&.Mui-disabled": { color: "text.disabled", opacity: 0.44 },
           "& .MuiSvgIcon-root": { fontSize: "1.375rem" },
         }}
       >

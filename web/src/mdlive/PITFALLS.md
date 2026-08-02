@@ -655,12 +655,14 @@ here says otherwise.
     is an ordinary trailing 44pt
     formatting action, never a selected-looking rail, gradient, or separately
     divided region. Main fullscreen compose also moves Collapse into the upper
-    message-action track; do not restore a mostly empty top app bar. The overlay
+    message-action track and uses that track's flexible center for Save Draft,
+    Schedule, and state-gated Force Push; do not restore a mostly empty top app
+    bar. The overlay
     itself must retain `safe-area-inset-top`: removing the app bar also removes
     the inset it used to consume, otherwise the first editor line sits beneath
     the iPhone status bar/Dynamic Island. Draft and
     Queue keep their separate overlay discard action and reuse the dock with Done
-    editing. Main fullscreen compose no longer duplicates Save Draft in this bar.
+    editing, omitting the main composer's delivery actions.
     Keep every action in an equal 44pt slot:
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard. Moving it into a native
