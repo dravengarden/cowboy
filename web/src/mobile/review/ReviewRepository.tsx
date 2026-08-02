@@ -13,7 +13,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  IconButton,
   List,
   ListItemButton,
   ListItemText,
@@ -21,7 +20,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MobileSheetDismiss } from "../../_shell";
+import { MobileSheetActionGroup, MobileSheetDismiss } from "../../_shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import type { GitReviewEntry } from "./gitReviewModel";
 import {
@@ -92,6 +91,66 @@ function GraphCell({ row }: { row: GitGraphRow }): React.JSX.Element {
   );
 }
 
+function RepositoryDetailHeader(
+  {
+    title,
+    subtitle,
+  }: {
+    readonly title: string;
+    readonly subtitle: string;
+  },
+): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        pt: "calc(env(safe-area-inset-top, 0px) + 14px)",
+        px: 2,
+        pb: 1.5,
+        borderBottom: 1,
+        borderColor: "divider",
+      }}
+    >
+      <Typography variant="subtitle1" fontWeight={700} noWrap>{title}</Typography>
+      <Typography variant="caption" color="text.secondary" component="div">
+        {subtitle}
+      </Typography>
+    </Box>
+  );
+}
+
+function RepositoryBackOverlay(
+  { onBack, label }: { readonly onBack: () => void; readonly label: string },
+): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        position: "absolute",
+        zIndex: 3,
+        left: 0,
+        right: 0,
+        bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+        px: 2,
+        pointerEvents: "none",
+      }}
+    >
+      <MobileSheetActionGroup
+        actions={[{
+          key: "back",
+          label,
+          onPress: onBack,
+          icon: (
+            <ArrowBack
+              aria-hidden
+              fontSize="small"
+              sx={{ transform: "translateX(-0.5px)" }}
+            />
+          ),
+        }]}
+      />
+    </Box>
+  );
+}
+
 function CommitPatch({
   sessionId,
   oid,
@@ -117,14 +176,11 @@ function CommitPatch({
   const allLines = patch?.text.split("\n") ?? [];
   const lines = allLines.slice(0, 5_000);
   return (
-    <Stack sx={{ height: 1, minHeight: 0 }}>
-      <Stack direction="row" alignItems="center" sx={{ px: 1, minHeight: 52, borderBottom: 1, borderColor: "divider" }}>
-        <IconButton aria-label="Back to commit" onClick={onBack}><ArrowBack /></IconButton>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle2" noWrap>{path}</Typography>
-          {patch && <Typography variant="caption" color="text.secondary">+{patch.added} −{patch.removed}</Typography>}
-        </Box>
-      </Stack>
+    <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
+      <RepositoryDetailHeader
+        title={path}
+        subtitle={patch ? `+${patch.added} −${patch.removed}` : "Loading patch…"}
+      />
       <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", pb: 10, fontFamily: "var(--cowboy-font-mono)", fontSize: "0.72rem", lineHeight: 1.55 }}>
         {error
           ? <Alert severity="error">Couldn’t load this patch</Alert>
@@ -152,6 +208,7 @@ function CommitPatch({
           ))}
         {patch && (patch.truncated || allLines.length > lines.length) && <Alert severity="info">Large patch preview truncated</Alert>}
       </Box>
+      <RepositoryBackOverlay onBack={onBack} label="Back to commit" />
     </Stack>
   );
 }
@@ -185,18 +242,11 @@ function CommitDetail({
     return <CommitPatch sessionId={sessionId} oid={commit.oid} path={selectedPath} onBack={() => setSelectedPath(undefined)} />;
   }
   return (
-    <Stack sx={{ height: 1, minHeight: 0 }}>
-      <Stack direction="row" alignItems="center" sx={{ px: 1, minHeight: 52 }}>
-        <IconButton aria-label="Back to history" onClick={onBack}>
-          <ArrowBack />
-        </IconButton>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle2" noWrap>{commit.subject}</Typography>
-          <Typography variant="caption" color="text.secondary">
-            {shortOid(commit.oid)} · {relativeDate(commit.authoredAt)}
-          </Typography>
-        </Box>
-      </Stack>
+    <Stack sx={{ position: "relative", height: 1, minHeight: 0 }}>
+      <RepositoryDetailHeader
+        title={commit.subject}
+        subtitle={`${shortOid(commit.oid)} · ${relativeDate(commit.authoredAt)}`}
+      />
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, pb: 10 }}>
         {error
           ? <Alert severity="error">Couldn’t load this commit</Alert>
@@ -242,6 +292,7 @@ function CommitDetail({
             </Stack>
           )}
       </Box>
+      <RepositoryBackOverlay onBack={onBack} label="Back to history" />
     </Stack>
   );
 }
