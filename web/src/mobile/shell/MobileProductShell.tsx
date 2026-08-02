@@ -51,12 +51,21 @@ function ignoredGestureTarget(
   boundary: HTMLElement,
 ): boolean {
   const element = target instanceof HTMLElement ? target : null;
+  const focusedComposer = element?.closest(
+    "[data-mobile-focus-composer='true']",
+  );
+  // Once any editor inside a Composer owns focus, its complete visible card is
+  // one writing surface. In particular, the generous blank canvas around a
+  // short message must not become a left/right product-navigation handle.
+  const focusedComposerOwnsGesture =
+    focusedComposer?.matches(":focus-within") === true;
   const explicitlyAllowsPager =
     element?.closest("[data-mobile-pager-allow]") != null;
   return (
     expandedSelection(globalThis.getSelection?.() ?? null) ||
     (!explicitlyAllowsPager &&
-      (element?.closest(
+      (focusedComposerOwnsGesture ||
+        element?.closest(
           "input, textarea, [contenteditable='true'], [data-mobile-pager-ignore]",
         ) != null ||
         hasHorizontalScroller(target, boundary)))

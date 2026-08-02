@@ -211,9 +211,13 @@ export function bindMobileSpatialDrawer({
   const onTouchStart = (event: TouchEvent): void => {
     const touch = event.touches[0];
     const target = event.target instanceof HTMLElement ? event.target : null;
+    const focusedComposerOwnsGesture = target?.closest(
+      "[data-mobile-focus-composer='true']",
+    )?.matches(":focus-within") === true;
     if (
       !touch ||
       expandedSelection(globalThis.getSelection?.() ?? null) ||
+      focusedComposerOwnsGesture ||
       target?.closest(ignoreSelector) ||
       hasHorizontalScroller(event.target, gestureTarget)
     ) {

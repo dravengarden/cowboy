@@ -674,6 +674,14 @@ here says otherwise.
     the ordinary new-message composer yields its slot and the shared pending
     scrollport may grow to 56vh. Do not stack two complete composers above the
     keyboard or retain the ordinary 40vh list cap around the active editor.
+    While any Mobile Composer has focus, its complete visible card owns every
+    touch that begins inside it, including blank editor canvas, attachments, and
+    both accessory tracks. The shell pager and Session drawer must test the
+    closest `[data-mobile-focus-composer]` for `:focus-within` before reserving a
+    horizontal gesture. Protecting only the textarea or CM6 content node leaves
+    the deliberately generous writing canvas as an accidental navigation zone.
+    Keep this focus-scoped: an unfocused compact card may still participate in
+    the normal spatial navigation model.
     Keep every action in an equal 44pt slot:
     Send/Done uses primary color for hierarchy, not a circular container. Keep this dock in the
     WebView and adjacent to the native-resized keyboard, with a 6px outer breathing
