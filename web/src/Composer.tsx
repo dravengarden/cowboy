@@ -1622,7 +1622,7 @@ export function ComposerWorkspace({
               opacity: 1,
               transform: "translateY(0)",
               pointerEvents: "auto",
-              borderBottomColor: (t) => alpha(t.palette.divider, 0.42),
+              borderTopColor: (t) => alpha(t.palette.divider, 0.42),
             },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
@@ -2050,7 +2050,7 @@ export function ComposerWorkspace({
             alignItems="center"
             spacing={0.125}
             sx={{
-              order: 1,
+              order: 2,
               maxHeight: 0,
               minHeight: 0,
               px: 0.75,
@@ -2061,8 +2061,8 @@ export function ComposerWorkspace({
               scrollbarWidth: "none",
               pointerEvents: "none",
               transform: "translateY(8px)",
-              borderBottom: 1,
-              borderBottomColor: "transparent",
+              borderTop: 1,
+              borderTopColor: "transparent",
               transition:
                 "max-height 160ms cubic-bezier(.2,.8,.2,1), opacity 120ms ease 24ms, transform 160ms cubic-bezier(.2,.8,.2,1), border-color 120ms ease",
               "&::-webkit-scrollbar": { display: "none" },
@@ -2118,7 +2118,7 @@ export function ComposerWorkspace({
           // + config chips + the right-pinned action cluster.
           spacing={compact ? 0 : 0.5}
           sx={{
-            order: touchInput ? 2 : undefined,
+            order: touchInput ? 1 : undefined,
             px: 0.5,
             pb: 0.5,
             // Compact (mobile): spread the icons when they fit, but let the row
