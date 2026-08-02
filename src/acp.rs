@@ -368,7 +368,15 @@ pub fn run_agent_with_sink(
     match result {
         Ok(()) => sink.set_status(session_id, Status::Exited, None),
         Err(e) => {
-            tracing::error!(session = session_id, error = %e, "agent session ended with error");
+            let raw_error = e.to_string();
+            let detail = if spec.id == "gemini" {
+                crate::provider::gemini::user_facing_startup_error(&raw_error)
+                    .unwrap_or(&raw_error)
+                    .to_owned()
+            } else {
+                raw_error.clone()
+            };
+            tracing::error!(session = session_id, error = %raw_error, "agent session ended with error");
             // Salvage un-consumed prompts. A cold-start / handshake failure returns
             // BEFORE the command loop (`while let Some(cmd) = cmd_rx.recv()`) drains
             // cmd_rx, so a prompt the dispatcher delivered to this (revived) agent is
@@ -380,7 +388,7 @@ pub fn run_agent_with_sink(
             while let Ok(cmd) = cmd_rx.try_recv() {
                 if let AgentCommand::Prompt(blocks, cmid, completion) = cmd {
                     if let Some(tx) = completion {
-                        let _ = tx.send(Err(format!("agent failed before prompt: {e}")));
+                        let _ = tx.send(Err(format!("agent failed before prompt: {detail}")));
                         continue;
                     }
                     let content: Vec<serde_json::Value> = blocks
@@ -395,7 +403,7 @@ pub fn run_agent_with_sink(
                     sink.requeue_prompt(session_id, text, content, cmid);
                 }
             }
-            sink.set_status(session_id, Status::Crashed, Some(e.to_string()));
+            sink.set_status(session_id, Status::Crashed, Some(detail));
         }
     }
 }

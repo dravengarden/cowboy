@@ -32,6 +32,23 @@ Deno.test("derive coalesces text and memoizes immutable timelines", () => {
   if (message.chunks[0].text !== "hello") throw new Error("chunks were not coalesced");
 });
 
+Deno.test("derive collapses repeated terminal lifecycle projections", () => {
+  const detail = "Gemini personal access retired";
+  const items = derive([detail, null, null].map((projectedDetail, index): Envelope => ({
+    session_id: "gemini-session",
+    seq: index + 1,
+    kind: "lifecycle",
+    status: "crashed",
+    detail: projectedDetail,
+  })));
+  if (items.length !== 1 || items[0]?.kind !== "lifecycle") {
+    throw new Error("one crash projected through multiple layers should render once");
+  }
+  if (items[0].detail !== detail || items[0].key !== "3") {
+    throw new Error("the collapsed crash should retain the latest identity");
+  }
+});
+
 Deno.test("Codex compact command and completion drive the compact state", () => {
   const requested: Envelope[] = [{
     session_id: "s1",

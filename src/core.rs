@@ -3555,6 +3555,31 @@ impl Hub {
             .map(|s| s.meta.status)
     }
 
+    /// Latest explanatory crash detail for the current dead edge. Status-only
+    /// worker snapshots may append a detail-less duplicate after the worker's
+    /// richer ACP lifecycle event, so skip empty crash records while walking
+    /// back, but never cross a non-crash lifecycle boundary.
+    #[must_use]
+    pub fn latest_crash_detail(&self, session_id: &str) -> Option<String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(session_id)?;
+        if session.meta.status != Status::Crashed {
+            return None;
+        }
+        for envelope in session.log.iter().rev() {
+            let Event::Lifecycle { status, detail } = &envelope.event else {
+                continue;
+            };
+            if *status != Status::Crashed {
+                return None;
+            }
+            if detail.is_some() {
+                return detail.clone();
+            }
+        }
+        None
+    }
+
     fn next_qid(&self) -> String {
         format!("q{}", self.inner.next_qid.fetch_add(1, Ordering::Relaxed))
     }
@@ -4734,6 +4759,25 @@ mod confirm_hold_tests {
             Some("watchdog".to_owned()),
         ));
         assert_eq!(hub.status("status-cas"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn latest_crash_detail_survives_a_detail_less_runtime_projection() {
+        let hub = hub_with_session("terminal-crash");
+        hub.set_status(
+            "terminal-crash",
+            Status::Crashed,
+            Some("provider retired this login flow".to_owned()),
+        );
+        hub.set_status("terminal-crash", Status::Crashed, None);
+        assert_eq!(
+            hub.latest_crash_detail("terminal-crash").as_deref(),
+            Some("provider retired this login flow")
+        );
+
+        hub.set_status("terminal-crash", Status::Starting, None);
+        hub.set_status("terminal-crash", Status::Crashed, None);
+        assert_eq!(hub.latest_crash_detail("terminal-crash"), None);
     }
 
     #[test]

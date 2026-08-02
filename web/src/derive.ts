@@ -369,7 +369,16 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         // Only surface notable transitions (crash/exit); running/busy show in
         // the header.
         if (env.status === "crashed" || env.status === "exited") {
-          items.push({ kind: "lifecycle", status: env.status, detail: env.detail, key: String(env.seq) });
+          const previous = items.at(-1);
+          if (
+            previous?.kind === "lifecycle" && previous.status === env.status &&
+            (previous.detail === env.detail || previous.detail === null || env.detail === null)
+          ) {
+            if (env.detail !== null) previous.detail = env.detail;
+            previous.key = String(env.seq);
+          } else {
+            items.push({ kind: "lifecycle", status: env.status, detail: env.detail, key: String(env.seq) });
+          }
         }
         break;
       }

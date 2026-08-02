@@ -4988,14 +4988,35 @@ fn handle_command(state: &AppState, text: &str, held: &mut HashMap<String, Strin
             // a message to start a new one" bar and no spinner; submitting a
             // message revives it via the drain. Exited/dormant sessions (nothing
             // unfinished) still pre-revive on open so they're ready to type into.
-            if state.hub.status(&session_id) == Some(Status::Interrupted)
-                && !state.hub.effective_auto_resume(&session_id)
+            let meta = state
+                .hub
+                .session_list()
+                .into_iter()
+                .find(|meta| meta.id == session_id);
+            let terminal_provider_error = meta.as_ref().is_some_and(|meta| {
+                meta.status == Status::Crashed
+                    && meta.provider == "gemini"
+                    && state
+                        .hub
+                        .latest_crash_detail(&session_id)
+                        .as_deref()
+                        .is_some_and(crate::provider::gemini::is_retired_consumer_error)
+            });
+            if terminal_provider_error
+                || (state.hub.status(&session_id) == Some(Status::Interrupted)
+                    && !state.hub.effective_auto_resume(&session_id))
             {
                 // Interrupted + NOT opted into auto-resume → leave it for manual
                 // recovery (the "last turn was interrupted" bar; submitting
                 // revives it). An auto-resume session falls through to
                 // ensure_alive: restore already enqueued the continuation, so
                 // reviving here drains it the moment the session is opened.
+                if terminal_provider_error {
+                    tracing::info!(
+                        session_id = %session_id,
+                        "not auto-reviving session with terminal provider startup error"
+                    );
+                }
                 Ok(())
             } else {
                 // A client opens the focus it restored from localStorage on

@@ -19,6 +19,14 @@ Each entry is a **`LaunchSpec`**: `id` + `command` + `args`. That's the whole
 contract a provider must satisfy to start; everything downstream
 (initialize/handshake/command loop) is provider-agnostic and lives in `acp.rs`.
 
+Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
+Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key
+or Code Assist Standard/Enterprise credentials. Cowboy recognizes the upstream
+retirement response as a terminal startup error: selecting the crashed session
+does not create a restart loop, while an explicit Retry remains available after
+the user changes credentials. Antigravity CLI is not a drop-in replacement
+until it publishes an ACP server mode.
+
 ## Resume is discovered, not declared
 
 There is **no static resume flag**. A provider gains resume support purely by the

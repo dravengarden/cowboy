@@ -2629,7 +2629,7 @@ const ItemView = memo(function ItemView({
             sx={{ fontWeight: interrupted ? 600 : 400 }}
           >
             {item.status}
-            {item.detail ? `: ${item.detail}` : ""}
+            {item.detail ? `: ${presentedCrashDetail(item.detail)}` : ""}
           </Typography>
         </Stack>
       );
@@ -2685,10 +2685,31 @@ const ItemView = memo(function ItemView({
 // surfaces as `interrupted` (amber, "didn't finish"), distinct from the normal
 // `exited` dormant (grey, "completed, asleep") — completed vs interrupted at a
 // glance, no percentage.
+const GEMINI_CONSUMER_RETIRED =
+  "This client is no longer supported for Gemini Code Assist for individuals";
+const GEMINI_CONSUMER_GUIDANCE =
+  "Gemini CLI no longer supports Google Login for personal, Google AI Pro, or AI Ultra accounts. Use an API key, Code Assist Standard/Enterprise, or migrate to Antigravity.";
+
+function presentedCrashDetail(detail: string): string {
+  return detail.includes(GEMINI_CONSUMER_RETIRED) ? GEMINI_CONSUMER_GUIDANCE : detail;
+}
+
+function latestCrashDetail(items: RenderItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.kind === "lifecycle" && item.status === "crashed" && item.detail) {
+      return presentedCrashDetail(item.detail);
+    }
+  }
+  return null;
+}
+
 function SessionStatusBar({
   status,
+  crashDetail,
 }: {
   status: Status;
+  crashDetail: string | null;
 }): React.JSX.Element | null {
   let tone: "warning" | "error" | "neutral";
   let icon: React.JSX.Element;
@@ -2701,7 +2722,7 @@ function SessionStatusBar({
   } else if (status === "crashed") {
     tone = "error";
     icon = <ErrorOutline fontSize="small" />;
-    text = "Agent stopped unexpectedly — send a message to restart it.";
+    text = crashDetail ?? "Agent stopped unexpectedly — send a message to restart it.";
   } else if (status === "exited") {
     tone = "neutral";
     icon = <Bedtime fontSize="small" />;
@@ -2994,6 +3015,7 @@ export function Transcript({
     return () => cancelAnimationFrame(frame);
   }, [drawerCatchupStep, sessionId]);
   const allItems = useMemo(() => derive(presentedTimeline), [presentedTimeline]);
+  const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
   const items = useMemo(
     () =>
       visibleItemKeys
@@ -4369,7 +4391,7 @@ export function Transcript({
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */
       }
-      <SessionStatusBar status={status} />
+      <SessionStatusBar status={status} crashDetail={crashDetail} />
       {
         /* The scroll-to-latest affordance is the persistent sticky/auto-scroll
           toggle in the composer (stickyStore + Composer), not a pill here. A
