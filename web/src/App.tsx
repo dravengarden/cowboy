@@ -3934,7 +3934,26 @@ function MachinesContent(): React.JSX.Element {
                                 <Typography variant="body2" fontWeight={650}>
                                     {open ? "Hide details" : "Details & versions"}
                                 </Typography>
-                                {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+                                <Stack direction="row" spacing={0.5} alignItems="center">
+                                    <Tooltip title="Recheck projects, versions, and sign-in status">
+                                        <span>
+                                            <IconButton
+                                                size="small"
+                                                aria-label={`Refresh ${machine.display_name} inventory`}
+                                                disabled={busy[`${machine.id}:refresh:`]}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    command(machine.id, "refresh");
+                                                }}
+                                            >
+                                                {busy[`${machine.id}:refresh:`]
+                                                    ? <DelayedNetworkProgress size={16} />
+                                                    : <RefreshIcon fontSize="small" />}
+                                            </IconButton>
+                                        </span>
+                                    </Tooltip>
+                                    {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+                                </Stack>
                             </ButtonBase>
                             {open && (
                                 <Stack spacing={1.25} sx={{ pt: 0.25 }}>
@@ -3956,14 +3975,6 @@ function MachinesContent(): React.JSX.Element {
                                                 Roots: {rootWorkspaces.map((workspace) => workspace.display_name).join(" · ")}
                                             </Typography>
                                         )}
-                                    </Stack>
-                                    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                                            <Button
-                                                size="small"
-                                                startIcon={busy[`${machine.id}:refresh:`] ? <DelayedNetworkProgress size={14} /> : <RefreshIcon />}
-                                                disabled={busy[`${machine.id}:refresh:`]}
-                                                onClick={() => command(machine.id, "refresh")}
-                                            >Refresh</Button>
                                     </Stack>
                                     {componentSections.map((section) => (
                                         <Stack key={section.label} spacing={0.75}>
@@ -4043,12 +4054,21 @@ function MachinesContent(): React.JSX.Element {
                                                                     {component.detail}
                                                                 </Typography>
                                                             )}
+                                                            {legacyGeminiAuth && (
+                                                                <Typography
+                                                                    variant="caption"
+                                                                    color="warning.main"
+                                                                    sx={{ display: "block", mt: 0.25, maxWidth: 720 }}
+                                                                >
+                                                                    This Machine uses the legacy inventory protocol. Update Cowboy Machine to verify Gemini authentication.
+                                                                </Typography>
+                                                            )}
                                                         </Box>
                                                         {provider && component.auth === "signed_in" && !legacyGeminiAuth && (
                                                             <Chip size="small" color="success" variant="outlined" label="Signed in" />
                                                         )}
                                                         {provider === "gemini" && legacyGeminiAuth && (
-                                                            <Chip size="small" variant="outlined" color="warning" label="Machine update required" />
+                                                            <Chip size="small" variant="outlined" color="warning" label="Legacy Machine" />
                                                         )}
                                                         {provider && component.auth !== "signed_in" && provider === "gemini" && !legacyGeminiAuth && (
                                                             <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
