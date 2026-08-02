@@ -3324,7 +3324,11 @@ export function Transcript({
             fromTop,
             viewportHeight: el.clientHeight,
             reachedStart: currentPaging.reachedStart,
-            loadingOlder: currentPaging.loadingOlder,
+            // `loadOlder` has completed canonically; React may not have
+            // published that synchronous store update into this ref yet.
+            // Treating its stale `loadingOlder` bit as authoritative would
+            // stop sparse-page filling after the first request.
+            loadingOlder: false,
             beforeSeq: currentPaging.beforeSeq,
           })) break;
         }
