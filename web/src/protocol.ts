@@ -100,6 +100,21 @@ export interface AcpUpdate {
   [key: string]: unknown;
 }
 
+export function isPureTerminalOutputDelta(update: AcpUpdate): boolean {
+  if (update.sessionUpdate !== "tool_call_update") return false;
+  if (
+    !Object.keys(update).every((key) =>
+      key === "sessionUpdate" || key === "toolCallId" || key === "_meta"
+    )
+  ) return false;
+  const meta = update._meta;
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return false;
+  if (!Object.keys(meta).every((key) => key === "terminal_output_delta")) return false;
+  const terminal = (meta as Record<string, unknown>).terminal_output_delta;
+  return typeof terminal === "object" && terminal !== null && !Array.isArray(terminal) &&
+    typeof (terminal as Record<string, unknown>).data === "string";
+}
+
 export interface ContentBlock {
   type: string;
   text?: string;

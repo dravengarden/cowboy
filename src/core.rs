@@ -131,6 +131,10 @@ fn is_context_cleared(envelope: &Envelope) -> bool {
     )
 }
 
+fn is_turn_end(envelope: &Envelope) -> bool {
+    matches!(envelope.event, Event::TurnEnd { .. })
+}
+
 /// Whether the current native-agent context has received a user turn.
 ///
 /// Codex allocates a thread id at `session/new` but does not create a resumable
@@ -1996,7 +2000,15 @@ impl Hub {
             let Some(&root_index) = roots.last() else {
                 return (Vec::new(), None, true);
             };
-            let events = session.log[root_index..end].to_vec();
+            // A question page describes one conversational turn. Background
+            // terminals may continue to emit after TurnEnd; including that
+            // unbounded tail makes a page grow forever and can strand the next
+            // bootstrap behind thousands of non-renderable tool deltas.
+            let page_end = session.log[root_index..end]
+                .iter()
+                .position(is_turn_end)
+                .map_or(end, |offset| root_index + offset + 1);
+            let events = session.log[root_index..page_end].to_vec();
             let reached_start = roots.len() == 1 && session.reached_start;
             let next_before_seq = (!reached_start).then_some(session.log[root_index].seq);
             (events, next_before_seq, reached_start)
@@ -2057,12 +2069,16 @@ impl Hub {
             if !is_human_question_chunk(envelope) || previous_was_user {
                 return None;
             }
-            let end = (root_index + 1..session.log.len())
+            let next_root = (root_index + 1..session.log.len())
                 .find(|&index| {
                     is_human_question_chunk(&session.log[index])
                         && !is_user_message_chunk(&session.log[index - 1])
                 })
                 .unwrap_or(session.log.len());
+            let end = session.log[root_index..next_root]
+                .iter()
+                .position(is_turn_end)
+                .map_or(next_root, |offset| root_index + offset + 1);
             Some(session.log[root_index..end].to_vec())
         })
     }
@@ -5367,6 +5383,62 @@ mod confirm_hold_tests {
             .expect("lazy question page");
         assert_eq!(
             lazy_page.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn question_history_stops_before_background_output_after_turn_end() {
+        let hub = hub_with_session("question-tail");
+        hub.push(
+            "question-tail",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"text": "show me the logs"},
+                }),
+            },
+        );
+        hub.push(
+            "question-tail",
+            Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"text": "the watcher is running"},
+                }),
+            },
+        );
+        hub.push(
+            "question-tail",
+            Event::TurnEnd {
+                stop_reason: "end_turn".to_owned(),
+            },
+        );
+        for index in 0..100 {
+            hub.push(
+                "question-tail",
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": "watcher",
+                        "line": index,
+                    }),
+                },
+            );
+        }
+
+        let (page, _, _) = hub
+            .question_page_before("question-tail", 103)
+            .expect("question page");
+        assert_eq!(
+            page.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        let lazy = hub
+            .question_page_at("question-tail", 0)
+            .expect("lazy question page");
+        assert_eq!(
+            lazy.iter().map(|event| event.seq).collect::<Vec<_>>(),
             [0, 1, 2]
         );
     }

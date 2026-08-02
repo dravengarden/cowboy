@@ -930,13 +930,27 @@ impl Store {
         let Some(root) = root else {
             return Ok((Vec::new(), None, true));
         };
+        let turn_end = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MIN(seq) FROM events \
+             WHERE session_id = $1 AND seq >= $2 AND seq < $3 \
+               AND payload->>'kind' = 'turn_end'",
+        )
+        .bind(session_id)
+        .bind(root)
+        .bind(before_i64)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question turn end for {session_id}"))?;
+        let page_end = turn_end
+            .and_then(|seq| seq.checked_add(1))
+            .unwrap_or(before_i64);
         let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>(
             "SELECT seq, payload, 0::bigint AS total_count FROM events \
              WHERE session_id = $1 AND seq >= $2 AND seq < $3 ORDER BY seq",
         )
         .bind(session_id)
         .bind(root)
-        .bind(before_i64)
+        .bind(page_end)
         .fetch_all(&self.pool)
         .await
         .with_context(|| format!("SELECT complete question page for {session_id}"))?;
@@ -1081,6 +1095,19 @@ impl Store {
         let Some((start, end)) = bounds else {
             return Ok(None);
         };
+        let turn_end = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT MIN(seq) FROM events \
+             WHERE session_id = $1 AND seq >= $2 \
+               AND ($3::bigint IS NULL OR seq < $3) \
+               AND payload->>'kind' = 'turn_end'",
+        )
+        .bind(session_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("SELECT question page turn end for {session_id}:{root_seq}"))?;
+        let end = turn_end.and_then(|seq| seq.checked_add(1)).or(end);
         let rows = sqlx::query_as::<_, EventRow>(
             "SELECT seq, payload, 0::bigint AS total_count FROM events \
              WHERE session_id = $1 AND seq >= $2 AND ($3::bigint IS NULL OR seq < $3) \

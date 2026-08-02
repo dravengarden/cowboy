@@ -6,6 +6,8 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldRecoverUnrenderableHistory,
+  shouldShowFreshSessionEmptyState,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport.ts";
 
@@ -93,6 +95,49 @@ Deno.test("mobile transcript refills when an iPad viewport grows", () => {
       loadingFillHeight: 260,
     }),
     true,
+  );
+});
+
+Deno.test("empty transcript copy is reserved for a truly fresh session", () => {
+  assertEquals(
+    shouldShowFreshSessionEmptyState({
+      loading: false,
+      itemCount: 0,
+      isLive: true,
+      reachedStart: true,
+      timelineEventCount: 2,
+    }),
+    true,
+  );
+  assertEquals(
+    shouldShowFreshSessionEmptyState({
+      loading: false,
+      itemCount: 0,
+      isLive: true,
+      reachedStart: false,
+      timelineEventCount: 200,
+    }),
+    false,
+  );
+});
+
+Deno.test("an unrenderable durable tail jumps to a question boundary", () => {
+  const tail = {
+    managed: true,
+    itemCount: 0,
+    timelineEventCount: 200,
+    reachedStart: false,
+    loadingOlder: false,
+    beforeSeq: 994_143,
+  };
+  assertEquals(shouldRecoverUnrenderableHistory(tail), true);
+  assertEquals(
+    shouldRecoverUnrenderableHistory({ ...tail, itemCount: 1 }),
+    false,
+  );
+  assertEquals(
+    shouldRecoverUnrenderableHistory({ ...tail, reachedStart: true }),
+    false,
   );
 });
 

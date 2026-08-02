@@ -11,6 +11,33 @@ export interface TranscriptViewportBackfillInput {
   loadingFillHeight: number | null;
 }
 
+export function shouldShowFreshSessionEmptyState(input: {
+  loading: boolean;
+  itemCount: number;
+  isLive: boolean;
+  reachedStart: boolean | undefined;
+  timelineEventCount: number;
+}): boolean {
+  if (input.loading || input.itemCount !== 0 || !input.isLive) return false;
+  // A fresh session can contain lifecycle metadata while still having no
+  // conversation. Conversely, a tail made only of orphan tool deltas has no
+  // renderable items but explicitly has older durable history. Never describe
+  // that second case as a brand-new session.
+  return input.reachedStart ?? input.timelineEventCount === 0;
+}
+
+export function shouldRecoverUnrenderableHistory(input: {
+  managed: boolean;
+  itemCount: number;
+  timelineEventCount: number;
+  reachedStart: boolean;
+  loadingOlder: boolean;
+  beforeSeq: number | null;
+}): boolean {
+  return input.managed && input.itemCount === 0 && input.timelineEventCount > 0 &&
+    !input.reachedStart && !input.loadingOlder && input.beforeSeq !== null;
+}
+
 export function shouldBackfillTranscriptViewport(
   input: TranscriptViewportBackfillInput,
 ): boolean {

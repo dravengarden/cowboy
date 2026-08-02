@@ -42,6 +42,20 @@ impl EventReducer {
         if matches!(kind, Some("usage_update" | "session_info_update")) {
             return None;
         }
+        // Codex exposes terminal stdout/stderr as an extension-only delta. It
+        // is useful to connected clients while a command is running, but it is
+        // not a self-contained transcript row: without the original tool_call
+        // it renders nothing. In particular, a background command can keep
+        // emitting after TurnEnd has finalized and evicted its tool slot. If we
+        // persist those orphan deltas one row at a time, an unbounded `tail -f`
+        // eventually pushes every renderable row out of the bounded bootstrap
+        // window. Keep the raw broadcast live, advance the durable sequence
+        // watermark in the store writer, and omit pure terminal deltas from the
+        // canonical transcript. A semantic tool update carrying status/content
+        // alongside `_meta` still follows the normal merge path below.
+        if kind == Some("tool_call_update") && is_pure_terminal_output_delta(update) {
+            return None;
+        }
         if matches!(kind, Some("agent_message_chunk" | "agent_thought_chunk")) {
             let text = update
                 .get("content")
@@ -121,6 +135,22 @@ impl EventReducer {
     }
 }
 
+fn is_pure_terminal_output_delta(update: &serde_json::Value) -> bool {
+    let Some(object) = update.as_object() else {
+        return false;
+    };
+    object
+        .keys()
+        .all(|key| matches!(key.as_str(), "sessionUpdate" | "toolCallId" | "_meta"))
+        && update
+            .pointer("/_meta/terminal_output_delta/data")
+            .is_some_and(serde_json::Value::is_string)
+        && update
+            .get("_meta")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|meta| meta.keys().all(|key| key == "terminal_output_delta"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +180,66 @@ mod tests {
             .reduce(update(2, "tool_call_update", "tool"))
             .expect("fresh update");
         assert_eq!(fresh.seq, 2);
+    }
+
+    #[test]
+    fn pure_terminal_output_is_live_only_even_after_turn_end() {
+        let mut reducer = EventReducer::default();
+        assert!(reducer.reduce(update(1, "tool_call", "tool")).is_some());
+        assert!(
+            reducer
+                .reduce(Envelope {
+                    session_id: "session".to_owned(),
+                    seq: 2,
+                    event: Event::TurnEnd {
+                        stop_reason: "end_turn".to_owned(),
+                    },
+                    cmid: None,
+                })
+                .is_some()
+        );
+        let delta = Envelope {
+            session_id: "session".to_owned(),
+            seq: 3,
+            event: Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "tool",
+                    "_meta": {
+                        "terminal_output_delta": {
+                            "terminal_id": "tool",
+                            "data": "one more log line\n"
+                        }
+                    }
+                }),
+            },
+            cmid: None,
+        };
+        assert!(reducer.reduce(delta).is_none());
+    }
+
+    #[test]
+    fn semantic_tool_update_with_terminal_metadata_still_persists() {
+        let mut reducer = EventReducer::default();
+        assert!(reducer.reduce(update(1, "tool_call", "tool")).is_some());
+        let completed = Envelope {
+            session_id: "session".to_owned(),
+            seq: 2,
+            event: Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "tool",
+                    "status": "completed",
+                    "_meta": {
+                        "terminal_output_delta": {
+                            "terminal_id": "tool",
+                            "data": "done\n"
+                        }
+                    }
+                }),
+            },
+            cmid: None,
+        };
+        assert!(reducer.reduce(completed).is_some());
     }
 }

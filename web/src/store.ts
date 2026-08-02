@@ -27,20 +27,21 @@ import { linkTimeline } from "./derive";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
-import type {
-  ConfigOption,
-  ContentBlock,
-  Delivery,
-  DraftSchedule,
-  Envelope,
-  Inbound,
-  JudgeResult,
-  JudgeRun,
-  Outbound,
-  SessionBootstrapResponse,
-  SessionMeta,
-  SkillView,
-  WireQueued,
+import {
+  type ConfigOption,
+  type ContentBlock,
+  type Delivery,
+  type DraftSchedule,
+  type Envelope,
+  type Inbound,
+  isPureTerminalOutputDelta,
+  type JudgeResult,
+  type JudgeRun,
+  type Outbound,
+  type SessionBootstrapResponse,
+  type SessionMeta,
+  type SkillView,
+  type WireQueued,
 } from "./protocol";
 import { mergeCanonicalTimeline } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
@@ -593,7 +594,8 @@ function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope): Map<s
   if (
     env.kind === "update" &&
     (env.update.sessionUpdate === "usage_update" ||
-      env.update.sessionUpdate === "session_info_update")
+      env.update.sessionUpdate === "session_info_update" ||
+      isPureTerminalOutputDelta(env.update))
   ) {
     return timelines;
   }
@@ -739,9 +741,9 @@ export async function loadOlder(sessionId: string): Promise<boolean> {
   }
 }
 
-export async function loadPreviousQuestionPage(sessionId: string): Promise<void> {
+export async function loadPreviousQuestionPage(sessionId: string): Promise<boolean> {
   const pg = state.pagination.get(sessionId);
-  if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return;
+  if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return false;
   const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const beforeSeq = pg.beforeSeq;
   setPagination(sessionId, { ...pg, loadingOlder: true });
@@ -751,14 +753,14 @@ export async function loadPreviousQuestionPage(sessionId: string): Promise<void>
     );
     if (!res.ok) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
-      return;
+      return false;
     }
     const data = (await res.json()) as {
       events: Envelope[];
       next_before_seq: number | null;
       reached_start: boolean;
     };
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return;
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     setState({
       ...state,
       timelines: mergeEvents(state.timelines, sessionId, data.events),
@@ -768,8 +770,10 @@ export async function loadPreviousQuestionPage(sessionId: string): Promise<void>
       loadingOlder: false,
       beforeSeq: data.next_before_seq,
     });
+    return data.events.length > 0;
   } catch {
     setPagination(sessionId, { ...pg, loadingOlder: false });
+    return false;
   }
 }
 

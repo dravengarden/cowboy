@@ -87,6 +87,7 @@ import {
   canonicalTimeline,
   discardMessage,
   loadOlder,
+  loadPreviousQuestionPage,
   type QueuedMessage,
   releaseFollowedHistory,
   retryMessage,
@@ -114,6 +115,8 @@ import {
   scrollbackReplacementFromTop,
   shouldBackfillTranscriptViewport,
   shouldContinueScrollbackFill,
+  shouldRecoverUnrenderableHistory,
+  shouldShowFreshSessionEmptyState,
   shouldMagnetizeTranscript,
 } from "./transcriptViewport";
 import {
@@ -3306,6 +3309,18 @@ export function Transcript({
   );
   const pagingRef = useRef(paging);
   pagingRef.current = paging;
+  const renderableItemCountRef = useRef(items.length);
+  renderableItemCountRef.current = items.length;
+  const timelineEventCountRef = useRef(timeline.length);
+  timelineEventCountRef.current = timeline.length;
+  const semanticRecoveryCursorRef = useRef<number | null>(null);
+  const showFreshSessionEmptyState = shouldShowFreshSessionEmptyState({
+    loading,
+    itemCount: items.length,
+    isLive,
+    reachedStart: paging?.reachedStart,
+    timelineEventCount: timeline.length,
+  });
 
   // Tool details deliberately browses only the retained history window. Never
   // page an entire long-running session merely to make its denominator exact:
@@ -3506,6 +3521,7 @@ export function Transcript({
     setViewportBackfillPaused(false);
     viewportBackfillCursorRef.current = null;
     viewportBackfillSettlingRef.current = false;
+    semanticRecoveryCursorRef.current = null;
     viewportBackfillAllowanceRef.current = VIEWPORT_BACKFILL_PAGE_LIMIT;
     viewportHeightRef.current = null;
     historyPrefetchArmedRef.current = true;
@@ -3548,6 +3564,36 @@ export function Transcript({
       const el = parentRef.current;
       if (!el || !paging) {
         setBackfillingViewport(false);
+        return;
+      }
+      // A bounded tail can consist entirely of output deltas whose original
+      // tool_call is much older. Walking 64 raw rows at a time is both slow and
+      // incapable of producing UI until that parent finally arrives. Jump to
+      // the indexed previous question page instead; the server bounds it at
+      // TurnEnd, so background terminal output cannot make this recovery
+      // response grow forever.
+      if (shouldRecoverUnrenderableHistory({
+        managed: managesScrollHistoryRef.current,
+        itemCount: renderableItemCountRef.current,
+        timelineEventCount: timelineEventCountRef.current,
+        reachedStart: paging.reachedStart,
+        loadingOlder: paging.loadingOlder,
+        beforeSeq: paging.beforeSeq,
+      })) {
+        const cursor = paging.beforeSeq;
+        if (semanticRecoveryCursorRef.current === cursor) {
+          setBackfillingViewport(false);
+          return;
+        }
+        semanticRecoveryCursorRef.current = cursor;
+        setBackfillingViewport(true);
+        void loadPreviousQuestionPage(sessionId)
+          .then((progressed) => {
+            if (!progressed) setScrollbackFailed(true);
+          })
+          .finally(() => {
+            requestViewportBackfillRef.current(false);
+          });
         return;
       }
       if (viewportHeightRef.current === null) {
@@ -4534,7 +4580,7 @@ export function Transcript({
               provider={provider}
             />
           )
-          : items.length === 0 && isLive
+          : showFreshSessionEmptyState
           ? <EmptyTranscript provider={provider} cwd={cwd} />
           : (
             // Rendered NEWEST-FIRST in the DOM; column-reverse flips it to
