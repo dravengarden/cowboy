@@ -645,8 +645,10 @@ here says otherwise.
     contextual Send/Done remain stable above, while formatting scrolls alone on
     the track nearest the keyboard. Fullscreen editors render that material as
     the same inset, rounded panel used by the compact composer, not as two
-    edge-to-edge system bars. Its only internal separator is the quiet horizontal
-    boundary between semantic tracks. Settings is an ordinary trailing 44pt
+    edge-to-edge system bars. Both surfaces use the same 8px Mobile composer
+    gutter; do not introduce a separate fullscreen inset. Its only internal
+    separator is the quiet horizontal boundary between semantic tracks. Settings
+    is an ordinary trailing 44pt
     formatting action, never a selected-looking rail, gradient, or separately
     divided region. Main fullscreen compose also moves Collapse into the upper
     message-action track; do not restore a mostly empty top app bar. The overlay

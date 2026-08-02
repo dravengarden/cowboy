@@ -30,7 +30,7 @@ export function MobileComposerAccessoryDock({
         minHeight: 96,
         display: "grid",
         gridTemplateRows: "48px 48px",
-        mx: 1.5,
+        mx: 1,
         mb: 0.75,
         ...mobileComposerPanelFrameSx,
         borderColor: (theme) => alpha(theme.palette.divider, 0.5),
