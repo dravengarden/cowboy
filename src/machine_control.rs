@@ -9,6 +9,20 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 
+const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+// Workspace preparation can run six sequential Git commands, each bounded to
+// 30 seconds on the Machine. Keep the controller alive beyond that complete
+// Machine-side envelope so it never abandons a still-running preparation.
+const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(210);
+
+fn adapter_timeout(adapter: &str) -> std::time::Duration {
+    if adapter == "workspace" {
+        WORKSPACE_ADAPTER_TIMEOUT
+    } else {
+        DEFAULT_ADAPTER_TIMEOUT
+    }
+}
+
 struct Connection {
     epoch: String,
     tx: mpsc::UnboundedSender<MachineCommand>,
@@ -107,7 +121,7 @@ impl MachineControl {
             self.pending.write().remove(&request_id);
             return Err(error);
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(40), rx).await {
+        match tokio::time::timeout(adapter_timeout(adapter), rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("Machine adapter response channel closed".to_owned()),
             Err(_) => {
@@ -132,6 +146,15 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn workspace_requests_cover_the_complete_machine_preparation_envelope() {
+        assert_eq!(
+            adapter_timeout("workspace"),
+            std::time::Duration::from_secs(210)
+        );
+        assert_eq!(adapter_timeout("zed"), std::time::Duration::from_secs(40));
+    }
 
     #[tokio::test]
     async fn adapter_response_is_correlated_without_entering_another_machine() {
