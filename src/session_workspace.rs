@@ -94,36 +94,47 @@ pub async fn prepare(
     tokio::fs::create_dir_all(worktree_root)
         .await
         .with_context(|| format!("creating worktree root {}", worktree_root.display()))?;
-    git_output(
-        &repository,
-        [
-            OsStr::new("worktree"),
-            OsStr::new("add"),
-            OsStr::new("--detach"),
-            destination.as_os_str(),
-            OsStr::new(&revision),
-        ],
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "creating isolated session worktree {}",
-            destination.display()
+    let created = async {
+        git_output(
+            &repository,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--detach"),
+                destination.as_os_str(),
+                OsStr::new(&revision),
+            ],
         )
-    })?;
-    let checkout = destination
-        .canonicalize()
-        .with_context(|| format!("canonicalizing new worktree {}", destination.display()))?;
-    let path = checkout
-        .join(&relative_path)
-        .canonicalize()
+        .await
         .with_context(|| {
             format!(
-                "canonicalizing selected workspace {} in new worktree {}",
-                relative_path.display(),
-                checkout.display()
+                "creating isolated session worktree {}",
+                destination.display()
             )
         })?;
+        let checkout = destination
+            .canonicalize()
+            .with_context(|| format!("canonicalizing new worktree {}", destination.display()))?;
+        let path = checkout
+            .join(&relative_path)
+            .canonicalize()
+            .with_context(|| {
+                format!(
+                    "canonicalizing selected workspace {} in new worktree {}",
+                    relative_path.display(),
+                    checkout.display()
+                )
+            })?;
+        Ok::<_, anyhow::Error>(path)
+    }
+    .await;
+    let path = match created {
+        Ok(value) => value,
+        Err(error) => {
+            cleanup_failed_creation(&repository, &destination, &base_ref).await;
+            return Err(error);
+        }
+    };
     Ok(PreparedWorkspace {
         path: path.display().to_string(),
         source_path: source.display().to_string(),
@@ -132,6 +143,23 @@ pub async fn prepare(
         isolated: true,
         created: true,
     })
+}
+
+async fn cleanup_failed_creation(repository: &Path, destination: &Path, base_ref: &str) {
+    let _ = git_command(
+        repository,
+        [
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            destination.as_os_str(),
+        ],
+    )
+    .await;
+    if tokio::fs::try_exists(destination).await.unwrap_or(false) {
+        let _ = tokio::fs::remove_dir_all(destination).await;
+    }
+    let _ = git_command(repository, ["update-ref", "-d", base_ref]).await;
 }
 
 async fn reuse_existing(
@@ -369,6 +397,40 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(source.join("value.txt")).unwrap(),
             "unfinished\n"
+        );
+
+        let unpublished = source.join("unpublished-subdir");
+        std::fs::create_dir_all(&unpublished).unwrap();
+        std::fs::write(unpublished.join("value.txt"), "not remote\n").unwrap();
+        let failed = prepare(
+            PrepareWorkspaceRequest {
+                root: unpublished.display().to_string(),
+                session_id: "sess-missing-subdir".to_owned(),
+            },
+            &managed,
+        )
+        .await;
+        assert!(failed.is_err());
+        assert!(!managed.join("sess-missing-subdir").exists());
+        assert!(
+            !git_command(
+                &source,
+                [
+                    "show-ref",
+                    "--verify",
+                    "refs/cowboy/session-bases/sess-missing-subdir"
+                ],
+            )
+            .await
+            .unwrap()
+            .status
+            .success()
+        );
+        assert!(
+            !git_output(&source, ["worktree", "list", "--porcelain"])
+                .await
+                .unwrap()
+                .contains("sess-missing-subdir")
         );
 
         let selected = source.join("nested");
