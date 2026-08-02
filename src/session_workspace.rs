@@ -1,6 +1,7 @@
 //! Machine-local preparation of isolated Git worktrees for Cowboy sessions.
 
 use std::ffi::OsStr;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -35,6 +36,7 @@ pub async fn prepare(
     worktree_root: &Path,
 ) -> Result<PreparedWorkspace> {
     validate_session_id(&request.session_id)?;
+    let _session_lock = acquire_session_lock(worktree_root, &request.session_id).await?;
     let source = PathBuf::from(&request.root)
         .canonicalize()
         .with_context(|| format!("canonicalizing session workspace {:?}", request.root))?;
@@ -210,6 +212,28 @@ pub async fn prepare(
         isolated: true,
         created: true,
     })
+}
+
+async fn acquire_session_lock(worktree_root: &Path, session_id: &str) -> Result<File> {
+    let lock_path = worktree_root.join(".locks").join(session_id);
+    tokio::task::spawn_blocking(move || {
+        let parent = lock_path
+            .parent()
+            .context("session lock path has no parent")?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating session lock directory {}", parent.display()))?;
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("opening session lock {}", lock_path.display()))?;
+        file.lock()
+            .with_context(|| format!("locking session preparation {}", lock_path.display()))?;
+        Ok::<_, anyhow::Error>(file)
+    })
+    .await
+    .context("joining session lock acquisition")?
 }
 
 async fn remove_stale_destination_registration(
@@ -691,15 +715,18 @@ mod tests {
             .await
             .unwrap();
         std::fs::remove_dir_all(managed.join("sess-recoverable")).unwrap();
-        let restored = prepare(
-            PrepareWorkspaceRequest {
-                root: source.display().to_string(),
-                session_id: "sess-recoverable".to_owned(),
-            },
-            &managed,
-        )
-        .await
-        .unwrap();
+        let restore_request = || PrepareWorkspaceRequest {
+            root: source.display().to_string(),
+            session_id: "sess-recoverable".to_owned(),
+        };
+        let (restored, concurrent) = tokio::join!(
+            prepare(restore_request(), &managed),
+            prepare(restore_request(), &managed)
+        );
+        let restored = restored.unwrap();
+        let concurrent = concurrent.unwrap();
+        assert_eq!(restored.path, concurrent.path);
+        assert_ne!(restored.created, concurrent.created);
         assert_eq!(
             restored.revision.as_deref(),
             Some(unpublished_revision.as_str())
