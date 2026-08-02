@@ -3303,6 +3303,27 @@ export function Transcript({
     paging?.reachedStart,
     sessionId,
   ]);
+  // Large generated images and rich Markdown can initially reserve enough
+  // height to stop viewport hydration, then shrink after decode/fallback or a
+  // disclosure settles. Observing only the fixed-height scroll box misses that
+  // change because its border box never resized. Watch the retained rows too,
+  // and re-measure through the existing RAF-coalesced loader whenever their
+  // actual layout changes. Filled/desktop/page-view guards remain centralized
+  // in requestViewportBackfillRef, so streaming rows do not create extra loads.
+  useEffect(() => {
+    if (!managesScrollHistory || typeof ResizeObserver === "undefined") {
+      return undefined;
+    }
+    const el = parentRef.current;
+    if (!el) return undefined;
+    const observer = new ResizeObserver(() => {
+      requestViewportBackfillRef.current(false);
+    });
+    for (const row of el.querySelectorAll<HTMLElement>("[data-key]")) {
+      observer.observe(row);
+    }
+    return () => observer.disconnect();
+  }, [items.length, managesScrollHistory, sessionId]);
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
   // user bubbles below the latest real item (newest at the very bottom), dropped
   // by cmid the moment the echo lands. Empty in the common (confirmed) case.
