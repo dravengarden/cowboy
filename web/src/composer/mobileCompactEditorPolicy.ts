@@ -1,5 +1,15 @@
 import { imageTokensInText } from "../attachments";
 
+/** The persisted inline-height preference belongs to Desktop only. Mobile and
+ * tablet have a separate, explicit fullscreen sheet; leaking the Desktop bit
+ * into their compact composer silently promotes it to a 48vh CM6 canvas. */
+export function shouldExpandInlineComposer(
+  surfaceKind: "desktop" | "tablet" | "mobile",
+  expandedPreference: boolean,
+): boolean {
+  return surfaceKind === "desktop" && expandedPreference;
+}
+
 /**
  * Native iOS text controls own the reliable long-press edit menu. CM6 owns
  * inline-image widgets. Use the native control only while the compact touch

@@ -730,6 +730,17 @@ here says otherwise.
     next quiet page-head group. A failure replaces the skeleton with a
     visible Retry row rather than clipping the action above placeholder cards.
 
+35. **Desktop inline expansion is not a cross-surface preference.** The
+    persisted `composer-expanded` and drag height describe Desktop's resizable
+    inline Prompt canvas only. Mobile and tablet use their explicit fullscreen
+    sheet for long-form writing; their ordinary composer must always pass
+    `expanded=false` and no persisted height to the platform editor. Browser
+    storage can survive a Desktop/iPad surface-classification change, so gating
+    only the expand button is insufficient: gate the editor props at the shared
+    workspace boundary. Otherwise a stale Desktop `true` silently promotes an
+    empty Mobile native textarea to a 48vh CM6 canvas, producing a large blank
+    composer while the UI still presents Mobile's fullscreen affordance.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

@@ -6,6 +6,7 @@ import {
 import {
   composerEditorMountSeed,
   shouldFocusPromotedEditor,
+  shouldExpandInlineComposer,
   shouldUseNativeCompactEditor,
 } from "./mobileCompactEditorPolicy";
 
@@ -48,6 +49,13 @@ Deno.test("compact touch text uses the native editor for the iOS long-press menu
   assertEquals(shouldUseNativeCompactEditor("mobile", false, false, "hello"), true);
   assertEquals(shouldUseNativeCompactEditor("tablet", false, false, ""), true);
   assertEquals(shouldUseNativeCompactEditor("desktop", false, false, "hello"), false);
+});
+
+Deno.test("the persisted Desktop expansion preference never expands Mobile inline compose", () => {
+  assertEquals(shouldExpandInlineComposer("desktop", true), true);
+  assertEquals(shouldExpandInlineComposer("desktop", false), false);
+  assertEquals(shouldExpandInlineComposer("mobile", true), false);
+  assertEquals(shouldExpandInlineComposer("tablet", true), false);
 });
 
 Deno.test("inline images and expanded touch composers stay on CM6", () => {

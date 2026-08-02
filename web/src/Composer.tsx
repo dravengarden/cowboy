@@ -95,6 +95,7 @@ import {
 } from "./MobileComposerAccessoryDock";
 import { MessagePreview } from "./MessagePreview";
 import { useTouchComposer } from "./ComposerTextarea";
+import { shouldExpandInlineComposer } from "./composer/mobileCompactEditorPolicy";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ALT_LABEL, ENTER_LABEL, MOD_LABEL } from "./platform";
 import { ShortcutKeycap } from "./ShortcutKeycap";
@@ -1098,6 +1099,13 @@ export function ComposerWorkspace({
   const vim = useVimSetting();
   // Expand toggle (desktop only — gated where rendered). Persisted per device.
   const expanded = useComposerExpanded();
+  // That preference can be shared by PWA storage across iPad/Desktop surface
+  // classifications. Mobile owns a separate fullscreen sheet, so its ordinary
+  // composer must never inherit Desktop's 48vh inline canvas.
+  const inlineExpanded = shouldExpandInlineComposer(
+    desktop ? "desktop" : "mobile",
+    expanded,
+  );
   const composerHeight = useComposerHeight();
   // Drag-to-resize the editor (desktop), VSCode-terminal style: a top-edge handle
   // grows/shrinks the editor; dragging below RESIZE_MIN auto-collapses to the
@@ -1713,8 +1721,8 @@ export function ComposerWorkspace({
             onSubmit={submitAndNotify}
             onSaveDraft={saveDraft}
             borderless
-            expanded={expanded}
-            heightPx={composerHeight}
+            expanded={inlineExpanded}
+            heightPx={inlineExpanded ? composerHeight : 0}
             // Column layout: stretch to fill the column instead of the vh-bounded
             // compact/expanded sizes (overrides expanded/heightPx).
             fill={column}
