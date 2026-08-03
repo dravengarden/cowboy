@@ -77,6 +77,7 @@ struct AppState {
 const STORE_QUEUE_CAPACITY: usize = 8_192;
 const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
+const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -182,7 +183,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Ok(entries) => hub.load_settings(entries),
                 Err(e) => tracing::warn!(error = %e, "loading settings (degrading to defaults)"),
             }
-            hub.restore(restored);
+            // Detached workers outlive this control-plane process. Keep
+            // persisted Busy turns guarded until their Machine runtime has had
+            // one bounded reconnect window to prove ownership; only then may a
+            // missing worker become Interrupted.
+            hub.restore_reconciling_runtime(restored);
             tracing::info!(
                 postgres = url,
                 restored = restored_count,
@@ -388,6 +393,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let dispatcher_hub = hub.clone();
     let dispatcher_supervisor = Arc::clone(&supervisor);
     let dispatcher_shutdown = shutdown_rx.clone();
+    let dispatcher_exit_state = dispatcher_shutdown.clone();
     let mut dispatcher_task = tokio::spawn(async move {
         run_dispatcher(
             dispatcher_hub,
@@ -397,7 +403,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         )
         .await;
         dispatcher_health.set_dispatcher(false);
-        tracing::error!("dispatcher exited unexpectedly");
+        if *dispatcher_exit_state.borrow() {
+            tracing::info!("dispatcher stopped after shutdown");
+        } else {
+            tracing::error!("dispatcher exited while Cowboy was still serving");
+        }
     });
 
     // One bounded queue feeds one long-lived Codex app-server process; every
@@ -446,34 +456,43 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // now-restored in-memory sessions. An overdue one fires immediately (catch-up).
     hub.rearm_scheduled_drafts();
 
-    // Headless auto-resume. A turn cut off by THIS restart had its continuation
-    // enqueued + the session marked Interrupted during `hub.restore` above — but
-    // that continuation only drains once the agent revives, which used to wait for
-    // a CLIENT to open the session. Revive the opted-in ones right here so an
-    // interrupted turn resumes with NO client connected — the whole point of
-    // auto-resume is surviving an unattended deploy. Gated on a non-empty queue so
-    // we only wake sessions that actually have the continuation (or user-queued
-    // prompts) to drain, never an idle Interrupted one (which would just spin a
-    // misleading "working" state). The drain runs through the dispatcher wired above.
+    // Resume interruptions already finalized before this process. Newly restored
+    // Busy turns are deliberately absent here until runtime reconciliation ends.
     for meta in hub.session_list() {
-        if meta.status != Status::Interrupted || !hub.effective_auto_resume(&meta.id) {
-            continue;
-        }
-        if hub
-            .session_info(&meta.id)
-            .is_none_or(|i| i.queue_count == 0)
-        {
-            continue;
-        }
-        match supervisor.ensure_alive(&meta.id) {
-            Ok(revived) => {
-                tracing::info!(session = %meta.id, revived, "auto-resume: reviving interrupted turn");
-            }
-            Err(e) => {
-                tracing::warn!(session = %meta.id, error = %e, "auto-resume revive failed");
-            }
-        }
+        revive_auto_resume_session(&hub, &supervisor, &meta.id);
     }
+
+    // Machine WebSockets can only reconnect after Axum starts listening. Keep
+    // this timer independent of the request task: real worker snapshots remove
+    // their sessions from the reconciliation set, while the remainder become
+    // genuine interruptions after the same bounded grace used for Machine
+    // presence. Auto-resume starts only after that decision, never before it.
+    let runtime_reconciliation_task = {
+        let hub = hub.clone();
+        let supervisor = Arc::clone(&supervisor);
+        let mut shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = tokio::time::sleep(RUNTIME_RECONCILIATION_GRACE) => {
+                    let interrupted = hub.finalize_runtime_reconciliation();
+                    if !interrupted.is_empty() {
+                        tracing::warn!(
+                            count = interrupted.len(),
+                            "runtime reconciliation grace expired without detached owners"
+                        );
+                    }
+                    for session_id in interrupted {
+                        revive_auto_resume_session(&hub, &supervisor, &session_id);
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        tracing::info!("runtime reconciliation cancelled by shutdown");
+                    }
+                }
+            }
+        })
+    };
 
     tracing::info!(
         workspace = %args.workspace_root.display(),
@@ -506,6 +525,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     judge_task.abort();
     scheduler_task.abort();
     reset_task.abort();
+    runtime_reconciliation_task.abort();
     match tokio::time::timeout(std::time::Duration::from_secs(5), &mut dispatcher_task).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!(%error, "dispatcher task failed during shutdown"),
@@ -1078,6 +1098,28 @@ async fn run_dispatcher(
         }
     }
     tracing::info!("dispatcher shutting down (channel closed)");
+}
+
+/// Revive one opted-in interrupted session only when it has durable work ready
+/// to drain. This is shared by startup recovery and the delayed detached-worker
+/// reconciliation path so neither requires a browser to open the session.
+fn revive_auto_resume_session(hub: &Hub, supervisor: &Supervisor, session_id: &str) {
+    if hub.status(session_id) != Some(Status::Interrupted)
+        || !hub.effective_auto_resume(session_id)
+        || hub
+            .session_info(session_id)
+            .is_none_or(|info| info.queue_count == 0)
+    {
+        return;
+    }
+    match supervisor.ensure_alive(session_id) {
+        Ok(revived) => {
+            tracing::info!(session = %session_id, revived, "auto-resume: reviving interrupted turn");
+        }
+        Err(error) => {
+            tracing::warn!(session = %session_id, %error, "auto-resume revive failed");
+        }
+    }
 }
 
 /// Build the ACP prompt blocks for a queued message: parse the stored content

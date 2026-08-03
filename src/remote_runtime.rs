@@ -187,7 +187,8 @@ impl RemoteRuntime {
             .lock()
             .get(session_id)
             .is_some_and(|worker| {
-                !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+                worker.has_connected_owner()
+                    && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
             })
     }
 
@@ -820,8 +821,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 .lock()
                 .remove(&format!("ensure:{session_id}"));
             shared.sent.lock().remove(&format!("ensure:{session_id}"));
-            apply_snapshot(&shared.hub, &worker);
-            reconcile_idle_snapshot(shared, &worker);
+            if apply_snapshot(&shared.hub, &worker) {
+                reconcile_idle_snapshot(shared, &worker);
+            }
         }
         Frame::Welcome { workers, .. } => update_worker_snapshots(shared, workers),
         Frame::Heartbeat => {}
@@ -899,8 +901,9 @@ fn update_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         update_declaration(shared, &worker);
-        apply_snapshot(&shared.hub, &worker);
-        reconcile_idle_snapshot(shared, &worker);
+        if apply_snapshot(&shared.hub, &worker) {
+            reconcile_idle_snapshot(shared, &worker);
+        }
         shared
             .pending
             .lock()
@@ -921,8 +924,9 @@ fn merge_worker_snapshots(shared: &Shared, workers: Vec<WorkerSnapshot>) {
             continue;
         }
         update_declaration(shared, &worker);
-        apply_snapshot(&shared.hub, &worker);
-        reconcile_idle_snapshot(shared, &worker);
+        if apply_snapshot(&shared.hub, &worker) {
+            reconcile_idle_snapshot(shared, &worker);
+        }
         shared
             .pending
             .lock()
@@ -956,7 +960,10 @@ fn worker_status(state: WorkerState) -> Status {
     }
 }
 
-fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) {
+fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) -> bool {
+    if !hub.accept_runtime_snapshot(worker) {
+        return false;
+    }
     if let Some(agent_session_id) = &worker.agent_session_id {
         hub.set_agent_session_id(&worker.session_id, agent_session_id.clone());
     }
@@ -982,6 +989,7 @@ fn apply_snapshot(hub: &Hub, worker: &WorkerSnapshot) {
         worker_status(worker.state)
     };
     hub.set_status(&worker.session_id, status, None);
+    true
 }
 
 fn pending_prompt_for(shared: &Shared, session_id: &str) -> bool {

@@ -114,8 +114,12 @@ exhausted retries explicitly degrade health.
 
 ## Auto-resume of interrupted turns
 
-If the daemon restarts mid-turn, that session restores as `Interrupted`. When
-the session's effective auto-resume setting is on (global default or per-session
-override), the Hub enqueues a continuation prompt on restore, tagged with the
-`__cont__` cmid prefix so it is deduped and rendered as a resumed-turn note
+On controller startup, a persisted Busy session first remains guarded while
+Machine runtimes reconnect. A connected worker snapshot adopts the original
+turn without adding an interruption marker. Broker launch-registry placeholders
+are not live-owner evidence and cannot settle this reconciliation. Only when the
+bounded grace expires without a connected owner does the Hub mark the session
+`Interrupted`. If its effective auto-resume setting is on (global default or
+per-session override), the Hub then enqueues a continuation prompt tagged with
+the `__cont__` cmid prefix, so it is deduped and rendered as a resumed-turn note
 rather than a user message. A retry template handles the empty-partial case.

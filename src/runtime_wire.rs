@@ -77,6 +77,20 @@ pub struct WorkerSnapshot {
     pub drain_requested: bool,
 }
 
+impl WorkerSnapshot {
+    /// Whether this snapshot came from a connected worker rather than the
+    /// Machine broker's launch-registry placeholder.
+    ///
+    /// Placeholder epochs use the reserved `broker-` prefix so an additive v1
+    /// controller can distinguish "known session" from "live owner" without a
+    /// wire-version flag. A placeholder must never prove that an in-flight turn
+    /// survived a control-plane restart.
+    #[must_use]
+    pub fn has_connected_owner(&self) -> bool {
+        !self.worker_epoch.starts_with("broker-")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StartSession {
     pub session_id: String,

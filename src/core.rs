@@ -614,7 +614,8 @@ pub struct JudgeReq {
     pub final_text: String,
 }
 
-/// One session's full persisted state, handed to [`Hub::restore`] at startup.
+/// One session's full persisted state, handed to
+/// [`Hub::restore_reconciling_runtime`] at startup.
 pub struct RestoredSession {
     pub meta: SessionMeta,
     pub log: Vec<Envelope>,
@@ -1456,6 +1457,11 @@ pub struct Hub {
 
 struct HubInner {
     sessions: Mutex<HashMap<String, Session>>,
+    /// Persisted Busy sessions awaiting an authoritative, connected worker
+    /// snapshot after the control plane restarts. Broker registry placeholders
+    /// do not settle this set; a bounded server-side grace timer finalizes the
+    /// remainder as genuine interruptions.
+    runtime_reconciliation: Mutex<HashSet<String>>,
     /// Canonicalizes the raw ACP stream for the in-memory replay tail. The DB
     /// writer owns a separate reducer because it consumes the same raw stream
     /// asynchronously; live WebSocket subscribers continue to receive raw frames.
@@ -1518,6 +1524,7 @@ impl Hub {
         Self {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
+                runtime_reconciliation: Mutex::new(HashSet::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 order: Mutex::new(Vec::new()),
                 tx,
@@ -1661,23 +1668,28 @@ impl Hub {
     /// `Sessions` broadcast on first connect already includes everything.
     /// Skips the write-behind side: these rows are already in the DB.
     ///
-    /// **Restored sessions are forced to a dead state.** The agent subprocess
-    /// does not come back across a daemon restart — the postgres state is
-    /// metadata + history only, not a live ACP connection. Letting a restored
-    /// row keep its persisted `Running`/`Busy` status creates the trap of a UI
-    /// that looks alive but rejects every prompt with `unknown session` (no
-    /// `agent_tx` in the supervisor). So every restored session is dead +
-    /// disabled; resume via session/load is a future follow-up (design §7).
+    /// Without runtime reconciliation, restored sessions are forced to a dead
+    /// state. Production startup instead uses
+    /// [`Self::restore_reconciling_runtime`], because detached Machine workers
+    /// can outlive the controller and authoritatively reclaim a persisted Busy
+    /// turn during the bounded reconnect window.
     ///
-    /// But the persisted status still tells us WHAT it was doing when we died,
+    /// The persisted status still tells us what it was doing when we died,
     /// and we keep that one bit: a session that was `Busy` (a turn in flight)
     /// becomes [`Status::Interrupted`] — "your last turn never finished" — while
     /// an idle/alive one just becomes `Exited` (dormant, nothing unfinished).
     /// The write-behind store applies the `Busy` write within ms of a turn
     /// starting, so for any turn that ran more than an instant the bit is
     /// durable before a restart (store.rs accepts the sub-ms crash window).
-    pub fn restore(&self, sessions: Vec<RestoredSession>) {
-        self.restore_with_workers(sessions, &[]);
+    /// Restore persisted state before Machine runtimes reconnect.
+    ///
+    /// Persisted Busy sessions retain their Busy/in-flight guard during the
+    /// bounded reconnect window. A connected worker snapshot adopts them; the
+    /// server later calls [`Self::finalize_runtime_reconciliation`] for any
+    /// session that still has no owner. This ordering is what makes normal
+    /// control-plane deployment transparent to detached workers.
+    pub fn restore_reconciling_runtime(&self, sessions: Vec<RestoredSession>) {
+        self.restore_impl(sessions, &[], true);
     }
 
     /// Restore persisted sessions while reconciling detached runtime workers.
@@ -1685,9 +1697,20 @@ impl Hub {
     /// exists. This prevents a control-plane deploy from generating a false
     /// interruption marker and duplicate auto-resume while the original ACP
     /// prompt is still running in its detached worker.
-    pub fn restore_with_workers(&self, sessions: Vec<RestoredSession>, workers: &[WorkerSnapshot]) {
+    #[cfg(test)]
+    fn restore_with_workers(&self, sessions: Vec<RestoredSession>, workers: &[WorkerSnapshot]) {
+        self.restore_impl(sessions, workers, false);
+    }
+
+    fn restore_impl(
+        &self,
+        sessions: Vec<RestoredSession>,
+        workers: &[WorkerSnapshot],
+        defer_missing_busy: bool,
+    ) {
         let live: HashMap<&str, &WorkerSnapshot> = workers
             .iter()
+            .filter(|worker| worker.has_connected_owner())
             .map(|worker| (worker.session_id.as_str(), worker))
             .collect();
         // Seed the qid counter PAST every restored id. The counter (`next_qid`)
@@ -1759,7 +1782,9 @@ impl Hub {
                     Some(WorkerState::Crashed) => Status::Crashed,
                     None => match meta.status {
                         // No detached owner survived: preserve the original
-                        // restart-recovery behavior.
+                        // restart-recovery behavior unless production startup
+                        // is still inside its bounded runtime reconnect window.
+                        Status::Busy if defer_missing_busy => Status::Busy,
                         Status::Busy => Status::Interrupted,
                         Status::Exited | Status::Crashed | Status::Interrupted => meta.status,
                         Status::Running | Status::Starting => Status::Exited,
@@ -1771,7 +1796,11 @@ impl Hub {
                     meta.agent_session_id = Some(agent_session_id);
                 }
                 if was_busy {
-                    interrupted.push(id.clone());
+                    if defer_missing_busy {
+                        self.inner.runtime_reconciliation.lock().insert(id.clone());
+                    } else {
+                        interrupted.push(id.clone());
+                    }
                 }
                 if healed {
                     reid_dirty.push(id.clone());
@@ -1798,9 +1827,10 @@ impl Hub {
                         queue,
                         drafts,
                         editing: None,
-                        in_flight: runtime.is_some_and(|worker| {
-                            worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
-                        }),
+                        in_flight: (defer_missing_busy && was_busy)
+                            || runtime.is_some_and(|worker| {
+                                worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
+                            }),
                         lifecycle_epoch: 0,
                         judge_seq: 0,
                         judge_runs,
@@ -1818,32 +1848,70 @@ impl Hub {
         // `busy`, so the next restore reads `interrupted` and adds no second marker
         // (only a fresh `busy` → interrupt does).
         for id in interrupted {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::UpdateStatus {
-                    session_id: id.clone(),
-                    status: Status::Interrupted,
-                });
-            }
-            self.push(
-                &id,
-                Event::Lifecycle {
-                    status: Status::Interrupted,
-                    detail: Some("turn cut off by a cowboy restart — it never finished".to_owned()),
-                },
-            );
-            // Auto-resume (opted in, globally or per-session): enqueue a
-            // continuation built from the cut-off turn's partial output. It stays
-            // queued behind the `Interrupted` marker and auto-drains the instant
-            // the agent revives (on open / reconnect), so the user finds the turn
-            // already continuing instead of having to retype.
-            if self.effective_auto_resume(&id) {
-                self.enqueue_continuation(&id);
-            }
+            self.record_restart_interruption(&id);
         }
         // Persist any session whose duplicate ids we healed, so the corrected
         // (unique-id) lists reach the DB + every client.
         for id in reid_dirty {
             self.emit_pending(&id);
+        }
+    }
+
+    /// Decide whether an incoming runtime snapshot may project lifecycle state
+    /// into the Hub. A real connected owner atomically settles startup
+    /// reconciliation. A broker-only placeholder is ignored while a persisted
+    /// Busy turn is still waiting for its owner, so it cannot overwrite Busy
+    /// with a speculative Starting/Running state.
+    pub fn accept_runtime_snapshot(&self, worker: &WorkerSnapshot) -> bool {
+        if worker.has_connected_owner() {
+            if self
+                .inner
+                .runtime_reconciliation
+                .lock()
+                .remove(&worker.session_id)
+            {
+                tracing::info!(
+                    session = %worker.session_id,
+                    worker_epoch = %worker.worker_epoch,
+                    "detached worker adopted restored in-flight turn"
+                );
+            }
+            true
+        } else {
+            !self
+                .inner
+                .runtime_reconciliation
+                .lock()
+                .contains(&worker.session_id)
+        }
+    }
+
+    /// Finalize persisted Busy sessions whose detached owner did not reconnect
+    /// within the server's bounded grace period. Returns exactly the sessions
+    /// newly marked Interrupted so the server can revive opted-in continuations.
+    pub fn finalize_runtime_reconciliation(&self) -> Vec<String> {
+        let pending = std::mem::take(&mut *self.inner.runtime_reconciliation.lock());
+        let interrupted: Vec<String> = pending
+            .into_iter()
+            .filter(|id| self.status(id) == Some(Status::Busy))
+            .collect();
+        for id in &interrupted {
+            self.record_restart_interruption(id);
+        }
+        interrupted
+    }
+
+    fn record_restart_interruption(&self, session_id: &str) {
+        self.set_status(
+            session_id,
+            Status::Interrupted,
+            Some("turn cut off by a cowboy restart — it never finished".to_owned()),
+        );
+        // Auto-resume (opted in, globally or per-session): enqueue a
+        // continuation built from the cut-off turn's partial output. It stays
+        // queued behind the Interrupted marker until the server revives it.
+        if self.effective_auto_resume(session_id) {
+            self.enqueue_continuation(session_id);
         }
     }
 
@@ -4722,6 +4790,102 @@ pub async fn run_judge_worker(hub: Hub, mut rx: mpsc::Receiver<JudgeReq>, comman
                 hub.finish_judge_failure(req, &error);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_reconciliation_tests {
+    use super::*;
+
+    fn restored_busy(id: &str) -> RestoredSession {
+        RestoredSession {
+            meta: SessionMeta {
+                id: id.to_owned(),
+                provider: "codex".to_owned(),
+                machine_id: "hawk".to_owned(),
+                cwd: "/tmp".to_owned(),
+                title: "test".to_owned(),
+                status: Status::Busy,
+                origin: SessionOrigin::Web,
+                agent_session_id: Some("agent-1".to_owned()),
+                auto_resume: Some(false),
+                awaiting_user: false,
+                done: false,
+                judging: false,
+                paused: false,
+                system: false,
+                context_used: 0,
+                context_size: 0,
+                usage: None,
+                next_schedule_ms: None,
+            },
+            log: Vec::new(),
+            event_count: 0,
+            reached_start: true,
+            next_seq: 0,
+            queue: Vec::new(),
+            drafts: Vec::new(),
+            judge_runs: Vec::new(),
+            mobile_review_state: serde_json::Value::Null,
+        }
+    }
+
+    fn worker_snapshot(session_id: &str, worker_epoch: &str) -> WorkerSnapshot {
+        WorkerSnapshot {
+            session_id: session_id.to_owned(),
+            worker_epoch: worker_epoch.to_owned(),
+            generation: "gen-1".to_owned(),
+            executable: None,
+            launch: None,
+            state: WorkerState::Busy,
+            agent_session_id: Some("agent-1".to_owned()),
+            current_turn_id: Some("turn-1".to_owned()),
+            last_runtime_seq: 7,
+            pending_permissions: Vec::new(),
+            config_options: None,
+            context_used: None,
+            context_size: None,
+            pending_prompt_count: 0,
+            drain_requested: false,
+        }
+    }
+
+    #[test]
+    fn placeholder_cannot_settle_restored_busy_turn() {
+        let hub = Hub::new();
+        hub.restore_reconciling_runtime(vec![restored_busy("session-1")]);
+
+        assert_eq!(hub.status("session-1"), Some(Status::Busy));
+        assert!(!hub.accept_runtime_snapshot(&worker_snapshot("session-1", "broker-session-1")));
+        assert_eq!(hub.status("session-1"), Some(Status::Busy));
+
+        assert_eq!(
+            hub.finalize_runtime_reconciliation(),
+            vec!["session-1".to_owned()]
+        );
+        assert_eq!(hub.status("session-1"), Some(Status::Interrupted));
+        assert!(hub.finalize_runtime_reconciliation().is_empty());
+    }
+
+    #[test]
+    fn connected_worker_adopts_restored_busy_turn() {
+        let hub = Hub::new();
+        hub.restore_reconciling_runtime(vec![restored_busy("session-2")]);
+
+        assert!(hub.accept_runtime_snapshot(&worker_snapshot("session-2", "worker-epoch-2")));
+        assert!(hub.finalize_runtime_reconciliation().is_empty());
+        assert_eq!(hub.status("session-2"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn immediate_restore_does_not_treat_broker_placeholder_as_live_owner() {
+        let hub = Hub::new();
+        hub.restore_with_workers(
+            vec![restored_busy("session-3")],
+            &[worker_snapshot("session-3", "broker-session-3")],
+        );
+
+        assert_eq!(hub.status("session-3"), Some(Status::Interrupted));
     }
 }
 

@@ -67,14 +67,17 @@ Recovery rests on four facts:
 
 ```mermaid
 flowchart TB
-    BOOT["daemon boots"] --> RESTORE["Hub.restore<br/>from Postgres"]
+    BOOT["daemon boots"] --> RESTORE["Hub restore<br/>from Postgres"]
     RESTORE --> META["sessions + event logs +<br/>queue/drafts/settings"]
-    META --> INT{"status =<br/>Interrupted?"}
+    META --> WAIT["bounded Machine runtime<br/>reconciliation"]
+    WAIT -->|"connected owner"| ADOPT["adopt detached turn<br/>without interruption"]
+    WAIT -->|"no owner"| INT{"status =<br/>Interrupted?"}
     INT -->|"auto-resume on"| ENQ["enqueue continuation<br/>(__cont__ cmid)"]
     INT -->|off| IDLE["leave idle,<br/>revive on open"]
     ENQ --> REV["revive agent<br/>(session/load)"]
 
     style RESTORE fill:#eef2ff,stroke:#6366f1
+    style ADOPT fill:#dcfce7,stroke:#16a34a
     style ENQ fill:#dcfce7,stroke:#16a34a
 ```
 
