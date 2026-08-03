@@ -3907,6 +3907,22 @@ function PendingRow({
   const overlayEditorRef = useRef<ComposerEditorHandle>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const beginEdit = (): void => {
+    // iOS will only open its software keyboard when the real editable control is
+    // focused inside the originating tap. React normally batches `onEdit()` and
+    // mounts the row editor after that activation window, leaving a visible edit
+    // card with no keyboard. Commit the edit surface synchronously, then hand the
+    // same gesture directly to it. This also arms UIKit's native paste/select
+    // recognizer; a hidden keyboard claim or rAF focus cannot do that.
+    if (touchInput) {
+      flushSync(() => {
+        setDraft(message.text);
+        editTextRef.current = message.text;
+        setEditAttachments(message.attachments);
+        onEdit();
+      });
+      editorRef.current?.focusEnd();
+      return;
+    }
     setDraft(message.text);
     editTextRef.current = message.text;
     setEditAttachments(message.attachments);
@@ -3986,6 +4002,13 @@ function PendingRow({
     // Desktop's editor chunk can mount one frame after the row switches state;
     // focus exactly once in that frame instead of racing the lazy editor now and
     // focusing it again later (repeat focus writes can interfere with macOS IME).
+    // Touch entry already mounted and focused the real textarea synchronously in
+    // `beginEdit`. Re-focusing on the next frame falls outside the user gesture
+    // and can make WebKit keep the caret while declining to show the keyboard.
+    if (touchInput) {
+      rowRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
+      return undefined;
+    }
     const frame = globalThis.requestAnimationFrame(() => {
       editorRef.current?.focusEnd();
       rowRef.current?.scrollIntoView({ block: "center", behavior: "auto" });

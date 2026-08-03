@@ -851,6 +851,19 @@ here says otherwise.
     Release the one-shot caret and paste-focus claim only from a layout effect
     after the CM6 child has committed its initial EditorState.
 
+40. **Starting a Mobile Queue/Draft edit must mount and focus the real editor
+    inside the initiating tap.** Updating the parent `editingId` normally leaves
+    the editor mount batched until after the click handler returns. A layout
+    effect wrapped in `requestAnimationFrame` is later still: the card appears,
+    but iOS has already closed its user-activation window and will not raise the
+    software keyboard. For touch editing, synchronously commit the row editor
+    with `flushSync`, then call `focusEnd()` on that real textarea before the tap
+    returns. Do not substitute a hidden keyboard claim; it can preserve a raised
+    keyboard across an existing focus transfer, but it does not arm the newly
+    mounted editor's native Paste/Select recognizer. Do not repeat focus on the
+    next frame, because that second programmatic focus can leave a caret visible
+    while WebKit declines the keyboard.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
@@ -870,6 +883,9 @@ fullscreen editor:
       ordinary new-message composer (pitfall #17).
 - [ ] Start an unchanged Queue/Draft edit and tap the panel header: it closes and
       folds directly without a confirmation flash (pitfall #17).
+- [ ] Tap a Queue/Draft message to edit: the compact editor appears with its caret
+      at the end and the software keyboard opens in the same interaction
+      (pitfall #40).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
 - [ ] Attach a photo, then type — keyboard returns, input works.
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
