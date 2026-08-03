@@ -829,8 +829,8 @@ export function ComposerWorkspace({
     submit,
     submitTracked,
     forceTracked,
-    jumpToFront: jumpCurrentPromptToFront,
-    saveAsDraft,
+    jumpToFrontTracked: jumpCurrentPromptToFrontTracked,
+    saveAsDraftTracked,
     scheduleNew,
   } = useComposerDraftController(sessionId, editorRef, {
     // Desktop CodeMirror owns its document. Keeping its hot path in refs avoids
@@ -847,15 +847,33 @@ export function ComposerWorkspace({
     return submitted;
   }, [desktop, onSubmitted, submit]);
   const submitFeedback = useNetworkActionState();
-  const submitWithFeedback = useCallback((): void => {
-    void submitFeedback.run(() => {
-      const confirmation = submitTracked();
-      if (confirmation === null) return Promise.resolve();
-      if (!desktop) dismissMobileSoftwareKeyboard();
-      onSubmitted?.();
-      return confirmation;
+  const dismissAfterMobileDelivery = useCallback((): void => {
+    if (desktop) return;
+
+    // A touch click may have moved activeElement from the editor to its toolbar
+    // button by the time the authoritative acknowledgement arrives. Clear both
+    // possible owners. Modal/Popover teardown can restore the old Composer focus
+    // on the following paint, so repeat once after that restoration opportunity.
+    dismissMobileSoftwareKeyboard();
+    releaseMobileComposerFocus();
+    globalThis.requestAnimationFrame(() => {
+      dismissMobileSoftwareKeyboard();
+      releaseMobileComposerFocus();
     });
-  }, [desktop, onSubmitted, submitFeedback, submitTracked]);
+  }, [desktop]);
+  const submitWithFeedback = useCallback((): void => {
+    void (async () => {
+      let submitted = false;
+      const succeeded = await submitFeedback.run(() => {
+        const confirmation = submitTracked();
+        if (confirmation === null) return Promise.resolve();
+        submitted = true;
+        onSubmitted?.();
+        return confirmation;
+      });
+      if (submitted && succeeded) dismissAfterMobileDelivery();
+    })();
+  }, [dismissAfterMobileDelivery, onSubmitted, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -1207,17 +1225,17 @@ export function ComposerWorkspace({
   async function confirmForce(): Promise<void> {
     const confirmation = forceTracked();
     if (confirmation === null) return;
-    if (!desktop) dismissMobileSoftwareKeyboard();
     await confirmation;
     setForceAnchor(null);
+    dismissAfterMobileDelivery();
   }
   // "Jump to front of queue" (no interrupt): send the composed prompt to the
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
   // of the queue. Only meaningful when there's already a queue to jump ahead of.
   function jumpToFront(): void {
-    if (jumpCurrentPromptToFront(queue.length) && !desktop) {
-      dismissMobileSoftwareKeyboard();
-    }
+    const confirmation = jumpCurrentPromptToFrontTracked(queue.length);
+    if (confirmation === null) return;
+    void confirmation.then(dismissAfterMobileDelivery).catch(() => undefined);
   }
   // Enter confirms the force-push popover (it doesn't autofocus a button the way
   // the Dialogs do). Held-⌘⏎ repeats are ignored inside the hook, so the still-
@@ -1232,7 +1250,9 @@ export function ComposerWorkspace({
   // Park the composer's content as a draft (the Draft button) and clear the
   // input. Drafts persist and are activated later from the Drafts panel.
   function saveDraft(): void {
-    saveAsDraft();
+    const confirmation = saveAsDraftTracked();
+    if (confirmation === null) return;
+    void confirmation.then(dismissAfterMobileDelivery).catch(() => undefined);
   }
 
   // The schedule picker: `null` = closed; `{id}` present = editing an existing
@@ -1247,9 +1267,7 @@ export function ComposerWorkspace({
       return;
     }
     // Fresh: schedule the composer's content, then clear the input like saveDraft.
-    if (scheduleNew(fireAtMs, delivery) && !desktop) {
-      dismissMobileSoftwareKeyboard();
-    }
+    if (scheduleNew(fireAtMs, delivery)) dismissAfterMobileDelivery();
   }
 
   return (

@@ -795,11 +795,15 @@ here says otherwise.
     primitive: ordinary formatting and attachment actions must continue to
     preserve keyboard focus.
 
-    The same scoped release marks the end of a Mobile delivery action. Once Send
-    or Queue is locally accepted, Jump to front succeeds, Schedule commits, or a
-    confirmed Force push is accepted, release the active Mobile editor immediately;
-    do not wait for the network acknowledgement. Invalid/no-op actions retain the
-    keyboard and draft. Desktop never uses this touch keyboard boundary.
+    The same scoped release marks the successful end of a Mobile delivery action.
+    Send/Queue, Jump to front, Save draft, and confirmed Force push keep the
+    editor alive until their authoritative operation resolves, then release both
+    the editor and any toolbar button that became `document.activeElement` during
+    the touch. Schedule releases after its local store commit. Confirmation
+    cancellation, rejection, and invalid/no-op actions retain the keyboard and
+    draft. Modal/Popover teardown can restore the old editor focus, so the shared
+    dismissal repeats after the next paint. Desktop never uses this touch keyboard
+    boundary.
 
 38. **A full-height touch Composer without inline images stays a native
     textarea.** Resolving the complete CM6 height chain makes the blank canvas a
