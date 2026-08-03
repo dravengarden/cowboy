@@ -999,6 +999,17 @@ export function ComposerWorkspace({
   const [holding, setHolding] = useState(false);
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
   const [clearComposerAnchor, setClearComposerAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (clearComposerAnchor === null) return undefined;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setClearComposerAnchor(null);
+    };
+    globalThis.addEventListener("keydown", closeOnEscape, true);
+    return (): void => globalThis.removeEventListener("keydown", closeOnEscape, true);
+  }, [clearComposerAnchor]);
   const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<HTMLElement | null>(null);
   const desktopMoreButtonRef = useRef<HTMLButtonElement | null>(null);
   const desktopToolbarRef = useRef<HTMLDivElement | null>(null);
@@ -2491,52 +2502,68 @@ export function ComposerWorkspace({
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}
       </Paper>
-      <Popover
+      {/* Keep this confirmation non-modal. Even with every FocusTrap option
+          disabled, MUI Popover still mounts a Modal and applies its document
+          lifecycle; on iOS that ends the focused editor's software-keyboard
+          session. Popper leaves the native first responder untouched. */}
+      <Popper
         open={clearComposerAnchor !== null}
         anchorEl={clearComposerAnchor}
-        onClose={(): void => setClearComposerAnchor(null)}
-        disableAutoFocus
-        disableEnforceFocus
-        disableRestoreFocus
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { sx: { mt: 0.5, maxWidth: 244, borderRadius: 2 } } }}
+        placement="bottom-end"
+        modifiers={[
+          { name: "offset", options: { offset: [0, 8] } },
+          { name: "flip", options: { fallbackPlacements: ["top-end", "left"] } },
+          { name: "preventOverflow", options: { padding: 8 } },
+        ]}
+        sx={{ zIndex: (theme) => theme.zIndex.modal }}
       >
-        <Box sx={{ p: 1.5 }}>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            Clear this composer?
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-            Text and attachments in this unsent message will be removed.
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.5 }}>
-            <Button
-              size="small"
-              color="inherit"
-              onPointerDown={(event): void => event.preventDefault()}
-              onClick={(): void => setClearComposerAnchor(null)}
-              sx={{ textTransform: "none" }}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              color="error"
-              onPointerDown={(event): void => event.preventDefault()}
-              onClick={(): void => {
-                importantHaptic();
-                clearComposer();
-                setClearComposerAnchor(null);
-                globalThis.requestAnimationFrame(() => editorRef.current?.focus());
-              }}
-              sx={{ textTransform: "none" }}
-            >
-              Clear all
-            </Button>
-          </Stack>
-        </Box>
-      </Popover>
+        <ClickAwayListener onClickAway={(): void => setClearComposerAnchor(null)}>
+          <Paper
+            role="dialog"
+            aria-modal="false"
+            aria-label="Clear composer confirmation"
+            sx={{ maxWidth: 244, borderRadius: 2, boxShadow: 8 }}
+          >
+            <Box sx={{ p: 1.5 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                Clear this composer?
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 0.5 }}
+              >
+                Text and attachments in this unsent message will be removed.
+              </Typography>
+              <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.5 }}>
+                <Button
+                  size="small"
+                  color="inherit"
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={(): void => setClearComposerAnchor(null)}
+                  sx={{ textTransform: "none" }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="error"
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={(): void => {
+                    importantHaptic();
+                    clearComposer();
+                    setClearComposerAnchor(null);
+                  }}
+                  sx={{ textTransform: "none" }}
+                >
+                  Clear all
+                </Button>
+              </Stack>
+            </Box>
+          </Paper>
+        </ClickAwayListener>
+      </Popper>
       {
         /* Force-push confirm — opened by a completed long-press on Queue. Anchored
           to the button, rising above it. Confirm interrupts the running turn and

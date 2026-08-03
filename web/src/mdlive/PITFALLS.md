@@ -889,6 +889,9 @@ fullscreen editor:
 
 - [ ] Type pinyin on a `**`/`# ` marker line — no dropped/garbled chars (pitfall #1).
 - [ ] Caret is visible + stays visible while typing/scrolling (pitfall #2).
+- [ ] With the software keyboard visible, open Clear all, cancel it, reopen it,
+      and confirm it: the keyboard stays visible throughout, text clears only on
+      confirm, and the same editor retains its caret (pitfall #43).
 - [ ] Long-press → the Paste/Select menu appears; Paste works (pitfall #3).
 - [ ] In fullscreen, long-press near text keeps the native menu; long-press far
       below text opens Cowboy Paste, and tapping it keeps the keyboard visible.
@@ -934,7 +937,7 @@ Desktop Vim + IME checks:
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.
 
-43. **Composer utility actions belong to the expand rail, and confirmation must not steal iOS focus.** The touch composer reserves its top-right edge for a vertical utility rail: Fullscreen, Clear all, then Hide keyboard. Clear all stays visible but disabled when the composer is empty. Its confirmation Popover disables auto/enforced/restored focus and every action prevents pointer-down focus transfer, so opening or cancelling it cannot dismiss the keyboard; confirming clears the editor and attachments, then restores the caret without remounting the editor. Do not put these utility actions back into the evenly distributed delivery row.
+43. **Composer utility actions belong to the expand rail, and confirmation must not steal iOS focus.** The touch composer reserves its top-right edge for a vertical utility rail: Fullscreen, Clear all, then Hide keyboard. Clear all stays visible but disabled when the composer is empty. Its confirmation must use a non-modal `Popper`, not MUI `Popover`: disabling `Popover`'s auto/enforced/restored focus was insufficient because its underlying `Modal` lifecycle still ended the iOS software-keyboard session. Opening, cancelling, and confirming all prevent pointer-down focus transfer; confirmation clears the editor and attachments in the same still-focused editor, with no delayed refocus. Do not put these utility actions back into the evenly distributed delivery row.
 
 44. **Touch Composer action density follows available tablet width.** Portrait
     phones distribute the compact message actions across the row so every 44pt
