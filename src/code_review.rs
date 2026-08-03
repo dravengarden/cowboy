@@ -19,6 +19,7 @@ const MAX_COMMIT_FILES: usize = 1_000;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 const FILE_PAGE_BYTES: usize = 256 * 1024;
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
+const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeChange {
@@ -174,14 +175,90 @@ pub trait CodeProvider {
 
 pub struct LocalCodeProvider {
     root: PathBuf,
+    aggregate_root: Option<PathBuf>,
 }
 
 impl LocalCodeProvider {
     #[must_use]
     pub fn new(root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref().to_path_buf();
         Self {
-            root: root.as_ref().to_path_buf(),
+            aggregate_root: aggregate_checkout_root(&root),
+            root,
         }
+    }
+
+    fn projected_projects(&self) -> Vec<(String, PathBuf)> {
+        let Some(aggregate_root) = self.aggregate_root.as_deref() else {
+            return Vec::new();
+        };
+        let definitions = aggregate_root.join("project-defs");
+        let projects = aggregate_root.join("projects");
+        let Ok(children) = std::fs::read_dir(&definitions) else {
+            return Vec::new();
+        };
+        let mut projected = children
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                if name.starts_with('.')
+                    || !entry.path().join("project.toml").is_file()
+                    || !projects.join(&name).is_dir()
+                {
+                    return None;
+                }
+                Some((name.clone(), projects.join(name)))
+            })
+            .collect::<Vec<_>>();
+        projected.sort_by(|left, right| left.0.cmp(&right.0));
+        projected
+    }
+
+    fn projected_path(&self, relative: &Path) -> Option<(PathBuf, PathBuf)> {
+        let mut components = relative.components();
+        if !matches!(
+            components.next()?,
+            Component::Normal(component) if component == std::ffi::OsStr::new("projects")
+        ) {
+            return None;
+        }
+        let Component::Normal(project) = components.next()? else {
+            return None;
+        };
+        let project = project.to_str()?;
+        let (_, source) = self
+            .projected_projects()
+            .into_iter()
+            .find(|(name, _)| name == project)?;
+        let inner = components.collect::<PathBuf>();
+        Some((source, inner))
+    }
+
+    fn resolved_file(&self, relative: &Path) -> Result<PathBuf, String> {
+        let local = self.root.join(relative);
+        if let Ok(canonical) = local.canonicalize() {
+            let canonical_root = self
+                .root
+                .canonicalize()
+                .map_err(|error| format!("workspace unavailable: {error}"))?;
+            if canonical.starts_with(canonical_root) && canonical.is_file() {
+                return Ok(canonical);
+            }
+        }
+        let (project_root, inner) = self
+            .projected_path(relative)
+            .ok_or_else(|| "file not found".to_owned())?;
+        let canonical_root = project_root
+            .canonicalize()
+            .map_err(|_| "file not found".to_owned())?;
+        let canonical = project_root
+            .join(inner)
+            .canonicalize()
+            .map_err(|_| "file not found".to_owned())?;
+        if !canonical.starts_with(canonical_root) || !canonical.is_file() {
+            return Err("file not found".to_owned());
+        }
+        Ok(canonical)
     }
 
     fn head(&self) -> Option<String> {
@@ -243,6 +320,8 @@ impl LocalCodeProvider {
 
     fn worktree_revision(head: Option<&str>, status: &[u8]) -> String {
         let mut digest = sha2::Sha256::new();
+        digest.update(LOCAL_PROVIDER_REVISION);
+        digest.update([0]);
         if let Some(head) = head {
             digest.update(head.as_bytes());
         }
@@ -299,8 +378,44 @@ impl CodeProvider for LocalCodeProvider {
     }
 
     fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String> {
-        let (entries, truncated) =
-            crate::files::directory(&self.root, relative, limit).map_err(str::to_owned)?;
+        let relative_path = safe_relative(relative)?;
+        let local = crate::files::directory(&self.root, relative, limit);
+        let (mut entries, mut truncated) = if let Ok(page) = local {
+            page
+        } else if let Some((project_root, inner)) = self.projected_path(&relative_path) {
+            let inner = inner.to_string_lossy();
+            let (entries, truncated) =
+                crate::files::directory(&project_root, &inner, limit).map_err(str::to_owned)?;
+            let prefix = relative.trim_end_matches('/');
+            (
+                entries
+                    .into_iter()
+                    .map(|mut entry| {
+                        entry.path = format!("{prefix}/{}", entry.path);
+                        entry
+                    })
+                    .collect(),
+                truncated,
+            )
+        } else {
+            return Err("directory not found".to_owned());
+        };
+        if relative == "projects" {
+            for (name, _) in self.projected_projects() {
+                if entries.iter().any(|entry| entry.name == name) {
+                    continue;
+                }
+                entries.push(crate::files::DirectoryEntry {
+                    name: name.clone(),
+                    path: format!("projects/{name}"),
+                    is_directory: true,
+                    ignored: false,
+                });
+            }
+            entries.sort_by(|left, right| left.name.cmp(&right.name));
+            truncated |= entries.len() > limit;
+            entries.truncate(limit);
+        }
         Ok(CodeTreePage {
             entries: entries
                 .into_iter()
@@ -542,18 +657,7 @@ impl CodeProvider for LocalCodeProvider {
 
     fn file_page(&self, relative: &str, cursor: Option<&str>) -> Result<FileDocument, String> {
         let relative = safe_relative(relative)?;
-        let canonical_root = self
-            .root
-            .canonicalize()
-            .map_err(|error| format!("workspace unavailable: {error}"))?;
-        let canonical_file = self
-            .root
-            .join(&relative)
-            .canonicalize()
-            .map_err(|_| "file not found".to_owned())?;
-        if !canonical_file.starts_with(&canonical_root) || !canonical_file.is_file() {
-            return Err("file not found".to_owned());
-        }
+        let canonical_file = self.resolved_file(&relative)?;
         let mut file = File::open(&canonical_file).map_err(|error| error.to_string())?;
         let size = file.metadata().map_err(|error| error.to_string())?.len();
         let metadata = file.metadata().map_err(|error| error.to_string())?;
@@ -856,6 +960,23 @@ fn safe_relative(relative: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+fn aggregate_checkout_root(root: &Path) -> Option<PathBuf> {
+    let common_dir = git_output(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        4096,
+    )
+    .ok()
+    .and_then(|bytes| String::from_utf8(bytes).ok())?;
+    let common_dir = PathBuf::from(common_dir.trim()).canonicalize().ok()?;
+    if common_dir.file_name()? != std::ffi::OsStr::new(".git") {
+        return None;
+    }
+    let checkout = common_dir.parent()?.canonicalize().ok()?;
+    (checkout.join("project-defs").is_dir() && checkout.join("projects").is_dir())
+        .then_some(checkout)
+}
+
 fn ensure_git_worktree(root: &Path) -> Result<(), String> {
     git_output(root, &["rev-parse", "--is-inside-work-tree"], 32)
         .and_then(|output| {
@@ -1139,6 +1260,79 @@ mod tests {
         let provider = LocalCodeProvider::new(&dir);
         assert_eq!(provider.file("tracked.rs").unwrap().text, "fn old() {}\n");
         assert!(provider.file("../secret").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn aggregate_worktrees_project_registered_checkouts_into_code_tree() {
+        let dir = scratch("aggregate-projects");
+        fs::create_dir_all(dir.join("project-defs/external")).unwrap();
+        fs::create_dir_all(dir.join("projects/tracked")).unwrap();
+        fs::write(
+            dir.join("project-defs/external/project.toml"),
+            "name = \"external\"\n",
+        )
+        .unwrap();
+        fs::write(dir.join("projects/tracked/README.md"), "tracked\n").unwrap();
+        fs::write(dir.join(".gitignore"), "/projects/*\n").unwrap();
+        Command::new("git")
+            .args([
+                "add",
+                "-f",
+                ".gitignore",
+                "project-defs/external/project.toml",
+                "projects/tracked/README.md",
+            ])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-qm", "add aggregate layout"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::create_dir_all(dir.join("projects/external/src")).unwrap();
+        fs::write(
+            dir.join("projects/external/src/lib.rs"),
+            "pub fn projected() {}\n",
+        )
+        .unwrap();
+        let linked = dir.with_extension("aggregate-linked");
+        let _ = fs::remove_dir_all(&linked);
+        Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+
+        let provider = LocalCodeProvider::new(&linked);
+        let projects = provider.directory("projects", 100).unwrap();
+        assert!(projects.entries.iter().any(|entry| entry.name == "tracked"));
+        assert!(
+            projects
+                .entries
+                .iter()
+                .any(|entry| entry.name == "external")
+        );
+        let external = provider.directory("projects/external", 100).unwrap();
+        assert_eq!(external.entries[0].path, "projects/external/src");
+        assert_eq!(
+            provider.file("projects/external/src/lib.rs").unwrap().text,
+            "pub fn projected() {}\n"
+        );
+        assert!(provider.file("projects/unregistered/secret").is_err());
+
+        Command::new("git")
+            .args(["worktree", "remove", "--force", linked.to_str().unwrap()])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
 

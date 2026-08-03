@@ -110,9 +110,15 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
 - `GET /file?path=<relative>&cursor=<opaque>` returns the next window only while
   the file identity revision still matches; changed snapshots return `409`.
 
-Every response carries `apiVersion: 1`. Paths are resolved from the session,
-validated, and contained inside its worktree. Git porcelain and Zed RPC values
-never cross this boundary. Server handlers depend on the product-level
+Every response carries `apiVersion: 1`. Paths are resolved from the session and
+validated. For a Columbus aggregate worktree, the read-only tree additionally
+projects registered `projects/<name>` checkouts from the repository's primary
+checkout when that ignored child is absent from the isolated session worktree.
+Only names with both `project-defs/<name>/project.toml` and a matching project
+directory are eligible; canonical containment is checked again for every page
+and file read. Session execution, Git changes, history, and diffs remain scoped
+to the isolated worktree. Git porcelain and Zed RPC values never cross this
+boundary. Server handlers depend on the product-level
 `CodeProvider` interface for manifests, directory pages, changes, diffs, and
 file windows. The first implementation reads the local worktree; a future
 version-pinned Zed adapter can replace it without changing browser contracts.
