@@ -935,3 +935,12 @@ Desktop Vim + IME checks:
       editor behavior is unchanged.
 
 43. **Composer utility actions belong to the expand rail, and confirmation must not steal iOS focus.** The touch composer reserves its top-right edge for a vertical utility rail: Fullscreen, Clear all, then Hide keyboard. Clear all stays visible but disabled when the composer is empty. Its confirmation Popover disables auto/enforced/restored focus and every action prevents pointer-down focus transfer, so opening or cancelling it cannot dismiss the keyboard; confirming clears the editor and attachments, then restores the caret without remounting the editor. Do not put these utility actions back into the evenly distributed delivery row.
+
+44. **Touch Composer action density follows available tablet width.** Portrait
+    phones distribute the compact message actions across the row so every 44pt
+    target remains easy to reach. At 700px and wider, including iPad split and
+    full-width layouts, the same actions form a compact left-aligned group with
+    a small fixed gap. Do not stretch a few actions across an iPad canvas or
+    classify iPad as Desktop to obtain this layout; this is a visual density
+    rule inside the touch product and does not change editor, focus, keyboard,
+    or gesture ownership.

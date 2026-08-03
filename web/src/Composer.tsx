@@ -2228,10 +2228,11 @@ export function ComposerWorkspace({
           data-mobile-action-row={touchInput ? "true" : undefined}
           direction="row"
           alignItems="center"
-          // Compact (mobile) is tight, so spread the icons space-evenly across the
-          // whole row (edge padding included → nothing crammed at the right edge),
-          // and @ folds out below to make room. Desktop keeps the tight left group
-          // + config chips + the right-pinned action cluster.
+          // A phone is tight, so spread the icons across its action row. A touch
+          // tablet has enough room to keep the same actions as one compact,
+          // left-anchored group instead of stretching a handful of glyphs across
+          // the full iPad canvas. Desktop keeps its separate left group +
+          // config chips + right-pinned action cluster.
           spacing={compact ? 0 : 0.5}
           sx={{
             order: touchInput ? 1 : undefined,
@@ -2250,6 +2251,10 @@ export function ComposerWorkspace({
               overflowY: "hidden",
               scrollbarWidth: "none",
               "&::-webkit-scrollbar": { display: "none" },
+              "@media (min-width: 700px)": {
+                justifyContent: "flex-start",
+                columnGap: 0.5,
+              },
             }),
             ...TOOLBAR_MIN_H,
           }}
