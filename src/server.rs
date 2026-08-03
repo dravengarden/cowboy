@@ -2451,6 +2451,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     state.machine_control.install(
         hello.machine_id.clone(),
         challenge_id.clone(),
+        connection_mode == "local",
         machine_command_tx,
     );
     state.machine_control.record(
@@ -3484,33 +3485,26 @@ async fn remote_code_request(
     if machine_id == "local" {
         return Ok(None);
     }
+    let colocated = match state.machine_control.is_colocated(&machine_id) {
+        Some(value) => value,
+        None => match state.store.as_ref() {
+            Some(store) => store.machine_is_local(&machine_id).await.unwrap_or(false),
+            None => false,
+        },
+    };
+    if colocated {
+        return Ok(None);
+    }
     let mut request = operation;
     request
         .as_object_mut()
         .context("code adapter operation must be an object")?
         .insert("root".to_owned(), serde_json::Value::String(cwd.to_owned()));
-    let value = match state
+    let value = state
         .machine_control
         .adapter_request(&machine_id, "code", request)
         .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            let colocated = match state.store.as_ref() {
-                Some(store) => store.machine_is_local(&machine_id).await.unwrap_or(false),
-                None => false,
-            };
-            if colocated {
-                tracing::warn!(
-                    machine = %machine_id,
-                    %error,
-                    "colocated Code adapter unavailable; using controller filesystem"
-                );
-                return Ok(None);
-            }
-            return Err(anyhow::Error::msg(error));
-        }
-    };
+        .map_err(anyhow::Error::msg)?;
     Ok(Some(serde_json::from_value(value)?))
 }
 

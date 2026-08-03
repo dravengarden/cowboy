@@ -25,6 +25,7 @@ fn adapter_timeout(adapter: &str) -> std::time::Duration {
 
 struct Connection {
     epoch: String,
+    colocated: bool,
     tx: mpsc::UnboundedSender<MachineCommand>,
 }
 
@@ -40,11 +41,28 @@ impl MachineControl {
         &self,
         machine_id: String,
         epoch: String,
+        colocated: bool,
         tx: mpsc::UnboundedSender<MachineCommand>,
     ) {
+        self.connections.write().insert(
+            machine_id,
+            Connection {
+                epoch,
+                colocated,
+                tx,
+            },
+        );
+    }
+
+    /// Return whether the current authenticated connection shares the
+    /// controller filesystem. `None` means the Machine is not connected, so
+    /// callers may consult persisted connection metadata instead.
+    #[must_use]
+    pub fn is_colocated(&self, machine_id: &str) -> Option<bool> {
         self.connections
-            .write()
-            .insert(machine_id, Connection { epoch, tx });
+            .read()
+            .get(machine_id)
+            .map(|connection| connection.colocated)
     }
 
     pub fn remove_if_current(&self, machine_id: &str, epoch: &str) {
@@ -160,7 +178,7 @@ mod tests {
     async fn adapter_response_is_correlated_without_entering_another_machine() {
         let control = Arc::new(MachineControl::default());
         let (tx, mut rx) = mpsc::unbounded_channel();
-        control.install("mac".to_owned(), "epoch".to_owned(), tx);
+        control.install("mac".to_owned(), "epoch".to_owned(), false, tx);
         let requester = Arc::clone(&control);
         let request = tokio::spawn(async move {
             requester
@@ -184,5 +202,21 @@ mod tests {
             request.await.expect("task").expect("response")["type"],
             "health"
         );
+    }
+
+    #[test]
+    fn colocated_state_belongs_to_the_current_machine_connection() {
+        let control = MachineControl::default();
+        let (first, _) = mpsc::unbounded_channel();
+        control.install("hawk".to_owned(), "old".to_owned(), true, first);
+        assert_eq!(control.is_colocated("hawk"), Some(true));
+
+        let (current, _) = mpsc::unbounded_channel();
+        control.install("hawk".to_owned(), "current".to_owned(), false, current);
+        control.remove_if_current("hawk", "old");
+        assert_eq!(control.is_colocated("hawk"), Some(false));
+
+        control.remove_if_current("hawk", "current");
+        assert_eq!(control.is_colocated("hawk"), None);
     }
 }
