@@ -4860,7 +4860,20 @@ export function SessionControls({
           <IconButton
             aria-label="options"
             disabled={dead}
-            onClick={(): void => setSheetOpen(true)}
+            onPointerDown={(): void => {
+              // Session settings lives in the navbar, outside the Composer's
+              // focus region. Release the active Mobile editor while the
+              // pointer gesture still owns it; by click time WebKit may have
+              // focused this button and hidden the keyboard without clearing
+              // the Composer's :focus-within geometry.
+              if (touchInput) releaseMobileComposerFocus();
+            }}
+            onClick={(): void => {
+              // Keyboard navigation does not emit pointerdown. Keep the same
+              // transition boundary for accessibility and hardware keyboards.
+              if (touchInput) releaseMobileComposerFocus();
+              setSheetOpen(true);
+            }}
           >
             <Tune />
           </IconButton>

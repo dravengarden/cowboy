@@ -782,10 +782,13 @@ here says otherwise.
     the keyboard. If the old textarea/CM contenteditable remains
     `document.activeElement`, the compact card's `:focus-within` height survives
     without a keyboard and leaves a large empty Composer after the sheet closes.
-    The Settings trigger therefore releases only an editor inside the closest
-    `[data-mobile-focus-composer]` synchronously in the originating click, before
-    it opens the sheet. `ComposerToolbarSettings` repeats that narrow release in
-    a layout effect only as a fallback for non-toolbar callers. Waiting for the
+    The Settings trigger therefore releases only the active element whose
+    closest owner is `[data-mobile-focus-composer]`, synchronously before it
+    opens the sheet. This applies both to an in-Composer toolbar trigger and to
+    the navbar's Session settings trigger, which sits outside that owner and
+    must release focus on pointerdown before WebKit transfers focus to the
+    navbar button. `ComposerToolbarSettings` repeats that narrow release in a
+    layout effect only as a fallback for non-toolbar callers. Waiting for the
     effect alone is unreliable on iOS because modal focus transfer can replace
     `document.activeElement` before it runs while the old card still paints its
     focused geometry. Do not move that blur to the shared accessory button
