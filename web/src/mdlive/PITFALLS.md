@@ -784,10 +784,11 @@ here says otherwise.
     without a keyboard and leaves a large empty Composer after the sheet closes.
     The Settings trigger therefore releases only the active element whose
     closest owner is `[data-mobile-focus-composer]`, synchronously before it
-    opens the sheet. This applies both to an in-Composer toolbar trigger and to
-    the navbar's Session settings trigger, which sits outside that owner and
-    must release focus on pointerdown before WebKit transfers focus to the
-    navbar button. `ComposerToolbarSettings` repeats that narrow release in a
+    opens the sheet. This applies to an in-Composer toolbar trigger, the
+    navbar's Session settings trigger, and the global App Settings trigger.
+    Both navbar triggers sit outside that owner and must release focus on
+    pointerdown before WebKit transfers focus to the navbar button.
+    `ComposerToolbarSettings` repeats that narrow release in a
     layout effect only as a fallback for non-toolbar callers. Waiting for the
     effect alone is unreliable on iOS because modal focus transfer can replace
     `document.activeElement` before it runs while the old card still paints its

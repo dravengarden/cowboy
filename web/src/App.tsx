@@ -119,6 +119,7 @@ import {
 } from "./readingSettings";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { mobileComposerFocusMotion } from "./mobileComposerPrimitives";
+import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import {
@@ -1846,6 +1847,11 @@ export function App({
     // Settings + Info are one merged sheet; this picks which tab it opens on.
     const [settingsTab, setSettingsTab] = useState<"settings" | "info">("settings");
     const openSettings = (tab: "settings" | "info"): void => {
+        // A full-cover Mobile sheet ends the current Composer focus session.
+        // Pointer-operated entry points also release on pointerdown (before
+        // WebKit transfers focus to the button); this is the keyboard/hardware
+        // fallback and keeps every non-pointer caller on the same boundary.
+        if (mobile) releaseMobileComposerFocus();
         setSettingsTab(tab);
         setSettingsOpen(true);
     };
@@ -2925,6 +2931,15 @@ export function App({
                                     />
                                 )}
                                 <IconButton
+                                    onPointerDown={(): void => {
+                                        // By click time iOS may already have moved
+                                        // document.activeElement to this navbar
+                                        // button. Release the Composer while the
+                                        // originating gesture still owns it so
+                                        // its :focus-within height cannot outlive
+                                        // the software keyboard.
+                                        releaseMobileComposerFocus();
+                                    }}
                                     onClick={(): void => openSettings("settings")}
                                     aria-label="settings"
                                     title="Settings"
