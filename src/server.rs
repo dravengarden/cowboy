@@ -4242,17 +4242,25 @@ async fn api_code_file(
         Ok(None) => {
             let cache = state.code_cache.clone();
             let result = tokio::task::spawn_blocking(move || {
-                if let Some(cached) = cache.get_or_load(FsPath::new(&cwd), &query.path)? {
-                    debug_assert_eq!(cached.size, cached.bytes.len() as u64);
-                    crate::code_review::cached_file_page(
-                        &query.path,
-                        cached.bytes,
-                        cached.revision,
-                        query.cursor.as_deref(),
+                match cache.get_or_load(FsPath::new(&cwd), &query.path) {
+                    Ok(Some(cached)) => {
+                        debug_assert_eq!(cached.size, cached.bytes.len() as u64);
+                        crate::code_review::cached_file_page(
+                            &query.path,
+                            cached.bytes,
+                            cached.revision,
+                            query.cursor.as_deref(),
+                        )
+                    }
+                    // The cache is deliberately bounded to the physical session
+                    // worktree. Registered aggregate projects are a read-only Code
+                    // projection outside that root, so let the provider resolve and
+                    // validate those paths instead of treating a cache miss as an
+                    // authorization failure.
+                    Ok(None) | Err(_) => crate::code_review::LocalCodeProvider::new(
+                        FsPath::new(&cwd),
                     )
-                } else {
-                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
-                        .file_page(&query.path, query.cursor.as_deref())
+                    .file_page(&query.path, query.cursor.as_deref()),
                 }
             }).await;
             let Ok(result) = result else {
