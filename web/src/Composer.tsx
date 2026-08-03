@@ -107,6 +107,7 @@ import { ShortcutKeycap } from "./ShortcutKeycap";
 import { openLightbox } from "./ResourceLightbox";
 import { PlanDock } from "./PlanDock";
 import {
+  mobileComposerFocusMotion,
   mobileComposerPanelFrameSx,
   mobileComposerPanelHeaderMinHeight,
   mobileComposerKeyboardGap,
@@ -1630,7 +1631,7 @@ export function ComposerWorkspace({
           ...(touchInput && {
             borderRadius: mobileComposerPanelFrameSx.borderRadius,
             transition:
-              "border-color 180ms ease, background-color 180ms ease, box-shadow 220ms ease",
+              `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
             "&:focus-within": {
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
               // Focus changes hierarchy inside the same card. Keep the outer
@@ -1664,6 +1665,8 @@ export function ComposerWorkspace({
               transform: "translateY(0)",
               pointerEvents: "auto",
               borderTopColor: (t) => alpha(t.palette.divider, 0.42),
+              transition:
+                `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
             },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
@@ -1736,7 +1739,8 @@ export function ComposerWorkspace({
               flexDirection: "column",
               minHeight: 0,
               ...(touchInput && {
-                transition: "min-height 220ms cubic-bezier(.2,.8,.2,1)",
+                transition:
+                  `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "& > *": { flex: 1 },
                 "@media (prefers-reduced-motion: reduce)": { transition: "none" },
               }),
@@ -2107,7 +2111,7 @@ export function ComposerWorkspace({
               borderTop: 1,
               borderTopColor: "transparent",
               transition:
-                "max-height 160ms cubic-bezier(.2,.8,.2,1), opacity 120ms ease 24ms, transform 160ms cubic-bezier(.2,.8,.2,1), border-color 120ms ease",
+                `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
               "&::-webkit-scrollbar": { display: "none" },
               "@media (prefers-reduced-motion: reduce)": {
                 transition: "none",

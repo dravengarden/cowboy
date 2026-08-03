@@ -864,6 +864,15 @@ here says otherwise.
     next frame, because that second programmatic focus can leave a caret visible
     while WebKit declines the keyboard.
 
+41. **Mobile Composer focus and collapse use one motion timeline.** The editor
+    canvas, formatting row, card surface, and bottom Session bar all use
+    `mobileComposerFocusMotion`. On collapse, formatting controls fade first
+    while their row and the editor height settle together; the Session bar
+    rejoins during that same motion. On expansion, the Session bar yields
+    immediately and controls appear after the card has started opening. Do not
+    tune those durations independently: mismatched height, opacity, and padding
+    transitions make keyboard dismissal look like several clipped panels.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the

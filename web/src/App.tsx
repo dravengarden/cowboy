@@ -118,6 +118,7 @@ import {
     useReadingSettings,
 } from "./readingSettings";
 import { useNavbarAtBottom } from "./navbarSettings";
+import { mobileComposerFocusMotion } from "./mobileComposerPrimitives";
 import { FONT_PRESETS, getFontPreset } from "./fonts";
 import { ProviderIcon } from "./ProviderIcon";
 import {
@@ -2475,6 +2476,8 @@ export function App({
                         overflow: "hidden",
                         paddingTop: 0,
                         paddingBottom: 0,
+                        transition:
+                            `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 90ms ease, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                     },
                 }}
             >
@@ -2685,7 +2688,7 @@ export function App({
                         color: "text.primary",
                         maxHeight: navbarAtBottom ? 96 : undefined,
                         transition:
-                            "max-height 160ms cubic-bezier(.2,.8,.2,1), min-height 160ms cubic-bezier(.2,.8,.2,1), opacity 120ms ease, transform 160ms cubic-bezier(.2,.8,.2,1), padding 160ms cubic-bezier(.2,.8,.2,1)",
+                            `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 70ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, padding ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                         "@media (prefers-reduced-motion: reduce)": {
                             transition: "none",
                         },

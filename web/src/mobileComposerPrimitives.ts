@@ -13,3 +13,11 @@ export const mobileComposerPanelHeaderMinHeight = 44;
 
 /** Quiet separation between a focused Mobile composer and the native keyboard. */
 export const mobileComposerKeyboardGap = 6;
+
+/** One coordinated timeline for the Mobile composer's focus expansion and
+ * collapse. Keep adjacent surfaces on this curve so dismissing the keyboard
+ * reads as one card settling, rather than several independently clipped rows. */
+export const mobileComposerFocusMotion = {
+  duration: "240ms",
+  easing: "cubic-bezier(.22,1,.36,1)",
+} as const;
