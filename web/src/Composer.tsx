@@ -81,6 +81,10 @@ import {
   type ComposerEditorHandle,
 } from "./composer/PlatformComposerEditor";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
+import {
+  dismissMobileSoftwareKeyboard,
+  releaseMobileComposerFocus,
+} from "./composer/mobileComposerFocus";
 import { attachmentTrayForSurface } from "./composer/attachmentPresentation";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
@@ -836,18 +840,22 @@ export function ComposerWorkspace({
   });
   const submitAndNotify = useCallback((): boolean => {
     const submitted = submit();
-    if (submitted) onSubmitted?.();
+    if (submitted) {
+      if (!desktop) dismissMobileSoftwareKeyboard();
+      onSubmitted?.();
+    }
     return submitted;
-  }, [onSubmitted, submit]);
+  }, [desktop, onSubmitted, submit]);
   const submitFeedback = useNetworkActionState();
   const submitWithFeedback = useCallback((): void => {
     void submitFeedback.run(() => {
       const confirmation = submitTracked();
       if (confirmation === null) return Promise.resolve();
+      if (!desktop) dismissMobileSoftwareKeyboard();
       onSubmitted?.();
       return confirmation;
     });
-  }, [onSubmitted, submitFeedback, submitTracked]);
+  }, [desktop, onSubmitted, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
     snapshot.drafts.get(sessionId) ?? EMPTY_QUEUED_MESSAGES
@@ -1199,6 +1207,7 @@ export function ComposerWorkspace({
   async function confirmForce(): Promise<void> {
     const confirmation = forceTracked();
     if (confirmation === null) return;
+    if (!desktop) dismissMobileSoftwareKeyboard();
     await confirmation;
     setForceAnchor(null);
   }
@@ -1206,7 +1215,9 @@ export function ComposerWorkspace({
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
   // of the queue. Only meaningful when there's already a queue to jump ahead of.
   function jumpToFront(): void {
-    jumpCurrentPromptToFront(queue.length);
+    if (jumpCurrentPromptToFront(queue.length) && !desktop) {
+      dismissMobileSoftwareKeyboard();
+    }
   }
   // Enter confirms the force-push popover (it doesn't autofocus a button the way
   // the Dialogs do). Held-⌘⏎ repeats are ignored inside the hook, so the still-
@@ -1236,7 +1247,9 @@ export function ComposerWorkspace({
       return;
     }
     // Fresh: schedule the composer's content, then clear the input like saveDraft.
-    scheduleNew(fireAtMs, delivery);
+    if (scheduleNew(fireAtMs, delivery) && !desktop) {
+      dismissMobileSoftwareKeyboard();
+    }
   }
 
   return (
@@ -2113,7 +2126,10 @@ export function ComposerWorkspace({
             >
               <MobileComposerAccessoryButton
                 title="Customize toolbar"
-                onClick={(): void => setMobileToolbarSettingsOpen(true)}
+                onClick={(): void => {
+                  releaseMobileComposerFocus();
+                  setMobileToolbarSettingsOpen(true);
+                }}
               >
                 <Tune />
               </MobileComposerAccessoryButton>
@@ -4148,7 +4164,10 @@ function PendingRow({
                 fixedAction={
                   <MobileComposerAccessoryButton
                     title="Customize toolbar"
-                    onClick={(): void => setMobileToolbarSettingsOpen(true)}
+                    onClick={(): void => {
+                      releaseMobileComposerFocus();
+                      setMobileToolbarSettingsOpen(true);
+                    }}
                   >
                     <Tune />
                   </MobileComposerAccessoryButton>

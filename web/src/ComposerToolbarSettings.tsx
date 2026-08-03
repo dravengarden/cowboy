@@ -24,6 +24,7 @@ import {
   useComposerToolbar,
 } from "./composerToolbarConfig";
 import { haptic } from "./haptic";
+import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 
 // Obsidian's "Manage toolbar options": curate which commands appear in the
 // fullscreen markdown toolbar and in what order. Search-to-add a disabled
@@ -54,15 +55,7 @@ export function ComposerToolbarSettings({
   // sheet as a large empty canvas.
   useLayoutEffect(() => {
     if (!open) return;
-    const active = document.activeElement;
-    if (
-      active instanceof HTMLElement &&
-      (active.isContentEditable ||
-        active.tagName === "TEXTAREA" ||
-        active.closest(".cm-editor") !== null)
-    ) {
-      active.blur();
-    }
+    releaseMobileComposerFocus();
   }, [open]);
 
   // The order shown: the persisted list, with the in-flight dragged id floated to

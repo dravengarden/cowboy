@@ -44,6 +44,7 @@ import {
   MobileComposerAccessoryDock,
 } from "./MobileComposerAccessoryDock";
 import { mobileComposerKeyboardGap } from "./mobileComposerPrimitives";
+import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import { isNativeShell } from "./nativeShell";
 import type { AvailableCommand } from "./protocol";
 import { haptic } from "./haptic";
@@ -192,6 +193,7 @@ export function FullscreenComposer({
       aria-modal="true"
       aria-label="Fullscreen message editor"
       data-mobile-pager-modal="true"
+      data-mobile-focus-composer="true"
       sx={{
         // `position: absolute` (not fixed): the native shell resizes the WebView for
         // the keyboard, so `body` is normal-flow at viewport height and `absolute
@@ -362,7 +364,13 @@ export function FullscreenComposer({
         fixedAction={
           <MobileComposerAccessoryButton
             title="Customize toolbar"
-            onClick={act(() => setSettingsOpen(true))}
+            onClick={act(() => {
+              // Do this in the button's user gesture. Waiting for the sheet's
+              // layout effect is too late on iOS: focus may already have moved
+              // while the old editor still matches :focus-within visually.
+              releaseMobileComposerFocus();
+              setSettingsOpen(true);
+            })}
           >
             <Tune />
           </MobileComposerAccessoryButton>

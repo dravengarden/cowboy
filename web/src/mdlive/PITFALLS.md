@@ -772,10 +772,21 @@ here says otherwise.
     the keyboard. If the old textarea/CM contenteditable remains
     `document.activeElement`, the compact card's `:focus-within` height survives
     without a keyboard and leaves a large empty Composer after the sheet closes.
-    `ComposerToolbarSettings` therefore blurs only an active native textarea or
-    CM contenteditable in a layout effect when opening. Do not move that blur to
-    the shared accessory button primitive: ordinary actions must continue to
+    The Settings trigger therefore releases only an editor inside the closest
+    `[data-mobile-focus-composer]` synchronously in the originating click, before
+    it opens the sheet. `ComposerToolbarSettings` repeats that narrow release in
+    a layout effect only as a fallback for non-toolbar callers. Waiting for the
+    effect alone is unreliable on iOS because modal focus transfer can replace
+    `document.activeElement` before it runs while the old card still paints its
+    focused geometry. Do not move that blur to the shared accessory button
+    primitive: ordinary formatting and attachment actions must continue to
     preserve keyboard focus.
+
+    The same scoped release marks the end of a Mobile delivery action. Once Send
+    or Queue is locally accepted, Jump to front succeeds, Schedule commits, or a
+    confirmed Force push is accepted, release the active Mobile editor immediately;
+    do not wait for the network acknowledgement. Invalid/no-op actions retain the
+    keyboard and draft. Desktop never uses this touch keyboard boundary.
 
 38. **A full-height touch Composer without inline images stays a native
     textarea.** Resolving the complete CM6 height chain makes the blank canvas a
