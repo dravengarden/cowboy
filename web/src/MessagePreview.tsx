@@ -5,6 +5,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import type { Extension } from "@codemirror/state";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 // Read-only live-preview of a queued/draft message, rendered with the EXACT same
 // mdlive engine as the input composer (`livePreviewExtensions` + `cmTheme`) — so
@@ -47,6 +48,12 @@ function MessagePreviewImpl({
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // iOS may dispatch the compatibility click only after WebKit has closed the
+  // trusted user-activation window.  Queue/Draft edit needs to mount and focus
+  // its textarea inside that window or the card changes state without raising
+  // the keyboard.  Resolve an actual tap on pointer-up (while rejecting scroll
+  // gestures and nested controls), and suppress the duplicate click.
+  const editTap = useReliableTouchTap<HTMLDivElement>(() => onClick?.());
 
   // The SAME extensions the input uses (reused, not re-declared, so the preview
   // can never visually drift from the editor). Memoised per theme.
@@ -70,7 +77,7 @@ function MessagePreviewImpl({
     <Box sx={{ position: "relative", minWidth: 0 }}>
       <Box
         ref={ref}
-        onClick={onClick}
+        {...(onClick ? editTap : {})}
         sx={{
           ...(onClick && { cursor: "pointer" }),
           ...(expanded
