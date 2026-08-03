@@ -933,3 +933,5 @@ Desktop Vim + IME checks:
       bare `p/P` remains native Vim paste in every composer state.
 - [ ] At a mobile viewport, the Desktop Vim/IME chunk is not requested and Mobile
       editor behavior is unchanged.
+
+43. **Composer utility actions belong to the expand rail, and confirmation must not steal iOS focus.** The touch composer reserves its top-right edge for a vertical utility rail: Fullscreen, Clear all, then Hide keyboard. Clear all stays visible but disabled when the composer is empty. Its confirmation Popover disables auto/enforced/restored focus and every action prevents pointer-down focus transfer, so opening or cancelling it cannot dismiss the keyboard; confirming clears the editor and attachments, then restores the caret without remounting the editor. Do not put these utility actions back into the evenly distributed delivery row.

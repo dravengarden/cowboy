@@ -828,6 +828,7 @@ export function ComposerWorkspace({
     sendable,
     addFiles,
     removeAttachment,
+    clear: clearComposer,
     submit,
     submitTracked,
     forceTracked,
@@ -840,6 +841,10 @@ export function ComposerWorkspace({
     // touch-native editors still require the live React value.
     mirrorTextInReact: surface !== "desktop",
   });
+  // Clearing is independent from sending. A still-uploading attachment cannot
+  // be sent yet, but it is still user-owned staged content and must remain
+  // removable from the utility rail.
+  const clearable = text.trim().length > 0 || attachments.length > 0;
   const submitAndNotify = useCallback((): boolean => {
     const submitted = submit();
     if (submitted) {
@@ -993,6 +998,7 @@ export function ComposerWorkspace({
   // queue). `holding` drives the fill ring; `forceAnchor` anchors the popover.
   const [holding, setHolding] = useState(false);
   const [forceAnchor, setForceAnchor] = useState<HTMLElement | null>(null);
+  const [clearComposerAnchor, setClearComposerAnchor] = useState<HTMLElement | null>(null);
   const [desktopMoreAnchor, setDesktopMoreAnchor] = useState<HTMLElement | null>(null);
   const desktopMoreButtonRef = useRef<HTMLButtonElement | null>(null);
   const desktopToolbarRef = useRef<HTMLDivElement | null>(null);
@@ -1815,20 +1821,29 @@ export function ComposerWorkspace({
             beats the global MuiIconButton `& .MuiSvgIcon-root: 1.5rem` override
             (a per-icon sx loses that specificity); rem so it tracks the font scale.
             Dropped in column mode — the editor already fills the column. */}
-        {!column && (
-        <Tooltip
-          title={touchInput
-            ? "Fullscreen editor"
-            : (expanded ? "Collapse editor" : "Expand editor")}
-        >
-          <IconButton
-            data-desktop-item-action="default"
-            size="small"
-            aria-label={touchInput
-              ? "fullscreen editor"
-              : (expanded ? "collapse editor" : "expand editor")}
-            onClick={touchInput
-              ? (): void => {
+        {!column && (touchInput
+          ? (
+            <Stack
+              data-mobile-composer-utility-rail
+              spacing={0.125}
+              sx={{
+                position: "absolute",
+                top: 2,
+                right: 2,
+                zIndex: 2,
+                alignItems: "center",
+              }}
+            >
+              <Tooltip title="Fullscreen editor">
+                <IconButton
+                  size="small"
+                  aria-label="fullscreen editor"
+                  sx={{
+                    ...TOOLBAR_ICON_BTN,
+                    color: "text.secondary",
+                    "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+                  }}
+                  onClick={(): void => {
                 // Mount the fullscreen editor SYNCHRONOUSLY inside this user tap
                 // (flushSync), then focus it IN-gesture. iOS only ARMS the native
                 // text interaction (the long-press Paste/Select menu) for a
@@ -1841,21 +1856,68 @@ export function ComposerWorkspace({
                 // user gesture → armed + keyboard up (no claim/timer needed).
                 flushSync(() => setComposeFs(true));
                 editorRef.current?.focusEnd();
-              }
-              : toggleComposerExpanded}
-            sx={{
-              position: "absolute",
-              top: 2,
-              right: 2,
-              zIndex: 1,
-              color: "text.secondary",
-              "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
-            }}
-          >
-            {!touchInput && expanded ? <CloseFullscreen /> : <OpenInFull />}
-          </IconButton>
-        </Tooltip>
-        )}
+                  }}
+                >
+                  <OpenInFull />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Clear all">
+                <span>
+                  <IconButton
+                    size="small"
+                    aria-label="clear composer"
+                    disabled={!clearable}
+                    sx={{
+                      ...TOOLBAR_ICON_BTN,
+                      color: "text.secondary",
+                      "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
+                    }}
+                    onPointerDown={(event): void => event.preventDefault()}
+                    onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
+                  >
+                    <DeleteOutline />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Hide keyboard">
+                <IconButton
+                  data-mobile-keyboard-hide
+                  size="small"
+                  aria-label="hide keyboard"
+                  sx={{
+                    ...TOOLBAR_ICON_BTN,
+                    display: "none",
+                    color: "text.secondary",
+                    "& .MuiSvgIcon-root": { fontSize: "1.15rem" },
+                  }}
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={dismissMobileSoftwareKeyboard}
+                >
+                  <KeyboardHide />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+          )
+          : (
+            <Tooltip title={expanded ? "Collapse editor" : "Expand editor"}>
+              <IconButton
+                data-desktop-item-action="default"
+                size="small"
+                aria-label={expanded ? "collapse editor" : "expand editor"}
+                onClick={toggleComposerExpanded}
+                sx={{
+                  position: "absolute",
+                  top: 2,
+                  right: 2,
+                  zIndex: 1,
+                  color: "text.secondary",
+                  "& .MuiSvgIcon-root": { fontSize: "1.25rem" },
+                }}
+              >
+                {expanded ? <CloseFullscreen /> : <OpenInFull />}
+              </IconButton>
+            </Tooltip>
+          ))}
         {/* Inline bottom toolbar INSIDE the card (Zed layout): the / @ 📎 triggers
             + config on the left, a flex spacer, then the send/queue/stop + ⋮ action
             cluster pinned to the card's right edge. This replaces BOTH the old
@@ -2412,22 +2474,6 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Hide keyboard">
-          <IconButton
-            data-mobile-keyboard-hide
-            aria-label="hide keyboard"
-            sx={{
-              ...TOOLBAR_ICON_BTN,
-              display: "none",
-            }}
-            onPointerDown={(event): void => event.preventDefault()}
-            onClick={(): void => {
-              dismissMobileSoftwareKeyboard();
-            }}
-          >
-            <KeyboardHide fontSize="small" />
-          </IconButton>
-        </Tooltip>
         </Stack>
         {touchInput && (
           <ComposerToolbarSettings
@@ -2440,6 +2486,52 @@ export function ComposerWorkspace({
         {/* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */}
       </Paper>
+      <Popover
+        open={clearComposerAnchor !== null}
+        anchorEl={clearComposerAnchor}
+        onClose={(): void => setClearComposerAnchor(null)}
+        disableAutoFocus
+        disableEnforceFocus
+        disableRestoreFocus
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { sx: { mt: 0.5, maxWidth: 244, borderRadius: 2 } } }}
+      >
+        <Box sx={{ p: 1.5 }}>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            Clear this composer?
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+            Text and attachments in this unsent message will be removed.
+          </Typography>
+          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.5 }}>
+            <Button
+              size="small"
+              color="inherit"
+              onPointerDown={(event): void => event.preventDefault()}
+              onClick={(): void => setClearComposerAnchor(null)}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              color="error"
+              onPointerDown={(event): void => event.preventDefault()}
+              onClick={(): void => {
+                importantHaptic();
+                clearComposer();
+                setClearComposerAnchor(null);
+                globalThis.requestAnimationFrame(() => editorRef.current?.focus());
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              Clear all
+            </Button>
+          </Stack>
+        </Box>
+      </Popover>
       {
         /* Force-push confirm — opened by a completed long-press on Queue. Anchored
           to the button, rising above it. Confirm interrupts the running turn and
