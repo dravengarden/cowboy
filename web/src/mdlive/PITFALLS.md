@@ -151,6 +151,16 @@ here says otherwise.
    retries replace the already-armed native text interaction and suppress the
    same menu. Never restore touch freeze or post-open focus retries.
 
+   **Full-cover Composer settings and `:focus-within` (2026-08-03):** a toolbar
+   button becomes `document.activeElement` before its React `onClick` runs. The
+   Tune button is still inside `[data-mobile-focus-composer]`, so blurring only
+   textarea/contenteditable focus owners leaves the whole Composer matched by
+   `:focus-within`: iOS hides the keyboard for the sheet, but the background
+   card remains a tall empty focused canvas after the sheet closes. A full-cover
+   transition must blur whichever active descendant owns the Composer focus
+   region, including its button. Inline formatting and attachment actions still
+   preserve editor focus and must not use this helper.
+
 4. **A tiny "dot" after the caret / near rendered markdown on iOS.** CM6 wraps
    every widget (the placeholder, each hidden-marker widget) in a srcless
    `<img class="cm-widgetBuffer">`; iOS WebKit renders a srcless `<img>` as a

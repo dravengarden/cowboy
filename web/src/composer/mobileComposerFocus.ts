@@ -10,13 +10,13 @@ export function releaseMobileComposerFocus(): boolean {
   if (active.closest("[data-mobile-focus-composer='true']") === null) {
     return false;
   }
-  if (
-    active.tagName !== "TEXTAREA" &&
-    !active.isContentEditable &&
-    active.closest(".cm-content") === null
-  ) {
-    return false;
-  }
+
+  // Opening the full-cover toolbar settings is a transition out of the whole
+  // composer focus region, not merely out of its text node. By click time iOS
+  // may already have moved document.activeElement from the editor to the Tune
+  // button. That button still satisfies the card's :focus-within selector; if
+  // we only blur textarea/contenteditable nodes, the keyboard disappears while
+  // the focused card remains expanded as a large empty canvas.
   active.blur();
   return true;
 }
