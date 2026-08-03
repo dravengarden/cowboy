@@ -63,6 +63,7 @@ import {
   EditOutlined,
   ExpandMore,
   InsertDriveFileOutlined,
+  KeyboardHide,
   MoreVert,
   OpenInFull,
   Refresh,
@@ -1668,6 +1669,9 @@ export function ComposerWorkspace({
               transition:
                 `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
             },
+            "&:focus-within [data-mobile-keyboard-hide]": {
+              display: "inline-flex",
+            },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
             },
@@ -2407,6 +2411,22 @@ export function ComposerWorkspace({
               <Bolt fontSize="small" />
             </IconButton>
           </span>
+        </Tooltip>
+        <Tooltip title="Hide keyboard">
+          <IconButton
+            data-mobile-keyboard-hide
+            aria-label="hide keyboard"
+            sx={{
+              ...TOOLBAR_ICON_BTN,
+              display: "none",
+            }}
+            onPointerDown={(event): void => event.preventDefault()}
+            onClick={(): void => {
+              dismissMobileSoftwareKeyboard();
+            }}
+          >
+            <KeyboardHide fontSize="small" />
+          </IconButton>
         </Tooltip>
         </Stack>
         {touchInput && (

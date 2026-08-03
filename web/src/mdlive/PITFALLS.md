@@ -873,6 +873,15 @@ here says otherwise.
     tune those durations independently: mismatched height, opacity, and padding
     transitions make keyboard dismissal look like several clipped panels.
 
+42. **The Mobile keyboard-dismiss action is an explicit focus boundary, not an
+    editor mutation.** Keep the button in the main action track's final slot and
+    reveal it from the composer's native `:focus-within` state; do not mirror
+    focus or keyboard visibility through React state. Its `pointerdown` must
+    prevent the button from stealing focus, and its click must call the shared
+    keyboard-dismiss helper without changing text, selection, attachments, or
+    expanded state. This makes the keyboard collapse predictably while leaving
+    the draft exactly where the user stopped typing.
+
 ## Verification matrix (run the WHOLE thing after any editor change)
 
 On the **iOS Simulator** (or device), in BOTH the inline composer and the
