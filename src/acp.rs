@@ -56,6 +56,7 @@ use crate::provider::LaunchSpec;
 /// then startup configuration, so a slow but progressing launch is not charged
 /// against one opaque deadline.
 pub(crate) const STARTUP_PHASE_TIMEOUT: Duration = Duration::from_mins(1);
+const RESUME_PHASE_TIMEOUT: Duration = Duration::from_mins(4);
 const CODEX_FULL_ACCESS_CONFIG_ID: &str = "mode";
 const CODEX_FULL_ACCESS_CONFIG_VALUE: &str = "agent-full-access";
 
@@ -188,7 +189,7 @@ mod startup_mode_tests {
         assert!(!resume.retryable());
         assert_eq!(
             resume.to_string(),
-            "agent did not complete ACP session/resume within 60s"
+            "agent did not complete ACP session/resume within 240s"
         );
     }
 }
@@ -206,12 +207,23 @@ impl StartupTimeout {
     const fn new(phase: StartupPhase) -> Self {
         Self {
             phase,
-            seconds: STARTUP_PHASE_TIMEOUT.as_secs(),
+            seconds: startup_phase_timeout(phase).as_secs(),
         }
     }
 
     const fn retryable(&self) -> bool {
         matches!(self.phase, StartupPhase::Initialize)
+    }
+}
+
+const fn startup_phase_timeout(phase: StartupPhase) -> Duration {
+    if matches!(phase, StartupPhase::Resume) {
+        // App Server must scan the native rollout before it can resume. Large
+        // image-heavy threads can take longer than a normal ACP handshake even
+        // when excludeTurns avoids serializing their history back to the adapter.
+        RESUME_PHASE_TIMEOUT
+    } else {
+        STARTUP_PHASE_TIMEOUT
     }
 }
 
@@ -236,7 +248,7 @@ async fn startup_watchdog(mut phases: watch::Receiver<StartupPhase>) -> StartupT
         }
 
         tokio::select! {
-            () = tokio::time::sleep(STARTUP_PHASE_TIMEOUT) => {
+            () = tokio::time::sleep(startup_phase_timeout(phase)) => {
                 return StartupTimeout::new(phase);
             }
             changed = phases.changed() => {
