@@ -1957,8 +1957,21 @@ fn parse_workspaces(values: &[String]) -> anyhow::Result<Vec<MachineWorkspace>> 
         if id.trim().is_empty() || id.contains('/') {
             bail!("workspace id {id:?} is invalid");
         }
-        let canonical = std::fs::canonicalize(path)
-            .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"))?;
+        let canonical = match std::fs::canonicalize(path) {
+            Ok(canonical) => canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tracing::warn!(
+                    workspace_id = id,
+                    workspace_path = path,
+                    "skipping configured workspace that is not present on this Machine"
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("canonicalizing workspace {id:?} at {path:?}"));
+            }
+        };
         if !canonical.is_dir() {
             bail!("workspace {id:?} is not a directory");
         }
@@ -2298,6 +2311,30 @@ mod tests {
             )
             .is_some()
         );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn missing_optional_workspace_does_not_take_the_machine_offline() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-machine-partial-workspaces-{}",
+            std::process::id()
+        ));
+        let available = root.join("available");
+        std::fs::create_dir_all(&available).expect("available workspace");
+
+        let workspaces = parse_workspaces(&[
+            format!("available={}", available.display()),
+            format!("awaiting-sync={}", root.join("missing").display()),
+        ])
+        .expect("missing optional workspace should be skipped");
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].id, "available");
+        assert_eq!(
+            workspaces[0].canonical_path,
+            available.canonicalize().unwrap().display().to_string()
+        );
+
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 }
