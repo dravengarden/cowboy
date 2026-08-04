@@ -405,7 +405,19 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&target)?;
+                match std::fs::create_dir(&target) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let metadata = std::fs::symlink_metadata(&target)?;
+                        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Claude DeepSeek config boundary must contain only real directories",
+                            ));
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Err(error) => return Err(error),
         }
@@ -807,5 +819,40 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&root).expect("remove symlink test home");
+    }
+
+    #[test]
+    fn claude_deepseek_config_creation_is_safe_under_concurrent_first_launches() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-claude-deepseek-concurrent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).expect("create concurrent test home");
+
+        let barrier = Arc::new(Barrier::new(16));
+        let workers = (0..16)
+            .map(|_| {
+                let root = root.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    super::prepare_claude_deepseek_config_dir_at(&root)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut expected = None;
+        for worker in workers {
+            let path = worker
+                .join()
+                .expect("config creation thread panicked")
+                .expect("concurrent config creation failed");
+            assert_eq!(expected.get_or_insert_with(|| path.clone()), &path);
+        }
+        std::fs::remove_dir_all(&root).expect("remove concurrent test home");
     }
 }
