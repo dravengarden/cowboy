@@ -247,6 +247,9 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), false);
   assertEquals(actionRow.includes("data-mobile-keyboard-hide"), true);
   assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
+  assertEquals(actionRow.includes("{clearable && ("), true);
+  assertEquals(actionRow.includes('left: "50%"'), true);
+  assertEquals(actionRow.includes('bottom: 42'), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(

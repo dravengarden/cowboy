@@ -2544,24 +2544,26 @@ export function ComposerWorkspace({
               mr: 0.25,
             }}
           >
-            <Tooltip title="Clear composer">
-              <span data-mobile-composer-clear>
-                <IconButton
-                  aria-label="clear composer"
-                  disabled={!clearable}
-                  sx={{
-                    ...TOOLBAR_ICON_BTN,
-                    position: "absolute",
-                    right: 0,
-                    bottom: 42,
-                  }}
-                  onPointerDown={(event): void => event.preventDefault()}
-                  onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
-                >
-                  <DeleteOutline fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
+            {clearable && (
+              <Tooltip title="Clear composer">
+                <span data-mobile-composer-clear>
+                  <IconButton
+                    aria-label="clear composer"
+                    sx={{
+                      ...TOOLBAR_ICON_BTN,
+                      position: "absolute",
+                      left: "50%",
+                      bottom: 42,
+                      transform: "translateX(-50%)",
+                    }}
+                    onPointerDown={(event): void => event.preventDefault()}
+                    onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
+                  >
+                    <DeleteOutline fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
             <Tooltip title="Hide keyboard">
               <IconButton
                 size="small"
