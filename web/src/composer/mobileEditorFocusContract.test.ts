@@ -29,5 +29,12 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
     false,
   );
   assertEquals(composerSource.includes("minHeight: 132"), false);
+  assertEquals(
+    composerSource.includes(
+      'data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within)',
+    ),
+    false,
+  );
+  assertEquals(composerSource.includes('"& > *": { flex: 1 }'), false);
   assertEquals(textareaSource.includes("maxRows={expanded ? 30 : 10}"), true);
 });

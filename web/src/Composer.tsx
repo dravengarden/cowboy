@@ -1670,7 +1670,7 @@ export function ComposerWorkspace({
             // chain; otherwise CM6 collapses to its 14px text line while the
             // surrounding card remains tall, so an iOS long-press in the visible
             // blank area lands on an inert wrapper and cannot open Paste/AutoFill.
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
+            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
               flex: 1,
               minHeight: 0,
               height: "100%",
@@ -1773,7 +1773,6 @@ export function ComposerWorkspace({
               ...(touchInput && {
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
-                "& > *": { flex: 1 },
                 "@media (prefers-reduced-motion: reduce)": { transition: "none" },
               }),
               ...(column && { flex: 1 }),
