@@ -521,6 +521,7 @@ async fn agent_main(
 
     let mut child = Command::new(&spec.command)
         .args(&spec.args)
+        .envs(&spec.env)
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -930,7 +931,7 @@ async fn run_session(
         session.session_id
     };
     startup_phase.send_replace(StartupPhase::Configure);
-    if provider_id == "codex" {
+    if crate::provider::is_codex(provider_id) {
         state.codex_full_access.store(
             config_options
                 .as_ref()
@@ -942,7 +943,7 @@ async fn run_session(
     // Codex ACP exposes its approval preset as a config option instead of a
     // session mode. Default new/revived Codex panels to Full Access when the
     // adapter advertises it; a failed set falls back to the adapter default.
-    if provider_id == "codex"
+    if crate::provider::is_codex(provider_id)
         && config_options
             .as_ref()
             .is_some_and(|opts| codex_full_access_available(opts))
@@ -1263,6 +1264,7 @@ pub async fn run_oneshot(spec: &LaunchSpec, cwd: PathBuf, prompt: String) -> Res
 
     let mut child = Command::new(&spec.command)
         .args(&spec.args)
+        .envs(&spec.env)
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

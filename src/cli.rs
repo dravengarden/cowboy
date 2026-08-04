@@ -76,7 +76,7 @@ pub struct ServeAcpArgs {
 
 #[derive(Args)]
 pub struct TryAgentArgs {
-    /// Provider id: `claude-code` | `codex`.
+    /// Provider id: `claude-code` | `codex` | `codex-deepseek` | `gemini`.
     #[arg(long)]
     provider: String,
     /// Working directory for the session.

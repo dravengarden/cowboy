@@ -13,10 +13,11 @@ needed, hand-coded confirm-detection rules — the core never changes.
 |---|---|---|
 | `claude-code` | `npx -y @agentclientprotocol/claude-agent-acp` | Claude Code ACP adapter |
 | `codex` | `npx -y @agentclientprotocol/codex-acp` plus full-access defaults | adapter over Codex App Server |
+| `codex-deepseek` | the same Codex ACP adapter with process-local `CODEX_CONFIG` | Codex over the independent local DeepSeek Responses shim |
 | `gemini` | `npx -y @google/gemini-cli --acp` | Gemini's native ACP mode |
 
-Each entry is a **`LaunchSpec`**: `id` + `command` + `args`. That's the whole
-contract a provider must satisfy to start; everything downstream
+Each entry is a **`LaunchSpec`**: `id` + `command` + `args` + scoped environment.
+That's the whole contract a provider must satisfy to start; everything downstream
 (initialize/handshake/command loop) is provider-agnostic and lives in `acp.rs`.
 
 Managed Machine releases also set Codex ACP's `CODEX_PATH` to
@@ -27,6 +28,14 @@ serializing the complete rollout while leaving `session/load` intact: the
 adapter still performs its explicit `thread/read(includeTurns=true)` afterward.
 The shim does not patch or take ownership of the npm-managed adapter and is
 idempotent with an upstream adapter that starts sending the option itself.
+
+`codex-deepseek` is a runtime variant, not a second agent implementation. Codex
+still owns planning, tools, approvals, goals, memory, and execution; its model
+provider points at `codex-deepseek.service` on loopback. The shim owns only wire
+translation and has an independent lifecycle, port, credential, and health
+check. Restarting or upgrading it never restarts Cowboy Machine or resident ACP
+workers. A future Claude/DeepSeek bridge must use another process and profile;
+the two adapters must not grow into a shared provider router.
 
 Gemini CLI stopped accepting Google Login for consumer, Google AI Pro, and AI
 Ultra accounts on 2026-06-18. Its ACP mode remains usable with a Gemini API key

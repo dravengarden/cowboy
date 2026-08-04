@@ -20,6 +20,7 @@ function contentText(content: unknown): string {
 export function providerName(provider: string): string {
   if (provider === "claude-code") return "Claude Code";
   if (provider === "codex") return "Codex";
+  if (provider === "codex-deepseek") return "Codex · DeepSeek";
   if (provider === "gemini") return "Gemini";
   return provider || "Agent";
 }
@@ -54,7 +55,7 @@ function humanize(value: string): string {
 
 export function toolTypeName(provider: string, toolName: string, kind: string): string {
   if (toolName) return toolName;
-  if (provider === "codex") {
+  if (provider === "codex" || provider === "codex-deepseek") {
     if (kind === "execute") return "Shell";
     if (kind === "edit") return "Patch";
     if (kind === "read") return "Read";

@@ -6,6 +6,8 @@
 //! the generic ACP backend in [`crate::acp`] does the rest.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Per-provider specifics beyond launching. Today each holds its L1 confirm-detect
 // (the volatile, often-changing turn-end markers — design §B), sharing the
@@ -24,6 +26,8 @@ pub struct LaunchSpec {
     pub command: String,
     /// Arguments passed to the executable.
     pub args: Vec<String>,
+    /// Environment additions scoped to this adapter subprocess.
+    pub env: HashMap<String, String>,
 }
 
 const CODEX_FULL_ACCESS_ARGS: &[&str] = &[
@@ -89,6 +93,48 @@ fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'stati
             &get_env,
         ),
     );
+    let mut deepseek = spec_with_custom_default_args(
+        "codex-deepseek",
+        "npx",
+        &["-y", "@agentclientprotocol/codex-acp"],
+        &[],
+        &get_env,
+    );
+    // Reuse the installed Codex ACP adapter when the host already supplies it.
+    // The inference endpoint itself remains a separate, independently deployed
+    // process; only this worker-local configuration points Codex at it.
+    if get_env("COWBOY_ACP_CODEX_DEEPSEEK_CMD").is_none()
+        && let Some(command) = get_env("COWBOY_ACP_CODEX_CMD")
+    {
+        deepseek.command = command;
+        if get_env("COWBOY_ACP_CODEX_DEEPSEEK_ARGS").is_none() {
+            deepseek.args.clear();
+        }
+    }
+    deepseek
+        .env
+        .insert("MODEL_PROVIDER".to_owned(), "deepseek-local".to_owned());
+    deepseek.env.insert(
+        "CODEX_CONFIG".to_owned(),
+        serde_json::json!({
+            "model": "deepseek-v4-flash",
+            "model_provider": "deepseek-local",
+            "model_reasoning_effort": "high",
+            "model_catalog_json": "/etc/codex-deepseek/codex-models.json",
+            "model_providers": {
+                "deepseek-local": {
+                    "name": "Local DeepSeek Responses gateway",
+                    "base_url": "http://127.0.0.1:8088/v1",
+                    "wire_api": "responses",
+                    "request_max_retries": 1,
+                    "stream_max_retries": 0,
+                    "stream_idle_timeout_ms": 600000
+                }
+            }
+        })
+        .to_string(),
+    );
+    m.insert("codex-deepseek", deepseek);
     m.insert(
         "gemini",
         // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's no
@@ -154,6 +200,7 @@ fn spec_with_custom_default_args(
                     .map(|s| (*s).to_owned())
                     .collect()
             }),
+            env: HashMap::new(),
         },
         // Default command (npx): `_ARGS` may still override the pinned adapter args.
         None => LaunchSpec {
@@ -161,6 +208,7 @@ fn spec_with_custom_default_args(
             command: default_cmd.to_owned(),
             args: arg_override
                 .unwrap_or_else(|| default_args.iter().map(|s| (*s).to_owned()).collect()),
+            env: HashMap::new(),
         },
     }
 }
@@ -168,7 +216,117 @@ fn spec_with_custom_default_args(
 /// Look up a built-in provider's launch spec by id.
 #[must_use]
 pub fn lookup(id: &str) -> Option<LaunchSpec> {
-    builtin().remove(id)
+    let mut spec = builtin().remove(id)?;
+    if id == "codex-deepseek" {
+        match prepare_codex_deepseek_home() {
+            Ok(home) => {
+                spec.env
+                    .insert("CODEX_HOME".to_owned(), home.display().to_string());
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to prepare isolated Codex DeepSeek home");
+                return None;
+            }
+        }
+    }
+    Some(spec)
+}
+
+/// Whether a Cowboy provider uses the Codex ACP/runtime semantics.
+#[must_use]
+pub fn is_codex(id: &str) -> bool {
+    matches!(id, "codex" | "codex-deepseek")
+}
+
+fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _, symlink};
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/home/draven"));
+    let source = home.join(".codex");
+    let target = home.join(".local/state/cowboy/codex-deepseek-home");
+    std::fs::create_dir_all(&target)?;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
+
+    let base = match std::fs::read_to_string(source.join("config.toml")) {
+        Ok(config) => config,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let config = render_codex_deepseek_config(&base);
+    static NEXT_CONFIG_WRITE: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_CONFIG_WRITE.fetch_add(1, Ordering::Relaxed);
+    let temporary = target.join(format!(".config.toml.{}.{sequence}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(config.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, target.join("config.toml"))?;
+
+    for entry in [
+        "AGENTS.md",
+        "skills",
+        "plugins",
+        "rules",
+        "memories",
+        "memories_extensions",
+    ] {
+        let link = target.join(entry);
+        if !link.exists() && !link.is_symlink() {
+            let _ = symlink(source.join(entry), link);
+        }
+    }
+    Ok(target)
+}
+
+fn render_codex_deepseek_config(base: &str) -> String {
+    let mut filtered = String::new();
+    let mut in_root = true;
+    let mut skip_managed_provider = false;
+    for line in base.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_root = false;
+            skip_managed_provider = trimmed == "[model_providers.deepseek-local]"
+                || trimmed.starts_with("[model_providers.deepseek-local.");
+            if skip_managed_provider {
+                continue;
+            }
+        } else if skip_managed_provider {
+            continue;
+        }
+        let key = line.split_once('=').map(|(key, _)| key.trim());
+        if in_root
+            && matches!(
+                key,
+                Some("model" | "model_provider" | "model_reasoning_effort" | "model_catalog_json")
+            )
+        {
+            continue;
+        }
+        filtered.push_str(line);
+        filtered.push('\n');
+    }
+    format!(
+        "model = \"deepseek-v4-flash\"\n\
+         model_provider = \"deepseek-local\"\n\
+         model_reasoning_effort = \"high\"\n\
+         model_catalog_json = \"/etc/codex-deepseek/codex-models.json\"\n\n\
+         {filtered}\n\
+         [model_providers.deepseek-local]\n\
+         name = \"Local DeepSeek Responses gateway\"\n\
+         base_url = \"http://127.0.0.1:8088/v1\"\n\
+         wire_api = \"responses\"\n\
+         request_max_retries = 1\n\
+         stream_max_retries = 0\n\
+         stream_idle_timeout_ms = 600000\n"
+    )
 }
 
 #[cfg(test)]
@@ -205,6 +363,32 @@ mod tests {
             Some("npx".to_owned())
         );
         assert!(lookup_with(&[], "nope").is_none());
+
+        let deepseek = lookup_with(
+            &[("COWBOY_ACP_CODEX_CMD", "/opt/npm-global/bin/codex-acp")],
+            "codex-deepseek",
+        )
+        .expect("codex-deepseek registered");
+        assert_eq!(deepseek.command, "/opt/npm-global/bin/codex-acp");
+        assert!(deepseek.args.is_empty());
+        assert_eq!(
+            deepseek.env.get("MODEL_PROVIDER").map(String::as_str),
+            Some("deepseek-local")
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(deepseek.env.get("CODEX_CONFIG").expect("Codex config"))
+                .expect("valid Codex config JSON");
+        assert_eq!(config["model"], "deepseek-v4-flash");
+
+        let deepseek_with_args = lookup_with(
+            &[
+                ("COWBOY_ACP_CODEX_CMD", "/opt/npm-global/bin/codex-acp"),
+                ("COWBOY_ACP_CODEX_DEEPSEEK_ARGS", "--one --two"),
+            ],
+            "codex-deepseek",
+        )
+        .expect("codex-deepseek registered");
+        assert_eq!(deepseek_with_args.args, ["--one", "--two"]);
 
         // Override just _CMD: npx-specific args are dropped, while Codex keeps
         // its provider-specific full-access config for the pre-installed binary.
@@ -254,5 +438,24 @@ mod tests {
             .args,
             ["--acp", "--foo"]
         );
+    }
+
+    #[test]
+    fn deepseek_overlay_preserves_base_config_without_base_model_defaults() {
+        let rendered = super::render_codex_deepseek_config(
+            "approval_policy = \"never\"\nmodel = \"gpt\"\n\n\
+             [model_providers.deepseek-local]\nbase_url = \"stale\"\n\n\
+             [features]\nmemories = true\n",
+        );
+        assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
+        assert!(!rendered.contains("model = \"gpt\""));
+        assert!(rendered.contains("approval_policy = \"never\""));
+        assert!(rendered.contains("[features]\nmemories = true"));
+        assert!(rendered.contains("[model_providers.deepseek-local]"));
+        assert_eq!(
+            rendered.matches("[model_providers.deepseek-local]").count(),
+            1
+        );
+        assert!(!rendered.contains("base_url = \"stale\""));
     }
 }

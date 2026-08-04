@@ -73,6 +73,7 @@ import { machineVersionPresentation, type MachineComponentUpdate } from "./machi
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
+import { providerName } from "./tools/presentation";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     PROVIDERS,
@@ -1421,7 +1422,7 @@ function NewSessionDialog({
                 >
                     {PROVIDERS.map((p) => (
                         <MenuItem key={p} value={p} disabled={!providerAvailable(p)}>
-                            {p}
+                            {providerName(p)}
                         </MenuItem>
                     ))}
                 </TextField>

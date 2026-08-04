@@ -851,6 +851,37 @@ async fn collect_inventory(
             update: None,
         });
     }
+    if !disabled.iter().any(|slot| slot == "codex-deepseek") {
+        let deepseek_ready = std::path::Path::new("/etc/codex-deepseek/codex-models.json")
+            .is_file()
+            && tokio::time::timeout(
+                Duration::from_millis(500),
+                reqwest::Client::new()
+                    .get("http://127.0.0.1:8088/healthz")
+                    .send(),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok_and(|response| response.status().is_success()));
+        inventory.push(ComponentInventory {
+            id: ComponentId {
+                kind: ComponentKind::ProviderAdapter,
+                slot: "codex-deepseek".to_owned(),
+            },
+            state: if deepseek_ready {
+                ComponentState::Active
+            } else {
+                ComponentState::Missing
+            },
+            version: String::new(),
+            generation: String::new(),
+            digest: String::new(),
+            rollback_generation: None,
+            active_leases: 0,
+            auth: None,
+            detail: Some("loopback Responses gateway".to_owned()),
+            update: None,
+        });
+    }
     apply_npm_release_status(&mut inventory).await;
     inventory
 }
@@ -2048,8 +2079,8 @@ mod tests {
     #[test]
     fn disabled_provider_aliases_are_normalized() {
         assert_eq!(
-            disabled_provider_slots_from("claude-code, gemini"),
-            ["claude", "gemini"]
+            disabled_provider_slots_from("claude-code, gemini, codex-deepseek"),
+            ["claude", "gemini", "codex-deepseek"]
         );
     }
 

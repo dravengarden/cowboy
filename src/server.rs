@@ -2942,15 +2942,16 @@ fn machine_supports_provider(
     provider: &str,
 ) -> bool {
     use crate::machine_protocol::{AuthState, ComponentKind, ComponentState};
-    let slot = match provider {
+    let cli_slot = match provider {
         "claude-code" => "claude",
+        "codex-deepseek" => "codex",
         provider => provider,
     };
     let cli_ready = components.iter().any(|component| {
         component.id.kind == ComponentKind::ProviderCli
-            && matches!(component.id.slot.as_str(), candidate if candidate == slot || candidate == provider)
+            && matches!(component.id.slot.as_str(), candidate if candidate == cli_slot || candidate == provider)
             && component.state == ComponentState::Active
-            && component.auth == Some(AuthState::SignedIn)
+            && (provider == "codex-deepseek" || component.auth == Some(AuthState::SignedIn))
     });
     if !cli_ready {
         return false;
@@ -2958,11 +2959,18 @@ fn machine_supports_provider(
     if provider == "gemini" {
         return gemini_machine_auth_is_current(components);
     }
-    components.iter().any(|component| {
-        component.id.kind == ComponentKind::ProviderAdapter
-            && matches!(component.id.slot.as_str(), candidate if candidate == slot || candidate == provider)
-            && component.state == ComponentState::Active
-    })
+    let adapter_active = |slot: &str| {
+        components.iter().any(|component| {
+            component.id.kind == ComponentKind::ProviderAdapter
+                && component.id.slot == slot
+                && component.state == ComponentState::Active
+        })
+    };
+    if provider == "codex-deepseek" {
+        adapter_active("codex") && adapter_active("codex-deepseek")
+    } else {
+        adapter_active(cli_slot) || adapter_active(provider)
+    }
 }
 
 fn gemini_machine_auth_is_current(
@@ -3039,6 +3047,43 @@ mod machine_provider_tests {
             component(ComponentKind::ProviderAdapter, "claude", None),
         ];
         assert!(machine_supports_provider(&components, "claude-code"));
+    }
+
+    #[test]
+    fn deepseek_runtime_reuses_managed_codex_components() {
+        let codex_only = [
+            component(
+                ComponentKind::ProviderCli,
+                "codex",
+                Some(AuthState::SignedIn),
+            ),
+            component(ComponentKind::ProviderAdapter, "codex", None),
+        ];
+        assert!(!machine_supports_provider(&codex_only, "codex-deepseek"));
+        let components = [
+            component(
+                ComponentKind::ProviderCli,
+                "codex",
+                Some(AuthState::SignedIn),
+            ),
+            component(ComponentKind::ProviderAdapter, "codex", None),
+            component(ComponentKind::ProviderAdapter, "codex-deepseek", None),
+        ];
+        assert!(machine_supports_provider(&components, "codex-deepseek"));
+
+        let signed_out_components = [
+            component(
+                ComponentKind::ProviderCli,
+                "codex",
+                Some(AuthState::SignedOut),
+            ),
+            component(ComponentKind::ProviderAdapter, "codex", None),
+            component(ComponentKind::ProviderAdapter, "codex-deepseek", None),
+        ];
+        assert!(machine_supports_provider(
+            &signed_out_components,
+            "codex-deepseek"
+        ));
     }
 
     #[test]

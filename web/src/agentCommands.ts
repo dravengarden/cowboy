@@ -56,6 +56,7 @@ const COMPACT_ALIASES = ["compact", "compress", "summarize", "summarise"];
 const COMPACT_DEFAULT: Record<string, string> = {
   "claude-code": "compact",
   "codex": "compact",
+  "codex-deepseek": "compact",
   "gemini": "compress",
 };
 

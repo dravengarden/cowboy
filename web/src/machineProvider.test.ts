@@ -12,6 +12,31 @@ Deno.test("maps the claude-code session provider to the claude CLI slot", () => 
   );
 });
 
+Deno.test("maps the Codex DeepSeek runtime to the managed Codex slots", () => {
+  assertEquals(
+    machineProviderAvailable("codex-deepseek", [{
+      id: { kind: "provider_cli", slot: "codex" },
+      state: "active",
+      auth: "signed_in",
+    }]),
+    false,
+  );
+  assertEquals(
+    machineProviderAvailable("codex-deepseek", [{
+      id: { kind: "provider_cli", slot: "codex" },
+      state: "active",
+      auth: "signed_out",
+    }, {
+      id: { kind: "provider_adapter", slot: "codex" },
+      state: "active",
+    }, {
+      id: { kind: "provider_adapter", slot: "codex-deepseek" },
+      state: "active",
+    }]),
+    true,
+  );
+});
+
 Deno.test("requires an active and confirmed signed-in provider", () => {
   assertEquals(
     machineProviderAvailable("gemini", [{

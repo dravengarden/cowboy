@@ -397,4 +397,4 @@ export type Inbound =
   | { type: "retry_turn"; session_id: string }
   | { type: "set_setting"; key: string; value: unknown };
 
-export const PROVIDERS = ["claude-code", "codex", "gemini"] as const;
+export const PROVIDERS = ["codex", "codex-deepseek", "claude-code", "gemini"] as const;

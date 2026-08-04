@@ -39,6 +39,7 @@ export function ProviderIcon({
         </SvgIcon>
       );
     case "codex":
+    case "codex-deepseek":
       return (
         <SvgIcon viewBox="0 0 24 24" {...props}>
           <path d={OPENAI_PATH} />

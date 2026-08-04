@@ -848,7 +848,7 @@ fn codex_full_access_permission(
     };
     let workers = shared.workers.lock();
     let worker = workers.get(session_id)?;
-    if worker.launch.as_ref()?.provider != "codex"
+    if !crate::provider::is_codex(&worker.launch.as_ref()?.provider)
         || !worker
             .config_options
             .as_ref()

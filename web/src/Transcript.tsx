@@ -832,7 +832,7 @@ function ThinkingIndicator({
   provider: string;
 }): React.JSX.Element {
   if (provider === "claude-code") return <ClaudeThinking />;
-  if (provider === "codex") return <CodexThinking />;
+  if (provider === "codex" || provider === "codex-deepseek") return <CodexThinking />;
   return <DefaultThinking />;
 }
 
@@ -2731,7 +2731,7 @@ const ItemView = memo(function ItemView({
             color: "text.secondary",
             alignSelf: "stretch",
             maxWidth: "100%",
-            px: provider === "codex" ? 0.25 : 0,
+            px: provider === "codex" || provider === "codex-deepseek" ? 0.25 : 0,
           }}
         >
           <Box sx={{ fontSize: "0.84rem", flex: 1, minWidth: 0 }}>
@@ -2739,7 +2739,7 @@ const ItemView = memo(function ItemView({
             <ThoughtSteps
               sections={item.sections}
               streaming={!!streaming}
-              codex={provider === "codex"}
+              codex={provider === "codex" || provider === "codex-deepseek"}
             />
           </Box>
         </Box>
