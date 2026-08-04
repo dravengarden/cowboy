@@ -1833,6 +1833,7 @@ export function ComposerWorkspace({
               flexDirection: "column",
               minHeight: 0,
               ...(touchInput && {
+                minHeight: 80,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": { transition: "none" },
@@ -2482,19 +2483,6 @@ export function ComposerWorkspace({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Clear composer">
-          <span data-mobile-composer-clear>
-            <IconButton
-              aria-label="clear composer"
-              disabled={!clearable}
-              sx={TOOLBAR_ICON_BTN}
-              onPointerDown={(event): void => event.preventDefault()}
-              onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
-            >
-              <DeleteOutline fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
         {/* Schedule the current content: park it as a draft that the SERVER
             auto-sends at a future time (fires even with every client offline). */}
         <Tooltip title="定时发送">
@@ -2549,12 +2537,31 @@ export function ComposerWorkspace({
             sx={{
               display: "none",
               flex: "0 0 42px",
+              position: "relative",
               alignItems: "center",
               justifyContent: "center",
               alignSelf: "stretch",
               mr: 0.25,
             }}
           >
+            <Tooltip title="Clear composer">
+              <span data-mobile-composer-clear>
+                <IconButton
+                  aria-label="clear composer"
+                  disabled={!clearable}
+                  sx={{
+                    ...TOOLBAR_ICON_BTN,
+                    position: "absolute",
+                    right: 0,
+                    bottom: 42,
+                  }}
+                  onPointerDown={(event): void => event.preventDefault()}
+                  onClick={(event): void => setClearComposerAnchor(event.currentTarget)}
+                >
+                  <DeleteOutline fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
             <Tooltip title="Hide keyboard">
               <IconButton
                 size="small"

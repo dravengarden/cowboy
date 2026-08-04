@@ -79,7 +79,7 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
     ),
     false,
   );
-  assertEquals(composerSource.includes("minHeight: 132"), false);
+  assertEquals(composerSource.includes("minHeight: 80"), true);
   assertEquals(
     composerSource.includes(
       "data-mobile-editor-area] > *, &:has([data-mobile-editor-area]:focus-within)",
@@ -246,6 +246,7 @@ Deno.test("mobile keyboard dismissal belongs to the delivery row, not the utilit
   assertEquals(actionStart >= 0 && actionEnd > actionStart, true);
   assertEquals(utilityRail.includes("data-mobile-keyboard-hide"), false);
   assertEquals(actionRow.includes("data-mobile-keyboard-hide"), true);
+  assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(
