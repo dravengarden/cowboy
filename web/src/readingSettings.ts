@@ -135,6 +135,7 @@ export function useGlobalFontScale(): void {
     const root = globalThis.document?.documentElement;
     if (!root) return;
     root.style.fontSize = `${String(fontScale * 100)}%`;
+    root.style.setProperty("--cowboy-font-scale", String(fontScale));
     root.style.setProperty("--cowboy-reading-line-height", String(lineHeight));
   }, [fontScale, lineHeight]);
 }
