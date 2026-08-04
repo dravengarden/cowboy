@@ -142,6 +142,12 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
   );
   assertEquals(
     composerSource.includes(
+      'data-mobile-floating-edit={mobileFloatingEdit ? "true" : undefined}',
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
       'data-mobile-pending-editor={touchInput ? "true" : undefined}',
     ),
     true,
@@ -155,6 +161,18 @@ Deno.test("mobile keyboard focus presents one floating composer surface", () => 
       "[data-mobile-composer-shell-material='true']\": {\n                        opacity: \"0 !important\"",
     ),
     true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "[data-mobile-primary-composer='true'][data-mobile-keyboard-open='true']:has(",
+    ),
+    false,
+  );
+  assertEquals(
+    appSource.includes(
+      "[data-mobile-focus-composer='true'][data-mobile-keyboard-open='true']:has(",
+    ),
+    false,
   );
 });
 

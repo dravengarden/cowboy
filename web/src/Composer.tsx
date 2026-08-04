@@ -1366,16 +1366,16 @@ export function ComposerWorkspace({
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main
           // Composer owns the visible software keyboard.
-          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)) > [data-mobile-input-context]": {
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-input-context]": {
             display: "none",
           },
           // A Queue/Draft edit follows the same focus model. Its containing
           // scrollport must stay mounted because it owns the transaction, so
           // hide Plan and the inactive sibling panel instead of the scrollport.
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)) > [data-mobile-input-context='plan']": {
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) > [data-mobile-input-context='plan']": {
             display: "none",
           },
-          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)) [data-mobile-pending-panel]:not(:has([data-mobile-pending-editor='true']:focus-within))": {
+          "&:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within) [data-mobile-pending-panel]:not([data-mobile-floating-edit='true'])": {
             display: "none",
           },
         }),
@@ -3610,6 +3610,7 @@ function PendingPanel({
   return (
     <Box
       data-mobile-pending-panel={!desktop ? kind : undefined}
+      data-mobile-floating-edit={mobileFloatingEdit ? "true" : undefined}
       {...(desktop
         ? {
           "data-desktop-region": `prompt.${kind}`,
