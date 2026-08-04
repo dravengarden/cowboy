@@ -1362,6 +1362,12 @@ export function ComposerWorkspace({
         borderTop: 0,
         position: "relative", // anchor for Popper portal placement
         ...(!desktop && {
+          // The idle stack needs a full rhythm token below transcript chrome.
+          // Once the keyboard leaves only one floating card, halve that inset:
+          // enough separation to read as floating without manufacturing a band.
+          "&:has(> [data-mobile-primary-composer='true'][data-mobile-keyboard-open='true'] [data-mobile-editor-area]:focus-within), &:has([data-mobile-pending-editor='true'][data-mobile-keyboard-open='true']:focus-within)": {
+            paddingTop: "4px",
+          },
           // Keyboard Focus Mode is a single floating writing surface. Keep the
           // auxiliary state mounted so Plan/Queue/Draft disclosure and edit
           // ownership survive, but remove it from presentation while the main
@@ -1756,6 +1762,12 @@ export function ComposerWorkspace({
             "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-keyboard-hide]": {
               display: "inline-flex",
             },
+            // Clear is destructive, low-frequency chrome. In focused writing
+            // mode it formed an awkward vertical pair with the trailing keyboard
+            // action, so keep only fullscreen in the top-right utility rail.
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-composer-clear]": {
+              display: "none",
+            },
             "@media (prefers-reduced-motion: reduce)": {
               transition: "none",
             },
@@ -1939,7 +1951,7 @@ export function ComposerWorkspace({
                 </IconButton>
               </Tooltip>
               <Tooltip title="Clear all">
-                <span>
+                <span data-mobile-composer-clear>
                   <IconButton
                     size="small"
                     aria-label="clear composer"

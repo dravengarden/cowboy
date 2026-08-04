@@ -127,9 +127,23 @@ Deno.test("mobile composer preserves its stack gap below the transcript boundary
     ),
     true,
   );
+  assertEquals(
+    composerSource.includes('paddingTop: "4px"'),
+    true,
+  );
 });
 
 Deno.test("mobile keyboard focus presents one floating composer surface", () => {
+  assertEquals(
+    composerSource.includes("<span data-mobile-composer-clear>"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "[data-mobile-composer-clear]\": {\n              display: \"none\"",
+    ),
+    true,
+  );
   assertEquals(
     composerSource.includes("data-mobile-primary-composer"),
     true,
