@@ -8,16 +8,57 @@ const textareaSource = await Deno.readTextFile(
   new URL("../ComposerTextarea.tsx", import.meta.url),
 );
 
-Deno.test("mobile composer promotion is owned by the real editor focus region", () => {
+Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
+  assertEquals(
+    composerSource.includes(
+      '"&[data-mobile-keyboard-open=\'true\']:has([data-mobile-editor-area]:focus-within)"',
+    ),
+    true,
+  );
+  assertEquals(composerSource.includes("data-mobile-keyboard-open={"), true);
   assertEquals(
     composerSource.includes(
       '"&:has([data-mobile-editor-area]:focus-within)"',
     ),
+    false,
+  );
+});
+
+Deno.test("mobile column and pending ownership cannot fill the viewport without a keyboard", () => {
+  assertEquals(
+    composerSource.includes(
+      "const mobilePendingKeyboardEditing = mobilePendingEditing && keyboardOpen;",
+    ),
     true,
   );
   assertEquals(
-    composerSource.includes('"&:focus-within [data-mobile-editor-area]"'),
+    composerSource.includes("...(desktop && column && {"),
+    true,
+  );
+  assertEquals(composerSource.includes("...(column && { flex: 1 })"), false);
+  assertEquals(composerSource.includes("fill={desktop && column}"), true);
+  assertEquals(
+    composerSource.includes(
+      'maxHeight: mobilePendingKeyboardEditing ? "56vh" : "40vh"',
+    ),
+    true,
+  );
+});
+
+Deno.test("Plan plus Queue or Draft editing cannot promote mobile geometry after keyboard dismissal", () => {
+  assertEquals(
+    composerSource.includes("...(desktop && column && {"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("mobilePendingEditing ? \"56vh\" : \"40vh\""),
     false,
+  );
+  assertEquals(
+    composerSource.includes(
+      "mobilePendingKeyboardEditing ? \"56vh\" : \"40vh\"",
+    ),
+    true,
   );
 });
 
@@ -25,7 +66,7 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   assertEquals(textareaSource.includes("data-mobile-native-editor"), true);
   assertEquals(
     composerSource.includes(
-      '"&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor] textarea"',
+      "[data-mobile-native-editor] textarea",
     ),
     false,
   );
@@ -38,6 +79,17 @@ Deno.test("native textarea owns a content-sized mobile canvas", () => {
   );
   assertEquals(composerSource.includes('"& > *": { flex: 1 }'), false);
   assertEquals(textareaSource.includes("maxRows={expanded ? 30 : 10}"), true);
+});
+
+Deno.test("mobile pending edit preserves slow third-party IME focus until a real keyboard lifecycle", () => {
+  assertEquals(
+    composerSource.includes("() => finishMobileEditRef.current(),\n        700,"),
+    false,
+  );
+  assertEquals(
+    composerSource.includes("if (!mobileEditSawKeyboardRef.current) return undefined"),
+    true,
+  );
 });
 
 Deno.test("mobile composer does not reserve an empty strip above its first child", () => {

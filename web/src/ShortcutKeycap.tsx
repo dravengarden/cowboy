@@ -64,11 +64,11 @@ export function ShortcutKeycap({
           display: "inline-grid",
           placeItems: "center",
           minWidth: compact
-            ? (rendered.length > 2 ? 24 : 18)
-            : (rendered.length > 2 ? 28 : 20),
-          height: compact ? 18 : 20,
-          px: compact ? 0.35 : 0.5,
-          borderRadius: 0.75,
+            ? (rendered.length > 2 ? "1.5rem" : "1.125rem")
+            : (rendered.length > 2 ? "1.75rem" : "1.25rem"),
+          height: compact ? "1.125rem" : "1.25rem",
+          px: compact ? "0.175rem" : "0.25rem",
+          borderRadius: "0.4rem",
           border: 1,
           borderColor: (theme) => {
             if (inactive) {

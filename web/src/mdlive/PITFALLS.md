@@ -981,3 +981,15 @@ Desktop Vim + IME checks:
     This keeps native `:focus-within` authoritative while preventing a hidden
     keyboard from leaving the promoted canvas and toolbar behind. Never blur on
     the initial focused-but-not-yet-resized interval.
+
+46. **Mobile editing ownership and software-keyboard visibility are separate
+    layout signals.** Queue/Draft editing says which buffer owns the editor; it
+    does not prove that the keyboard is visible. Plan/column layout likewise
+    describes surrounding content, not permission to fill the phone viewport.
+    Only the shared `keyboardOpen` signal may promote pending-editor height or
+    keyboard-focused chrome. Keep `height: 100%`, flex-fill, and editor `fill`
+    behavior Desktop-only, otherwise Plan plus Queue/Draft can leave a large
+    empty Composer after keyboard dismissal. Desktop embedded controls must
+    scale icon and keycap geometry through `--cowboy-font-scale` or root-relative
+    units; fixed pixel or minimum-font-clamped glyph sizes drift from the global
+    font-size setting.

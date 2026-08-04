@@ -8,6 +8,7 @@ import {
   useExploreAtTail,
 } from "../explore/exploreStore";
 import { desktopEmbeddedControlSx } from "./DesktopEmbeddedControl";
+import { desktopEmbeddedControlIconSx } from "./DesktopEmbeddedIcon";
 
 export function DesktopConversationControls(
   { sessionId, projection = "history", shortcutActive = false }: {
@@ -50,15 +51,15 @@ export function DesktopConversationControls(
         size="small"
         color={followingCurrentView ? "primary" : "inherit"}
         variant="outlined"
-        startIcon={<South fontSize="small" />}
+        startIcon={<South sx={desktopEmbeddedControlIconSx()} />}
         onClick={toggle}
         sx={{
           ...desktopEmbeddedControlSx({ active: shortcutActive }),
-          height: 34,
+          height: "2.125rem",
           minWidth: 0,
-          px: 0.9,
-          mr: 0.75,
-          gap: 0.65,
+          px: "0.45rem",
+          mr: "0.375rem",
+          gap: "0.325rem",
           textTransform: "none",
           whiteSpace: "nowrap",
           "& .MuiButton-startIcon": { mr: 0 },
@@ -75,7 +76,7 @@ export function DesktopConversationControls(
           variant="global"
           accent={shortcutActive}
           availability={shortcutActive ? "available" : "inactive"}
-          sx={{ ml: 0.15, flexShrink: 0 }}
+          sx={{ ml: "0.1rem", flexShrink: 0 }}
         />
       </Button>
     </Tooltip>

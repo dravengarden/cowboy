@@ -1195,6 +1195,10 @@ export function ComposerWorkspace({
   // while preserving inline image tokens across compact/fullscreen handoff.
   const touchInput = useTouchComposer();
   const keyboardOpen = useKeyboardOpen();
+  // Editing ownership and visual expansion are deliberately separate. Queue or
+  // Draft may still own the buffer while WebKit is dismissing (or declined to
+  // open) the keyboard; that must not grant a mobile surface fill-height.
+  const mobilePendingKeyboardEditing = mobilePendingEditing && keyboardOpen;
   const mobileComposerKeyboardWasOpenRef = useRef(false);
   useLayoutEffect(() => {
     if (!touchInput) {
@@ -1360,7 +1364,7 @@ export function ComposerWorkspace({
         // card flex:1 below) instead of a bottom-floating stack. No safe-area
         // bottom inset (the AppStatusBar footer owns the column's bottom edge) and
         // overflow hidden so each region scrolls internally, never the column.
-        ...(column && {
+        ...(desktop && column && {
           height: "100%",
           minHeight: 0,
           display: "flex",
@@ -1514,7 +1518,7 @@ export function ComposerWorkspace({
             // direction lock continues to recognise deliberate horizontal drawer
             // gestures.
             minHeight: 0,
-            maxHeight: mobilePendingEditing ? "56vh" : "40vh",
+            maxHeight: mobilePendingKeyboardEditing ? "56vh" : "40vh",
             transition: "max-height 180ms cubic-bezier(.2,.8,.2,1)",
             flexShrink: 1,
             touchAction: "pan-y",
@@ -1651,6 +1655,9 @@ export function ComposerWorkspace({
           }
           : {})}
         data-mobile-focus-composer={touchInput ? "true" : undefined}
+        data-mobile-keyboard-open={
+          touchInput && keyboardOpen ? "true" : undefined
+        }
         // Column mode is a dedicated writing workspace. Its subtle card boundary
         // makes an empty tall editor read as an intentional canvas, not a blank
         // hole between the session rail and transcript.
@@ -1668,7 +1675,7 @@ export function ComposerWorkspace({
             : "transparent",
           // Column mode: the card fills the column's remaining height (below the
           // queued/drafts panels) so the editor is always in its tall form.
-          ...(column && {
+          ...(desktop && column && {
             flex: 1,
             minHeight: 0,
             overflow: "hidden",
@@ -1681,7 +1688,7 @@ export function ComposerWorkspace({
             // buttons also live inside this Paper, so plain :focus-within can
             // leave a tall, inert canvas after Settings or another action takes
             // focus while the native textarea has already blurred.
-            "&:has([data-mobile-editor-area]:focus-within)": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within)": {
               borderColor: (t) => alpha(t.palette.primary.main, 0.42),
               // Focus changes hierarchy inside the same card. Keep the outer
               // edge fixed so opening the keyboard does not look like a second
@@ -1697,12 +1704,12 @@ export function ComposerWorkspace({
             // chain; otherwise CM6 collapses to its 14px text line while the
             // surrounding card remains tall, so an iOS long-press in the visible
             // blank area lands on an inert wrapper and cannot open Paste/AutoFill.
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-theme-none, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-editor, &[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-scroller": {
               flex: 1,
               minHeight: 0,
               height: "100%",
             },
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-editor-area] .cm-content": {
               minHeight: "100%",
             },
             // The token-free touch editor remains content-sized. MUI's textarea
@@ -1711,11 +1718,11 @@ export function ComposerWorkspace({
             // surrounding editor area has no independent height: every visible
             // pixel is still backed by the real native textarea and therefore
             // remains a valid UIKit tap/long-press target.
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-native-editor]": {
               display: "flex",
               flexDirection: "column",
             },
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-focus-format-row]": {
               maxHeight: 48,
               opacity: 1,
               transform: "translateY(0)",
@@ -1724,7 +1731,7 @@ export function ComposerWorkspace({
               transition:
                 `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
             },
-            "&:has([data-mobile-editor-area]:focus-within) [data-mobile-keyboard-hide]": {
+            "&[data-mobile-keyboard-open='true']:has([data-mobile-editor-area]:focus-within) [data-mobile-keyboard-hide]": {
               display: "inline-flex",
             },
             "@media (prefers-reduced-motion: reduce)": {
@@ -1802,7 +1809,7 @@ export function ComposerWorkspace({
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
                 "@media (prefers-reduced-motion: reduce)": { transition: "none" },
               }),
-              ...(column && { flex: 1 }),
+              ...(desktop && column && { flex: 1 }),
             }}
           >
           <PlatformComposerEditor
@@ -1822,7 +1829,7 @@ export function ComposerWorkspace({
             heightPx={inlineExpanded ? composerHeight : 0}
             // Column layout: stretch to fill the column instead of the vh-bounded
             // compact/expanded sizes (overrides expanded/heightPx).
-            fill={column}
+            fill={desktop && column}
             flushRightScrollbar={desktop && column}
             // Reserve a top-right gutter so no line runs under the ↗/↙ expand
             // toggle the card overlays at its top-right corner.
@@ -4193,9 +4200,10 @@ function PendingRow({
       mobileEditSawKeyboardRef.current = true;
       return undefined;
     }
-    // Do not treat the short interval between synchronous editor focus and the
-    // first visualViewport resize as a dismissal. Only a visible→hidden keyboard
-    // transition completes the edit.
+    // A focused third-party IME may publish its visualViewport resize late (or
+    // not at all during its candidate transition). Do not infer dismissal from
+    // the absence of an opening event: only a real visible→hidden lifecycle may
+    // finish this edit. Geometry remains compact independently above.
     if (!mobileEditSawKeyboardRef.current) return undefined;
     const frame = globalThis.requestAnimationFrame(() =>
       finishMobileEditRef.current()
