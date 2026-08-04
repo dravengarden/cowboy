@@ -1019,3 +1019,12 @@ Desktop Vim + IME checks:
     third-party keyboards shrink `innerHeight` and `visualViewport.height`
     together, so keyboard detection needs a keyboard-free baseline plus actual
     editable focus, not only their instantaneous height difference.
+
+48. **Fullscreen delivery closes on acknowledgement, not on intent.** A main
+    Composer Send/Queue remains expanded while its authoritative operation is
+    pending, then closes only after success. Force push follows the same rule
+    after its confirmation action resolves; closing only the confirmation
+    Popover leaves an empty fullscreen editor behind. Cancellation, rejection,
+    and invalid/no-op delivery retain the editor and its draft so the user can
+    retry. Keep Draft/Queue row editing separate: its primary action finishes
+    the edit transaction rather than delivering that pending item.

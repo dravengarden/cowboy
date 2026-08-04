@@ -114,6 +114,27 @@ Deno.test("mobile pending edit exits when a third-party IME never reports an ope
   assertEquals(composerSource.includes("if (keyboardBoundEditing) {"), true);
 });
 
+Deno.test("fullscreen delivery closes only after authoritative success", () => {
+  assertEquals(
+    composerSource.includes(
+      "submitWithFeedback(() => setComposeFs(false))",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "dismissAfterMobileDelivery();\n    setComposeFs(false);",
+    ),
+    true,
+  );
+  assertEquals(
+    composerSource.includes(
+      "submitAndNotify();\n            setComposeFs(false);",
+    ),
+    false,
+  );
+});
+
 Deno.test("mobile composer keeps one boundary gap across focus transitions", () => {
   assertEquals(
     composerSource.includes(

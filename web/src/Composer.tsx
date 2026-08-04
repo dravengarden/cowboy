@@ -856,6 +856,10 @@ export function ComposerWorkspace({
     return submitted;
   }, [desktop, onSubmitted, submit]);
   const submitFeedback = useNetworkActionState();
+  // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
+  // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
+  // inline expand instead (composeFs is never set true there).
+  const [composeFs, setComposeFs] = useState(false);
   const dismissAfterMobileDelivery = useCallback((): void => {
     if (desktop) return;
 
@@ -870,7 +874,7 @@ export function ComposerWorkspace({
       releaseMobileComposerFocus();
     });
   }, [desktop]);
-  const submitWithFeedback = useCallback((): void => {
+  const submitWithFeedback = useCallback((onSucceeded?: () => void): void => {
     void (async () => {
       let submitted = false;
       const succeeded = await submitFeedback.run(() => {
@@ -880,7 +884,10 @@ export function ComposerWorkspace({
         onSubmitted?.();
         return confirmation;
       });
-      if (submitted && succeeded) dismissAfterMobileDelivery();
+      if (submitted && succeeded) {
+        dismissAfterMobileDelivery();
+        onSucceeded?.();
+      }
     })();
   }, [dismissAfterMobileDelivery, onSubmitted, submitFeedback, submitTracked]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -951,10 +958,6 @@ export function ComposerWorkspace({
   const onMobileDraftEditingChange = useCallback((editing: boolean): void => {
     setMobileDraftEditing(editing);
   }, []);
-  // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
-  // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
-  // inline expand instead (composeFs is never set true there).
-  const [composeFs, setComposeFs] = useState(false);
   // Inline-image selection popover. Tapping an inline image opens a small popover
   // (Preview / Delete) anchored to its <img>, ringed while open. The image widget
   // lives outside React, so it calls a module-level tap handler we register here.
@@ -1278,6 +1281,7 @@ export function ComposerWorkspace({
     await confirmation;
     setForceAnchor(null);
     dismissAfterMobileDelivery();
+    setComposeFs(false);
   }
   // "Jump to front of queue" (no interrupt): send the composed prompt to the
   // FRONT of the queue so it runs next after the current turn, ahead of the rest
@@ -2206,7 +2210,7 @@ export function ComposerWorkspace({
               aria-label={busy || starting ? "queue message" : "send"}
               disabled={!sendable || submitFeedback.pending}
               aria-busy={submitFeedback.pending || undefined}
-              onClick={submitWithFeedback}
+              onClick={(): void => submitWithFeedback()}
               sx={{
                 ml: 0.5,
                 minWidth: 86,
@@ -2477,7 +2481,7 @@ export function ComposerWorkspace({
                   disabled={!sendable || submitFeedback.pending}
                   aria-busy={submitFeedback.pending || undefined}
                   sx={TOOLBAR_ICON_BTN}
-                  onClick={submitWithFeedback}
+                  onClick={(): void => submitWithFeedback()}
                 >
                   {submitFeedback.progress
                     ? <CircularProgress size={18} color="inherit" />
@@ -2889,10 +2893,8 @@ export function ComposerWorkspace({
           // the edit overlay) so inline text carries in; markdown stays literal.
           value={text}
           onChange={setText}
-          onSubmit={(): void => {
-            submitAndNotify();
-            setComposeFs(false);
-          }}
+          onSubmit={(): void =>
+            submitWithFeedback(() => setComposeFs(false))}
           onSaveDraft={(): void => {
             saveDraft();
             setComposeFs(false);
