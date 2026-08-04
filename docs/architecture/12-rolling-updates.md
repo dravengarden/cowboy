@@ -44,6 +44,16 @@ configuration, so a real low-frequency configuration change cannot remain
 silently unapplied. The worker slice itself also has `restartIfChanged = false`:
 generic activation never tears down its task-owning members.
 
+The Machine hello is authoritative for the ACP generation the detached broker
+actually serves. Its bootstrap inventory therefore reports the effective
+`--desired-generation` supplied by the immutable release, not the Cowboy crate
+version. An active signed ACP component supersedes that bootstrap value. The
+controller may echo the reported generation back to the broker, but it must
+never manufacture a second generation from its own build metadata. Machine
+activation is healthy only after `/api/machines` reports that exact active ACP
+generation; this prevents a superficially healthy host restart from beginning
+a stale worker rollout after the release receipt is written.
+
 ## Runtime invariants
 
 1. One worker epoch owns a session at a time. A second epoch is rejected until
@@ -125,6 +135,7 @@ before fallback so late frames cannot corrupt the replacement session.
 | New Cowboy fails its 60 s `/healthz` gate | systemd stops/retries the core; workers remain independent, and an operator may roll the NixOS generation back without losing the turn |
 | Machine exits | systemd restarts it; peer reconnect loops use bounded backoff without spawning duplicate workers |
 | New Machine starts and immediately crashes | readiness-gated activation retains the previous host generation while detached workers retain turns/events |
+| Machine reports an ACP generation different from its release | activation remains pending and rolls the Machine profile back; no success receipt is written |
 | Candidate worker cannot exec, handshake, or becomes `Exited/Crashed` before ready | fence/stop candidate, mark generation unhealthy, launch previous generation |
 | Worker IPC heartbeat missing for 45 s | isolate and stop only that session unit; publish `Crashed` to the controller |
 | Runtime protocol has no overlap | reject the peer; do not reinterpret frames |

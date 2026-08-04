@@ -161,22 +161,22 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     let args =
         Args::parse_from(std::iter::once(command_name.to_owned()).chain(std::env::args().skip(1)));
     let runtime_socket = args.socket.clone();
+    let bootstrap_acp_generation = if args.desired_generation.is_empty() {
+        env!("CARGO_PKG_VERSION").to_owned()
+    } else {
+        args.desired_generation.clone()
+    };
     let components = Arc::new(ComponentStore::new(
         args.state_dir.join("components"),
         args.artifact_public_key.as_deref(),
+        bootstrap_acp_generation.clone(),
     )?);
     let active_acp = components
         .active()?
         .into_iter()
         .find(|(component, _)| component.id.kind == ComponentKind::AcpRuntime);
     let desired_generation = active_acp.as_ref().map_or_else(
-        || {
-            if args.desired_generation.is_empty() {
-                env!("CARGO_PKG_VERSION").to_owned()
-            } else {
-                args.desired_generation.clone()
-            }
-        },
+        || bootstrap_acp_generation,
         |(component, _)| component.generation.clone(),
     );
     let worker_command =
@@ -703,21 +703,7 @@ async fn collect_inventory(
         }
     }));
     if !has_managed_acp {
-        inventory.push(ComponentInventory {
-            id: ComponentId {
-                kind: ComponentKind::AcpRuntime,
-                slot: String::new(),
-            },
-            state: ComponentState::Active,
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            generation: env!("CARGO_PKG_VERSION").to_owned(),
-            digest: String::new(),
-            rollback_generation: None,
-            active_leases: 0,
-            auth: None,
-            detail: Some("bootstrap generation".to_owned()),
-            update: None,
-        });
+        inventory.push(bootstrap_acp_inventory(store.bootstrap_acp_generation()));
     }
     for (slot, command, version_args) in [
         ("codex", "codex", &["--version"][..]),
@@ -858,6 +844,24 @@ async fn collect_inventory(
     }
     apply_npm_release_status(&mut inventory).await;
     inventory
+}
+
+fn bootstrap_acp_inventory(generation: &str) -> ComponentInventory {
+    ComponentInventory {
+        id: ComponentId {
+            kind: ComponentKind::AcpRuntime,
+            slot: String::new(),
+        },
+        state: ComponentState::Active,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        generation: generation.to_owned(),
+        digest: String::new(),
+        rollback_generation: None,
+        active_leases: 0,
+        auth: None,
+        detail: Some("bootstrap generation".to_owned()),
+        update: None,
+    }
 }
 
 const NPM_COMPONENTS: &[(ComponentKind, &str, &str)] = &[
@@ -1978,9 +1982,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        disabled_provider_slots_from, gemini_auth_from_metadata, gemini_env_value_from,
-        managed_provider_environment, npm_package_for_component, parse_workspaces,
-        provider_for_component, reject_untrusted_workspace, selected_zed_pair,
+        bootstrap_acp_inventory, disabled_provider_slots_from, gemini_auth_from_metadata,
+        gemini_env_value_from, managed_provider_environment, npm_package_for_component,
+        parse_workspaces, provider_for_component, reject_untrusted_workspace, selected_zed_pair,
         validate_controller_url,
     };
     use crate::machine_components::ComponentStore;
@@ -2038,6 +2042,14 @@ mod tests {
             disabled_provider_slots_from("claude-code, gemini"),
             ["claude", "gemini"]
         );
+    }
+
+    #[test]
+    fn bootstrap_inventory_reports_effective_worker_generation() {
+        let inventory = bootstrap_acp_inventory("worker-content-address");
+        assert_eq!(inventory.id.kind, ComponentKind::AcpRuntime);
+        assert_eq!(inventory.generation, "worker-content-address");
+        assert_eq!(inventory.detail.as_deref(), Some("bootstrap generation"));
     }
 
     #[test]
@@ -2114,7 +2126,8 @@ mod tests {
             "cowboy-machine-provider-env-{}",
             std::process::id()
         ));
-        let store = ComponentStore::new(root.clone(), None).expect("component store");
+        let store = ComponentStore::new(root.clone(), None, "worker-test-bootstrap".to_owned())
+            .expect("component store");
         let component = |kind, slot: &str| DesiredComponent {
             id: ComponentId {
                 kind,

@@ -12,12 +12,17 @@ use crate::machine_protocol::{
 pub struct ComponentStore {
     root: PathBuf,
     publisher_key: Option<String>,
+    bootstrap_acp_generation: String,
     max_cache_bytes: u64,
     max_unused_age: std::time::Duration,
 }
 
 impl ComponentStore {
-    pub fn new(root: PathBuf, publisher_key_path: Option<&Path>) -> anyhow::Result<Self> {
+    pub fn new(
+        root: PathBuf,
+        publisher_key_path: Option<&Path>,
+        bootstrap_acp_generation: String,
+    ) -> anyhow::Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let publisher_key = publisher_key_path
             .map(std::fs::read_to_string)
@@ -30,9 +35,15 @@ impl ComponentStore {
         Ok(Self {
             root,
             publisher_key,
+            bootstrap_acp_generation,
             max_cache_bytes: 10 * 1024 * 1024 * 1024,
             max_unused_age: std::time::Duration::from_secs(30 * 24 * 60 * 60),
         })
+    }
+
+    #[must_use]
+    pub fn bootstrap_acp_generation(&self) -> &str {
+        &self.bootstrap_acp_generation
     }
 
     pub async fn reconcile(&self, desired: DesiredComponent) -> anyhow::Result<ComponentInventory> {
@@ -450,7 +461,12 @@ mod tests {
         let identity = MachineIdentity::load_or_create(&identity_dir).expect("signer");
         let public_key = root.join("publisher.pub");
         std::fs::write(&public_key, identity.public_key()).expect("public key");
-        let store = ComponentStore::new(root.join("store"), Some(&public_key)).expect("store");
+        let store = ComponentStore::new(
+            root.join("store"),
+            Some(&public_key),
+            "worker-bootstrap".to_owned(),
+        )
+        .expect("store");
 
         const FIRST: &[u8] = b"#!/bin/sh\nexit 0\n# first\n";
         const SECOND: &[u8] = b"#!/bin/sh\nexit 0\n# second\n";
@@ -482,7 +498,12 @@ mod tests {
         let identity = MachineIdentity::load_or_create(&root.join("signer")).unwrap();
         let public_key = root.join("publisher.pub");
         std::fs::write(&public_key, identity.public_key()).unwrap();
-        let store = ComponentStore::new(root.join("store"), Some(&public_key)).unwrap();
+        let store = ComponentStore::new(
+            root.join("store"),
+            Some(&public_key),
+            "worker-bootstrap".to_owned(),
+        )
+        .unwrap();
 
         store
             .reconcile(signed_component(
@@ -520,7 +541,12 @@ mod tests {
         let identity = MachineIdentity::load_or_create(&root.join("signer")).unwrap();
         let public_key = root.join("publisher.pub");
         std::fs::write(&public_key, identity.public_key()).unwrap();
-        let store = ComponentStore::new(root.join("store"), Some(&public_key)).unwrap();
+        let store = ComponentStore::new(
+            root.join("store"),
+            Some(&public_key),
+            "worker-bootstrap".to_owned(),
+        )
+        .unwrap();
         let mut archive_bytes = Vec::new();
         {
             let encoder =
